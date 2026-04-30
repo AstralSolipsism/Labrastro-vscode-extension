@@ -1,6 +1,12 @@
-import { Component, For, JSX, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js"
+import { Component, For, JSX, Show, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from "solid-js"
 import { useVSCode } from "../context/vscode"
 import { useServer } from "../context/server"
+import {
+  normalizeHostUrlInput,
+  resolveHostSaveResult,
+  shouldSyncHostDraft,
+  validateHostUrlInput,
+} from "../utils/host-url"
 import {
   ApprovalDetailsDialog,
   DEFAULT_AUTO_APPROVE_OPTIONS,
@@ -180,10 +186,6 @@ function asProviderCompat(value: unknown): ProviderCompat {
 function stringValue(value: unknown, fallback = ""): string {
   if (value === undefined || value === null) return fallback
   return String(value)
-}
-
-function normalizeHostUrl(value: string): string {
-  return value.trim().replace(/\/+$/, "")
 }
 
 function numberValue(value: unknown, fallback: number): number {
@@ -653,13 +655,23 @@ function formatConnectionSaveResult(result: Record<string, unknown> | undefined)
     const legacyHost = stringValue(result.legacyHostUrl, effective)
     return `已从 EZCode 旧配置迁移到 dogcode：${legacyHost}。当前实际请求 Host：${effective}（来源：${source}）。`
   }
-  if (requested && result.hostUrlSaveApplied === false) {
+  if (requested && (result.hostUrlSaveApplied !== true || effective !== requested)) {
     return `保存未生效：请求保存 ${requested}，当前实际请求 Host 仍是 ${effective || "未配置"}（来源：${source}）。`
   }
-  if (requested && result.hostUrlSaveApplied === true) {
-    return `已生效：${effective || requested}（来源：${source}）。`
+  if (requested) {
+    return `已生效：${effective}（来源：${source}）。`
   }
   return undefined
+}
+
+function connectionSaveResultKey(result: Record<string, unknown> | undefined): string | undefined {
+  if (!result) return undefined
+  return [
+    stringValue(result.hostUrlSaveRequested),
+    stringValue(result.hostUrl),
+    stringValue(result.hostUrlSaveApplied),
+    stringValue(result.message),
+  ].join("|")
 }
 
 const StatusBadge: Component<{ tone?: "success" | "warning" | "muted" | "error"; children: JSX.Element }> = (props) => {
@@ -676,6 +688,10 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
   const [adminSecret, setAdminSecret] = createSignal("")
   const [bootstrapSecret, setBootstrapSecret] = createSignal("")
   const [hostUrlDirty, setHostUrlDirty] = createSignal(false)
+  const [pendingHostSave, setPendingHostSave] = createSignal<string | undefined>()
+  const [hostUrlError, setHostUrlError] = createSignal<string | undefined>()
+  const [hostUrlSyncLock, setHostUrlSyncLock] = createSignal<string | undefined>()
+  const [dismissedConnectionSaveResultKey, setDismissedConnectionSaveResultKey] = createSignal<string | undefined>()
 
   const [providerId, setProviderId] = createSignal("deepseek")
   const [providerType, setProviderType] = createSignal<ProviderType>("openai_chat")
@@ -758,13 +774,18 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
     const source = stringValue(state.legacyHostUrlSource, stringValue(state.hostUrlSource, "unknown"))
     return `已从 EZCode 旧配置迁移到 dogcode：${legacyHost}（来源：${source}）。`
   })
-  const connectionSaveMessage = createMemo(() => formatConnectionSaveResult(server.connectionSaveResult()))
+  const connectionSaveMessage = createMemo(() => {
+    const result = server.connectionSaveResult()
+    const key = connectionSaveResultKey(result)
+    if (key && key === dismissedConnectionSaveResultKey()) return undefined
+    return formatConnectionSaveResult(result)
+  })
   const currentHostUrl = createMemo(() => stringValue(server.connectionState().hostUrl))
   const hostUrlSource = createMemo(() => stringValue(server.connectionState().hostUrlSource, "unknown"))
   const hostUrlConfigured = createMemo(() => server.connectionState().hostUrlConfigured === true)
   const adminUsable = createMemo(() => server.connectionState().adminReachable === true)
   const hostUrlDraftDiffers = createMemo(() => {
-    const draft = normalizeHostUrl(hostUrl())
+    const draft = normalizeHostUrlInput(hostUrl())
     const effective = currentHostUrl()
     return Boolean(draft && effective && draft !== effective)
   })
@@ -958,10 +979,21 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
   }
 
   const saveConnection = () => {
-    setHostUrlDirty(false)
+    const validation = validateHostUrlInput(hostUrl())
+    if (!validation.ok) {
+      setHostUrlError(validation.error)
+      setHostUrlDirty(true)
+      setPendingHostSave(undefined)
+      return
+    }
+    const requestedHostUrl = validation.value
+    setHostUrl(requestedHostUrl)
+    setPendingHostSave(requestedHostUrl)
+    setHostUrlError(undefined)
+    setDismissedConnectionSaveResultKey(undefined)
     vscode.postMessage({
       type: "connection.save",
-      hostUrl: normalizeHostUrl(hostUrl()),
+      hostUrl: requestedHostUrl,
       adminSecret: adminSecret(),
       bootstrapSecret: bootstrapSecret(),
     })
@@ -1139,9 +1171,31 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
 
   createEffect(() => {
     const current = currentHostUrl()
-    if (!hostUrlDirty() && current) {
+    const lock = hostUrlSyncLock()
+    if (lock && current === lock) {
+      setHostUrlSyncLock(undefined)
+    }
+    if (shouldSyncHostDraft({
+      currentHostUrl: current,
+      dirty: hostUrlDirty(),
+      pendingHostSave: pendingHostSave(),
+      localError: hostUrlError(),
+      syncLock: lock,
+    })) {
       setHostUrl(current)
     }
+  })
+
+  createEffect(() => {
+    const result = server.connectionSaveResult()
+    const pending = pendingHostSave()
+    if (!result || !pending || stringValue(result.hostUrlSaveRequested) !== pending) return
+    const resolved = resolveHostSaveResult(result, untrack(hostUrl))
+    setHostUrl(resolved.hostUrl)
+    setHostUrlDirty(resolved.dirty)
+    setHostUrlError(resolved.error)
+    setHostUrlSyncLock(resolved.syncLock)
+    setPendingHostSave(undefined)
   })
 
   createEffect(() => {
@@ -1414,6 +1468,9 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
           </StatusBadge>
         </div>
         <p class="setting-description">当前实际请求执行器：{stringValue(server.connectionState().hostUrl, "未配置")}</p>
+        <Show when={hostUrlError()}>
+          <div class="settings-error">{hostUrlError()}</div>
+        </Show>
         <Show when={connectionMigrationMessage()}>
           <div class="settings-action-result">
             <div>
@@ -1455,6 +1512,11 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
             <input class="setting-input" value={hostUrl()} placeholder="http://192.168.50.149:8765" onInput={(event) => {
               setHostUrlDirty(true)
               setHostUrl(event.currentTarget.value)
+              setPendingHostSave(undefined)
+              setHostUrlError(undefined)
+              setHostUrlSyncLock(undefined)
+              const key = connectionSaveResultKey(server.connectionSaveResult())
+              if (key) setDismissedConnectionSaveResultKey(key)
             }} />
           </label>
           <label class="field-label">

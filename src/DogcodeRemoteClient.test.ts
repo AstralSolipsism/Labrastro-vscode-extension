@@ -167,4 +167,27 @@ describe("DogcodeRemoteClient host config saves", () => {
       hostUrlSaveApplied: false,
     })
   })
+
+  it("keeps manually saved dogcode host ahead of legacy ezcode host", async () => {
+    vscodeMock.dogcodeInspect = { globalValue: "http://127.0.0.1:8765" }
+    vscodeMock.dogcodeValue = "http://127.0.0.1:8765"
+    vscodeMock.ezcodeInspect = { globalValue: "http://192.168.50.149:8765" }
+    const client = new DogcodeRemoteClient(context as never)
+
+    const state = await client.saveConnection({ hostUrl: "https://dogcode.outlune.com" })
+
+    expect(vscodeMock.updates[0]).toMatchObject({
+      section: "dogcode",
+      key: "hostUrl",
+      value: "https://dogcode.outlune.com",
+      target: vscodeMock.targets.Global,
+    })
+    expect(state).toMatchObject({
+      hostUrl: "https://dogcode.outlune.com",
+      hostUrlSource: "global",
+      hostUrlMigratedFromEzcode: false,
+      hostUrlSaveRequested: "https://dogcode.outlune.com",
+      hostUrlSaveApplied: true,
+    })
+  })
 })
