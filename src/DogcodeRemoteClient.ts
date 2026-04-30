@@ -3,7 +3,17 @@ import * as fs from "fs/promises"
 import * as path from "path"
 import { spawn, type ChildProcessWithoutNullStreams } from "child_process"
 
-type JsonObject = Record<string, unknown>
+export type JsonObject = Record<string, unknown>
+
+export interface BackendCapabilities {
+  ok: boolean
+  apiVersion: number
+  serverVersion: string
+  sessions: boolean
+  chatStream: boolean
+  freshSessionWithoutSessionHint: boolean
+  peerTokenHeartbeatRefresh: boolean
+}
 
 export interface ConnectionState {
   hostUrl: string
@@ -21,6 +31,44 @@ export interface ConnectionState {
 interface PeerInfo {
   peer_id: string
   peer_token: string
+}
+
+export class RemoteError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly code: string,
+    message: string,
+    public readonly body: unknown
+  ) {
+    super(message)
+    this.name = "RemoteError"
+  }
+}
+
+export function isRemoteError(error: unknown, code?: string, status?: number): error is RemoteError {
+  if (!(error instanceof RemoteError)) return false
+  if (code !== undefined && error.code !== code) return false
+  if (status !== undefined && error.status !== status) return false
+  return true
+}
+
+export function isInvalidPeerTokenError(error: unknown): boolean {
+  return isRemoteError(error, "invalid_peer_token", 401)
+}
+
+export async function retryInvalidPeerTokenOnce<T>(
+  operation: () => Promise<T>,
+  recover: () => Promise<void>
+): Promise<T> {
+  try {
+    return await operation()
+  } catch (error) {
+    if (!isInvalidPeerTokenError(error)) {
+      throw error
+    }
+    await recover()
+    return operation()
+  }
 }
 
 export class DogcodeRemoteClient {
@@ -106,6 +154,11 @@ export class DogcodeRemoteClient {
     return this.adminPost("/remote/admin/status", {})
   }
 
+  async capabilities(): Promise<BackendCapabilities> {
+    const payload = await this.getJson("/remote/capabilities")
+    return normalizeBackendCapabilities(payload)
+  }
+
   async providerRecord(payload: JsonObject): Promise<JsonObject> {
     return this.adminPost("/remote/admin/providers/record", payload)
   }
@@ -155,64 +208,57 @@ export class DogcodeRemoteClient {
   }
 
   async environmentManifest(): Promise<JsonObject> {
-    const peer = await this.ensurePeer()
     const platform = peerPlatform()
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd()
-    return this.postJson("/remote/environment/manifest", {
+    return this.postPeerJson("/remote/environment/manifest", (peer) => ({
       peer_token: peer.peer_token,
       os: platform.os,
       arch: platform.arch,
       workspace: workspaceRoot,
-    })
+    }))
   }
 
   async listSessions(limit = 20): Promise<JsonObject> {
-    const peer = await this.ensurePeer()
-    return this.postJson("/remote/sessions/list", {
+    return this.postPeerJson("/remote/sessions/list", (peer) => ({
       peer_token: peer.peer_token,
       limit,
-    })
+    }))
   }
 
   async loadSession(sessionId: string): Promise<JsonObject> {
-    const peer = await this.ensurePeer()
-    return this.postJson("/remote/sessions/load", {
+    return this.postPeerJson("/remote/sessions/load", (peer) => ({
       peer_token: peer.peer_token,
       session_id: sessionId,
-    })
+    }))
   }
 
   async newSession(): Promise<JsonObject> {
-    const peer = await this.ensurePeer()
-    return this.postJson("/remote/sessions/new", {
+    return this.postPeerJson("/remote/sessions/new", (peer) => ({
       peer_token: peer.peer_token,
-    })
+    }))
   }
 
   async deleteSession(sessionId: string): Promise<JsonObject> {
-    const peer = await this.ensurePeer()
-    return this.postJson("/remote/sessions/delete", {
+    return this.postPeerJson("/remote/sessions/delete", (peer) => ({
       peer_token: peer.peer_token,
       session_id: sessionId,
-    })
+    }))
   }
 
   async saveSessionSnapshot(sessionId: string, snapshot: JsonObject): Promise<JsonObject> {
-    const peer = await this.ensurePeer()
-    return this.postJson("/remote/sessions/snapshot", {
+    return this.postPeerJson("/remote/sessions/snapshot", (peer) => ({
       peer_token: peer.peer_token,
       session_id: sessionId,
       snapshot,
-    })
+    }))
   }
 
   async startChat(prompt: string, sessionId?: string): Promise<JsonObject> {
-    const peer = await this.ensurePeer()
-    return this.postJson("/remote/chat/start", {
+    return this.postPeerJson("/remote/chat/start", (peer) => ({
       peer_token: peer.peer_token,
       prompt,
       session_hint: sessionId,
-    })
+    }))
   }
 
   async streamChat(chatId: string, cursor: number, timeoutSec = 2): Promise<JsonObject> {
@@ -267,6 +313,20 @@ export class DogcodeRemoteClient {
       throw new Error("Admin secret is not configured.")
     }
     return this.postJson(pathname, payload, { "X-RC-Admin-Secret": adminSecret })
+  }
+
+  private async postPeerJson(
+    pathname: string,
+    payload: (peer: PeerInfo) => JsonObject
+  ): Promise<JsonObject> {
+    let peer = await this.ensurePeer()
+    return retryInvalidPeerTokenOnce(
+      () => this.postJson(pathname, payload(peer)),
+      async () => {
+        await this.stopPeer()
+        peer = await this.ensurePeer()
+      }
+    )
   }
 
   private async ensurePeer(): Promise<PeerInfo> {
@@ -369,6 +429,11 @@ export class DogcodeRemoteClient {
     return parseJsonResponse(response)
   }
 
+  private async getJson(pathname: string, headers: Record<string, string> = {}): Promise<JsonObject> {
+    const response = await fetch(this.hostUrl + pathname, { headers })
+    return parseJsonResponse(response)
+  }
+
   private async requestText(pathname: string, headers: Record<string, string> = {}): Promise<string> {
     const response = await fetch(this.hostUrl + pathname, { headers })
     if (!response.ok) {
@@ -386,14 +451,42 @@ export class DogcodeRemoteClient {
   }
 }
 
-async function parseJsonResponse(response: Response): Promise<JsonObject> {
+export async function parseJsonResponse(response: Response): Promise<JsonObject> {
   const text = await response.text()
-  const body = text ? JSON.parse(text) : {}
-  if (!response.ok) {
-    const message = typeof body.message === "string" ? body.message : text
-    throw new Error(`${response.status} ${body.error || message}`)
+  let body: unknown = {}
+  try {
+    body = text ? JSON.parse(text) : {}
+  } catch {
+    body = { message: text }
   }
-  return body
+  if (!response.ok) {
+    const payload = body && typeof body === "object" ? (body as JsonObject) : {}
+    const code = typeof payload.error === "string" ? payload.error : ""
+    const detail = typeof payload.message === "string" ? payload.message : text
+    const message = [response.status, code || detail].filter(Boolean).join(" ")
+    throw new RemoteError(response.status, code, message, body)
+  }
+  return body && typeof body === "object" ? (body as JsonObject) : {}
+}
+
+function normalizeBackendCapabilities(payload: JsonObject): BackendCapabilities {
+  const capabilities =
+    payload.capabilities && typeof payload.capabilities === "object"
+      ? (payload.capabilities as JsonObject)
+      : {}
+  return {
+    ok: payload.ok === true,
+    apiVersion: numberValue(payload.api_version) ?? 0,
+    serverVersion: typeof payload.server_version === "string" ? payload.server_version : "",
+    sessions: capabilities.sessions === true,
+    chatStream: capabilities.chat_stream === true,
+    freshSessionWithoutSessionHint: capabilities.fresh_session_without_session_hint === true,
+    peerTokenHeartbeatRefresh: capabilities.peer_token_heartbeat_refresh === true,
+  }
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined
 }
 
 function parseBootstrapToken(script: string): string {
