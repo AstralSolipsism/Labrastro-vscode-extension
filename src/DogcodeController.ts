@@ -539,7 +539,13 @@ export class DogcodeController implements vscode.Disposable {
         await this.loadSession(targetSessionId, post, { suppressListRefresh: true })
         return
       }
-      await this.createSession(post, { suppressListRefresh: true, fingerprint: listPayload.fingerprint })
+      this.currentSessionId = undefined
+      await this.context.workspaceState.update("dogcode.currentSessionId", undefined)
+      post({
+        type: "session.list",
+        sessions: this.sessions,
+        fingerprint: listPayload.fingerprint || this.sessionFingerprint,
+      })
     } catch (error) {
       post({ type: "session.error", message: errorMessage(error) })
     }
@@ -633,8 +639,6 @@ export class DogcodeController implements vscode.Disposable {
       this.context.workspaceState.update("dogcode.currentSessionId", metadata.id)
       if (!options.suppressListRefresh) {
         await this.refreshSessions()
-      } else if (!this.sessions.some((session) => session.id === metadata.id)) {
-        this.sessions = [metadata, ...this.sessions]
       }
       if (!this.sessionFingerprint) {
         this.sessionFingerprint = stringValue(payload.fingerprint) || options.fingerprint
@@ -692,7 +696,11 @@ export class DogcodeController implements vscode.Disposable {
         if (nextSessionId) {
           await this.loadSession(nextSessionId, post, { suppressListRefresh: true })
         } else {
-          await this.createSession(post, { suppressListRefresh: true, fingerprint: this.sessionFingerprint })
+          post({
+            type: "session.list",
+            sessions: this.sessions,
+            fingerprint: this.sessionFingerprint,
+          })
         }
       }
     } catch (error) {

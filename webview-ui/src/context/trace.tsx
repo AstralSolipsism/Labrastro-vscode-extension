@@ -16,6 +16,7 @@ import {
   type MockTaskStats,
   type MockTurn,
 } from "../components/chat/mock-data"
+import { sessionBundleHasContent } from "../utils/session-history"
 import { buildOrchestrationGraph, getRootSessionId } from "../utils/trace-orchestration"
 import { useVSCode, type ExtensionMessage } from "./vscode"
 
@@ -339,7 +340,7 @@ export const TraceProvider: ParentComponent = (props) => {
   const writeSessionBundle = (
     sessionId: string,
     bundle: MockSessionBundle,
-    options: { applyToCurrent?: boolean; preserveIntent?: boolean; skipSnapshot?: boolean } = {}
+    options: { applyToCurrent?: boolean; preserveIntent?: boolean; skipSnapshot?: boolean; includeInHistory?: boolean } = {}
   ) => {
     const snapshot = cloneValue(bundle)
 
@@ -348,16 +349,18 @@ export const TraceProvider: ParentComponent = (props) => {
       [sessionId]: snapshot,
     }))
 
-    setAllSessions((prev) => {
-      const existingIndex = prev.findIndex((session) => session.id === sessionId)
-      if (existingIndex === -1) {
-        return [...prev, snapshot.session]
-      }
+    if (options.includeInHistory !== false) {
+      setAllSessions((prev) => {
+        const existingIndex = prev.findIndex((session) => session.id === sessionId)
+        if (existingIndex === -1) {
+          return [...prev, snapshot.session]
+        }
 
-      const updated = [...prev]
-      updated[existingIndex] = snapshot.session
-      return updated
-    })
+        const updated = [...prev]
+        updated[existingIndex] = snapshot.session
+        return updated
+      })
+    }
 
     if (options.applyToCurrent) {
       applyBundleToSignals(sessionId, snapshot, { preserveIntent: options.preserveIntent })
@@ -420,7 +423,6 @@ export const TraceProvider: ParentComponent = (props) => {
   }
 
   const clearSession = () => {
-    vscode.postMessage({ type: "session.new" })
     setCurrentSessionId(null)
     setStats(EMPTY_STATS)
     setTurns([])
@@ -433,7 +435,7 @@ export const TraceProvider: ParentComponent = (props) => {
   }
 
   const createSession = () => {
-    vscode.postMessage({ type: "session.new" })
+    clearSession()
   }
 
   const deleteSession = (sessionId: string) => {
@@ -994,6 +996,7 @@ export const TraceProvider: ParentComponent = (props) => {
           writeSessionBundle(msg.sessionId, bundle, {
             applyToCurrent: true,
             skipSnapshot: true,
+            includeInHistory: msg.type !== "session.created" || sessionBundleHasContent(bundle),
           })
           if (draftBundle && draftSessionId) {
             removeSessionBundle(draftSessionId)
