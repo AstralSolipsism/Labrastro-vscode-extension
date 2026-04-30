@@ -1,7 +1,8 @@
 import * as vscode from "vscode"
 import * as fs from "fs"
 import * as path from "path"
-import { DogcodeRemoteClient } from "./DogcodeRemoteClient"
+import { BackendCapabilities, DogcodeRemoteClient, isRemoteError } from "./DogcodeRemoteClient"
+import { canStartSessionlessChat, LEGACY_BACKEND_UPGRADE_MESSAGE } from "./session-start"
 
 type PostMessage = (message: Record<string, unknown>) => Thenable<boolean> | void
 type EnvironmentRunMode = "check" | "configure"
@@ -114,6 +115,7 @@ export class DogcodeController implements vscode.Disposable {
   private readonly approvalDocuments: ApprovalDocumentProvider
   private activeChatId: string | undefined
   private currentSessionId: string | undefined
+  private backendCapabilities: BackendCapabilities | null | undefined
   private sessionApiAvailable: boolean | undefined
   private sessionFingerprint: string | undefined
   private sessionInitialization: Promise<void> | undefined
@@ -155,6 +157,7 @@ export class DogcodeController implements vscode.Disposable {
     post({ type: "autoApproval.state", payload: this.getAutoApprovalState() })
     await this.postConnectionState(post)
     await this.postAdminState(post)
+    await this.refreshBackendCapabilities(post)
     await this.initializeSessionState(post)
     if (this.toolchainState) {
       post({ type: "toolchain.state", payload: this.toolchainState })
@@ -178,6 +181,7 @@ export class DogcodeController implements vscode.Disposable {
         })
         await this.postConnectionState(post)
         await this.postAdminState(post)
+        await this.refreshBackendCapabilities(post)
         return true
       case "autoApproval.get":
         post({ type: "autoApproval.state", payload: this.getAutoApprovalState() })
@@ -471,6 +475,23 @@ export class DogcodeController implements vscode.Disposable {
     }
   }
 
+  private async refreshBackendCapabilities(post?: PostMessage): Promise<void> {
+    try {
+      this.backendCapabilities = await this.client.capabilities()
+      post?.({ type: "backend.capabilities", payload: this.backendCapabilities })
+    } catch {
+      this.backendCapabilities = null
+    }
+  }
+
+  private async ensureBackendCapabilities(): Promise<BackendCapabilities | null> {
+    if (this.backendCapabilities !== undefined) {
+      return this.backendCapabilities
+    }
+    await this.refreshBackendCapabilities()
+    return this.backendCapabilities ?? null
+  }
+
   private async refreshToolchainState(post: PostMessage): Promise<void> {
     try {
       this.toolchainState = await this.client.toolchainList()
@@ -534,7 +555,7 @@ export class DogcodeController implements vscode.Disposable {
       this.sessionFingerprint = stringValue(payload.fingerprint)
       this.sessions = normalizeSessionMetadataList(payload.sessions)
     } catch (error) {
-      if (isRemoteNotFound(error)) {
+      if (isSessionApiUnavailable(error)) {
         this.sessionApiAvailable = false
         this.sessionFingerprint = undefined
         this.sessions = []
@@ -627,7 +648,7 @@ export class DogcodeController implements vscode.Disposable {
         fingerprint: this.sessionFingerprint,
       })
     } catch (error) {
-      if (isRemoteNotFound(error)) {
+      if (isSessionApiUnavailable(error)) {
         this.sessionApiAvailable = false
         this.currentSessionId = undefined
         await this.context.workspaceState.update("dogcode.currentSessionId", undefined)
@@ -689,7 +710,7 @@ export class DogcodeController implements vscode.Disposable {
     try {
       await this.client.saveSessionSnapshot(sessionId, snapshot)
     } catch (error) {
-      if (isRemoteNotFound(error)) {
+      if (isSessionApiUnavailable(error)) {
         this.sessionApiAvailable = false
         return
       }
@@ -1239,7 +1260,7 @@ export class DogcodeController implements vscode.Disposable {
             fingerprint: this.sessionFingerprint,
           })
         } catch (error) {
-          if (!isRemoteNotFound(error)) {
+          if (!isSessionApiUnavailable(error)) {
             throw error
           }
           this.sessionApiAvailable = false
@@ -1247,6 +1268,16 @@ export class DogcodeController implements vscode.Disposable {
           this.currentSessionId = undefined
           await this.context.workspaceState.update("dogcode.currentSessionId", undefined)
         }
+      }
+      if (
+        !sessionId &&
+        !canStartSessionlessChat(
+          this.sessionApiAvailable,
+          await this.ensureBackendCapabilities()
+        )
+      ) {
+        post({ type: "chat.error", message: LEGACY_BACKEND_UPGRADE_MESSAGE })
+        return
       }
       post({ type: "chat.started", text })
       const start = await this.client.startChat(text, sessionId)
@@ -1456,8 +1487,8 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-function isRemoteNotFound(error: unknown): boolean {
-  return errorMessage(error).trim() === "404 not_found"
+function isSessionApiUnavailable(error: unknown): boolean {
+  return isRemoteError(error, "not_found", 404) || isRemoteError(error, "sessions_unavailable", 503)
 }
 
 function normalizeSessionMetadata(value: unknown): SessionMetadataState {
