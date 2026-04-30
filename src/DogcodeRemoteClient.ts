@@ -3,6 +3,16 @@ import * as fs from "fs/promises"
 import * as path from "path"
 import { spawn, type ChildProcessWithoutNullStreams } from "child_process"
 import { buildStartupConnectionState } from "./startup-state"
+import {
+  DEFAULT_HOST_URL,
+  type HostUrlInspection,
+  type HostUrlSource,
+  type HostUrlState,
+  normalizeHostUrl,
+  resolveHostUrlState,
+  selectDogcodeHostWriteSource,
+  selectMigrationWriteSource,
+} from "./host-config"
 
 export type JsonObject = Record<string, unknown>
 
@@ -27,6 +37,11 @@ export interface ConnectionState {
   peerId?: string
   status: "checking" | "missing-config" | "ready" | "error"
   message?: string
+  hostUrlMigratedFromEzcode?: boolean
+  legacyHostUrl?: string
+  legacyHostUrlSource?: HostUrlSource
+  hostUrlSaveRequested?: string
+  hostUrlSaveApplied?: boolean
 }
 
 interface PeerInfo {
@@ -94,6 +109,7 @@ export class DogcodeRemoteClient {
   }
 
   async connectionState(): Promise<ConnectionState> {
+    const migration = await this.ensureHostUrlMigrated()
     const adminSecret = await this.context.secrets.get("dogcode.adminSecret")
     const bootstrapSecret = await this.context.secrets.get("dogcode.bootstrapSecret")
     const host = this.hostUrlState()
@@ -113,6 +129,9 @@ export class DogcodeRemoteClient {
           peerId: this.peerInfo?.peer_id,
           status: "error",
           message: `Admin API unreachable at ${host.url}: ${errorMessage(error)}`,
+          hostUrlMigratedFromEzcode: Boolean(migration),
+          legacyHostUrl: migration?.legacyHostUrl || host.legacyHostUrl,
+          legacyHostUrlSource: migration?.legacyHostUrlSource || host.legacyHostUrlSource,
         }
       }
     }
@@ -128,7 +147,10 @@ export class DogcodeRemoteClient {
       peerConnected: this.isPeerRunning(),
       peerId: this.peerInfo?.peer_id,
       status: missing ? "missing-config" : "ready",
-      message: connectionMessage(host, Boolean(adminSecret), Boolean(bootstrapSecret)),
+      message: migration?.message || connectionMessage(host, Boolean(adminSecret), Boolean(bootstrapSecret)),
+      hostUrlMigratedFromEzcode: Boolean(migration),
+      legacyHostUrl: migration?.legacyHostUrl || host.legacyHostUrl,
+      legacyHostUrlSource: migration?.legacyHostUrlSource || host.legacyHostUrlSource,
     }
   }
 
@@ -140,9 +162,28 @@ export class DogcodeRemoteClient {
     let requestedHostUrl: string | undefined
     if (options.hostUrl !== undefined && options.hostUrl.trim()) {
       requestedHostUrl = normalizeHostUrl(options.hostUrl)
-      await vscode.workspace
-        .getConfiguration("dogcode")
-        .update("hostUrl", requestedHostUrl, vscode.ConfigurationTarget.Global)
+      try {
+        await this.updateDogcodeHostUrl(
+          requestedHostUrl,
+          selectDogcodeHostWriteSource(this.dogcodeHostInspection())
+        )
+      } catch (error) {
+        const host = this.hostUrlState()
+        return {
+          hostUrl: host.url,
+          hostUrlConfigured: host.configured,
+          hostUrlSource: host.source,
+          adminSecretSet: Boolean(await this.context.secrets.get("dogcode.adminSecret")),
+          bootstrapSecretSet: Boolean(await this.context.secrets.get("dogcode.bootstrapSecret")),
+          adminReachable: false,
+          peerConnected: this.isPeerRunning(),
+          peerId: this.peerInfo?.peer_id,
+          status: "error",
+          message: `Host URL 保存失败：${errorMessage(error)}`,
+          hostUrlSaveRequested: requestedHostUrl,
+          hostUrlSaveApplied: false,
+        }
+      }
     }
     if (options.adminSecret !== undefined && options.adminSecret.trim()) {
       await this.context.secrets.store("dogcode.adminSecret", options.adminSecret.trim())
@@ -156,10 +197,18 @@ export class DogcodeRemoteClient {
       return {
         ...state,
         status: "error",
+        hostUrlSaveRequested: requestedHostUrl,
+        hostUrlSaveApplied: false,
         message: `Host URL 已请求保存为 ${requestedHostUrl}，但当前 VS Code 生效值仍是 ${state.hostUrl}（来源：${state.hostUrlSource}）。请检查 Workspace/Folder 设置是否覆盖了全局设置。`,
       }
     }
-    return state
+    return requestedHostUrl
+      ? {
+          ...state,
+          hostUrlSaveRequested: requestedHostUrl,
+          hostUrlSaveApplied: true,
+        }
+      : state
   }
 
   async adminStatus(): Promise<JsonObject> {
@@ -391,29 +440,64 @@ export class DogcodeRemoteClient {
     return Boolean(this.peerProcess && this.peerProcess.exitCode === null && this.peerInfo)
   }
 
-  private hostUrlState(): {
-    url: string
-    configured: boolean
-    source: ConnectionState["hostUrlSource"]
-  } {
-    const config = vscode.workspace.getConfiguration("dogcode")
-    const inspected = config.inspect<string>("hostUrl")
-    let source: ConnectionState["hostUrlSource"] = "default"
-    if (inspected?.workspaceFolderValue !== undefined) {
-      source = "workspace-folder"
-    } else if (inspected?.workspaceValue !== undefined) {
-      source = "workspace"
-    } else if (inspected?.globalValue !== undefined) {
-      source = "global"
-    } else if (!inspected) {
-      source = "unknown"
+  private hostUrlState(): HostUrlState {
+    const config = this.dogcodeConfig()
+    return resolveHostUrlState(
+      this.dogcodeHostInspection(config),
+      config.get<string>("hostUrl", DEFAULT_HOST_URL),
+      this.ezcodeHostInspection()
+    )
+  }
+
+  private async ensureHostUrlMigrated(): Promise<HostUrlState | undefined> {
+    const host = this.hostUrlState()
+    if (!host.migratedFromEzcode || !host.legacyHostUrl) {
+      return undefined
     }
-    const configured = config.get<string>("hostUrl", "http://127.0.0.1:8765")
-    return {
-      url: normalizeHostUrl(configured),
-      configured: source !== "default",
-      source,
+    try {
+      await this.updateDogcodeHostUrl(
+        host.legacyHostUrl,
+        selectMigrationWriteSource(host.migrationTargetSource)
+      )
+      return host
+    } catch (error) {
+      console.warn("[dogcode] legacy ezcode host migration failed", error)
+      return {
+        ...host,
+        message: `检测到 EZCode 旧 Host 配置 ${host.legacyHostUrl}，但自动迁移到 dogcode 失败：${errorMessage(error)}。本次仍会使用旧 Host 发起请求。`,
+      }
     }
+  }
+
+  private dogcodeConfig(source?: HostUrlSource): vscode.WorkspaceConfiguration {
+    const resource = source === "workspace-folder"
+      ? vscode.workspace.workspaceFolders?.[0]?.uri
+      : undefined
+    return vscode.workspace.getConfiguration("dogcode", resource)
+  }
+
+  private dogcodeHostInspection(config = this.dogcodeConfig()): HostUrlInspection | undefined {
+    return config.inspect<string>("hostUrl")
+  }
+
+  private ezcodeHostInspection(): HostUrlInspection | undefined {
+    return vscode.workspace.getConfiguration("ezcode").inspect<string>("hostUrl")
+  }
+
+  private async updateDogcodeHostUrl(value: string, source: HostUrlSource): Promise<void> {
+    const normalizedSource =
+      source === "workspace-folder" && vscode.workspace.workspaceFolders?.[0]
+        ? "workspace-folder"
+        : source === "workspace"
+          ? "workspace"
+          : "global"
+    const target =
+      normalizedSource === "workspace-folder"
+        ? vscode.ConfigurationTarget.WorkspaceFolder
+        : normalizedSource === "workspace"
+          ? vscode.ConfigurationTarget.Workspace
+          : vscode.ConfigurationTarget.Global
+    await this.dogcodeConfig(normalizedSource).update("hostUrl", value, target)
   }
 
   private async ensurePeerBinary(): Promise<string> {
@@ -430,6 +514,7 @@ export class DogcodeRemoteClient {
   }
 
   private async postJson(pathname: string, payload: JsonObject, headers: Record<string, string> = {}): Promise<JsonObject> {
+    await this.ensureHostUrlMigrated()
     const response = await fetch(this.hostUrl + pathname, {
       method: "POST",
       headers: {
@@ -442,11 +527,13 @@ export class DogcodeRemoteClient {
   }
 
   private async getJson(pathname: string, headers: Record<string, string> = {}): Promise<JsonObject> {
+    await this.ensureHostUrlMigrated()
     const response = await fetch(this.hostUrl + pathname, { headers })
     return parseJsonResponse(response)
   }
 
   private async requestText(pathname: string, headers: Record<string, string> = {}): Promise<string> {
+    await this.ensureHostUrlMigrated()
     const response = await fetch(this.hostUrl + pathname, { headers })
     if (!response.ok) {
       throw new Error(`${response.status} ${await response.text()}`)
@@ -455,6 +542,7 @@ export class DogcodeRemoteClient {
   }
 
   private async requestBuffer(pathname: string): Promise<Buffer> {
+    await this.ensureHostUrlMigrated()
     const response = await fetch(this.hostUrl + pathname)
     if (!response.ok) {
       throw new Error(`${response.status} ${await response.text()}`)
@@ -520,10 +608,6 @@ function peerPlatform(): { os: string; arch: string } {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
-}
-
-function normalizeHostUrl(value: string): string {
-  return value.trim().replace(/\/+$/, "")
 }
 
 function connectionMessage(

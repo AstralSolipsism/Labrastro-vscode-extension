@@ -226,12 +226,15 @@ export class DogcodeController implements vscode.Disposable {
   ): Promise<boolean> {
     switch (message.type) {
       case "connection.save":
-        await this.client.saveConnection({
-          hostUrl: stringValue(message.hostUrl),
-          adminSecret: stringValue(message.adminSecret),
-          bootstrapSecret: stringValue(message.bootstrapSecret),
-        })
-        await this.postConnectionState(post)
+        {
+          const state = await this.client.saveConnection({
+            hostUrl: stringValue(message.hostUrl),
+            adminSecret: stringValue(message.adminSecret),
+            bootstrapSecret: stringValue(message.bootstrapSecret),
+          })
+          post({ type: "connection.saveResult", payload: state })
+          post({ type: "connection.state", payload: state })
+        }
         await this.postAdminState(post)
         await this.refreshBackendCapabilities(post)
         return true

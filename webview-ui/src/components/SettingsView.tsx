@@ -644,6 +644,24 @@ function formatActionResult(
   return undefined
 }
 
+function formatConnectionSaveResult(result: Record<string, unknown> | undefined): string | undefined {
+  if (!result) return undefined
+  const requested = stringValue(result.hostUrlSaveRequested)
+  const effective = stringValue(result.hostUrl)
+  const source = stringValue(result.hostUrlSource, "unknown")
+  if (result.hostUrlMigratedFromEzcode === true) {
+    const legacyHost = stringValue(result.legacyHostUrl, effective)
+    return `已从 EZCode 旧配置迁移到 dogcode：${legacyHost}。当前实际请求 Host：${effective}（来源：${source}）。`
+  }
+  if (requested && result.hostUrlSaveApplied === false) {
+    return `保存未生效：请求保存 ${requested}，当前实际请求 Host 仍是 ${effective || "未配置"}（来源：${source}）。`
+  }
+  if (requested && result.hostUrlSaveApplied === true) {
+    return `已生效：${effective || requested}（来源：${source}）。`
+  }
+  return undefined
+}
+
 const StatusBadge: Component<{ tone?: "success" | "warning" | "muted" | "error"; children: JSX.Element }> = (props) => {
   return <span class={`settings-badge settings-badge--${props.tone || "muted"}`}>{props.children}</span>
 }
@@ -733,6 +751,14 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
   })
   const connectionStatus = createMemo(() => stringValue(server.connectionState().status, "missing-config"))
   const connectionMessage = createMemo(() => stringValue(server.connectionState().message))
+  const connectionMigrationMessage = createMemo(() => {
+    const state = server.connectionState()
+    if (state.hostUrlMigratedFromEzcode !== true) return undefined
+    const legacyHost = stringValue(state.legacyHostUrl, stringValue(state.hostUrl))
+    const source = stringValue(state.legacyHostUrlSource, stringValue(state.hostUrlSource, "unknown"))
+    return `已从 EZCode 旧配置迁移到 dogcode：${legacyHost}（来源：${source}）。`
+  })
+  const connectionSaveMessage = createMemo(() => formatConnectionSaveResult(server.connectionSaveResult()))
   const currentHostUrl = createMemo(() => stringValue(server.connectionState().hostUrl))
   const hostUrlSource = createMemo(() => stringValue(server.connectionState().hostUrlSource, "unknown"))
   const hostUrlConfigured = createMemo(() => server.connectionState().hostUrlConfigured === true)
@@ -1388,8 +1414,24 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
           </StatusBadge>
         </div>
         <p class="setting-description">当前实际请求执行器：{stringValue(server.connectionState().hostUrl, "未配置")}</p>
-        <Show when={connectionMessage()}>
+        <Show when={connectionMigrationMessage()}>
+          <div class="settings-action-result">
+            <div>
+              <strong>旧配置已迁移</strong>
+              <small>{connectionMigrationMessage()}</small>
+            </div>
+          </div>
+        </Show>
+        <Show when={connectionMessage() && !connectionMigrationMessage()}>
           <div class="settings-error">{connectionMessage()}</div>
+        </Show>
+        <Show when={connectionSaveMessage()}>
+          <div class="settings-action-result">
+            <div>
+              <strong>Host URL 保存结果</strong>
+              <small>{connectionSaveMessage()}</small>
+            </div>
+          </div>
         </Show>
         <Show when={hostUrlDraftDiffers()}>
           <div class="settings-action-result">

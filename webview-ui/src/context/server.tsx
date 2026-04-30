@@ -25,6 +25,7 @@ interface ServerContextValue {
   /** 插件版本 */
   extensionVersion: () => string | undefined
   connectionState: () => Record<string, unknown>
+  connectionSaveResult: () => Record<string, unknown> | undefined
   adminState: () => Record<string, unknown>
   adminStateUpdatedAt: () => string | undefined
   adminError: () => string | undefined
@@ -50,6 +51,7 @@ export const ServerProvider: ParentComponent = (props) => {
   const [workspaceDirectory, setWorkspaceDirectory] = createSignal<string | undefined>()
   const [extensionVersion, setExtensionVersion] = createSignal<string | undefined>()
   const [connectionState, setConnectionState] = createSignal<Record<string, unknown>>({})
+  const [connectionSaveResult, setConnectionSaveResult] = createSignal<Record<string, unknown> | undefined>()
   const [adminState, setAdminState] = createSignal<Record<string, unknown>>({})
   const [adminStateUpdatedAt, setAdminStateUpdatedAt] = createSignal<string | undefined>()
   const [adminError, setAdminError] = createSignal<string | undefined>()
@@ -76,6 +78,9 @@ export const ServerProvider: ParentComponent = (props) => {
       }
       if (msg.type === "connection.state" && typeof msg.payload === "object" && msg.payload) {
         setConnectionState(msg.payload as Record<string, unknown>)
+      }
+      if (msg.type === "connection.saveResult" && typeof msg.payload === "object" && msg.payload) {
+        setConnectionSaveResult(msg.payload as Record<string, unknown>)
       }
       if (msg.type === "admin.state" && typeof msg.payload === "object" && msg.payload) {
         setAdminState(msg.payload as Record<string, unknown>)
@@ -130,6 +135,7 @@ export const ServerProvider: ParentComponent = (props) => {
     workspaceDirectory,
     extensionVersion,
     connectionState,
+    connectionSaveResult,
     adminState,
     adminStateUpdatedAt,
     adminError,
