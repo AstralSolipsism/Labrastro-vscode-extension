@@ -50,7 +50,7 @@ export function buildCspString(
     "frame-ancestors 'none'",
     "object-src 'none'",
     `style-src ${cspSource} 'nonce-${nonce}'`,
-    `script-src 'nonce-${nonce}'`,
+    `script-src ${cspSource} 'nonce-${nonce}'`,
     `font-src ${cspSource}`,
     `connect-src ${connectSrc}`,
     `img-src ${cspSource} data:`,
@@ -122,7 +122,7 @@ export function buildWebviewHtml(
 </head>
 <body>
   <div id="root"></div>
-  <script nonce="${nonce}" src="${options.scriptUri}"></script>
+  <script type="module" nonce="${nonce}" src="${options.scriptUri}"></script>
 </body>
 </html>`
 }

@@ -4,6 +4,8 @@ const { solidPlugin } = require("esbuild-plugin-solid")
 
 const production = process.argv.includes("--production")
 const watch = process.argv.includes("--watch")
+const fast = process.argv.includes("--fast")
+const devSourcemap = !production && !fast
 
 /**
  * esbuild 构建问题匹配器插件
@@ -57,12 +59,15 @@ async function main() {
   const webviewCtx = await esbuild.context({
     entryPoints: ["webview-ui/src/index.tsx"],
     bundle: true,
-    format: "iife",        // Webview 只能加载 IIFE 格式的脚本
+    format: "esm",
+    splitting: true,
     minify: production,
-    sourcemap: !production,
+    sourcemap: devSourcemap ? "external" : false,
     sourcesContent: false,
     platform: "browser",   // 浏览器 API（但受 CSP 限制）
-    outfile: "dist/webview.js",
+    outdir: "dist",
+    entryNames: "webview",
+    chunkNames: "chunks/[name]-[hash]",
     assetNames: "assets/[name]-[hash]",
     loader: {
       ".ttf": "file",

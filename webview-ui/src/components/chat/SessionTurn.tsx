@@ -1,4 +1,4 @@
-import { Component, For, Match, Show, Switch, createSignal } from "solid-js"
+import { Component, For, Match, Show, Suspense, Switch, createSignal, lazy } from "solid-js"
 import type { MockTurn, MockPart, MockMessage } from "./mock-data"
 import {
   TOOL_STATUS_TO_TRACE_STATUS,
@@ -11,8 +11,11 @@ import {
   type TraceNodeKind,
 } from "../../types/trace"
 import { IconButton } from "../common/IconButton"
-import { MarkdownBlock } from "../common/MarkdownBlock"
 import { ApprovalDetailsBody, approvalFromPayload } from "./ApprovalDetailsDialog"
+
+const MarkdownBlock = lazy(async () => ({
+  default: (await import("../common/MarkdownBlock")).MarkdownBlock,
+}))
 
 const TOOL_LABELS: Record<string, string> = {
   read_file: "读取文件",
@@ -229,7 +232,9 @@ const ToolSection: Component<{ title: string; children: import("solid-js").JSX.E
 const ToolOutput: Component<{ part: MockPart }> = (props) => (
   <Switch fallback={<pre class="tool-card__output">{props.part.toolOutput}</pre>}>
     <Match when={props.part.toolOutputFormat === "markdown"}>
-      <MarkdownBlock text={props.part.toolOutput} class="tool-card__markdown" />
+      <Suspense fallback={<pre class="tool-card__output">{props.part.toolOutput}</pre>}>
+        <MarkdownBlock text={props.part.toolOutput} class="tool-card__markdown" />
+      </Suspense>
     </Match>
     <Match when={props.part.toolOutputFormat === "json"}>
       <pre class="tool-card__output">{formatJson(parseJsonOrRaw(props.part.toolOutput || ""))}</pre>
@@ -290,7 +295,9 @@ const SessionPart: Component<PartProps> = (props) => {
 
 const MarkdownText: Component<{ text?: string; format?: "plain" | "markdown" }> = (props) => (
   <Show when={props.format === "markdown"} fallback={<div class="assistant-text-part">{props.text}</div>}>
-    <MarkdownBlock text={props.text} />
+    <Suspense fallback={<div class="assistant-text-part">{props.text}</div>}>
+      <MarkdownBlock text={props.text} />
+    </Suspense>
   </Show>
 )
 
@@ -363,7 +370,9 @@ const ViewPart: Component<PartProps> = (props) => {
       <Show when={open()}>
         <div class="view-card__content">
           <Show when={summary()}>
-            <MarkdownBlock text={summary()} class="structured-card__markdown" />
+            <Suspense fallback={<div class="structured-card__markdown">{summary()}</div>}>
+              <MarkdownBlock text={summary()} class="structured-card__markdown" />
+            </Suspense>
           </Show>
           <pre class="structured-card__json">{formatJson(props.part.viewPayload || {})}</pre>
         </div>
@@ -388,7 +397,9 @@ const ContextEventPart: Component<PartProps> = (props) => {
       <Show when={open()}>
         <div class="context-event-card__content">
           <Show when={summary()}>
-            <MarkdownBlock text={summary()} class="structured-card__markdown" />
+            <Suspense fallback={<div class="structured-card__markdown">{summary()}</div>}>
+              <MarkdownBlock text={summary()} class="structured-card__markdown" />
+            </Suspense>
           </Show>
           <pre class="structured-card__json">{formatJson(props.part.contextPayload || {})}</pre>
         </div>
@@ -440,7 +451,9 @@ const UiEventPart: Component<PartProps> = (props) => {
       <Show when={open()}>
         <div class="ui-event-card__content">
           <Show when={summary()}>
-            <MarkdownBlock text={summary()} class="structured-card__markdown" />
+            <Suspense fallback={<div class="structured-card__markdown">{summary()}</div>}>
+              <MarkdownBlock text={summary()} class="structured-card__markdown" />
+            </Suspense>
           </Show>
           <pre class="structured-card__json">{formatJson(props.part.uiEventPayload || {})}</pre>
         </div>

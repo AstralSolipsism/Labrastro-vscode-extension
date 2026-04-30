@@ -13,17 +13,18 @@
  * - 前端据此切换模式：隐藏侧边栏导航栏、显示面板顶部返回按钮
  */
 
-import { Component, createSignal, Switch, Match, onMount, onCleanup, Show } from "solid-js"
+import { Component, createSignal, Switch, Match, onMount, onCleanup, Show, Suspense, lazy } from "solid-js"
 import { TraceProvider, useTrace } from "./context/trace"
 import { VSCodeProvider, useVSCode, type ExtensionMessage } from "./context/vscode"
 import { ServerProvider } from "./context/server"
 import type { TraceNavigationIntent } from "./types/trace"
-import AgentManagerView from "./components/AgentManagerView"
 import ChatView from "./components/ChatView"
-import SettingsView from "./components/SettingsView"
-import AboutView from "./components/AboutView"
 import { IconButton } from "./components/common/IconButton"
 import "./styles/main.css"
+
+const SettingsView = lazy(() => import("./components/SettingsView"))
+const AboutView = lazy(() => import("./components/AboutView"))
+const AgentManagerView = lazy(() => import("./components/AgentManagerView"))
 
 // ─────────────────────────────────────────────────────────────
 // 视图类型
@@ -132,18 +133,24 @@ const AppContent: Component = () => {
           />
         </Match>
         <Match when={currentView() === "settings"}>
-          <SettingsView targetTab={settingsTab()} />
+          <Suspense fallback={null}>
+            <SettingsView targetTab={settingsTab()} />
+          </Suspense>
         </Match>
         <Match when={currentView() === "about"}>
-          <AboutView />
+          <Suspense fallback={null}>
+            <AboutView />
+          </Suspense>
         </Match>
         <Match when={currentView() === "agentManager"}>
-          <AgentManagerView
-            nodeId={panelNodeId()}
-            branchId={panelBranchId()}
-            sessionId={panelSessionId()}
-            intent={panelIntent()}
-          />
+          <Suspense fallback={null}>
+            <AgentManagerView
+              nodeId={panelNodeId()}
+              branchId={panelBranchId()}
+              sessionId={panelSessionId()}
+              intent={panelIntent()}
+            />
+          </Suspense>
         </Match>
       </Switch>
     </>
