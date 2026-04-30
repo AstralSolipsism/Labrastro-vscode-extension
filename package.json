@@ -1,0 +1,126 @@
+{
+  "name": "solipsism-code",
+  "displayName": "EZCode",
+  "description": "EZCode central self-hosted coding agent sidebar",
+  "version": "0.1.0",
+  "publisher": "solipsism",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:solipsism-code.SidebarProvider",
+    "onCommand:solipsism-code.newTask",
+    "onCommand:solipsism-code.openSessionHistory",
+    "onCommand:solipsism-code.openSettings",
+    "onCommand:solipsism-code.openAbout",
+    "onCommand:solipsism-code.openAgentManager"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "solipsism-code-ActivityBar",
+          "title": "EZCode",
+          "icon": "assets/icons/solipsism-activitybar.svg"
+        }
+      ]
+    },
+    "views": {
+      "solipsism-code-ActivityBar": [
+        {
+          "type": "webview",
+          "id": "solipsism-code.SidebarProvider",
+          "name": "EZCode"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "solipsism-code.newTask",
+        "title": "新建对话",
+        "icon": "$(add)"
+      },
+      {
+        "command": "solipsism-code.openSessionHistory",
+        "title": "Session History",
+        "icon": "$(history)"
+      },
+      {
+        "command": "solipsism-code.openSettings",
+        "title": "Settings",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "solipsism-code.openAbout",
+        "title": "About",
+        "icon": "$(info)"
+      },
+      {
+        "command": "solipsism-code.openAgentManager",
+        "title": "Open EZCode Trace Preview",
+        "icon": "$(list-tree)"
+      }
+    ],
+    "configuration": {
+      "title": "EZCode",
+      "properties": {
+        "ezcode.hostUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8765",
+          "description": "EZCode host HTTP base URL."
+        }
+      }
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "solipsism-code.newTask",
+          "group": "navigation@0",
+          "when": "view == solipsism-code.SidebarProvider"
+        },
+        {
+          "command": "solipsism-code.openSessionHistory",
+          "group": "navigation@0.5",
+          "when": "view == solipsism-code.SidebarProvider"
+        },
+        {
+          "command": "solipsism-code.openSettings",
+          "group": "navigation@1",
+          "when": "view == solipsism-code.SidebarProvider"
+        },
+        {
+          "command": "solipsism-code.openAbout",
+          "group": "navigation@2",
+          "when": "view == solipsism-code.SidebarProvider"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "package": "node esbuild.js --production",
+    "test:auto-approval": "vitest run webview-ui/src/utils/command-auto-approval.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.2",
+    "@types/shell-quote": "^1.7.5",
+    "@types/vscode": "^1.85.0",
+    "@vscode/codicons": "^0.0.45",
+    "esbuild": "^0.24.0",
+    "esbuild-plugin-solid": "^0.6.0",
+    "solid-js": "^1.9.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.5"
+  },
+  "dependencies": {
+    "dompurify": "^3.4.1",
+    "highlight.js": "^11.11.1",
+    "marked": "^18.0.2",
+    "shell-quote": "^1.8.3"
+  }
+}

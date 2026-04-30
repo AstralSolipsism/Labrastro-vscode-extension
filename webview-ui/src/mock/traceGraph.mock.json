@@ -1,0 +1,493 @@
+{
+  "version": "1.0.0",
+  "locale": "zh-CN",
+  "session": {
+    "id": "session-spec-001",
+    "title": "Trace Graph Front-End Spec",
+    "workspaceDirectory": "G:/AboutDEV/AstralCode/AstralCode",
+    "mode": "panel"
+  },
+  "ui": {
+    "activeNodeId": "n17",
+    "selectedNodeId": "n6",
+    "focusedBranchId": "b-fix",
+    "showInspector": true,
+    "showMiniMap": true,
+    "viewMode": "expanded"
+  },
+  "i18n": {
+    "zh-CN": {
+      "categories": {
+        "reasoning": "思考 / 推理",
+        "conversation": "对话 / 发言",
+        "execution": "执行 / 操作",
+        "control": "控制流 / 分支控制"
+      },
+      "statuses": {
+        "queued": "待执行 / 排队中",
+        "active": "进行中 / 当前活跃",
+        "streaming": "流式输出中",
+        "success": "已完成",
+        "error": "异常 / 失败",
+        "cancelled": "已取消",
+        "abandoned": "已废弃 / 已放弃",
+        "rewound": "已回退"
+      },
+      "edgeKinds": {
+        "sequential": "顺序边",
+        "fork": "分叉边",
+        "subagent": "子代理边",
+        "rollback": "回退边",
+        "return": "返回边",
+        "abandoned": "废弃边",
+        "focus": "聚焦边"
+      },
+      "branchLabels": {
+        "branch.main": "主分支",
+        "branch.explore": "探索分支",
+        "branch.subagentA": "子代理 A",
+        "branch.fix": "修复分支"
+      },
+      "nodeKinds": {
+        "thought_summary": "思考摘要",
+        "plan_update": "计划更新",
+        "decision": "决策点",
+        "user_message": "用户消息",
+        "assistant_message": "助手回复",
+        "tool_call": "工具调用",
+        "tool_result": "工具结果",
+        "command_run": "命令执行",
+        "file_edit": "文件修改",
+        "rollback": "回退",
+        "fork": "分叉",
+        "subagent_spawn": "子代理分发",
+        "task_dispatch": "任务派发"
+      }
+    },
+    "en-US": {
+      "categories": {
+        "reasoning": "Reasoning",
+        "conversation": "Conversation",
+        "execution": "Execution",
+        "control": "Control Flow"
+      },
+      "statuses": {
+        "queued": "Queued",
+        "active": "Active",
+        "streaming": "Streaming",
+        "success": "Success",
+        "error": "Error",
+        "cancelled": "Cancelled",
+        "abandoned": "Abandoned",
+        "rewound": "Rewound"
+      },
+      "edgeKinds": {
+        "sequential": "Sequential",
+        "fork": "Fork",
+        "subagent": "Subagent",
+        "rollback": "Rollback",
+        "return": "Return",
+        "abandoned": "Abandoned",
+        "focus": "Focus"
+      },
+      "branchLabels": {
+        "branch.main": "Main Branch",
+        "branch.explore": "Explore Branch",
+        "branch.subagentA": "Subagent A",
+        "branch.fix": "Fix Branch"
+      },
+      "nodeKinds": {
+        "thought_summary": "Thought Summary",
+        "plan_update": "Plan Update",
+        "decision": "Decision",
+        "user_message": "User Message",
+        "assistant_message": "Assistant Message",
+        "tool_call": "Tool Call",
+        "tool_result": "Tool Result",
+        "command_run": "Command Run",
+        "file_edit": "File Edit",
+        "rollback": "Rollback",
+        "fork": "Fork",
+        "subagent_spawn": "Subagent Spawn",
+        "task_dispatch": "Task Dispatch"
+      }
+    }
+  },
+  "branches": [
+    {
+      "id": "main",
+      "lane": 0,
+      "depth": 0,
+      "kind": "main",
+      "state": "active",
+      "labelKey": "branch.main"
+    },
+    {
+      "id": "b-explore",
+      "parentBranchId": "main",
+      "forkNodeId": "n7",
+      "lane": 1,
+      "depth": 1,
+      "kind": "fork",
+      "state": "abandoned",
+      "labelKey": "branch.explore"
+    },
+    {
+      "id": "b-agent-a",
+      "parentBranchId": "b-explore",
+      "forkNodeId": "n10",
+      "lane": 2,
+      "depth": 2,
+      "kind": "subagent",
+      "state": "abandoned",
+      "labelKey": "branch.subagentA"
+    },
+    {
+      "id": "b-fix",
+      "parentBranchId": "main",
+      "forkNodeId": "n13",
+      "lane": 1,
+      "depth": 1,
+      "kind": "fork",
+      "state": "active",
+      "labelKey": "branch.fix"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "n0",
+      "category": "conversation",
+      "kind": "user_message",
+      "status": "success",
+      "branchId": "main",
+      "lane": 0,
+      "step": 0,
+      "startedAt": "2026-04-11T10:20:00.000Z",
+      "endedAt": "2026-04-11T10:20:00.000Z",
+      "title": "用户发起需求",
+      "summary": "整理 Trace Graph 前端规格，并提供中英对照与 mock JSON。",
+      "transcriptAnchorId": "turn-user-001"
+    },
+    {
+      "id": "n1",
+      "category": "reasoning",
+      "kind": "thought_summary",
+      "status": "success",
+      "branchId": "main",
+      "lane": 0,
+      "step": 1,
+      "startedAt": "2026-04-11T10:20:03.000Z",
+      "endedAt": "2026-04-11T10:20:06.000Z",
+      "parentId": "n0",
+      "title": "识别需求范围",
+      "summary": "确定输出应覆盖节点、状态、边、动画、组件拆分和 mock 数据。"
+    },
+    {
+      "id": "n2",
+      "category": "reasoning",
+      "kind": "plan_update",
+      "status": "success",
+      "branchId": "main",
+      "lane": 0,
+      "step": 2,
+      "startedAt": "2026-04-11T10:20:07.000Z",
+      "endedAt": "2026-04-11T10:20:09.000Z",
+      "parentId": "n1",
+      "title": "计划更新",
+      "summary": "先写规格文档，再给 UI 直接可用的 mock JSON。"
+    },
+    {
+      "id": "n3",
+      "category": "execution",
+      "kind": "tool_call",
+      "status": "success",
+      "branchId": "main",
+      "lane": 0,
+      "step": 3,
+      "startedAt": "2026-04-11T10:20:10.000Z",
+      "endedAt": "2026-04-11T10:20:11.000Z",
+      "parentId": "n2",
+      "title": "读取前端上下文",
+      "summary": "检索 App、ChatView、Provider 和样式规则。",
+      "meta": {
+        "toolName": "codebase_retrieval"
+      }
+    },
+    {
+      "id": "n4",
+      "category": "execution",
+      "kind": "tool_result",
+      "status": "success",
+      "branchId": "main",
+      "lane": 0,
+      "step": 4,
+      "startedAt": "2026-04-11T10:20:11.000Z",
+      "endedAt": "2026-04-11T10:20:12.000Z",
+      "parentId": "n3",
+      "title": "检索完成",
+      "summary": "确认当前前端使用 Solid、消息驱动视图切换和本地 CSS。"
+    },
+    {
+      "id": "n5",
+      "category": "conversation",
+      "kind": "assistant_message",
+      "status": "success",
+      "branchId": "main",
+      "lane": 0,
+      "step": 5,
+      "startedAt": "2026-04-11T10:20:14.000Z",
+      "endedAt": "2026-04-11T10:20:16.000Z",
+      "parentId": "n4",
+      "title": "返回方案草图",
+      "summary": "先给出节点、状态、动画和交互设计草案。",
+      "transcriptAnchorId": "turn-assistant-001"
+    },
+    {
+      "id": "n6",
+      "category": "reasoning",
+      "kind": "decision",
+      "status": "success",
+      "branchId": "main",
+      "lane": 0,
+      "step": 6,
+      "startedAt": "2026-04-11T10:20:17.000Z",
+      "endedAt": "2026-04-11T10:20:17.000Z",
+      "parentId": "n5",
+      "title": "锁定首版稳定方案",
+      "summary": "形成第一个可回退、可 fork 的稳定节点。",
+      "meta": {
+        "availableActions": ["inspect", "fork", "rollback"]
+      }
+    },
+    {
+      "id": "n7",
+      "category": "control",
+      "kind": "fork",
+      "status": "success",
+      "branchId": "main",
+      "lane": 0,
+      "step": 7,
+      "startedAt": "2026-04-11T10:20:18.000Z",
+      "endedAt": "2026-04-11T10:20:18.000Z",
+      "parentId": "n6",
+      "forkFrom": "n6",
+      "title": "从稳定节点分叉探索方案",
+      "summary": "创建探索分支，尝试更激进的图谱布局。"
+    },
+    {
+      "id": "n8",
+      "category": "reasoning",
+      "kind": "thought_summary",
+      "status": "success",
+      "branchId": "b-explore",
+      "lane": 1,
+      "step": 8,
+      "startedAt": "2026-04-11T10:20:19.000Z",
+      "endedAt": "2026-04-11T10:20:20.000Z",
+      "parentId": "n7",
+      "title": "探索全屏图谱方案",
+      "summary": "尝试把图做成更接近 Git Graph 的全屏结构。"
+    },
+    {
+      "id": "n9",
+      "category": "control",
+      "kind": "task_dispatch",
+      "status": "success",
+      "branchId": "b-explore",
+      "lane": 1,
+      "step": 9,
+      "startedAt": "2026-04-11T10:20:21.000Z",
+      "endedAt": "2026-04-11T10:20:21.000Z",
+      "parentId": "n8",
+      "title": "派发布局验证任务",
+      "summary": "把布局和交互拆成独立验证任务。"
+    },
+    {
+      "id": "n10",
+      "category": "control",
+      "kind": "subagent_spawn",
+      "status": "success",
+      "branchId": "b-explore",
+      "lane": 1,
+      "step": 10,
+      "startedAt": "2026-04-11T10:20:22.000Z",
+      "endedAt": "2026-04-11T10:20:22.000Z",
+      "parentId": "n9",
+      "title": "启动子代理验证",
+      "summary": "让子代理单独评估复杂图谱的可视密度。",
+      "meta": {
+        "availableActions": ["inspect", "subagent"]
+      }
+    },
+    {
+      "id": "n10a",
+      "category": "reasoning",
+      "kind": "thought_summary",
+      "status": "success",
+      "branchId": "b-agent-a",
+      "lane": 2,
+      "step": 11,
+      "startedAt": "2026-04-11T10:20:23.000Z",
+      "endedAt": "2026-04-11T10:20:24.000Z",
+      "parentId": "n10",
+      "title": "子代理分析图密度",
+      "summary": "判断 sidebar 模式下全屏图谱信息过载。"
+    },
+    {
+      "id": "n10b",
+      "category": "execution",
+      "kind": "tool_call",
+      "status": "success",
+      "branchId": "b-agent-a",
+      "lane": 2,
+      "step": 12,
+      "startedAt": "2026-04-11T10:20:25.000Z",
+      "endedAt": "2026-04-11T10:20:26.000Z",
+      "parentId": "n10a",
+      "title": "读取布局样例",
+      "summary": "检查现有示例和主聊天区可用高度。"
+    },
+    {
+      "id": "n10c",
+      "category": "execution",
+      "kind": "tool_result",
+      "status": "error",
+      "branchId": "b-agent-a",
+      "lane": 2,
+      "step": 13,
+      "startedAt": "2026-04-11T10:20:26.000Z",
+      "endedAt": "2026-04-11T10:20:27.000Z",
+      "parentId": "n10b",
+      "title": "子代理返回负反馈",
+      "summary": "结论：sidebar 下不适合默认全展开。"
+    },
+    {
+      "id": "n11",
+      "category": "execution",
+      "kind": "tool_result",
+      "status": "error",
+      "branchId": "b-explore",
+      "lane": 1,
+      "step": 14,
+      "startedAt": "2026-04-11T10:20:28.000Z",
+      "endedAt": "2026-04-11T10:20:29.000Z",
+      "parentId": "n10",
+      "title": "探索分支验证失败",
+      "summary": "视觉信息过载，交互层级过深。"
+    },
+    {
+      "id": "n12",
+      "category": "control",
+      "kind": "rollback",
+      "status": "rewound",
+      "branchId": "main",
+      "lane": 0,
+      "step": 15,
+      "startedAt": "2026-04-11T10:20:30.000Z",
+      "endedAt": "2026-04-11T10:20:30.000Z",
+      "parentId": "n11",
+      "rollbackTo": "n6",
+      "title": "回退到稳定方案节点",
+      "summary": "保留探索痕迹，但返回稳定节点继续推进。",
+      "meta": {
+        "availableActions": ["inspect", "rollback"]
+      }
+    },
+    {
+      "id": "n13",
+      "category": "control",
+      "kind": "fork",
+      "status": "success",
+      "branchId": "main",
+      "lane": 0,
+      "step": 16,
+      "startedAt": "2026-04-11T10:20:31.000Z",
+      "endedAt": "2026-04-11T10:20:31.000Z",
+      "parentId": "n12",
+      "forkFrom": "n6",
+      "title": "从稳定节点创建修复分支",
+      "summary": "改为默认折叠、可展开的图谱面板。"
+    },
+    {
+      "id": "n14",
+      "category": "reasoning",
+      "kind": "thought_summary",
+      "status": "success",
+      "branchId": "b-fix",
+      "lane": 1,
+      "step": 17,
+      "startedAt": "2026-04-11T10:20:32.000Z",
+      "endedAt": "2026-04-11T10:20:33.000Z",
+      "parentId": "n13",
+      "title": "确定可落地布局",
+      "summary": "把图谱嵌入 TaskHeader 下方，默认折叠展开。"
+    },
+    {
+      "id": "n15",
+      "category": "execution",
+      "kind": "command_run",
+      "status": "success",
+      "branchId": "b-fix",
+      "lane": 1,
+      "step": 18,
+      "startedAt": "2026-04-11T10:20:34.000Z",
+      "endedAt": "2026-04-11T10:20:35.000Z",
+      "parentId": "n14",
+      "title": "生成规格文档",
+      "summary": "整理节点、状态、边和组件拆分。"
+    },
+    {
+      "id": "n16",
+      "category": "execution",
+      "kind": "file_edit",
+      "status": "success",
+      "branchId": "b-fix",
+      "lane": 1,
+      "step": 19,
+      "startedAt": "2026-04-11T10:20:36.000Z",
+      "endedAt": "2026-04-11T10:20:37.000Z",
+      "parentId": "n15",
+      "title": "输出 mock 数据",
+      "summary": "提供可直接驱动 UI 的 JSON。"
+    },
+    {
+      "id": "n17",
+      "category": "conversation",
+      "kind": "assistant_message",
+      "status": "streaming",
+      "branchId": "b-fix",
+      "lane": 1,
+      "step": 20,
+      "startedAt": "2026-04-11T10:20:38.000Z",
+      "parentId": "n16",
+      "title": "正在输出最终规格",
+      "summary": "向用户返回带中英对照的可实施文档和 mock 数据。",
+      "transcriptAnchorId": "turn-assistant-002"
+    }
+  ],
+  "edges": [
+    { "id": "e0", "kind": "sequential", "source": "n0", "target": "n1", "branchId": "main" },
+    { "id": "e1", "kind": "sequential", "source": "n1", "target": "n2", "branchId": "main" },
+    { "id": "e2", "kind": "sequential", "source": "n2", "target": "n3", "branchId": "main" },
+    { "id": "e3", "kind": "sequential", "source": "n3", "target": "n4", "branchId": "main" },
+    { "id": "e4", "kind": "sequential", "source": "n4", "target": "n5", "branchId": "main" },
+    { "id": "e5", "kind": "sequential", "source": "n5", "target": "n6", "branchId": "main" },
+    { "id": "e6", "kind": "sequential", "source": "n6", "target": "n7", "branchId": "main" },
+    { "id": "e7", "kind": "fork", "source": "n7", "target": "n8", "branchId": "b-explore", "emphasis": "strong" },
+    { "id": "e8", "kind": "sequential", "source": "n8", "target": "n9", "branchId": "b-explore" },
+    { "id": "e9", "kind": "sequential", "source": "n9", "target": "n10", "branchId": "b-explore" },
+    { "id": "e10", "kind": "subagent", "source": "n10", "target": "n10a", "branchId": "b-agent-a", "emphasis": "strong" },
+    { "id": "e11", "kind": "sequential", "source": "n10a", "target": "n10b", "branchId": "b-agent-a" },
+    { "id": "e12", "kind": "sequential", "source": "n10b", "target": "n10c", "branchId": "b-agent-a" },
+    { "id": "e13", "kind": "return", "source": "n10c", "target": "n11", "branchId": "b-explore" },
+    { "id": "e14", "kind": "rollback", "source": "n11", "target": "n12", "branchId": "main", "emphasis": "strong" },
+    { "id": "e15", "kind": "fork", "source": "n12", "target": "n13", "branchId": "main", "emphasis": "strong" },
+    { "id": "e16", "kind": "fork", "source": "n13", "target": "n14", "branchId": "b-fix", "emphasis": "strong" },
+    { "id": "e17", "kind": "sequential", "source": "n14", "target": "n15", "branchId": "b-fix" },
+    { "id": "e18", "kind": "sequential", "source": "n15", "target": "n16", "branchId": "b-fix" },
+    { "id": "e19", "kind": "sequential", "source": "n16", "target": "n17", "branchId": "b-fix", "emphasis": "strong" },
+    { "id": "e20", "kind": "abandoned", "source": "n11", "target": "n8", "branchId": "b-explore", "emphasis": "muted" },
+    { "id": "e21", "kind": "abandoned", "source": "n10c", "target": "n10a", "branchId": "b-agent-a", "emphasis": "muted" },
+    { "id": "e22", "kind": "focus", "source": "n6", "target": "n17", "branchId": "b-fix", "emphasis": "strong" }
+  ]
+}
