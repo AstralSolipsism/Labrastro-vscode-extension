@@ -22,7 +22,7 @@ export const WelcomeState: Component<WelcomeStateProps> = (props) => {
     <div class="welcome-state">
       <div class="welcome-state__mark">
         <span class="codicon codicon-remote-explorer" aria-hidden="true" />
-        <span>EZCode</span>
+        <span>dogcode</span>
       </div>
       <p class="welcome-state__copy">连接中心化 host 后，在这里发起 agent 任务。</p>
 

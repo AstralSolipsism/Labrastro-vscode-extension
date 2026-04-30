@@ -68,7 +68,7 @@ export const ServerProvider: ParentComponent = (props) => {
         setConnected(true)
         setWorkspaceDirectory(msg.workspaceDirectory as string | undefined)
         setExtensionVersion(msg.extensionVersion as string | undefined)
-        console.log("[EZCode] 已连接到 Extension Host", msg)
+        console.log("[dogcode] 已连接到 Extension Host", msg)
       }
       if (msg.type === "connection.state" && typeof msg.payload === "object" && msg.payload) {
         setConnectionState(msg.payload as Record<string, unknown>)

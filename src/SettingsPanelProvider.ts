@@ -1,6 +1,6 @@
 import * as vscode from "vscode"
 import { buildWebviewHtml } from "./webview-html"
-import { EzcodeController } from "./EzcodeController"
+import { DogcodeController } from "./DogcodeController"
 
 /**
  * 面板视图类型。
@@ -12,14 +12,14 @@ type PanelView = "settings" | "about"
 
 /** 面板标题映射 */
 const PANEL_TITLES: Record<PanelView, string> = {
-  settings: "EZCode Settings",
-  about: "EZCode About",
+  settings: "dogcode Settings",
+  about: "dogcode About",
 }
 
 /** 从 panel viewType 字符串推断视图类型 */
 function viewFromType(viewType: string): PanelView | undefined {
-  if (viewType === "solipsism-code.settingsPanel") return "settings"
-  if (viewType === "solipsism-code.aboutPanel") return "about"
+  if (viewType === "dogcode.settingsPanel") return "settings"
+  if (viewType === "dogcode.aboutPanel") return "about"
   return undefined
 }
 
@@ -49,7 +49,7 @@ export class SettingsPanelProvider implements vscode.Disposable {
 
   constructor(
     private readonly extensionUri: vscode.Uri,
-    private readonly ezcode: EzcodeController
+    private readonly dogcode: DogcodeController
   ) {}
 
   // ─────────────────────────────────────────────────────────
@@ -73,20 +73,20 @@ export class SettingsPanelProvider implements vscode.Disposable {
           existing.webview.postMessage({ type: "navigate", view, tab })
         }
         existing.reveal(vscode.ViewColumn.One)
-        console.log(`[EZCode] ${PANEL_TITLES[view]} 面板已存在，聚焦`)
+        console.log(`[dogcode] ${PANEL_TITLES[view]} 面板已存在，聚焦`)
         return
       } catch {
         // 面板已被 dispose 但 onDidDispose 回调未清理 Map — 清除无效引用
-        console.log(`[EZCode] ${PANEL_TITLES[view]} 面板已失效，重新创建`)
+        console.log(`[dogcode] ${PANEL_TITLES[view]} 面板已失效，重新创建`)
         this.panels.delete(view)
       }
     }
 
-    console.log(`[EZCode] 创建 ${PANEL_TITLES[view]} 面板 (当前 Map 大小: ${this.panels.size})`)
+    console.log(`[dogcode] 创建 ${PANEL_TITLES[view]} 面板 (当前 Map 大小: ${this.panels.size})`)
 
     // 创建新面板
     const panel = vscode.window.createWebviewPanel(
-      `solipsism-code.${view}Panel`,   // viewType — Serializer 用此标识恢复
+      `dogcode.${view}Panel`,   // viewType — Serializer 用此标识恢复
       PANEL_TITLES[view],
       vscode.ViewColumn.One,
       {
@@ -123,8 +123,8 @@ export class SettingsPanelProvider implements vscode.Disposable {
   private wirePanel(panel: vscode.WebviewPanel, view: PanelView): void {
     // 设置面板图标
     panel.iconPath = {
-      light: vscode.Uri.joinPath(this.extensionUri, "assets", "icons", "solipsism-light.svg"),
-      dark: vscode.Uri.joinPath(this.extensionUri, "assets", "icons", "solipsism-dark.svg"),
+      light: vscode.Uri.joinPath(this.extensionUri, "assets", "icons", "dogcode-light.svg"),
+      dark: vscode.Uri.joinPath(this.extensionUri, "assets", "icons", "dogcode-dark.svg"),
     }
 
     // 先写入带 CSP 的 HTML，再启用脚本选项，避免空 HTML 触发 missing-csp warning。
@@ -144,7 +144,7 @@ export class SettingsPanelProvider implements vscode.Disposable {
         return
       }
     }
-    const webviewPostDisposable = this.ezcode.registerWebviewPost(postToWebview)
+    const webviewPostDisposable = this.dogcode.registerWebviewPost(postToWebview)
 
     // ① closePanel：面板内返回按钮关闭面板
     const closePanelDisposable = panel.webview.onDidReceiveMessage((msg) => {
@@ -160,7 +160,7 @@ export class SettingsPanelProvider implements vscode.Disposable {
         setTimeout(() => {
           void (async () => {
             if (disposed) return
-            await this.ezcode.postInitialState(postToWebview)
+            await this.dogcode.postInitialState(postToWebview)
             postToWebview({
               type: "navigate",
               view,
@@ -168,7 +168,7 @@ export class SettingsPanelProvider implements vscode.Disposable {
             })
           })().catch((error) => {
             if (!disposed) {
-              console.warn("[EZCode] postInitialState failed", error)
+              console.warn("[dogcode] postInitialState failed", error)
             }
           })
         }, 50)
@@ -192,9 +192,9 @@ export class SettingsPanelProvider implements vscode.Disposable {
         vscode.env.openExternal(vscode.Uri.parse(msg.url))
         return
       }
-      await this.ezcode.handleMessage(msg, postToWebview)
+      await this.dogcode.handleMessage(msg, postToWebview)
       if (msg.type === "connection.save") {
-        vscode.window.showInformationMessage("EZCode 连接配置已保存")
+        vscode.window.showInformationMessage("dogcode 连接配置已保存")
       }
     })
 
@@ -204,7 +204,7 @@ export class SettingsPanelProvider implements vscode.Disposable {
     // 面板关闭时清理
     panel.onDidDispose(() => {
       disposed = true
-      console.log(`[EZCode] ${PANEL_TITLES[view]} 面板已关闭`)
+      console.log(`[dogcode] ${PANEL_TITLES[view]} 面板已关闭`)
       closePanelDisposable.dispose()
       readyDisposable.dispose()
       tabDisposable.dispose()
@@ -232,7 +232,7 @@ export class SettingsPanelProvider implements vscode.Disposable {
     return buildWebviewHtml(webview, {
       scriptUri,
       styleUri,
-      title: "EZCode",
+      title: "dogcode",
     })
   }
 

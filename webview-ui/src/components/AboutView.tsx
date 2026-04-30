@@ -16,7 +16,7 @@ const AboutView: Component = () => {
         <div class="about-logo">
           <span class="codicon codicon-remote-explorer" aria-hidden="true" />
         </div>
-        <h1 class="about-title">EZCode</h1>
+        <h1 class="about-title">dogcode</h1>
         <p class="about-version">
           版本 {server.extensionVersion() || "0.1.0"}
         </p>
@@ -26,7 +26,7 @@ const AboutView: Component = () => {
         <div class="about-section">
           <h3>架构演示</h3>
           <p>
-            EZCode 前端用于承载中心化自托管 coding agent 的 VS Code 侧边栏体验。
+            dogcode 前端用于承载中心化自托管 coding agent 的 VS Code 侧边栏体验。
           </p>
         </div>
 

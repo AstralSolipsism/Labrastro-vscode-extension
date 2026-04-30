@@ -1,9 +1,14 @@
 .vscode/**
+.github/**
 src/**
 webview-ui/**
 node_modules/**
+scripts/**
 *.ts
+*.vsix
 !dist/**
+dist/**/*.map
 esbuild.js
 tsconfig.json
 docs/**
+.gitignore

@@ -1,6 +1,6 @@
 import * as vscode from "vscode"
 import { AgentManagerPanelProvider } from "./AgentManagerPanelProvider"
-import { EzcodeController } from "./EzcodeController"
+import { DogcodeController } from "./DogcodeController"
 import { SidebarProvider } from "./SidebarProvider"
 import { SettingsPanelProvider } from "./SettingsPanelProvider"
 
@@ -17,15 +17,15 @@ import { SettingsPanelProvider } from "./SettingsPanelProvider"
  * - 注册 Panel Serializer（面板重启恢复）
  */
 export function activate(context: vscode.ExtensionContext) {
-  console.log("[EZCode] 插件激活中...")
+  console.log("[dogcode] 插件激活中...")
 
   // ─────────────────────────────────────────────────────────
   // 1. 创建 Provider 实例
   // ─────────────────────────────────────────────────────────
 
-  const ezcodeController = new EzcodeController(context)
-  const sidebarProvider = new SidebarProvider(context.extensionUri, ezcodeController)
-  const settingsPanelProvider = new SettingsPanelProvider(context.extensionUri, ezcodeController)
+  const dogcodeController = new DogcodeController(context)
+  const sidebarProvider = new SidebarProvider(context.extensionUri, dogcodeController)
+  const settingsPanelProvider = new SettingsPanelProvider(context.extensionUri, dogcodeController)
   const agentManagerPanelProvider = new AgentManagerPanelProvider(context.extensionUri)
 
   // ─────────────────────────────────────────────────────────
@@ -54,28 +54,28 @@ export function activate(context: vscode.ExtensionContext) {
 
   // "新建任务" — 触发侧边栏聊天视图
   context.subscriptions.push(
-    vscode.commands.registerCommand("solipsism-code.newTask", () => {
+    vscode.commands.registerCommand("dogcode.newTask", () => {
       sidebarProvider.triggerAction("newTask")
     })
   )
 
   // "会话历史" — 在侧边栏聊天视图中打开历史会话入口
   context.subscriptions.push(
-    vscode.commands.registerCommand("solipsism-code.openSessionHistory", () => {
+    vscode.commands.registerCommand("dogcode.openSessionHistory", () => {
       sidebarProvider.triggerAction("openSessionHistory")
     })
   )
 
   // "设置" — 在编辑器区域打开独立的 Settings 面板
   context.subscriptions.push(
-    vscode.commands.registerCommand("solipsism-code.openSettings", (tab?: string) => {
+    vscode.commands.registerCommand("dogcode.openSettings", (tab?: string) => {
       settingsPanelProvider.openPanel("settings", tab)
     })
   )
 
   // "关于" — 在编辑器区域打开独立的 About 面板
   context.subscriptions.push(
-    vscode.commands.registerCommand("solipsism-code.openAbout", () => {
+    vscode.commands.registerCommand("dogcode.openAbout", () => {
       settingsPanelProvider.openPanel("about")
     })
   )
@@ -83,7 +83,7 @@ export function activate(context: vscode.ExtensionContext) {
   // "Trace Preview" — 在编辑器区域打开后续深查页占位面板
   context.subscriptions.push(
     vscode.commands.registerCommand(
-      "solipsism-code.openAgentManager",
+      "dogcode.openAgentManager",
       (options?: { nodeId?: string; branchId?: string; sessionId?: string; intent?: "inspect" | "fork" | "rollback" | "subagent" }) => {
         agentManagerPanelProvider.openPanel(options)
       }
@@ -103,7 +103,7 @@ export function activate(context: vscode.ExtensionContext) {
   const panelTypes = ["settingsPanel", "aboutPanel"] as const
   for (const suffix of panelTypes) {
     context.subscriptions.push(
-      vscode.window.registerWebviewPanelSerializer(`solipsism-code.${suffix}`, {
+      vscode.window.registerWebviewPanelSerializer(`dogcode.${suffix}`, {
         async deserializeWebviewPanel(panel: vscode.WebviewPanel) {
           settingsPanelProvider.deserializePanel(panel)
         },
@@ -112,7 +112,7 @@ export function activate(context: vscode.ExtensionContext) {
   }
 
   context.subscriptions.push(
-    vscode.window.registerWebviewPanelSerializer("solipsism-code.agentManagerPanel", {
+    vscode.window.registerWebviewPanelSerializer("dogcode.agentManagerPanel", {
       async deserializeWebviewPanel(panel: vscode.WebviewPanel) {
         agentManagerPanelProvider.deserializePanel(panel)
       },
@@ -126,9 +126,9 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(sidebarProvider)
   context.subscriptions.push(settingsPanelProvider)
   context.subscriptions.push(agentManagerPanelProvider)
-  context.subscriptions.push(ezcodeController)
+  context.subscriptions.push(dogcodeController)
 
-  console.log("[EZCode] 插件激活完成")
+  console.log("[dogcode] 插件激活完成")
 }
 
 /**
@@ -136,5 +136,5 @@ export function activate(context: vscode.ExtensionContext) {
  * 通常不需要手动清理，因为 VS Code 会自动释放 `context.subscriptions` 中的资源。
  */
 export function deactivate() {
-  console.log("[EZCode] 插件已停用")
+  console.log("[dogcode] 插件已停用")
 }

@@ -2,7 +2,7 @@
 
 ## 目标 / Goal
 
-为 Solipsism Code 的前端提供一套**可实施**的 Trace Graph 规格，用于可视化 coding agent 的思考、发言、操作、工具调用、执行、subagent 分发、task 派发、rollback 与 fork。
+为 dogcode 的前端提供一套**可实施**的 Trace Graph 规格，用于可视化 coding agent 的思考、发言、操作、工具调用、执行、subagent 分发、task 派发、rollback 与 fork。
 
 这套图不是严格意义上的 Tree，而是**执行轨迹 DAG（Directed Acyclic Graph）**：
 

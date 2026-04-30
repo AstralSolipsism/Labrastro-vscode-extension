@@ -1,12 +1,12 @@
 import * as vscode from "vscode"
 import { buildWebviewHtml } from "./webview-html"
-import { EzcodeController } from "./EzcodeController"
+import { DogcodeController } from "./DogcodeController"
 
 /**
  * 侧边栏 Webview 提供器。
  *
  * 实现 `vscode.WebviewViewProvider` 接口，当用户点击 Activity Bar
- * 上的 EZCode 图标时，VS Code 会调用 `resolveWebviewView` 来
+ * 上的 dogcode 图标时，VS Code 会调用 `resolveWebviewView` 来
  * 创建侧边栏中的 Webview 内容。
  *
  * 这是 Kilocode 中 `KiloProvider` 的简化复刻版本，
@@ -18,7 +18,7 @@ import { EzcodeController } from "./EzcodeController"
  */
 export class SidebarProvider implements vscode.WebviewViewProvider {
   /** 必须与 package.json 中 views 的 id 完全一致 */
-  public static readonly viewType = "solipsism-code.SidebarProvider"
+  public static readonly viewType = "dogcode.SidebarProvider"
 
   /** 当前 webview 实例引用（侧边栏可能被隐藏、重新显示） */
   private webviewView: vscode.WebviewView | undefined
@@ -31,7 +31,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   constructor(
     private readonly extensionUri: vscode.Uri,
-    private readonly ezcode: EzcodeController
+    private readonly dogcode: DogcodeController
   ) {}
 
   // ─────────────────────────────────────────────────────────
@@ -95,7 +95,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         return
       }
     }
-    this.disposables.push(this.ezcode.registerWebviewPost(postToWebview))
+    this.disposables.push(this.dogcode.registerWebviewPost(postToWebview))
     webview.onDidReceiveMessage(
       async (message: Record<string, unknown>) => {
         const type = message.type as string
@@ -104,7 +104,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           case "webviewReady":
             // Webview 前端初始化完成，推送初始状态
             this.isWebviewReady = true
-            await this.ezcode.postInitialState(postToWebview)
+            await this.dogcode.postInitialState(postToWebview)
             break
 
           case "sendMessage":
@@ -121,16 +121,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
           case "openSettings":
             // 侧边栏中点击设置 → 触发命令打开独立 Settings 面板
-            vscode.commands.executeCommand("solipsism-code.openSettings")
+            vscode.commands.executeCommand("dogcode.openSettings")
             break
 
           case "openAbout":
             // 侧边栏中点击关于 → 触发命令打开独立 About 面板
-            vscode.commands.executeCommand("solipsism-code.openAbout")
+            vscode.commands.executeCommand("dogcode.openAbout")
             break
 
           case "openAgentManager":
-            vscode.commands.executeCommand("solipsism-code.openAgentManager", {
+            vscode.commands.executeCommand("dogcode.openAgentManager", {
               nodeId: typeof message.nodeId === "string" ? message.nodeId : undefined,
               branchId: typeof message.branchId === "string" ? message.branchId : undefined,
               sessionId: typeof message.sessionId === "string" ? message.sessionId : undefined,
@@ -146,8 +146,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             break
 
           default:
-            if (!(await this.ezcode.handleMessage(message, postToWebview))) {
-              console.log(`[EZCode] 未知消息类型: ${type}`, message)
+            if (!(await this.dogcode.handleMessage(message, postToWebview))) {
+              console.log(`[dogcode] 未知消息类型: ${type}`, message)
             }
         }
       },
@@ -173,7 +173,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private async handleUserMessage(message: Record<string, unknown>): Promise<void> {
     const text = message.text as string
     if (!text) return
-    await this.ezcode.handleMessage({ type: "chat.send", text }, (payload) =>
+    await this.dogcode.handleMessage({ type: "chat.send", text }, (payload) =>
       this.webviewView?.webview.postMessage(payload)
     )
   }
@@ -221,7 +221,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     return buildWebviewHtml(webview, {
       scriptUri,
       styleUri,
-      title: "EZCode",
+      title: "dogcode",
     })
   }
 

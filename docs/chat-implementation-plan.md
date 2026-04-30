@@ -2,11 +2,11 @@
 
 ## 目标
 
-将 SolipsismCode 的主对话区域（ChatView）从当前的基础演示升级为 **Kilocode v5 的完整视觉复刻**。仅实现前端视觉层和交互骨架，后端数据源使用模拟数据驱动。
+将 dogcode 的主对话区域（ChatView）从当前的基础演示升级为 **Kilocode v5 的完整视觉复刻**。仅实现前端视觉层和交互骨架，后端数据源使用模拟数据驱动。
 
 ## 当前状态 vs 目标状态
 
-| 维度 | 当前 SolipsismCode | 目标（Kilocode v5） |
+| 维度 | 当前 dogcode | 目标（Kilocode v5） |
 |------|----------------|-------------------|
 | 消息气泡 | 简单左右布局 + emoji头像 | Turn-based 布局：用户消息卡片 + 助手扁平内容流 |
 | 输入框 | 基础 textarea + 发送按钮 | 圆角容器 + ghost text + 文件@提及高亮 + 底部选择器栏（模式/模型/思维链） |
@@ -49,7 +49,7 @@ ChatView                        ← 主容器（flex column 布局）
 
 重建 CSS 基础，从 Kilocode 的 `chat.css` 中提取核心布局和组件样式。
 
-#### [MODIFY] [chat.css](file:///g:/AboutDEV/SolipsismCode/SolipsismCode/webview-ui/src/styles/chat.css)
+#### [MODIFY] [chat.css](file:///g:/AboutDEV/dogcode/dogcode/webview-ui/src/styles/chat.css)
 
 新建独立的 `chat.css`，从 `main.css` 中分离聊天相关样式。内容包括：
 
@@ -210,5 +210,5 @@ interface MockPart {
 ## Open Questions
 
 > [!IMPORTANT]
-> 1. **Logo 资源**：SolipsismCode 在 `assets/icons/` 下是否已有 SVG Logo？还是需要创建？当前使用 emoji `✦` 作为占位。
+> 1. **Logo 资源**：dogcode 在 `assets/icons/` 下是否已有 SVG Logo？还是需要创建？当前使用 emoji `✦` 作为占位。
 > 2. **工具卡片的图标**：是否使用 codicon（VS Code 内置图标），还是自行提供 SVG？

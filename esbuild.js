@@ -1,4 +1,5 @@
 const esbuild = require("esbuild")
+const fs = require("fs")
 const { solidPlugin } = require("esbuild-plugin-solid")
 
 const production = process.argv.includes("--production")
@@ -29,6 +30,10 @@ const esbuildProblemMatcherPlugin = {
 }
 
 async function main() {
+  if (!watch) {
+    fs.rmSync("dist", { recursive: true, force: true })
+  }
+
   // ───────────────────────────────────────────────
   // 构建 1: Extension Host（Node.js 环境）
   // ───────────────────────────────────────────────

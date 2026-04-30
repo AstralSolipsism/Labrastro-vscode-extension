@@ -733,7 +733,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         selectedTraceNodeId={trace.selectedTraceNodeId()}
         traceLocale="zh-CN"
         isWorking={isWorking()}
-        onCompact={() => console.log("[EZCode] compact context")}
+        onCompact={() => console.log("[dogcode] compact context")}
         onClose={() => trace.clearSession()}
         onStop={handleStop}
         onTraceNodeClick={focusTraceNode}

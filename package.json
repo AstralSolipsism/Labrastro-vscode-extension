@@ -1,101 +1,110 @@
 {
-  "name": "solipsism-code",
-  "displayName": "EZCode",
-  "description": "EZCode central self-hosted coding agent sidebar",
+  "name": "dogcode",
+  "displayName": "dogcode",
+  "description": "dogcode central self-hosted coding agent frontend for VS Code",
   "version": "0.1.0",
-  "publisher": "solipsism",
+  "publisher": "dogcode",
+  "icon": "assets/icons/doge.png",
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
     "Other"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AstralSolipsism/dogcode.git"
+  },
+  "homepage": "https://github.com/AstralSolipsism/dogcode#readme",
+  "bugs": {
+    "url": "https://github.com/AstralSolipsism/dogcode/issues"
+  },
   "activationEvents": [
-    "onView:solipsism-code.SidebarProvider",
-    "onCommand:solipsism-code.newTask",
-    "onCommand:solipsism-code.openSessionHistory",
-    "onCommand:solipsism-code.openSettings",
-    "onCommand:solipsism-code.openAbout",
-    "onCommand:solipsism-code.openAgentManager"
+    "onView:dogcode.SidebarProvider",
+    "onCommand:dogcode.newTask",
+    "onCommand:dogcode.openSessionHistory",
+    "onCommand:dogcode.openSettings",
+    "onCommand:dogcode.openAbout",
+    "onCommand:dogcode.openAgentManager"
   ],
   "main": "./dist/extension.js",
   "contributes": {
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "solipsism-code-ActivityBar",
-          "title": "EZCode",
-          "icon": "assets/icons/solipsism-activitybar.svg"
+          "id": "dogcode-ActivityBar",
+          "title": "dogcode",
+          "icon": "assets/icons/dogcode-activitybar.svg"
         }
       ]
     },
     "views": {
-      "solipsism-code-ActivityBar": [
+      "dogcode-ActivityBar": [
         {
           "type": "webview",
-          "id": "solipsism-code.SidebarProvider",
-          "name": "EZCode"
+          "id": "dogcode.SidebarProvider",
+          "name": "dogcode"
         }
       ]
     },
     "commands": [
       {
-        "command": "solipsism-code.newTask",
+        "command": "dogcode.newTask",
         "title": "新建对话",
         "icon": "$(add)"
       },
       {
-        "command": "solipsism-code.openSessionHistory",
+        "command": "dogcode.openSessionHistory",
         "title": "Session History",
         "icon": "$(history)"
       },
       {
-        "command": "solipsism-code.openSettings",
+        "command": "dogcode.openSettings",
         "title": "Settings",
         "icon": "$(settings-gear)"
       },
       {
-        "command": "solipsism-code.openAbout",
+        "command": "dogcode.openAbout",
         "title": "About",
         "icon": "$(info)"
       },
       {
-        "command": "solipsism-code.openAgentManager",
-        "title": "Open EZCode Trace Preview",
+        "command": "dogcode.openAgentManager",
+        "title": "Open dogcode Trace Preview",
         "icon": "$(list-tree)"
       }
     ],
     "configuration": {
-      "title": "EZCode",
+      "title": "dogcode",
       "properties": {
-        "ezcode.hostUrl": {
+        "dogcode.hostUrl": {
           "type": "string",
           "default": "http://127.0.0.1:8765",
-          "description": "EZCode host HTTP base URL."
+          "description": "dogcode host HTTP base URL."
         }
       }
     },
     "menus": {
       "view/title": [
         {
-          "command": "solipsism-code.newTask",
+          "command": "dogcode.newTask",
           "group": "navigation@0",
-          "when": "view == solipsism-code.SidebarProvider"
+          "when": "view == dogcode.SidebarProvider"
         },
         {
-          "command": "solipsism-code.openSessionHistory",
+          "command": "dogcode.openSessionHistory",
           "group": "navigation@0.5",
-          "when": "view == solipsism-code.SidebarProvider"
+          "when": "view == dogcode.SidebarProvider"
         },
         {
-          "command": "solipsism-code.openSettings",
+          "command": "dogcode.openSettings",
           "group": "navigation@1",
-          "when": "view == solipsism-code.SidebarProvider"
+          "when": "view == dogcode.SidebarProvider"
         },
         {
-          "command": "solipsism-code.openAbout",
+          "command": "dogcode.openAbout",
           "group": "navigation@2",
-          "when": "view == solipsism-code.SidebarProvider"
+          "when": "view == dogcode.SidebarProvider"
         }
       ]
     }
@@ -104,6 +113,7 @@
     "compile": "node esbuild.js",
     "watch": "node esbuild.js --watch",
     "package": "node esbuild.js --production",
+    "package:vsix": "vsce package --out dogcode.vsix",
     "test:auto-approval": "vitest run webview-ui/src/utils/command-auto-approval.test.ts"
   },
   "devDependencies": {
@@ -111,6 +121,7 @@
     "@types/shell-quote": "^1.7.5",
     "@types/vscode": "^1.85.0",
     "@vscode/codicons": "^0.0.45",
+    "@vscode/vsce": "^3.9.1",
     "esbuild": "^0.24.0",
     "esbuild-plugin-solid": "^0.6.0",
     "solid-js": "^1.9.0",

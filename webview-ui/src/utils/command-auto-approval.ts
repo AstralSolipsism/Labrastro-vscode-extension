@@ -11,8 +11,8 @@ export interface CommandDecisionResult {
   subCommands: string[]
 }
 
-const NEWLINE_PLACEHOLDER = "__EZCODE_NL__"
-const CARRIAGE_RETURN_PLACEHOLDER = "__EZCODE_CR__"
+const NEWLINE_PLACEHOLDER = "__dogcode_NL__"
+const CARRIAGE_RETURN_PLACEHOLDER = "__dogcode_CR__"
 
 export function getCommandDecision(
   command: string,

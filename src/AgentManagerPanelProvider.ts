@@ -8,8 +8,8 @@ export interface AgentManagerOpenOptions {
   intent?: "inspect" | "fork" | "rollback" | "subagent"
 }
 
-const AGENT_MANAGER_VIEW_TYPE = "solipsism-code.agentManagerPanel"
-const AGENT_MANAGER_TITLE = "EZCode Trace Preview"
+const AGENT_MANAGER_VIEW_TYPE = "dogcode.agentManagerPanel"
+const AGENT_MANAGER_TITLE = "dogcode Trace Preview"
 
 /**
  * AgentManager 单例面板。
@@ -41,10 +41,10 @@ export class AgentManagerPanelProvider implements vscode.Disposable {
           ...this.pendingContext,
         })
         this.panel.reveal(vscode.ViewColumn.One)
-        console.log("[EZCode] Trace Preview 面板已存在，聚焦")
+        console.log("[dogcode] Trace Preview 面板已存在，聚焦")
         return
       } catch {
-        console.log("[EZCode] Trace Preview 面板已失效，重新创建")
+        console.log("[dogcode] Trace Preview 面板已失效，重新创建")
         this.panel = undefined
       }
     }
@@ -71,8 +71,8 @@ export class AgentManagerPanelProvider implements vscode.Disposable {
 
   private wirePanel(panel: vscode.WebviewPanel): void {
     panel.iconPath = {
-      light: vscode.Uri.joinPath(this.extensionUri, "assets", "icons", "solipsism-light.svg"),
-      dark: vscode.Uri.joinPath(this.extensionUri, "assets", "icons", "solipsism-dark.svg"),
+      light: vscode.Uri.joinPath(this.extensionUri, "assets", "icons", "dogcode-light.svg"),
+      dark: vscode.Uri.joinPath(this.extensionUri, "assets", "icons", "dogcode-dark.svg"),
     }
 
     panel.webview.html = this.getHtml(panel.webview)
@@ -117,7 +117,7 @@ export class AgentManagerPanelProvider implements vscode.Disposable {
       if (this.panel === panel) {
         this.panel = undefined
       }
-      console.log("[EZCode] Trace Preview 面板已关闭")
+      console.log("[dogcode] Trace Preview 面板已关闭")
     })
   }
 
@@ -132,7 +132,7 @@ export class AgentManagerPanelProvider implements vscode.Disposable {
     return buildWebviewHtml(webview, {
       scriptUri,
       styleUri,
-      title: "EZCode Trace Preview",
+      title: "dogcode Trace Preview",
     })
   }
 

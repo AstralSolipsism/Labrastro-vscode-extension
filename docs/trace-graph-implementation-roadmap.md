@@ -2,7 +2,7 @@
 
 ## 目标 / Goal
 
-在保持 **Kilocode v5 风格主对话界面** 的前提下，为 Solipsism Code 落地一套双层可视化体系：
+在保持 **Kilocode v5 风格主对话界面** 的前提下，为 dogcode 落地一套双层可视化体系：
 
 1. **对话内轻量轨迹 / In-Chat Lightweight Trace**
    - 在主聊天界面中，以最小空间成本展示当前任务的执行轨迹
@@ -157,8 +157,8 @@ AgentManagerPage
 | 项目 | 中文 | 说明 |
 |------|------|------|
 | `AgentManagerPanelProvider` | AgentManager 面板提供器 | 复用 `SettingsPanelProvider` 的单例 panel 模式 |
-| `solipsism-code.openAgentManager` | 打开管理页命令 | 支持从 sidebar、聊天节点、工具卡片跳转 |
-| `solipsism-code.agentManagerPanel` | serializer viewType | 支持 VS Code 重启后恢复 |
+| `dogcode.openAgentManager` | 打开管理页命令 | 支持从 sidebar、聊天节点、工具卡片跳转 |
+| `dogcode.agentManagerPanel` | serializer viewType | 支持 VS Code 重启后恢复 |
 
 ## 4.2 Webview Front-End 侧 / Front-End Side
 

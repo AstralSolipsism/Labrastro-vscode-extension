@@ -1,7 +1,7 @@
 import * as vscode from "vscode"
 import * as fs from "fs"
 import * as path from "path"
-import { EzcodeRemoteClient } from "./EzcodeRemoteClient"
+import { DogcodeRemoteClient } from "./DogcodeRemoteClient"
 
 type PostMessage = (message: Record<string, unknown>) => Thenable<boolean> | void
 type EnvironmentRunMode = "check" | "configure"
@@ -99,7 +99,7 @@ interface AutoApprovalState {
   platform: NodeJS.Platform
 }
 
-const AUTO_APPROVAL_STATE_KEY = "ezcode.autoApproval"
+const AUTO_APPROVAL_STATE_KEY = "dogcode.autoApproval"
 const DEFAULT_AUTO_APPROVAL_OPTIONS: Record<AutoApprovalOptionKey, boolean> = {
   readOnly: false,
   write: false,
@@ -109,8 +109,8 @@ const DEFAULT_AUTO_APPROVAL_OPTIONS: Record<AutoApprovalOptionKey, boolean> = {
   unknown: false,
 }
 
-export class EzcodeController implements vscode.Disposable {
-  private readonly client: EzcodeRemoteClient
+export class DogcodeController implements vscode.Disposable {
+  private readonly client: DogcodeRemoteClient
   private readonly approvalDocuments: ApprovalDocumentProvider
   private activeChatId: string | undefined
   private currentSessionId: string | undefined
@@ -126,7 +126,7 @@ export class EzcodeController implements vscode.Disposable {
   private disposed = false
 
   constructor(private readonly context: vscode.ExtensionContext) {
-    this.client = new EzcodeRemoteClient(context)
+    this.client = new DogcodeRemoteClient(context)
     this.approvalDocuments = new ApprovalDocumentProvider()
     this.context.subscriptions.push(
       vscode.workspace.registerTextDocumentContentProvider(
@@ -509,7 +509,7 @@ export class EzcodeController implements vscode.Disposable {
         })
         return
       }
-      const storedSessionId = this.context.workspaceState.get<string>("ezcode.currentSessionId")
+      const storedSessionId = this.context.workspaceState.get<string>("dogcode.currentSessionId")
       const storedExists = Boolean(
         storedSessionId && this.sessions.some((session) => session.id === storedSessionId)
       )
@@ -572,7 +572,7 @@ export class EzcodeController implements vscode.Disposable {
       const metadata = normalizeSessionMetadata(payload.metadata)
       const bundle = buildSessionBundle(payload, metadata)
       this.currentSessionId = metadata.id
-      this.context.workspaceState.update("ezcode.currentSessionId", metadata.id)
+      this.context.workspaceState.update("dogcode.currentSessionId", metadata.id)
       if (!options.suppressListRefresh) {
         await this.refreshSessions()
       }
@@ -595,7 +595,7 @@ export class EzcodeController implements vscode.Disposable {
   ): Promise<void> {
     if (this.sessionApiAvailable === false) {
       this.currentSessionId = undefined
-      await this.context.workspaceState.update("ezcode.currentSessionId", undefined)
+      await this.context.workspaceState.update("dogcode.currentSessionId", undefined)
       post({
         type: "session.list",
         sessions: this.sessions,
@@ -609,7 +609,7 @@ export class EzcodeController implements vscode.Disposable {
       const metadata = normalizeSessionMetadata(payload.metadata)
       const bundle = buildSessionBundle(payload, metadata)
       this.currentSessionId = metadata.id
-      this.context.workspaceState.update("ezcode.currentSessionId", metadata.id)
+      this.context.workspaceState.update("dogcode.currentSessionId", metadata.id)
       if (!options.suppressListRefresh) {
         await this.refreshSessions()
       } else if (!this.sessions.some((session) => session.id === metadata.id)) {
@@ -630,7 +630,7 @@ export class EzcodeController implements vscode.Disposable {
       if (isRemoteNotFound(error)) {
         this.sessionApiAvailable = false
         this.currentSessionId = undefined
-        await this.context.workspaceState.update("ezcode.currentSessionId", undefined)
+        await this.context.workspaceState.update("dogcode.currentSessionId", undefined)
         post({
           type: "session.list",
           sessions: this.sessions,
@@ -657,7 +657,7 @@ export class EzcodeController implements vscode.Disposable {
       const deletedCurrent = this.currentSessionId === sessionId
       if (deletedCurrent) {
         this.currentSessionId = undefined
-        await this.context.workspaceState.update("ezcode.currentSessionId", undefined)
+        await this.context.workspaceState.update("dogcode.currentSessionId", undefined)
       }
       await this.refreshSessions()
       post({
@@ -1228,7 +1228,7 @@ export class EzcodeController implements vscode.Disposable {
           const metadata = normalizeSessionMetadata(created.metadata)
           sessionId = metadata.id
           this.currentSessionId = metadata.id
-          await this.context.workspaceState.update("ezcode.currentSessionId", metadata.id)
+          await this.context.workspaceState.update("dogcode.currentSessionId", metadata.id)
           await this.refreshSessions()
           post({
             type: "session.created",
@@ -1245,7 +1245,7 @@ export class EzcodeController implements vscode.Disposable {
           this.sessionApiAvailable = false
           sessionId = undefined
           this.currentSessionId = undefined
-          await this.context.workspaceState.update("ezcode.currentSessionId", undefined)
+          await this.context.workspaceState.update("dogcode.currentSessionId", undefined)
         }
       }
       post({ type: "chat.started", text })
@@ -1285,7 +1285,7 @@ export class EzcodeController implements vscode.Disposable {
               this.currentSessionId = remoteSessionId || sessionId
               if (this.currentSessionId) {
                 await this.context.workspaceState.update(
-                  "ezcode.currentSessionId",
+                  "dogcode.currentSessionId",
                   this.currentSessionId
                 )
               }
@@ -1836,7 +1836,7 @@ function toStringArray(value: unknown): string[] {
 }
 
 class ApprovalDocumentProvider implements vscode.TextDocumentContentProvider {
-  static readonly scheme = "ezcode-approval"
+  static readonly scheme = "dogcode-approval"
   private readonly documents = new Map<string, string>()
   private readonly approvals = new Map<string, ApprovalDetail>()
 
@@ -1856,7 +1856,7 @@ class ApprovalDocumentProvider implements vscode.TextDocumentContentProvider {
   async open(approvalId: string): Promise<void> {
     const detail = this.approvals.get(approvalId)
     if (!detail) {
-      void vscode.window.showWarningMessage("EZCode approval details are no longer available.")
+      void vscode.window.showWarningMessage("dogcode approval details are no longer available.")
       return
     }
     const targetColumn =
@@ -1922,7 +1922,7 @@ class ApprovalDocumentProvider implements vscode.TextDocumentContentProvider {
     const fileName = sanitizeFileName(pathValue.split(/[\\/]/).pop() || `${toolName}.txt`)
     return {
       approvalId,
-      title: `EZCode Approval: ${toolName} ${fileName}`,
+      title: `dogcode Approval: ${toolName} ${fileName}`,
       fileName,
       markdown:
         stringValue(payload.content) ||

@@ -1364,7 +1364,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
       <div class="settings-page-header">
         <div>
           <h2>执行器管理</h2>
-          <p>管理当前 VS Code 前端连接的 EZCode 执行器地址和密钥；后续可在这里接入更多 agent 执行器。</p>
+          <p>管理当前 VS Code 前端连接的 dogcode 执行器地址和密钥；后续可在这里接入更多 agent 执行器。</p>
         </div>
         <button class="btn btn-secondary" onClick={refreshAdmin}>
           <span class="codicon codicon-refresh" aria-hidden="true" />
@@ -1403,7 +1403,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
           <div class="settings-action-result">
             <div>
               <strong>当前执行器是本机默认地址</strong>
-              <small>如果 EZCode 执行器部署在服务器，请改为服务器地址，例如 http://192.168.50.149:8765。</small>
+              <small>如果 dogcode 执行器部署在服务器，请改为服务器地址，例如 http://192.168.50.149:8765。</small>
             </div>
           </div>
         </Show>
@@ -2416,7 +2416,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
         <div>
           <h1>
             <span class="codicon codicon-settings-gear" aria-hidden="true" />
-            EZCode 设置
+            dogcode 设置
           </h1>
           <p>执行器、服务商、工具链、自动批准和其他维护入口。</p>
         </div>
@@ -2424,7 +2424,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
       </div>
 
       <div class="settings-shell">
-        <nav class="settings-tab-list" aria-label="EZCode settings">
+        <nav class="settings-tab-list" aria-label="dogcode settings">
           <For each={settingsTabs}>
             {(tab) => (
               <button

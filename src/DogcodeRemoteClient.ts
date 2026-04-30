@@ -23,7 +23,7 @@ interface PeerInfo {
   peer_token: string
 }
 
-export class EzcodeRemoteClient {
+export class DogcodeRemoteClient {
   private peerProcess: ChildProcessWithoutNullStreams | undefined
   private peerInfo: PeerInfo | undefined
 
@@ -34,8 +34,8 @@ export class EzcodeRemoteClient {
   }
 
   async connectionState(): Promise<ConnectionState> {
-    const adminSecret = await this.context.secrets.get("ezcode.adminSecret")
-    const bootstrapSecret = await this.context.secrets.get("ezcode.bootstrapSecret")
+    const adminSecret = await this.context.secrets.get("dogcode.adminSecret")
+    const bootstrapSecret = await this.context.secrets.get("dogcode.bootstrapSecret")
     const host = this.hostUrlState()
     const adminMissing = !host.url || !adminSecret
     if (!adminMissing) {
@@ -81,14 +81,14 @@ export class EzcodeRemoteClient {
     if (options.hostUrl !== undefined && options.hostUrl.trim()) {
       requestedHostUrl = normalizeHostUrl(options.hostUrl)
       await vscode.workspace
-        .getConfiguration("ezcode")
+        .getConfiguration("dogcode")
         .update("hostUrl", requestedHostUrl, vscode.ConfigurationTarget.Global)
     }
     if (options.adminSecret !== undefined && options.adminSecret.trim()) {
-      await this.context.secrets.store("ezcode.adminSecret", options.adminSecret.trim())
+      await this.context.secrets.store("dogcode.adminSecret", options.adminSecret.trim())
     }
     if (options.bootstrapSecret !== undefined && options.bootstrapSecret.trim()) {
-      await this.context.secrets.store("ezcode.bootstrapSecret", options.bootstrapSecret.trim())
+      await this.context.secrets.store("dogcode.bootstrapSecret", options.bootstrapSecret.trim())
       await this.stopPeer()
     }
     const state = await this.connectionState()
@@ -262,7 +262,7 @@ export class EzcodeRemoteClient {
   }
 
   private async adminPost(pathname: string, payload: JsonObject): Promise<JsonObject> {
-    const adminSecret = await this.context.secrets.get("ezcode.adminSecret")
+    const adminSecret = await this.context.secrets.get("dogcode.adminSecret")
     if (!adminSecret) {
       throw new Error("Admin secret is not configured.")
     }
@@ -273,7 +273,7 @@ export class EzcodeRemoteClient {
     if (this.peerInfo && this.isPeerRunning()) {
       return this.peerInfo
     }
-    const bootstrapSecret = await this.context.secrets.get("ezcode.bootstrapSecret")
+    const bootstrapSecret = await this.context.secrets.get("dogcode.bootstrapSecret")
     if (!bootstrapSecret) {
       throw new Error("Bootstrap secret is not configured.")
     }
@@ -304,8 +304,8 @@ export class EzcodeRemoteClient {
       ],
       { cwd: workspaceRoot }
     )
-    this.peerProcess.stdout.on("data", (chunk) => console.log(`[EZCode peer] ${chunk}`))
-    this.peerProcess.stderr.on("data", (chunk) => console.warn(`[EZCode peer] ${chunk}`))
+    this.peerProcess.stdout.on("data", (chunk) => console.log(`[dogcode peer] ${chunk}`))
+    this.peerProcess.stderr.on("data", (chunk) => console.warn(`[dogcode peer] ${chunk}`))
     this.peerProcess.on("exit", () => {
       this.peerProcess = undefined
       this.peerInfo = undefined
@@ -324,7 +324,7 @@ export class EzcodeRemoteClient {
     configured: boolean
     source: ConnectionState["hostUrlSource"]
   } {
-    const config = vscode.workspace.getConfiguration("ezcode")
+    const config = vscode.workspace.getConfiguration("dogcode")
     const inspected = config.inspect<string>("hostUrl")
     let source: ConnectionState["hostUrlSource"] = "default"
     if (inspected?.workspaceFolderValue !== undefined) {
