@@ -160,7 +160,9 @@ export class SettingsPanelProvider implements vscode.Disposable {
         setTimeout(() => {
           void (async () => {
             if (disposed) return
-            await this.dogcode.postInitialState(postToWebview)
+            await this.dogcode.postInitialState(postToWebview, {
+              initializeSession: false,
+            })
             postToWebview({
               type: "navigate",
               view,

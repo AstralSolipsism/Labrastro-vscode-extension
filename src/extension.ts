@@ -17,6 +17,7 @@ import { SettingsPanelProvider } from "./SettingsPanelProvider"
  * - 注册 Panel Serializer（面板重启恢复）
  */
 export function activate(context: vscode.ExtensionContext) {
+  const activatedAt = Date.now()
   console.log("[dogcode] 插件激活中...")
 
   // ─────────────────────────────────────────────────────────
@@ -128,6 +129,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(agentManagerPanelProvider)
   context.subscriptions.push(dogcodeController)
 
+  console.log(`[dogcode startup] extension.activate ${Date.now() - activatedAt}ms`)
   console.log("[dogcode] 插件激活完成")
 }
 

@@ -2,6 +2,7 @@ import * as vscode from "vscode"
 import * as fs from "fs/promises"
 import * as path from "path"
 import { spawn, type ChildProcessWithoutNullStreams } from "child_process"
+import { buildStartupConnectionState } from "./startup-state"
 
 export type JsonObject = Record<string, unknown>
 
@@ -24,7 +25,7 @@ export interface ConnectionState {
   adminReachable: boolean
   peerConnected: boolean
   peerId?: string
-  status: "missing-config" | "ready" | "error"
+  status: "checking" | "missing-config" | "ready" | "error"
   message?: string
 }
 
@@ -79,6 +80,17 @@ export class DogcodeRemoteClient {
 
   get hostUrl(): string {
     return this.hostUrlState().url
+  }
+
+  startupConnectionState(): ConnectionState {
+    const host = this.hostUrlState()
+    return buildStartupConnectionState({
+      hostUrl: host.url,
+      hostUrlConfigured: host.configured,
+      hostUrlSource: host.source,
+      peerConnected: this.isPeerRunning(),
+      peerId: this.peerInfo?.peer_id,
+    })
   }
 
   async connectionState(): Promise<ConnectionState> {

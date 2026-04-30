@@ -119,6 +119,7 @@ export class DogcodeController implements vscode.Disposable {
   private sessionApiAvailable: boolean | undefined
   private sessionFingerprint: string | undefined
   private sessionInitialization: Promise<void> | undefined
+  private sessionInitializationToken = 0
   private sessions: SessionMetadataState[] = []
   private toolchainState: Record<string, unknown> | undefined
   private environmentManifest: Record<string, unknown> | undefined
@@ -147,7 +148,11 @@ export class DogcodeController implements vscode.Disposable {
     }
   }
 
-  async postInitialState(post: PostMessage): Promise<void> {
+  async postInitialState(
+    post: PostMessage,
+    options: { initializeSession?: boolean } = {}
+  ): Promise<void> {
+    const startedAt = Date.now()
     post({
       type: "ready",
       extensionVersion: contextVersion(this.context),
@@ -155,17 +160,64 @@ export class DogcodeController implements vscode.Disposable {
       platform: process.platform,
     })
     post({ type: "autoApproval.state", payload: this.getAutoApprovalState() })
-    await this.postConnectionState(post)
-    await this.postAdminState(post)
-    await this.refreshBackendCapabilities(post)
-    await this.initializeSessionState(post)
+    post({ type: "connection.state", payload: this.client.startupConnectionState() })
+    post({ type: "environment.snapshot", payload: this.environmentSnapshot })
+    post({
+      type: "startup.metric",
+      payload: { name: "initial-state-ready", elapsedMs: Date.now() - startedAt },
+    })
+    void this.refreshInitialStateInBackground(post, startedAt, {
+      initializeSession: options.initializeSession !== false,
+    })
+  }
+
+  private async refreshInitialStateInBackground(
+    post: PostMessage,
+    startedAt: number,
+    options: { initializeSession: boolean }
+  ): Promise<void> {
+    const run = async (name: string, operation: () => Promise<void>) => {
+      const stepStartedAt = Date.now()
+      try {
+        await operation()
+        post({
+          type: "startup.metric",
+          payload: {
+            name,
+            elapsedMs: Date.now() - stepStartedAt,
+            totalElapsedMs: Date.now() - startedAt,
+          },
+        })
+      } catch (error) {
+        post({
+          type: "startup.metric",
+          payload: {
+            name,
+            error: errorMessage(error),
+            elapsedMs: Date.now() - stepStartedAt,
+            totalElapsedMs: Date.now() - startedAt,
+          },
+        })
+      }
+    }
+
+    const tasks = [
+      run("connection-state", () => this.postConnectionState(post)),
+      run("admin-state", () => this.postAdminState(post)),
+      run("backend-capabilities", () => this.refreshBackendCapabilities(post)),
+    ]
+    if (options.initializeSession) {
+      tasks.push(run("session-initialize", () => this.initializeSessionState(post)))
+    }
+
+    await Promise.allSettled(tasks)
+
     if (this.toolchainState) {
       post({ type: "toolchain.state", payload: this.toolchainState })
     }
     if (this.environmentManifest) {
       post({ type: "environment.manifest", payload: this.environmentManifest })
     }
-    post({ type: "environment.snapshot", payload: this.environmentSnapshot })
   }
 
   async handleMessage(
@@ -511,7 +563,8 @@ export class DogcodeController implements vscode.Disposable {
       }
       return
     }
-    this.sessionInitialization = this.initializeSessionStateCore(post)
+    const token = ++this.sessionInitializationToken
+    this.sessionInitialization = this.initializeSessionStateCore(post, token)
     try {
       await this.sessionInitialization
     } finally {
@@ -519,9 +572,12 @@ export class DogcodeController implements vscode.Disposable {
     }
   }
 
-  private async initializeSessionStateCore(post: PostMessage): Promise<void> {
+  private async initializeSessionStateCore(post: PostMessage, token: number): Promise<void> {
     try {
-      const listPayload = await this.refreshSessions()
+      const listPayload = await this.refreshSessions(10)
+      if (token !== this.sessionInitializationToken) {
+        return
+      }
       if (this.sessionApiAvailable === false) {
         post({
           type: "session.list",
@@ -536,7 +592,11 @@ export class DogcodeController implements vscode.Disposable {
       )
       const targetSessionId = storedExists ? storedSessionId : this.sessions[0]?.id
       if (targetSessionId) {
-        await this.loadSession(targetSessionId, post, { suppressListRefresh: true })
+        await this.loadSession(targetSessionId, post, {
+          suppressListRefresh: true,
+          reason: "initial",
+          isStale: () => token !== this.sessionInitializationToken,
+        })
         return
       }
       this.currentSessionId = undefined
@@ -551,12 +611,12 @@ export class DogcodeController implements vscode.Disposable {
     }
   }
 
-  private async refreshSessions(): Promise<{ fingerprint?: string }> {
+  private async refreshSessions(limit = 20): Promise<{ fingerprint?: string }> {
     if (this.sessionApiAvailable === false) {
       return { fingerprint: this.sessionFingerprint }
     }
     try {
-      const payload = await this.client.listSessions(50)
+      const payload = await this.client.listSessions(limit)
       this.sessionApiAvailable = true
       this.sessionFingerprint = stringValue(payload.fingerprint)
       this.sessions = normalizeSessionMetadataList(payload.sessions)
@@ -574,7 +634,7 @@ export class DogcodeController implements vscode.Disposable {
 
   private async postSessionList(post: PostMessage): Promise<void> {
     try {
-      await this.refreshSessions()
+      await this.refreshSessions(50)
       post({
         type: "session.list",
         sessions: this.sessions,
@@ -588,7 +648,11 @@ export class DogcodeController implements vscode.Disposable {
   private async loadSession(
     sessionId: string,
     post: PostMessage,
-    options: { suppressListRefresh?: boolean } = {}
+    options: {
+      suppressListRefresh?: boolean
+      reason?: "initial" | "explicit"
+      isStale?: () => boolean
+    } = {}
   ): Promise<void> {
     if (!sessionId) {
       post({ type: "session.error", message: "Missing session id." })
@@ -596,6 +660,9 @@ export class DogcodeController implements vscode.Disposable {
     }
     try {
       const payload = await this.client.loadSession(sessionId)
+      if (options.isStale?.()) {
+        return
+      }
       const metadata = normalizeSessionMetadata(payload.metadata)
       const bundle = buildSessionBundle(payload, metadata)
       this.currentSessionId = metadata.id
@@ -606,6 +673,7 @@ export class DogcodeController implements vscode.Disposable {
       post({
         type: "session.loaded",
         sessionId: metadata.id,
+        reason: options.reason,
         metadata,
         bundle,
         sessions: this.sessions,
@@ -1247,10 +1315,17 @@ export class DogcodeController implements vscode.Disposable {
   ): Promise<void> {
     try {
       if (!requestedSessionId && this.sessionInitialization) {
-        await this.sessionInitialization
+        this.sessionInitializationToken += 1
       }
-      let sessionId = requestedSessionId || this.currentSessionId
-      if (!sessionId && this.sessionApiAvailable !== false) {
+      let sessionId = requestedSessionId
+      const capabilities = await this.ensureBackendCapabilities()
+      const supportsFreshSessionWithoutHint =
+        capabilities?.freshSessionWithoutSessionHint === true
+      if (
+        !sessionId &&
+        !supportsFreshSessionWithoutHint &&
+        this.sessionApiAvailable !== false
+      ) {
         try {
           const created = await this.client.newSession()
           this.sessionApiAvailable = true
@@ -1279,9 +1354,10 @@ export class DogcodeController implements vscode.Disposable {
       }
       if (
         !sessionId &&
+        !supportsFreshSessionWithoutHint &&
         !canStartSessionlessChat(
-          this.sessionApiAvailable,
-          await this.ensureBackendCapabilities()
+          false,
+          capabilities
         )
       ) {
         post({ type: "chat.error", message: LEGACY_BACKEND_UPGRADE_MESSAGE })
