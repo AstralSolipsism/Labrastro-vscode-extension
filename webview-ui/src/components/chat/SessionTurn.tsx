@@ -279,7 +279,16 @@ function shellStreamLabel(stream: ShellOutputStream): string {
   return "out"
 }
 
+function omitShellCommandFields(input?: Record<string, unknown>): Record<string, unknown> {
+  if (!input) return {}
+  const entries = Object.entries(input).filter(([key]) => !["command", "cmd", "args"].includes(key))
+  return Object.fromEntries(entries)
+}
+
 const ShellToolPart: Component<PartProps> = (props) => {
+  const [open, setOpen] = createSignal(
+    ["running", "awaiting_approval", "approved", "denied", "error", "cancelled"].includes(props.part.status || "")
+  )
   const [detailsOpen, setDetailsOpen] = createSignal(false)
   const kind = () => traceKindForPart(props.part)
   const status = () => traceStatusForPart(props.part)
@@ -287,27 +296,18 @@ const ShellToolPart: Component<PartProps> = (props) => {
   const toolName = () => props.part.tool || "shell"
   const command = createMemo(() => extractShellCommand(props.part.toolInput) || "命令内容不可用")
   const duration = () => toolDurationLabel(props.part)
+  const detailInput = createMemo(() => omitShellCommandFields(props.part.toolInput))
   const outputChunks = createMemo<ShellOutputChunk[]>(() => {
     if (props.part.toolOutputChunks?.length) return props.part.toolOutputChunks
     return shellChunksFromText(props.part.toolOutput || props.part.toolFinalOutput || "")
   })
   const hasDetails = () =>
     Boolean(
-      (props.part.toolInput && Object.keys(props.part.toolInput).length > 0) ||
+      Object.keys(detailInput()).length > 0 ||
       props.part.approvalId ||
       props.part.toolResultMeta && Object.keys(props.part.toolResultMeta).length > 0 ||
       shouldShowShellFinalOutput(props.part.toolOutput, props.part.toolFinalOutput),
     )
-  const approvalDetails = () => approvalFromPayload({}, {
-    approvalId: props.part.approvalId,
-    toolCallId: props.part.toolCallId,
-    toolName: toolName(),
-    toolSource: props.part.toolSource,
-    reason: props.part.approvalReason,
-    content: props.part.approvalContent,
-    toolArgs: props.part.toolInput || {},
-    sections: props.part.approvalSections || [],
-  })
 
   let outputRef: HTMLDivElement | undefined
   createEffect(() => {
@@ -336,7 +336,7 @@ const ShellToolPart: Component<PartProps> = (props) => {
         class="tool-card__header shell-card__header"
         onClick={() => {
           if (props.part.traceNodeId) props.onTraceNodeSelect?.(props.part.traceNodeId)
-          if (hasDetails()) setDetailsOpen((value) => !value)
+          setOpen((value) => !value)
         }}
       >
         <span class="tool-card__icon">
@@ -350,80 +350,94 @@ const ShellToolPart: Component<PartProps> = (props) => {
         <Show when={duration()}>
           <span class="tool-card__duration">{duration()}</span>
         </Show>
-        <Show when={hasDetails()}>
-          <span class={`codicon codicon-chevron-${detailsOpen() ? "down" : "right"}`} aria-hidden="true" />
-        </Show>
+        <span class={`codicon codicon-chevron-${open() ? "down" : "right"}`} aria-hidden="true" />
       </button>
 
-      <div class="shell-card__main">
-        <div class="shell-card__command" title={command()}>
-          <span class="shell-card__prompt">$</span>
-          <code>{command()}</code>
-        </div>
-
-        <Show when={props.part.approvalId}>
-          <div class="shell-card__approval">
-            <span class="codicon codicon-shield" aria-hidden="true" />
-            <span>{props.part.approvalReason || "该命令需要批准后执行。"}</span>
-            <strong>{approvalDecisionLabel(props.part.approvalDecision, props.part.status)}</strong>
+      <Show when={open()}>
+        <div class="shell-card__main">
+          <div class="shell-card__command" title={command()}>
+            <span class="shell-card__prompt">$</span>
+            <code>{command()}</code>
           </div>
-        </Show>
 
-        <div class="shell-terminal" ref={outputRef} role="log" aria-label="Shell 输出">
-          <Show
-            when={outputChunks().length > 0}
-            fallback={<div class="shell-terminal__empty">{shellEmptyText(props.part.status)}</div>}
-          >
-            <For each={outputChunks()}>
-              {(chunk) => (
-                <div
-                  class="shell-terminal__chunk"
-                  classList={{
-                    "shell-terminal__chunk--stderr": chunk.stream === "stderr",
-                    "shell-terminal__chunk--system": chunk.stream === "system",
-                    "shell-terminal__chunk--result": chunk.stream === "result",
-                  }}
-                >
-                  <span class="shell-terminal__stream">{shellStreamLabel(chunk.stream)}</span>
-                  <pre>{chunk.content}</pre>
-                </div>
-              )}
-            </For>
-          </Show>
-          <Show when={props.part.status === "running" || props.part.status === "approved"}>
-            <div class="shell-terminal__cursor" aria-hidden="true">
-              <span>▌</span>
+          <Show when={props.part.approvalId}>
+            <div class="shell-card__approval">
+              <span class="codicon codicon-shield" aria-hidden="true" />
+              <span>{props.part.approvalReason || "该命令需要批准后执行。"}</span>
+              <strong>{approvalDecisionLabel(props.part.approvalDecision, props.part.status)}</strong>
             </div>
           </Show>
-        </div>
-      </div>
 
-      <Show when={detailsOpen() && hasDetails()}>
-        <div class="tool-card__details shell-card__details">
-          <Show when={props.part.toolInput && Object.keys(props.part.toolInput).length > 0}>
-            <ToolSection title="参数">
-              <pre class="tool-card__code">{formatJson(props.part.toolInput)}</pre>
-            </ToolSection>
-          </Show>
-          <Show when={props.part.approvalId}>
-            <ToolSection title="审批详情">
-              <ApprovalDetailsBody approval={approvalDetails()} compact />
-            </ToolSection>
-          </Show>
-          <Show when={shouldShowShellFinalOutput(props.part.toolOutput, props.part.toolFinalOutput)}>
-            <ToolSection title="最终结果">
-              <pre class="tool-card__output">{props.part.toolFinalOutput}</pre>
-            </ToolSection>
-          </Show>
-          <Show when={props.part.toolResultMeta && Object.keys(props.part.toolResultMeta).length > 0}>
-            <ToolSection title="元数据">
-              <pre class="tool-card__code">{formatJson(props.part.toolResultMeta)}</pre>
-            </ToolSection>
-          </Show>
-          <Show when={props.part.toolOutputTruncated}>
-            <div class="shell-card__truncation-note">输出过长，主面板只保留最近输出。</div>
+          <div class="shell-terminal" ref={outputRef} role="log" aria-label="Shell 输出">
+            <Show
+              when={outputChunks().length > 0}
+              fallback={<div class="shell-terminal__empty">{shellEmptyText(props.part.status)}</div>}
+            >
+              <For each={outputChunks()}>
+                {(chunk) => (
+                  <div
+                    class="shell-terminal__chunk"
+                    classList={{
+                      "shell-terminal__chunk--stderr": chunk.stream === "stderr",
+                      "shell-terminal__chunk--system": chunk.stream === "system",
+                      "shell-terminal__chunk--result": chunk.stream === "result",
+                    }}
+                  >
+                    <span class="shell-terminal__stream">{shellStreamLabel(chunk.stream)}</span>
+                    <pre>{chunk.content}</pre>
+                  </div>
+                )}
+              </For>
+            </Show>
+            <Show when={props.part.status === "running" || props.part.status === "approved"}>
+              <div class="shell-terminal__cursor" aria-hidden="true">
+                <span>▌</span>
+              </div>
+            </Show>
+          </div>
+
+          <Show when={hasDetails()}>
+            <button
+              type="button"
+              class="shell-card__details-toggle"
+              onClick={() => setDetailsOpen((value) => !value)}
+            >
+              <span class={`codicon codicon-chevron-${detailsOpen() ? "down" : "right"}`} aria-hidden="true" />
+              <span>详情</span>
+            </button>
           </Show>
         </div>
+
+        <Show when={detailsOpen() && hasDetails()}>
+          <div class="tool-card__details shell-card__details">
+            <Show when={Object.keys(detailInput()).length > 0}>
+              <ToolSection title="参数">
+                <pre class="tool-card__code">{formatJson(detailInput())}</pre>
+              </ToolSection>
+            </Show>
+            <Show when={props.part.approvalId}>
+              <ToolSection title="审批">
+                <div class="shell-card__approval-detail">
+                  <span>{props.part.approvalReason || "该命令需要批准后执行。"}</span>
+                  <strong>{approvalDecisionLabel(props.part.approvalDecision, props.part.status)}</strong>
+                </div>
+              </ToolSection>
+            </Show>
+            <Show when={shouldShowShellFinalOutput(props.part.toolOutput, props.part.toolFinalOutput)}>
+              <ToolSection title="最终结果">
+                <pre class="tool-card__output">{props.part.toolFinalOutput}</pre>
+              </ToolSection>
+            </Show>
+            <Show when={props.part.toolResultMeta && Object.keys(props.part.toolResultMeta).length > 0}>
+              <ToolSection title="元数据">
+                <pre class="tool-card__code">{formatJson(props.part.toolResultMeta)}</pre>
+              </ToolSection>
+            </Show>
+            <Show when={props.part.toolOutputTruncated}>
+              <div class="shell-card__truncation-note">输出过长，主面板只保留最近输出。</div>
+            </Show>
+          </div>
+        </Show>
       </Show>
     </div>
   )
