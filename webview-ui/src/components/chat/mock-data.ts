@@ -6,6 +6,7 @@ import type {
   TraceNodeStatus,
   ToolExecutionStatus,
 } from "../../types/trace"
+import type { ShellOutputChunk } from "../../utils/shell-tool-output"
 import type { TimelineEvent } from "./TaskTimeline"
 
 export type MockSessionKind = "main" | "fork" | "subagent"
@@ -24,6 +25,9 @@ export interface MockPart {
   toolOutput?: string
   toolOutputFormat?: "plain" | "markdown" | "terminal" | "json"
   toolStream?: string
+  toolOutputChunks?: ShellOutputChunk[]
+  toolFinalOutput?: string
+  toolOutputTruncated?: boolean
   toolResultMeta?: Record<string, unknown>
   toolStartedAt?: number
   toolEndedAt?: number

@@ -1166,6 +1166,161 @@
   font-size: 11px;
 }
 
+.shell-card__header {
+  border-bottom: 1px solid var(--ez-border);
+}
+
+.shell-card__main {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+}
+
+.shell-card__command {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  padding: 7px 8px;
+  border: 1px solid var(--ez-border);
+  border-radius: 4px;
+  color: var(--vscode-terminal-foreground, var(--ez-fg));
+  background: color-mix(in srgb, var(--vscode-textCodeBlock-background, var(--ez-surface)) 82%, #000 18%);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.shell-card__prompt {
+  color: var(--ez-success);
+  font-weight: 700;
+}
+
+.shell-card__command code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.shell-card__approval {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 7px;
+  border: 1px solid color-mix(in srgb, var(--ez-warning) 45%, var(--ez-border));
+  border-radius: 4px;
+  color: var(--ez-fg);
+  background: color-mix(in srgb, var(--ez-warning) 10%, transparent);
+  font-size: 11px;
+}
+
+.shell-card__approval span:nth-child(2) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shell-card__approval strong {
+  color: var(--ez-warning);
+  font-weight: 700;
+}
+
+.shell-terminal {
+  max-height: 360px;
+  min-height: 88px;
+  overflow: auto;
+  padding: 8px 0;
+  border: 1px solid color-mix(in srgb, var(--ez-border) 72%, #000 28%);
+  border-radius: 4px;
+  color: var(--vscode-terminal-foreground, var(--vscode-editor-foreground, var(--ez-fg)));
+  background: color-mix(in srgb, var(--vscode-terminal-background, var(--vscode-textCodeBlock-background, var(--ez-surface))) 80%, #000 20%);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.shell-terminal__chunk {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 8px;
+  padding: 0 8px;
+}
+
+.shell-terminal__chunk + .shell-terminal__chunk {
+  margin-top: 2px;
+}
+
+.shell-terminal__stream {
+  padding-top: 1px;
+  color: color-mix(in srgb, var(--ez-muted) 85%, transparent);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.shell-terminal__chunk pre {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.shell-terminal__chunk--stderr pre,
+.shell-terminal__chunk--stderr .shell-terminal__stream {
+  color: var(--vscode-terminal-ansiRed, var(--vscode-errorForeground, #f14c4c));
+}
+
+.shell-terminal__chunk--system pre,
+.shell-terminal__chunk--system .shell-terminal__stream {
+  color: var(--ez-warning);
+}
+
+.shell-terminal__chunk--result .shell-terminal__stream {
+  color: var(--ez-success);
+}
+
+.shell-terminal__empty {
+  padding: 0 8px;
+  color: var(--ez-muted);
+}
+
+.shell-terminal__cursor {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 8px;
+  padding: 0 8px;
+  color: var(--ez-success);
+}
+
+.shell-terminal__cursor span {
+  grid-column: 2;
+  animation: shell-cursor-blink 1.1s steps(2, start) infinite;
+}
+
+.shell-card__details {
+  border-top: 1px solid var(--ez-border);
+}
+
+.shell-card__truncation-note {
+  color: var(--ez-muted);
+  font-size: 11px;
+}
+
+@keyframes shell-cursor-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell-terminal__cursor span {
+    animation: none;
+  }
+}
+
 .view-card__content,
 .context-event-card__content,
 .ui-event-card__content {

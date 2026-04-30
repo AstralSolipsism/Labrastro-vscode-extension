@@ -1,4 +1,4 @@
-import { Component, For, Match, Show, Suspense, Switch, createSignal, lazy } from "solid-js"
+import { Component, For, Match, Show, Suspense, Switch, createEffect, createMemo, createSignal, lazy } from "solid-js"
 import type { MockTurn, MockPart, MockMessage } from "./mock-data"
 import {
   TOOL_STATUS_TO_TRACE_STATUS,
@@ -12,6 +12,14 @@ import {
 } from "../../types/trace"
 import { IconButton } from "../common/IconButton"
 import { ApprovalDetailsBody, approvalFromPayload } from "./ApprovalDetailsDialog"
+import {
+  extractShellCommand,
+  isShellToolName,
+  shellChunksFromText,
+  shouldShowShellFinalOutput,
+  type ShellOutputChunk,
+  type ShellOutputStream,
+} from "../../utils/shell-tool-output"
 
 const MarkdownBlock = lazy(async () => ({
   default: (await import("../common/MarkdownBlock")).MarkdownBlock,
@@ -64,6 +72,13 @@ function traceStatusForPart(part: MockPart) {
   if (part.type === "tool") return TOOL_STATUS_TO_TRACE_STATUS[part.status || "pending"]
   if (part.type === "session") return part.sessionState === "error" ? "error" : "success"
   return "success"
+}
+
+function toolDurationLabel(part: MockPart): string {
+  if (!part.toolStartedAt || !part.toolEndedAt) return ""
+  const seconds = Math.max(0, part.toolEndedAt - part.toolStartedAt)
+  if (seconds < 1) return `${Math.round(seconds * 1000)}ms`
+  return `${seconds.toFixed(1)}s`
 }
 
 function markerClass(kind: TraceNodeKind, status = "success" as ReturnType<typeof traceStatusForPart>, selected = false) {
@@ -129,10 +144,7 @@ const ToolPart: Component<PartProps> = (props) => {
     )
   }
   const duration = () => {
-    if (!props.part.toolStartedAt || !props.part.toolEndedAt) return ""
-    const seconds = Math.max(0, props.part.toolEndedAt - props.part.toolStartedAt)
-    if (seconds < 1) return `${Math.round(seconds * 1000)}ms`
-    return `${seconds.toFixed(1)}s`
+    return toolDurationLabel(props.part)
   }
   const approvalDetails = () => approvalFromPayload({}, {
     approvalId: props.part.approvalId,
@@ -241,6 +253,181 @@ const ToolOutput: Component<{ part: MockPart }> = (props) => (
     </Match>
   </Switch>
 )
+
+function approvalDecisionLabel(decision?: string, status?: string): string {
+  if (decision === "deny_once") return "已拒绝"
+  if (decision === "auto_denied") return "自动拒绝"
+  if (decision === "auto_approved") return "自动批准"
+  if (decision === "allow_once") return "已批准"
+  if (status === "approved" || status === "running" || status === "complete") return "已批准"
+  if (status === "denied" || status === "cancelled") return "已拒绝"
+  return "待批准"
+}
+
+function shellEmptyText(status?: string): string {
+  if (status === "awaiting_approval") return "等待审批后执行。"
+  if (status === "approved") return "已批准，等待执行输出。"
+  if (status === "running") return "命令执行中，等待输出。"
+  if (status === "error") return "命令执行失败，未返回输出。"
+  return "暂无输出。"
+}
+
+function shellStreamLabel(stream: ShellOutputStream): string {
+  if (stream === "stderr") return "err"
+  if (stream === "result") return "out"
+  if (stream === "system") return "sys"
+  return "out"
+}
+
+const ShellToolPart: Component<PartProps> = (props) => {
+  const [detailsOpen, setDetailsOpen] = createSignal(false)
+  const kind = () => traceKindForPart(props.part)
+  const status = () => traceStatusForPart(props.part)
+  const selected = () => Boolean(props.part.traceNodeId && props.part.traceNodeId === props.selectedTraceNodeId)
+  const toolName = () => props.part.tool || "shell"
+  const command = createMemo(() => extractShellCommand(props.part.toolInput) || "命令内容不可用")
+  const duration = () => toolDurationLabel(props.part)
+  const outputChunks = createMemo<ShellOutputChunk[]>(() => {
+    if (props.part.toolOutputChunks?.length) return props.part.toolOutputChunks
+    return shellChunksFromText(props.part.toolOutput || props.part.toolFinalOutput || "")
+  })
+  const hasDetails = () =>
+    Boolean(
+      (props.part.toolInput && Object.keys(props.part.toolInput).length > 0) ||
+      props.part.approvalId ||
+      props.part.toolResultMeta && Object.keys(props.part.toolResultMeta).length > 0 ||
+      shouldShowShellFinalOutput(props.part.toolOutput, props.part.toolFinalOutput),
+    )
+  const approvalDetails = () => approvalFromPayload({}, {
+    approvalId: props.part.approvalId,
+    toolCallId: props.part.toolCallId,
+    toolName: toolName(),
+    toolSource: props.part.toolSource,
+    reason: props.part.approvalReason,
+    content: props.part.approvalContent,
+    toolArgs: props.part.toolInput || {},
+    sections: props.part.approvalSections || [],
+  })
+
+  let outputRef: HTMLDivElement | undefined
+  createEffect(() => {
+    outputChunks().length
+    props.part.toolOutput
+    props.part.status
+    if (!outputRef) return
+    queueMicrotask(() => {
+      if (outputRef) outputRef.scrollTop = outputRef.scrollHeight
+    })
+  })
+
+  return (
+    <div
+      class="tool-card shell-card"
+      classList={{
+        "tool-card--selected": selected(),
+        "tool-card--awaiting": props.part.status === "awaiting_approval",
+        "tool-card--error": props.part.status === "error",
+        "tool-card--cancelled": props.part.status === "cancelled" || props.part.status === "denied",
+      }}
+      data-trace-node-id={props.part.traceNodeId}
+    >
+      <button
+        type="button"
+        class="tool-card__header shell-card__header"
+        onClick={() => {
+          if (props.part.traceNodeId) props.onTraceNodeSelect?.(props.part.traceNodeId)
+          if (hasDetails()) setDetailsOpen((value) => !value)
+        }}
+      >
+        <span class="tool-card__icon">
+          <span class="codicon codicon-terminal" aria-hidden="true" />
+        </span>
+        <span class="tool-card__body">
+          <span class="tool-card__title">{TOOL_LABELS[toolName()] || "执行命令"}</span>
+        </span>
+        <span class={markerClass(kind(), status(), selected())} title={getTraceStatusLabel(status())} />
+        <span class="tool-card__status">{props.part.status ? getToolExecutionStatusLabel(props.part.status) : getTraceStatusLabel(status())}</span>
+        <Show when={duration()}>
+          <span class="tool-card__duration">{duration()}</span>
+        </Show>
+        <Show when={hasDetails()}>
+          <span class={`codicon codicon-chevron-${detailsOpen() ? "down" : "right"}`} aria-hidden="true" />
+        </Show>
+      </button>
+
+      <div class="shell-card__main">
+        <div class="shell-card__command" title={command()}>
+          <span class="shell-card__prompt">$</span>
+          <code>{command()}</code>
+        </div>
+
+        <Show when={props.part.approvalId}>
+          <div class="shell-card__approval">
+            <span class="codicon codicon-shield" aria-hidden="true" />
+            <span>{props.part.approvalReason || "该命令需要批准后执行。"}</span>
+            <strong>{approvalDecisionLabel(props.part.approvalDecision, props.part.status)}</strong>
+          </div>
+        </Show>
+
+        <div class="shell-terminal" ref={outputRef} role="log" aria-label="Shell 输出">
+          <Show
+            when={outputChunks().length > 0}
+            fallback={<div class="shell-terminal__empty">{shellEmptyText(props.part.status)}</div>}
+          >
+            <For each={outputChunks()}>
+              {(chunk) => (
+                <div
+                  class="shell-terminal__chunk"
+                  classList={{
+                    "shell-terminal__chunk--stderr": chunk.stream === "stderr",
+                    "shell-terminal__chunk--system": chunk.stream === "system",
+                    "shell-terminal__chunk--result": chunk.stream === "result",
+                  }}
+                >
+                  <span class="shell-terminal__stream">{shellStreamLabel(chunk.stream)}</span>
+                  <pre>{chunk.content}</pre>
+                </div>
+              )}
+            </For>
+          </Show>
+          <Show when={props.part.status === "running" || props.part.status === "approved"}>
+            <div class="shell-terminal__cursor" aria-hidden="true">
+              <span>▌</span>
+            </div>
+          </Show>
+        </div>
+      </div>
+
+      <Show when={detailsOpen() && hasDetails()}>
+        <div class="tool-card__details shell-card__details">
+          <Show when={props.part.toolInput && Object.keys(props.part.toolInput).length > 0}>
+            <ToolSection title="参数">
+              <pre class="tool-card__code">{formatJson(props.part.toolInput)}</pre>
+            </ToolSection>
+          </Show>
+          <Show when={props.part.approvalId}>
+            <ToolSection title="审批详情">
+              <ApprovalDetailsBody approval={approvalDetails()} compact />
+            </ToolSection>
+          </Show>
+          <Show when={shouldShowShellFinalOutput(props.part.toolOutput, props.part.toolFinalOutput)}>
+            <ToolSection title="最终结果">
+              <pre class="tool-card__output">{props.part.toolFinalOutput}</pre>
+            </ToolSection>
+          </Show>
+          <Show when={props.part.toolResultMeta && Object.keys(props.part.toolResultMeta).length > 0}>
+            <ToolSection title="元数据">
+              <pre class="tool-card__code">{formatJson(props.part.toolResultMeta)}</pre>
+            </ToolSection>
+          </Show>
+          <Show when={props.part.toolOutputTruncated}>
+            <div class="shell-card__truncation-note">输出过长，主面板只保留最近输出。</div>
+          </Show>
+        </div>
+      </Show>
+    </div>
+  )
+}
 
 const TracePart: Component<PartProps> = (props) => {
   const kind = () => props.part.traceNodeKind || "thought_summary"
@@ -483,7 +670,10 @@ const PartView: Component<PartProps> = (props) => {
       <Match when={props.part.type === "text"}>
         <MarkdownText text={props.part.text} format={props.part.textFormat} />
       </Match>
-      <Match when={props.part.type === "tool"}>
+      <Match when={props.part.type === "tool" && isShellToolName(props.part.tool, props.part.toolSource)}>
+        <ShellToolPart {...props} />
+      </Match>
+      <Match when={props.part.type === "tool" && !isShellToolName(props.part.tool, props.part.toolSource)}>
         <ToolPart {...props} />
       </Match>
       <Match when={props.part.type === "trace"}>

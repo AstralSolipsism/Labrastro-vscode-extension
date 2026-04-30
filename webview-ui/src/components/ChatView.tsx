@@ -17,6 +17,13 @@ import { IconButton } from "./common/IconButton"
 import { useTrace } from "../context/trace"
 import { useVSCode } from "../context/vscode"
 import { evaluateCommandDecision } from "../utils/command-auto-approval"
+import {
+  appendShellOutputChunk,
+  buildShellOutputText,
+  isShellToolName,
+  reconcileShellFinalOutput,
+  shellChunksFromText,
+} from "../utils/shell-tool-output"
 import { isLocalDraftSessionId } from "../utils/session-history"
 import type { MockMessage, MockPart } from "./chat/mock-data"
 
@@ -410,27 +417,52 @@ const ChatView: Component<ChatViewProps> = (props) => {
       const toolCallId = stringValue(payload.tool_call_id)
       const chunk = String(payload.content || "")
       const outputFormat = stringValue(payload.format) || stringValue(payload.output_format) || stringValue(payload.tool_output_format)
+      const toolSource = stringValue(payload.tool_source)
+      const stream = String(payload.stream || "stdout")
+      const isShell = isShellToolName(toolName, toolSource)
       const parts = ensureAssistantMessage().parts
       const existingIndex = resolveToolPartIndex(parts, toolName, toolCallId)
       const existing = existingIndex >= 0 ? parts[existingIndex] : undefined
+      const shellOutput = isShell
+        ? appendShellOutputChunk(existing?.toolOutputChunks, stream, chunk)
+        : undefined
       upsertToolPart(toolName, {
         status: "running",
         toolCallId,
-        toolStream: String(payload.stream || "stdout"),
-        toolOutputFormat: inferToolOutputFormat(toolName, stringValue(payload.tool_source), outputFormat),
-        toolOutput: `${existing?.toolOutput || ""}${chunk}`,
+        toolSource,
+        toolStream: stream,
+        toolOutputFormat: inferToolOutputFormat(toolName, toolSource, outputFormat),
+        toolOutput: shellOutput ? buildShellOutputText(shellOutput.chunks) : `${existing?.toolOutput || ""}${chunk}`,
+        toolOutputChunks: shellOutput?.chunks,
+        toolOutputTruncated: shellOutput?.truncated || existing?.toolOutputTruncated,
       }, toolCallId)
     } else if (type === "tool_call_end") {
       const toolName = String(payload.tool_name || "tool")
       const toolCallId = stringValue(payload.tool_call_id)
       const outputFormat = stringValue(payload.format) || stringValue(payload.output_format) || stringValue(payload.tool_output_format) || stringValue(payload.tool_result_format)
+      const toolSource = stringValue(payload.tool_source)
+      const finalOutput = String(payload.tool_result || "")
+      const parts = ensureAssistantMessage().parts
+      const existingIndex = resolveToolPartIndex(parts, toolName, toolCallId)
+      const existing = existingIndex >= 0 ? parts[existingIndex] : undefined
+      const isShell = isShellToolName(toolName, toolSource)
+      const reconciledShellOutput = isShell
+        ? reconcileShellFinalOutput(existing?.toolOutput, finalOutput, existing?.toolOutputChunks)
+        : finalOutput
+      const shellChunks = isShell
+        ? existing?.toolOutputChunks?.length
+          ? existing.toolOutputChunks
+          : shellChunksFromText(reconciledShellOutput)
+        : existing?.toolOutputChunks
       upsertToolPart(toolName, {
         status: payload.tool_success === false ? "error" : "complete",
         toolCallId,
-        toolSource: stringValue(payload.tool_source),
+        toolSource,
         toolEndedAt: numberValue(payload.ended_at),
-        toolOutput: String(payload.tool_result || ""),
-        toolOutputFormat: inferToolOutputFormat(toolName, stringValue(payload.tool_source), outputFormat),
+        toolOutput: reconciledShellOutput,
+        toolOutputFormat: inferToolOutputFormat(toolName, toolSource, outputFormat),
+        toolOutputChunks: shellChunks,
+        toolFinalOutput: isShell ? finalOutput : undefined,
         toolResultMeta: objectValue(payload.meta),
       }, toolCallId)
     } else if (type === "approval_request") {
