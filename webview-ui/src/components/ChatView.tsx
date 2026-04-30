@@ -17,6 +17,7 @@ import { IconButton } from "./common/IconButton"
 import { useTrace } from "../context/trace"
 import { useVSCode } from "../context/vscode"
 import { evaluateCommandDecision } from "../utils/command-auto-approval"
+import { isLocalDraftSessionId } from "../utils/session-history"
 import type { MockMessage, MockPart } from "./chat/mock-data"
 
 interface PendingApproval extends ApprovalDetails {
@@ -95,6 +96,13 @@ const ChatView: Component<ChatViewProps> = (props) => {
   })
 
   let timer: number | undefined
+
+  onMount(() => {
+    console.log("[dogcode startup]", {
+      name: "first-chat-render",
+      elapsedMs: Math.round(performance.now()),
+    })
+  })
 
   const startTimer = () => {
     if (timer) window.clearInterval(timer)
@@ -1119,10 +1127,6 @@ function parseColonFields(lines: string[]): Record<string, string> {
     fields[line.slice(0, index).trim()] = line.slice(index + 1).trim()
   }
   return fields
-}
-
-function isLocalDraftSessionId(sessionId: string | null | undefined): boolean {
-  return Boolean(sessionId?.startsWith("session-"))
 }
 
 function formatSessionDate(dateStr: string): string {

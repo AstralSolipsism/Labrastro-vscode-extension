@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest"
 import type { MockSessionBundle } from "../components/chat/mock-data"
 import { mockTraceUI } from "../components/chat/mock-data"
-import { sessionBundleHasContent } from "./session-history"
+import {
+  isLocalDraftSessionId,
+  sessionBundleHasContent,
+  shouldIgnoreInitialSessionLoad,
+} from "./session-history"
 
 const bundle = (turns: MockSessionBundle["turns"]): MockSessionBundle => ({
   session: { id: "session-1", title: "", updatedAt: "" },
@@ -44,5 +48,22 @@ describe("session history", () => {
         ])
       )
     ).toBe(true)
+  })
+})
+
+describe("initial session load guard", () => {
+  it("identifies local draft session ids", () => {
+    expect(isLocalDraftSessionId("session-local")).toBe(true)
+    expect(isLocalDraftSessionId("remote-session")).toBe(false)
+    expect(isLocalDraftSessionId(null)).toBe(false)
+  })
+
+  it("ignores stale initial loads when a local draft is active", () => {
+    expect(shouldIgnoreInitialSessionLoad("session-local", "remote-old", "initial")).toBe(true)
+  })
+
+  it("keeps explicit loads and matching initial loads", () => {
+    expect(shouldIgnoreInitialSessionLoad("session-local", "remote-old", "explicit")).toBe(false)
+    expect(shouldIgnoreInitialSessionLoad("session-local", "session-local", "initial")).toBe(false)
   })
 })

@@ -5,18 +5,19 @@ import type {
   TraceNavigationPayload,
   TraceNode,
 } from "../types/trace"
-import {
-  mockAllSessions,
-  mockDefaultSessionId,
-  mockSessionBundles,
-  type MockMessage,
-  type MockPart,
-  type MockSession,
-  type MockSessionBundle,
-  type MockTaskStats,
-  type MockTurn,
+import type {
+  MockMessage,
+  MockPart,
+  MockSession,
+  MockSessionBundle,
+  MockTaskStats,
+  MockTurn,
 } from "../components/chat/mock-data"
-import { sessionBundleHasContent } from "../utils/session-history"
+import {
+  isLocalDraftSessionId,
+  sessionBundleHasContent,
+  shouldIgnoreInitialSessionLoad,
+} from "../utils/session-history"
 import { buildOrchestrationGraph, getRootSessionId } from "../utils/trace-orchestration"
 import { useVSCode, type ExtensionMessage } from "./vscode"
 
@@ -166,10 +167,6 @@ function normalizeSessionBundle(value: unknown): MockSessionBundle | undefined {
   }
 }
 
-function isLocalDraftSessionId(sessionId: string | null | undefined): boolean {
-  return Boolean(sessionId?.startsWith("session-"))
-}
-
 function mergeRemoteBundleWithDraft(
   remoteBundle: MockSessionBundle,
   draftBundle: MockSessionBundle
@@ -253,12 +250,9 @@ const TraceContext = createContext<TraceContextValue>()
 
 export const TraceProvider: ParentComponent = (props) => {
   const vscode = useVSCode()
-  const defaultSession = mockSessionBundles[mockDefaultSessionId]
 
   const [allSessions, setAllSessions] = createSignal<MockSession[]>([])
-  const [sessionBundles, setSessionBundles] = createSignal<Record<string, MockSessionBundle>>(
-    cloneValue(mockSessionBundles)
-  )
+  const [sessionBundles, setSessionBundles] = createSignal<Record<string, MockSessionBundle>>({})
   const [currentSessionId, setCurrentSessionId] = createSignal<string | null>(null)
   const [stats, setStats] = createSignal<MockTaskStats>(cloneValue(EMPTY_STATS))
   const [turns, setTurns] = createSignal<MockTurn[]>([])
@@ -939,7 +933,6 @@ export const TraceProvider: ParentComponent = (props) => {
   }
 
   onMount(() => {
-    vscode.postMessage({ type: "session.initialize" })
     const unsubscribe = vscode.onMessage((msg: ExtensionMessage) => {
       if (msg.type === "session.list") {
         setAllSessions(normalizeSessionList(msg.sessions))
@@ -980,6 +973,9 @@ export const TraceProvider: ParentComponent = (props) => {
         (msg.type === "session.loaded" || msg.type === "session.created" || msg.type === "session.state") &&
         typeof msg.sessionId === "string"
       ) {
+        if (shouldIgnoreInitialSessionLoad(currentSessionId(), msg.sessionId, msg.reason)) {
+          return
+        }
         const remoteBundle = normalizeSessionBundle(msg.bundle)
         const sessions = normalizeSessionList(msg.sessions)
         if (sessions.length) {
@@ -1006,7 +1002,8 @@ export const TraceProvider: ParentComponent = (props) => {
 
       if (msg.type === "traceSnapshot" && typeof msg.payload === "object" && msg.payload) {
         const payload = msg.payload as TraceSnapshotPayload
-        const targetSessionId = payload.currentSessionId || currentSessionId() || mockDefaultSessionId
+        const targetSessionId = payload.currentSessionId || currentSessionId()
+        if (!targetSessionId) return
         const baseBundle = getSessionBundle(targetSessionId)
         if (!baseBundle) return
 
