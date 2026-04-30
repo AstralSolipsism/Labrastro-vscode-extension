@@ -24,6 +24,8 @@ type ModelDetailMode = "fetched" | "custom"
 type ModelActionIntent = "" | "savePreset" | "activateMain" | "activateSub" | "activateBoth"
 type EnvironmentEntryKind = "cli" | "mcp" | "skill"
 type ToolchainKind = EnvironmentEntryKind
+type ToolchainKindFilter = "all" | ToolchainKind
+type ToolchainStatusFilter = "all" | "ready" | "missing" | "stopped" | "awaiting"
 type EnvironmentEntryStatus =
   | "unchecked"
   | "checking"
@@ -34,6 +36,9 @@ type EnvironmentEntryStatus =
   | "installing"
   | "configured"
   | "failed"
+  | "stopped"
+  | "parse_failed"
+  | "needs_review"
 type EnvironmentSnapshotStatus = "idle" | "running" | "completed" | "error" | "canceled"
 
 interface SettingsViewProps {
@@ -116,9 +121,39 @@ interface ToolchainRecord {
   description?: string
   path_hint?: string
   docs?: Array<{ title?: string; url?: string }>
+  evidence?: Array<Record<string, string>>
+  repo_url?: string
+  credentials?: string[]
+  risk_level?: string
+  last_action?: string
+  last_updated?: string
   install_prompt?: string
   verify_prompt?: string
   notes?: string[]
+}
+
+interface ToolchainDashboardItem {
+  id: string
+  kind: ToolchainKind
+  name: string
+  alias: string
+  source: string
+  repo_url: string
+  docs: Array<{ title?: string; url?: string }>
+  evidence: Array<Record<string, string>>
+  placement: string
+  scope: string
+  status: EnvironmentEntryStatus
+  status_detail: string
+  check: string
+  install: string
+  command: string
+  requirements: Record<string, string>
+  credentials: string[]
+  risk_level: string
+  enabled: boolean
+  last_action: string
+  last_updated: string
 }
 
 interface ToolchainEditorState {
@@ -141,7 +176,11 @@ interface ToolchainEditorState {
   source: string
   description: string
   pathHint: string
+  repoUrl: string
   docsText: string
+  evidenceText: string
+  credentialsText: string
+  riskLevel: string
   installPrompt: string
   verifyPrompt: string
   notesText: string
@@ -256,6 +295,38 @@ function parseDocsText(value: string): Array<{ title: string; url: string }> {
   return docs
 }
 
+function evidenceText(value: unknown): string {
+  if (!Array.isArray(value)) return ""
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+    .map((item) =>
+      [
+        stringValue(item.field),
+        stringValue(item.title),
+        stringValue(item.url),
+        stringValue(item.excerpt),
+      ].join(" | ").trim()
+    )
+    .join("\n")
+}
+
+function parseEvidenceText(value: string): Array<Record<string, string>> {
+  const evidence: Array<Record<string, string>> = []
+  for (const line of value.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    const [field = "", title = "", url = "", ...excerptParts] = trimmed.split("|").map((part) => part.trim())
+    const item: Record<string, string> = {}
+    if (field) item.field = field
+    if (title) item.title = title
+    if (url) item.url = url
+    const excerpt = excerptParts.join(" | ").trim()
+    if (excerpt) item.excerpt = excerpt
+    if (Object.keys(item).length) evidence.push(item)
+  }
+  return evidence
+}
+
 function normalizeToolchainList(value: unknown, kind: ToolchainKind): ToolchainRecord[] {
   if (!Array.isArray(value)) return []
   return value
@@ -275,7 +346,7 @@ function emptyToolchainEditor(kind: ToolchainKind): ToolchainEditorState {
     argsText: "",
     envText: "",
     cwd: "",
-    placement: "peer",
+    placement: kind === "cli" ? "local" : "peer",
     distribution: "command",
     requirementsText: "",
     scope: "project",
@@ -285,7 +356,11 @@ function emptyToolchainEditor(kind: ToolchainKind): ToolchainEditorState {
     source: "",
     description: "",
     pathHint: "",
+    repoUrl: "",
     docsText: "",
+    evidenceText: "",
+    credentialsText: "",
+    riskLevel: "",
     installPrompt: "",
     verifyPrompt: "",
     notesText: "",
@@ -313,7 +388,11 @@ function toolchainEditorFromRecord(record: ToolchainRecord): ToolchainEditorStat
     source: stringValue(record.source),
     description: stringValue(record.description),
     pathHint: stringValue(record.path_hint),
+    repoUrl: stringValue(record.repo_url),
     docsText: docsText(record.docs),
+    evidenceText: evidenceText(record.evidence),
+    credentialsText: stringListText(record.credentials),
+    riskLevel: stringValue(record.risk_level),
     installPrompt: stringValue(record.install_prompt),
     verifyPrompt: stringValue(record.verify_prompt),
     notesText: stringListText(record.notes),
@@ -329,13 +408,19 @@ function toolchainPayloadFromEditor(editor: ToolchainEditorState): Record<string
     version: editor.version.trim() || undefined,
     source: editor.source.trim(),
     description: editor.description.trim(),
+    repo_url: editor.repoUrl.trim(),
     docs: parseDocsText(editor.docsText),
+    evidence: parseEvidenceText(editor.evidenceText),
+    requirements: parseMapText(editor.requirementsText),
+    credentials: parseStringList(editor.credentialsText),
+    risk_level: editor.riskLevel.trim(),
     install_prompt: editor.installPrompt.trim(),
     verify_prompt: editor.verifyPrompt.trim(),
     notes: parseStringList(editor.notesText),
   }
   if (editor.kind === "cli") {
     payload.command = editor.command.trim()
+    payload.placement = editor.placement || "local"
     payload.capabilities = parseStringList(editor.capabilitiesText)
   } else if (editor.kind === "mcp") {
     payload.command = editor.command.trim()
@@ -344,7 +429,6 @@ function toolchainPayloadFromEditor(editor: ToolchainEditorState): Record<string
     payload.cwd = editor.cwd.trim() || undefined
     payload.placement = editor.placement || "peer"
     payload.distribution = editor.distribution || "command"
-    payload.requirements = parseMapText(editor.requirementsText)
   } else {
     payload.scope = editor.scope || "project"
     payload.path_hint = editor.pathHint.trim() || undefined
@@ -358,6 +442,189 @@ function objectValue(value: unknown): Record<string, unknown> {
 
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : []
+}
+
+function stringMapValue(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {}
+  return Object.entries(value as Record<string, unknown>).reduce<Record<string, string>>((acc, [key, item]) => {
+    acc[key] = stringValue(item)
+    return acc
+  }, {})
+}
+
+function normalizeEvidence(value: unknown): Array<Record<string, string>> {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+    .map((item) => stringMapValue(item))
+    .filter((item) => Object.keys(item).length > 0)
+}
+
+function normalizeToolchainStatus(value: unknown): EnvironmentEntryStatus {
+  const text = stringValue(value)
+  if (text === "ready") return "available"
+  if ([
+    "unchecked",
+    "checking",
+    "available",
+    "missing",
+    "awaiting_approval",
+    "downloading",
+    "installing",
+    "configured",
+    "failed",
+    "stopped",
+    "parse_failed",
+    "needs_review",
+  ].includes(text)) {
+    return text as EnvironmentEntryStatus
+  }
+  return "unchecked"
+}
+
+function toolchainRecordToDashboardItem(record: ToolchainRecord): ToolchainDashboardItem {
+  const placement =
+    record.kind === "skill"
+      ? stringValue(record.scope, "project")
+      : stringValue(record.placement, record.kind === "cli" ? "local" : "server")
+  return {
+    id: `${record.kind}:${record.name}`,
+    kind: record.kind,
+    name: record.name,
+    alias: stringValue(record.command || record.path_hint || record.name),
+    source: stringValue(record.source),
+    repo_url: stringValue(record.repo_url),
+    docs: Array.isArray(record.docs) ? record.docs : [],
+    evidence: normalizeEvidence(record.evidence),
+    placement,
+    scope: record.kind === "skill" ? placement : stringValue(record.placement, placement),
+    status: boolValue(record.enabled, true) ? "unchecked" : "stopped",
+    status_detail: boolValue(record.enabled, true) ? "等待环境检查" : "清单已停用",
+    check: stringValue(record.check),
+    install: stringValue(record.install),
+    command: stringValue(record.command || record.path_hint),
+    requirements: stringMapValue(record.requirements),
+    credentials: stringArray(record.credentials),
+    risk_level: stringValue(record.risk_level),
+    enabled: boolValue(record.enabled, true),
+    last_action: stringValue(record.last_action),
+    last_updated: stringValue(record.last_updated),
+  }
+}
+
+function normalizeToolchainDashboardItems(
+  value: unknown,
+  fallbackGroups: Record<ToolchainKind, ToolchainRecord[]>,
+  snapshot: EnvironmentSnapshotState,
+): ToolchainDashboardItem[] {
+  const rawItems = Array.isArray(value)
+    ? value.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+    : []
+  const baseItems = rawItems.length
+    ? rawItems.map((item) => ({
+        id: stringValue(item.id) || `${stringValue(item.kind)}:${stringValue(item.name)}`,
+        kind: (["cli", "mcp", "skill"].includes(stringValue(item.kind)) ? stringValue(item.kind) : "cli") as ToolchainKind,
+        name: stringValue(item.name),
+        alias: stringValue(item.alias || item.command || item.name),
+        source: stringValue(item.source),
+        repo_url: stringValue(item.repo_url),
+        docs: Array.isArray(item.docs) ? item.docs as Array<{ title?: string; url?: string }> : [],
+        evidence: normalizeEvidence(item.evidence),
+        placement: stringValue(item.placement || item.scope),
+        scope: stringValue(item.scope || item.placement),
+        status: normalizeToolchainStatus(item.status),
+        status_detail: stringValue(item.status_detail),
+        check: stringValue(item.check),
+        install: stringValue(item.install),
+        command: stringValue(item.command),
+        requirements: stringMapValue(item.requirements),
+        credentials: stringArray(item.credentials),
+        risk_level: stringValue(item.risk_level),
+        enabled: boolValue(item.enabled, true),
+        last_action: stringValue(item.last_action),
+        last_updated: stringValue(item.last_updated),
+      }))
+    : (["cli", "mcp", "skill"] as ToolchainKind[]).flatMap((kind) =>
+        fallbackGroups[kind].map(toolchainRecordToDashboardItem)
+      )
+  const statusById = new Map(snapshot.entries.map((entry) => [entry.id, entry]))
+  return baseItems
+    .filter((item) => item.name)
+    .map((item) => {
+      const entry = statusById.get(item.id)
+      if (!entry) return item
+      return {
+        ...item,
+        status: normalizeToolchainStatus(entry.status),
+        status_detail: entry.detail || environmentStatusLabel(entry.status),
+        last_action: entry.lastAction || item.last_action,
+        last_updated: entry.lastUpdated || item.last_updated,
+      }
+    })
+}
+
+function toolchainStatusBucket(status: EnvironmentEntryStatus): ToolchainStatusFilter {
+  if (status === "available" || status === "configured") return "ready"
+  if (status === "missing") return "missing"
+  if (status === "stopped") return "stopped"
+  if (status === "awaiting_approval" || status === "needs_review" || status === "parse_failed") return "awaiting"
+  return "all"
+}
+
+function summarizeToolchainDashboard(items: ToolchainDashboardItem[]) {
+  return items.reduce(
+    (summary, item) => {
+      const bucket = toolchainStatusBucket(item.status)
+      if (bucket === "ready") summary.ready += 1
+      if (bucket === "missing") summary.missing += 1
+      if (bucket === "stopped") summary.stopped += 1
+      if (bucket === "awaiting") summary.awaiting += 1
+      return summary
+    },
+    { ready: 0, missing: 0, stopped: 0, awaiting: 0 },
+  )
+}
+
+function placementLabel(item: ToolchainDashboardItem): string {
+  if (item.kind === "cli") {
+    if (item.placement === "server") return "服务端"
+    if (item.placement === "both") return "服务端+本地端"
+    return "本地端"
+  }
+  if (item.kind === "mcp") {
+    if (item.placement === "server") return "服务端"
+    if (item.placement === "both") return "服务端+本地端"
+    return "本地端"
+  }
+  return item.scope === "user" || item.placement === "user" ? "用户级" : "项目级"
+}
+
+function toolchainSourceLabel(item: ToolchainDashboardItem): string {
+  const firstDoc = item.docs[0]
+  return item.repo_url || stringValue(firstDoc?.url) || item.source || "未记录"
+}
+
+function dashboardItemToRecord(item: ToolchainDashboardItem): ToolchainRecord {
+  return {
+    kind: item.kind,
+    name: item.name,
+    enabled: item.enabled,
+    command: item.command,
+    placement: item.kind === "skill" ? undefined : item.placement,
+    scope: item.kind === "skill" ? item.scope || item.placement : undefined,
+    requirements: item.requirements,
+    check: item.check,
+    install: item.install,
+    source: item.source,
+    description: item.alias,
+    docs: item.docs,
+    evidence: item.evidence,
+    repo_url: item.repo_url,
+    credentials: item.credentials,
+    risk_level: item.risk_level,
+    last_action: item.last_action,
+    last_updated: item.last_updated,
+  }
 }
 
 function uniqueCommandRules(values: string[]): string[] {
@@ -399,19 +666,25 @@ function environmentStatusLabel(status: EnvironmentEntryStatus): string {
     case "checking":
       return "检查中"
     case "available":
-      return "可用"
+      return "已就绪"
     case "missing":
-      return "缺失"
+      return "未安装"
     case "awaiting_approval":
-      return "等待批准"
+      return "待授权"
     case "downloading":
       return "下载中"
     case "installing":
       return "安装中"
     case "configured":
-      return "已配置"
+      return "已就绪"
+    case "stopped":
+      return "未运行"
+    case "parse_failed":
+      return "解析失败"
+    case "needs_review":
+      return "待确认"
     case "failed":
-      return "失败"
+      return "配置失败"
     default:
       return "未检查"
   }
@@ -426,7 +699,11 @@ function environmentStatusTone(status: EnvironmentEntryStatus): "success" | "war
     case "awaiting_approval":
     case "downloading":
     case "installing":
+    case "needs_review":
       return "warning"
+    case "missing":
+    case "stopped":
+    case "parse_failed":
     case "failed":
       return "error"
     default:
@@ -506,6 +783,9 @@ function normalizeEnvironmentEntries(value: unknown): EnvironmentEntryState[] {
         "installing",
         "configured",
         "failed",
+        "stopped",
+        "parse_failed",
+        "needs_review",
       ].includes(stringValue(item.status)) ? stringValue(item.status) : "unchecked") as EnvironmentEntryStatus,
       detail: stringValue(item.detail) || undefined,
       lastAction: stringValue(item.lastAction) || undefined,
@@ -715,6 +995,16 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
   const [selectedEnvironmentApproval, setSelectedEnvironmentApproval] = createSignal<EnvironmentApprovalState | undefined>()
   const [toolchainBootstrapped, setToolchainBootstrapped] = createSignal(false)
   const [toolchainEditor, setToolchainEditor] = createSignal<ToolchainEditorState | undefined>()
+  const [toolchainKindFilter, setToolchainKindFilter] = createSignal<ToolchainKindFilter>("all")
+  const [toolchainStatusFilter, setToolchainStatusFilter] = createSignal<ToolchainStatusFilter>("all")
+  const [toolchainSearch, setToolchainSearch] = createSignal("")
+  const [selectedToolchainId, setSelectedToolchainId] = createSignal("")
+  const [ingestRepoUrl, setIngestRepoUrl] = createSignal("")
+  const [ingestDocsUrl, setIngestDocsUrl] = createSignal("")
+  const [ingestDocsText, setIngestDocsText] = createSignal("")
+  const [ingestKindHint, setIngestKindHint] = createSignal<ToolchainKindFilter>("all")
+  const [ingestNameHint, setIngestNameHint] = createSignal("")
+  const [ingestPlacementHint, setIngestPlacementHint] = createSignal("")
   const [autoApprovalOptions, setAutoApprovalOptions] = createSignal<Record<string, boolean>>(DEFAULT_AUTO_APPROVE_OPTIONS)
   const [allowedCommandInput, setAllowedCommandInput] = createSignal("")
   const [deniedCommandInput, setDeniedCommandInput] = createSignal("")
@@ -843,6 +1133,57 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
     mcp: environmentSnapshot().entries.filter((entry) => entry.kind === "mcp"),
     skill: environmentSnapshot().entries.filter((entry) => entry.kind === "skill"),
   }))
+  const toolchainDashboardItems = createMemo(() => {
+    const state = server.toolchainState() || {}
+    return normalizeToolchainDashboardItems(
+      state.dashboard_items,
+      toolchainGroups(),
+      environmentSnapshot(),
+    )
+  })
+  const filteredToolchainItems = createMemo(() => {
+    const query = toolchainSearch().trim().toLowerCase()
+    return toolchainDashboardItems().filter((item) => {
+      if (toolchainKindFilter() !== "all" && item.kind !== toolchainKindFilter()) return false
+      if (toolchainStatusFilter() !== "all" && toolchainStatusBucket(item.status) !== toolchainStatusFilter()) {
+        return false
+      }
+      if (!query) return true
+      return [
+        item.name,
+        item.alias,
+        item.source,
+        item.repo_url,
+        item.command,
+        ...item.docs.map((doc) => `${stringValue(doc.title)} ${stringValue(doc.url)}`),
+      ].join(" ").toLowerCase().includes(query)
+    })
+  })
+  const selectedToolchain = createMemo(() =>
+    toolchainDashboardItems().find((item) => item.id === selectedToolchainId()) ||
+    filteredToolchainItems()[0] ||
+    toolchainDashboardItems()[0]
+  )
+  const toolchainSummary = createMemo(() => summarizeToolchainDashboard(toolchainDashboardItems()))
+  const toolchainIngestState = createMemo(() => server.toolchainIngestState())
+  const toolchainIngestLogs = createMemo(() => {
+    const logs = toolchainIngestState().logs
+    return Array.isArray(logs)
+      ? logs.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+      : []
+  })
+
+  createEffect(() => {
+    const selected = selectedToolchainId()
+    const items = toolchainDashboardItems()
+    if (!items.length) {
+      if (selected) setSelectedToolchainId("")
+      return
+    }
+    if (!items.some((item) => item.id === selected)) {
+      setSelectedToolchainId(items[0].id)
+    }
+  })
 
   const modelProfilesFor = (modelId: string) =>
     selectedProviderProfiles().filter((profile) => profileMatches(profile, providerId(), modelId))
@@ -913,8 +1254,23 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
 
   const refreshAdmin = () => vscode.postMessage({ type: "admin.refresh" })
   const refreshEnvironmentManifest = () => vscode.postMessage({ type: "environment.refreshManifest" })
-  const runEnvironment = (mode: "check" | "configure") => vscode.postMessage({ type: "environment.run", mode })
+  const runEnvironment = (mode: "check" | "configure", entryIds?: string[]) =>
+    vscode.postMessage({ type: "environment.run", mode, entryIds })
   const stopEnvironmentRun = () => vscode.postMessage({ type: "environment.cancel" })
+  const runToolchainIngest = () => {
+    vscode.postMessage({
+      type: "toolchain.ingest.run",
+      payload: {
+        repoUrl: ingestRepoUrl().trim(),
+        docsUrl: ingestDocsUrl().trim(),
+        docsText: ingestDocsText().trim(),
+        kindHint: ingestKindHint() === "all" ? "" : ingestKindHint(),
+        nameHint: ingestNameHint().trim(),
+        placementHint: ingestPlacementHint().trim(),
+      },
+    })
+  }
+  const cancelToolchainIngest = () => vscode.postMessage({ type: "toolchain.ingest.cancel" })
   const updateAutoApproval = (patch: {
     options?: Record<string, boolean>
     allowedCommands?: string[]
@@ -2044,6 +2400,14 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
               <span>版本</span>
               <input value={editor.version} onInput={(event) => patchToolchainEditor({ version: event.currentTarget.value })} />
             </label>
+            <label class="field-label">
+              <span>仓库地址</span>
+              <input value={editor.repoUrl} onInput={(event) => patchToolchainEditor({ repoUrl: event.currentTarget.value })} />
+            </label>
+            <label class="field-label">
+              <span>风险等级</span>
+              <input value={editor.riskLevel} placeholder="low / medium / high" onInput={(event) => patchToolchainEditor({ riskLevel: event.currentTarget.value })} />
+            </label>
           </div>
           <label class="field-label">
             <span>说明</span>
@@ -2058,6 +2422,14 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
           </Show>
 
           <Show when={editor.kind === "cli"}>
+            <label class="field-label">
+              <span>部署属性</span>
+              <select value={editor.placement} onChange={(event) => patchToolchainEditor({ placement: event.currentTarget.value })}>
+                <option value="local">local</option>
+                <option value="server">server</option>
+                <option value="both">both</option>
+              </select>
+            </label>
             <label class="field-label">
               <span>能力标签</span>
               <textarea rows={3} value={editor.capabilitiesText} placeholder="每行一个能力，例如 code-search" onInput={(event) => patchToolchainEditor({ capabilitiesText: event.currentTarget.value })} />
@@ -2094,10 +2466,6 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
               <span>环境变量</span>
               <textarea rows={3} value={editor.envText} placeholder="KEY=value，每行一个" onInput={(event) => patchToolchainEditor({ envText: event.currentTarget.value })} />
             </label>
-            <label class="field-label">
-              <span>运行要求</span>
-              <textarea rows={3} value={editor.requirementsText} placeholder="KEY=value，每行一个" onInput={(event) => patchToolchainEditor({ requirementsText: event.currentTarget.value })} />
-            </label>
           </Show>
 
           <Show when={editor.kind === "skill"}>
@@ -2131,6 +2499,20 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
             <textarea rows={3} value={editor.docsText} placeholder="标题 | URL，每行一个" onInput={(event) => patchToolchainEditor({ docsText: event.currentTarget.value })} />
           </label>
           <label class="field-label">
+            <span>LLM 提取依据</span>
+            <textarea rows={3} value={editor.evidenceText} placeholder="field | title | url | excerpt，每行一条" onInput={(event) => patchToolchainEditor({ evidenceText: event.currentTarget.value })} />
+          </label>
+          <div class="toolchain-editor__grid">
+            <label class="field-label">
+              <span>运行要求</span>
+              <textarea rows={3} value={editor.requirementsText} placeholder="KEY=value，每行一个" onInput={(event) => patchToolchainEditor({ requirementsText: event.currentTarget.value })} />
+            </label>
+            <label class="field-label">
+              <span>凭据需求</span>
+              <textarea rows={3} value={editor.credentialsText} placeholder="每行一个凭据名，例如 GITHUB_TOKEN" onInput={(event) => patchToolchainEditor({ credentialsText: event.currentTarget.value })} />
+            </label>
+          </div>
+          <label class="field-label">
             <span>安装指导 prompt</span>
             <textarea rows={4} value={editor.installPrompt} onInput={(event) => patchToolchainEditor({ installPrompt: event.currentTarget.value })} />
           </label>
@@ -2153,7 +2535,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
     )
   }
 
-  const renderToolchains = () => (
+  const renderToolchainsLegacy = () => (
     <div class="settings-page settings-page--wide">
       <div class="settings-page-header">
         <div>
@@ -2347,6 +2729,381 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
       {renderToolchainEditor()}
     </div>
   )
+
+  const renderToolchains = () => (
+      <div class="settings-page settings-page--wide toolchain-dashboard-page">
+        <div class="settings-page-header">
+          <div>
+            <h2>工具链管理</h2>
+            <p>按 CLI / MCP / Skill 管理清单；部署属性、安装位置和运行结果在条目内展示。</p>
+            <p class="setting-description">
+              当前状态：{environmentRunStatusLabel(environmentSnapshot().status)} · 最近清单刷新：{formatTimestamp(environmentSnapshot().lastManifestAt)}
+            </p>
+          </div>
+          <div class="settings-actions settings-actions--right">
+            <button class="btn btn-secondary" onClick={refreshToolchains} disabled={environmentSnapshot().running}>
+              <span class="codicon codicon-refresh" aria-hidden="true" />
+              刷新
+            </button>
+            <Show
+              when={!environmentSnapshot().running}
+              fallback={
+                <button class="btn btn-danger" onClick={stopEnvironmentRun}>
+                  <span class="codicon codicon-debug-stop" aria-hidden="true" />
+                  停止
+                </button>
+              }
+            >
+              <>
+                <button class="btn btn-secondary" onClick={() => runEnvironment("check")} disabled={!environmentSnapshot().entries.length}>
+                  <span class="codicon codicon-search" aria-hidden="true" />
+                  检查全部
+                </button>
+                <button class="btn btn-primary" onClick={() => runEnvironment("configure")} disabled={!environmentSnapshot().entries.length}>
+                  <span class="codicon codicon-tools" aria-hidden="true" />
+                  配置全部
+                </button>
+              </>
+            </Show>
+          </div>
+        </div>
+
+        <Show when={environmentError()}>
+          <div class="settings-error">{environmentError()}</div>
+        </Show>
+        <Show when={toolchainError()}>
+          <div class="settings-error">{toolchainError()}</div>
+        </Show>
+        <Show when={toolchainActionFeedback()}>
+          <div class="settings-success">{toolchainActionFeedback()}</div>
+        </Show>
+
+        <div class="toolchain-summary-grid">
+          <button class="toolchain-summary-card" classList={{ "is-active": toolchainStatusFilter() === "ready" }} onClick={() => setToolchainStatusFilter(toolchainStatusFilter() === "ready" ? "all" : "ready")}>
+            <span>已就绪</span>
+            <strong>{String(toolchainSummary().ready)}</strong>
+          </button>
+          <button class="toolchain-summary-card" classList={{ "is-active": toolchainStatusFilter() === "missing" }} onClick={() => setToolchainStatusFilter(toolchainStatusFilter() === "missing" ? "all" : "missing")}>
+            <span>未安装</span>
+            <strong>{String(toolchainSummary().missing)}</strong>
+          </button>
+          <button class="toolchain-summary-card" classList={{ "is-active": toolchainStatusFilter() === "stopped" }} onClick={() => setToolchainStatusFilter(toolchainStatusFilter() === "stopped" ? "all" : "stopped")}>
+            <span>未运行</span>
+            <strong>{String(toolchainSummary().stopped)}</strong>
+          </button>
+          <button class="toolchain-summary-card" classList={{ "is-active": toolchainStatusFilter() === "awaiting" }} onClick={() => setToolchainStatusFilter(toolchainStatusFilter() === "awaiting" ? "all" : "awaiting")}>
+            <span>待授权/待确认</span>
+            <strong>{String(toolchainSummary().awaiting)}</strong>
+          </button>
+        </div>
+
+        <section class="settings-section settings-section--flat toolchain-ingest-panel">
+          <div class="settings-section-heading">
+            <div>
+              <span>文档解析 Agent</span>
+              <small>从仓库和文档提取清单候选；校验通过后写入服务器 manifest。</small>
+            </div>
+            <StatusBadge tone={toolchainIngestState().running === true ? "warning" : toolchainIngestState().persisted === true ? "success" : "muted"}>
+              {toolchainIngestState().running === true ? "运行中" : toolchainIngestState().persisted === true ? "已写入" : "待命"}
+            </StatusBadge>
+          </div>
+          <div class="toolchain-ingest-grid">
+            <label class="field-label">
+              <span>仓库地址</span>
+              <input value={ingestRepoUrl()} placeholder="https://github.com/..." onInput={(event) => setIngestRepoUrl(event.currentTarget.value)} />
+            </label>
+            <label class="field-label">
+              <span>文档地址</span>
+              <input value={ingestDocsUrl()} placeholder="README / docs URL" onInput={(event) => setIngestDocsUrl(event.currentTarget.value)} />
+            </label>
+            <label class="field-label">
+              <span>类型提示</span>
+              <select value={ingestKindHint()} onChange={(event) => setIngestKindHint(event.currentTarget.value as ToolchainKindFilter)}>
+                <option value="all">自动判断</option>
+                <option value="cli">CLI</option>
+                <option value="mcp">MCP</option>
+                <option value="skill">Skill</option>
+              </select>
+            </label>
+            <label class="field-label">
+              <span>名称提示</span>
+              <input value={ingestNameHint()} onInput={(event) => setIngestNameHint(event.currentTarget.value)} />
+            </label>
+            <label class="field-label">
+              <span>部署提示</span>
+              <input value={ingestPlacementHint()} placeholder="server / local / both / peer / user / project" onInput={(event) => setIngestPlacementHint(event.currentTarget.value)} />
+            </label>
+            <div class="toolchain-ingest-actions">
+              <button class="btn btn-primary" onClick={runToolchainIngest} disabled={toolchainIngestState().running === true || (!ingestRepoUrl().trim() && !ingestDocsUrl().trim() && !ingestDocsText().trim())}>
+                <span class="codicon codicon-sparkle" aria-hidden="true" />
+                解析并写入
+              </button>
+              <Show when={toolchainIngestState().running === true}>
+                <button class="btn btn-danger" onClick={cancelToolchainIngest}>
+                  <span class="codicon codicon-debug-stop" aria-hidden="true" />
+                  停止
+                </button>
+              </Show>
+            </div>
+          </div>
+          <label class="field-label">
+            <span>补充文档片段</span>
+            <textarea rows={3} value={ingestDocsText()} placeholder="可粘贴 README 安装段落、凭据说明或风险提示" onInput={(event) => setIngestDocsText(event.currentTarget.value)} />
+          </label>
+        </section>
+
+        <section class="toolchain-workbench">
+          <div class="toolchain-list-pane">
+            <div class="toolchain-toolbar">
+              <div class="toolchain-kind-tabs" role="tablist" aria-label="工具类型筛选">
+                <For each={[
+                  ["all", "全部"],
+                  ["cli", "CLI"],
+                  ["mcp", "MCP"],
+                  ["skill", "Skill"],
+                ] as Array<[ToolchainKindFilter, string]>}>
+                  {([id, label]) => (
+                    <button classList={{ "is-active": toolchainKindFilter() === id }} onClick={() => setToolchainKindFilter(id)}>
+                      {label}
+                    </button>
+                  )}
+                </For>
+              </div>
+              <div class="toolchain-toolbar__search">
+                <span class="codicon codicon-search" aria-hidden="true" />
+                <input value={toolchainSearch()} placeholder="搜索工具、文档、命令" onInput={(event) => setToolchainSearch(event.currentTarget.value)} />
+              </div>
+            </div>
+
+            <div class="toolchain-table" role="table" aria-label="工具链清单">
+              <div class="toolchain-table__row toolchain-table__row--head" role="row">
+                <span>工具名称</span>
+                <span>类型</span>
+                <span>来源/文档</span>
+                <span>部署属性</span>
+                <span>安装/运行状态</span>
+                <span>操作</span>
+              </div>
+              <Show when={filteredToolchainItems().length} fallback={<div class="toolchain-empty">没有匹配的工具链条目。</div>}>
+                <For each={filteredToolchainItems()}>
+                  {(item) => {
+                    const record = () => dashboardItemToRecord(item)
+                    return (
+                      <div
+                        class="toolchain-table__row toolchain-table__row--item"
+                        classList={{ "is-selected": selectedToolchainId() === item.id }}
+                        role="row"
+                        tabIndex={0}
+                        onClick={() => setSelectedToolchainId(item.id)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault()
+                            setSelectedToolchainId(item.id)
+                          }
+                        }}
+                      >
+                        <span class="toolchain-name-cell">
+                          <strong>{item.name}</strong>
+                          <small>{item.alias || item.command || "未记录别名"}</small>
+                        </span>
+                        <span><StatusBadge>{environmentKindLabel(item.kind)}</StatusBadge></span>
+                        <span class="toolchain-source-cell">{toolchainSourceLabel(item)}</span>
+                        <span>{placementLabel(item)}</span>
+                        <span>
+                          <StatusBadge tone={environmentStatusTone(item.status)}>
+                            {environmentStatusLabel(item.status)}
+                          </StatusBadge>
+                        </span>
+                        <span class="toolchain-row-actions">
+                          <button class="ez-icon-button" title="检查" onClick={(event) => { event.stopPropagation(); runEnvironment("check", [item.id]) }}>
+                            <span class="codicon codicon-search" aria-hidden="true" />
+                          </button>
+                          <button class="ez-icon-button" title="配置" onClick={(event) => { event.stopPropagation(); runEnvironment("configure", [item.id]) }}>
+                            <span class="codicon codicon-tools" aria-hidden="true" />
+                          </button>
+                          <button class="ez-icon-button" title="编辑" onClick={(event) => { event.stopPropagation(); openEditToolchain(record()) }}>
+                            <span class="codicon codicon-edit" aria-hidden="true" />
+                          </button>
+                          <button class="ez-icon-button" title={item.enabled ? "停用" : "启用"} onClick={(event) => { event.stopPropagation(); enableToolchain(record(), !item.enabled) }}>
+                            <span class={`codicon codicon-${item.enabled ? "debug-pause" : "debug-start"}`} aria-hidden="true" />
+                          </button>
+                          <button class="ez-icon-button" title="删除" onClick={(event) => { event.stopPropagation(); deleteToolchain(record()) }}>
+                            <span class="codicon codicon-trash" aria-hidden="true" />
+                          </button>
+                        </span>
+                      </div>
+                    )
+                  }}
+                </For>
+              </Show>
+            </div>
+          </div>
+
+          <aside class="toolchain-detail-pane">
+            <Show when={selectedToolchain()} fallback={<div class="toolchain-empty">选择一个工具查看详情。</div>}>
+              {(item) => (
+                <>
+                  <div class="toolchain-detail-header">
+                    <div>
+                      <span class="settings-badge">{environmentKindLabel(item().kind)}</span>
+                      <h3>{item().name}</h3>
+                      <p>{item().alias || item().source || "未记录说明"}</p>
+                    </div>
+                    <StatusBadge tone={environmentStatusTone(item().status)}>
+                      {environmentStatusLabel(item().status)}
+                    </StatusBadge>
+                  </div>
+                  <div class="toolchain-detail-actions">
+                    <button class="btn btn-secondary" onClick={() => runEnvironment("check", [item().id])}>
+                      <span class="codicon codicon-search" aria-hidden="true" />
+                      检查
+                    </button>
+                    <button class="btn btn-primary" onClick={() => runEnvironment("configure", [item().id])}>
+                      <span class="codicon codicon-tools" aria-hidden="true" />
+                      配置
+                    </button>
+                    <button class="btn btn-secondary" onClick={() => openEditToolchain(dashboardItemToRecord(item()))}>
+                      编辑
+                    </button>
+                  </div>
+
+                  <div class="toolchain-detail-grid">
+                    <div class="toolchain-detail-block">
+                      <span>部署属性</span>
+                      <strong>{placementLabel(item())}</strong>
+                    </div>
+                    <div class="toolchain-detail-block">
+                      <span>结构化写入状态</span>
+                      <strong>{item().last_action || (item().enabled ? "manifest" : "disabled")}</strong>
+                      <small>{formatTimestamp(item().last_updated)}</small>
+                    </div>
+                  </div>
+
+                  <div class="toolchain-detail-section">
+                    <span>仓库/文档证据</span>
+                    <Show when={item().repo_url || item().docs.length || item().source} fallback={<small>未记录。</small>}>
+                      <div class="toolchain-link-list">
+                        <Show when={item().repo_url}>
+                          <a href={item().repo_url}>{item().repo_url}</a>
+                        </Show>
+                        <For each={item().docs}>
+                          {(doc) => <a href={stringValue(doc.url)}>{stringValue(doc.title) || stringValue(doc.url)}</a>}
+                        </For>
+                        <Show when={!item().repo_url && !item().docs.length && item().source}>
+                          <small>{item().source}</small>
+                        </Show>
+                      </div>
+                    </Show>
+                  </div>
+
+                  <div class="toolchain-detail-section">
+                    <span>LLM 提取依据</span>
+                    <Show when={item().evidence.length} fallback={<small>尚未写入证据片段。</small>}>
+                      <div class="toolchain-evidence-list">
+                        <For each={item().evidence.slice(0, 4)}>
+                          {(evidence) => (
+                            <div>
+                              <strong>{evidence.field || evidence.title || "evidence"}</strong>
+                              <small>{evidence.excerpt || evidence.url || evidence.title}</small>
+                            </div>
+                          )}
+                        </For>
+                      </div>
+                    </Show>
+                  </div>
+
+                  <div class="toolchain-detail-section">
+                    <span>检查命令</span>
+                    <code class="environment-command">{item().check || "未记录"}</code>
+                  </div>
+                  <div class="toolchain-detail-section">
+                    <span>安装命令</span>
+                    <code class="environment-command">{item().install || "未记录"}</code>
+                  </div>
+                  <div class="toolchain-detail-section">
+                    <span>风险说明</span>
+                    <small>
+                      {item().risk_level || "未标注"}
+                      {item().credentials.length ? ` · 需要凭据：${item().credentials.join(", ")}` : ""}
+                    </small>
+                  </div>
+                  <div class="toolchain-detail-section">
+                    <span>最近执行日志</span>
+                    <Show when={environmentSnapshot().logs.length} fallback={<small>尚无环境执行日志。</small>}>
+                      <For each={environmentSnapshot().logs.filter((log) => log.entryId === item().id).slice(-3)}>
+                        {(log) => <pre class="toolchain-mini-log">{log.message}</pre>}
+                      </For>
+                    </Show>
+                  </div>
+                  <div class="toolchain-detail-section">
+                    <span>解析 Agent 日志</span>
+                    <Show when={toolchainIngestLogs().length} fallback={<small>尚未运行文档解析。</small>}>
+                      <div class="toolchain-ingest-log-list">
+                        <For each={toolchainIngestLogs().slice(-6)}>
+                          {(log) => (
+                            <div class={`toolchain-ingest-log toolchain-ingest-log--${stringValue(log.level, "info")}`}>
+                              <small>{formatTimestamp(log.createdAt)}</small>
+                              <span>{stringValue(log.message)}</span>
+                            </div>
+                          )}
+                        </For>
+                      </div>
+                    </Show>
+                  </div>
+                </>
+              )}
+            </Show>
+          </aside>
+        </section>
+
+        <Show when={environmentSnapshot().approvals.length}>
+          <section class="settings-section settings-section--flat">
+            <div class="settings-section-heading">
+              <span>等待批准</span>
+              <StatusBadge tone="warning">{String(environmentSnapshot().approvals.length)}</StatusBadge>
+            </div>
+            <div class="environment-approval-list">
+              <For each={environmentSnapshot().approvals}>
+                {(approval) => {
+                  const summary = () => approvalSummary(approval)
+                  return (
+                    <div class="environment-approval-card">
+                      <div class="environment-approval-card__body">
+                        <strong>{summary().title}</strong>
+                        <span>{summary().primary}</span>
+                        <small>{summary().secondary}</small>
+                      </div>
+                      <div class="settings-actions settings-actions--right">
+                        <button class="btn btn-secondary" onClick={() => setSelectedEnvironmentApproval(approval)}>
+                          查看详情
+                        </button>
+                        <button class="btn btn-primary" onClick={() => replyEnvironmentApproval(approval, "allow_once")}>
+                          批准一次
+                        </button>
+                        <button class="btn btn-secondary" onClick={() => replyEnvironmentApproval(approval, "deny_once")}>
+                          拒绝
+                        </button>
+                      </div>
+                    </div>
+                  )
+                }}
+              </For>
+            </div>
+          </section>
+        </Show>
+
+        <Show when={selectedEnvironmentApproval()}>
+          {(approval) => (
+            <ApprovalDetailsDialog
+              approval={approval()}
+              onClose={() => setSelectedEnvironmentApproval(undefined)}
+              onDecision={(decision) => replyEnvironmentApproval(approval(), decision)}
+            />
+          )}
+        </Show>
+        {renderToolchainEditor()}
+      </div>
+    )
 
   const renderCommandRuleEditor = (
     kind: "allow" | "deny",

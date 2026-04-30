@@ -125,6 +125,7 @@ export class DogcodeController implements vscode.Disposable {
   private environmentManifest: Record<string, unknown> | undefined
   private environmentSnapshot: EnvironmentSnapshot = createEmptyEnvironmentSnapshot()
   private activeEnvironmentRun: ActiveEnvironmentRun | undefined
+  private activeToolchainIngestChatId: string | undefined
   private readonly webviewPosts = new Set<PostMessage>()
   private disposed = false
 
@@ -301,9 +302,21 @@ export class DogcodeController implements vscode.Disposable {
           }
         }
         return true
+      case "toolchain.ingest.run":
+        void this.startToolchainIngest(objectValue(message.payload), post)
+        return true
+      case "toolchain.ingest.cancel":
+        await this.cancelToolchainIngest(post)
+        return true
       case "environment.run":
         if (message.mode === "check" || message.mode === "configure") {
-          void this.startEnvironmentRun(message.mode, post)
+          void this.startEnvironmentRun(
+            message.mode,
+            post,
+            Array.isArray(message.entryIds)
+              ? message.entryIds.map((item) => String(item)).filter(Boolean)
+              : undefined
+          )
         }
         return true
       case "environment.cancel":
@@ -549,7 +562,27 @@ export class DogcodeController implements vscode.Disposable {
 
   private async refreshToolchainState(post: PostMessage): Promise<void> {
     try {
-      this.toolchainState = await this.client.toolchainList()
+      const list = await this.client.toolchainList()
+      let dashboard: Record<string, unknown> | undefined
+      try {
+        dashboard = await this.client.toolchainDashboard()
+      } catch (error) {
+        dashboard = {
+          error: errorMessage(error),
+          items: [],
+          summary: {},
+        }
+      }
+      const dashboardPayload = dashboard || {}
+      this.toolchainState = {
+        ...list,
+        dashboard: dashboardPayload,
+        dashboard_items: Array.isArray(dashboardPayload.items) ? dashboardPayload.items : [],
+        dashboard_summary:
+          dashboardPayload.summary && typeof dashboardPayload.summary === "object"
+            ? dashboardPayload.summary
+            : {},
+      }
       post({ type: "toolchain.state", payload: this.toolchainState })
     } catch (error) {
       post({ type: "toolchain.error", message: errorMessage(error) })
@@ -844,7 +877,11 @@ export class DogcodeController implements vscode.Disposable {
     return this.environmentManifest
   }
 
-  private async startEnvironmentRun(mode: EnvironmentRunMode, post: PostMessage): Promise<void> {
+  private async startEnvironmentRun(
+    mode: EnvironmentRunMode,
+    post: PostMessage,
+    entryIds?: string[]
+  ): Promise<void> {
     if (this.activeEnvironmentRun) {
       post({
         type: "environment.run.error",
@@ -856,7 +893,8 @@ export class DogcodeController implements vscode.Disposable {
     let chatId = ""
     try {
       const manifest = await this.ensureEnvironmentManifest(post)
-      const entries = buildEnvironmentEntries(manifest)
+      const runManifest = filterEnvironmentManifest(manifest, entryIds)
+      const entries = buildEnvironmentEntries(runManifest)
       if (entries.length === 0) {
         const history = environmentRunHistory(this.environmentSnapshot)
         this.environmentSnapshot = {
@@ -876,7 +914,7 @@ export class DogcodeController implements vscode.Disposable {
         return
       }
 
-      const prompt = buildEnvironmentRunPrompt(manifest, mode)
+      const prompt = buildEnvironmentRunPrompt(runManifest, mode)
       const start = await this.client.startChat(prompt)
       chatId = String(start.chat_id || "")
       if (!chatId) {
@@ -899,7 +937,7 @@ export class DogcodeController implements vscode.Disposable {
         startedAt: new Date().toISOString(),
         completedAt: undefined,
         lastManifestAt:
-          stringValue(manifest.loadedAt) || this.environmentSnapshot.lastManifestAt,
+          stringValue(runManifest.loadedAt) || this.environmentSnapshot.lastManifestAt,
         error: undefined,
         entries,
         approvals: [],
@@ -967,6 +1005,167 @@ export class DogcodeController implements vscode.Disposable {
       post({ type: "environment.snapshot", payload: this.environmentSnapshot })
       post({ type: "environment.run.error", message: errorMessage(error) })
     }
+  }
+
+  private async startToolchainIngest(
+    input: Record<string, unknown>,
+    post: PostMessage
+  ): Promise<void> {
+    if (this.activeToolchainIngestChatId) {
+      post({
+        type: "toolchain.ingest.error",
+        payload: {
+          status: "failed",
+          message: "已有文档解析 Agent 正在运行，请先等待当前任务结束。",
+        },
+      })
+      return
+    }
+
+    let chatId = ""
+    const startedAt = new Date().toISOString()
+    post({
+      type: "toolchain.ingest.started",
+      payload: { running: true, status: "running", startedAt, input },
+    })
+    try {
+      const prompt = buildToolchainIngestPrompt(input)
+      const start = await this.client.startChat(prompt)
+      chatId = String(start.chat_id || "")
+      if (!chatId) {
+        throw new Error("toolchain_ingest_chat_id_missing")
+      }
+      this.activeToolchainIngestChatId = chatId
+      post({
+        type: "toolchain.ingest.event",
+        payload: {
+          chatId,
+          level: "info",
+          message: "文档解析 Agent 已启动。",
+          createdAt: new Date().toISOString(),
+        },
+      })
+
+      let cursor = 0
+      let assistantText = ""
+      let finalResponse = ""
+      while (!this.disposed && this.activeToolchainIngestChatId === chatId) {
+        const stream = await this.client.streamChat(chatId, cursor, 2)
+        const events = Array.isArray(stream.events) ? stream.events : []
+        const nextCursor = Number(stream.next_cursor ?? cursor)
+        for (const event of events) {
+          if (!event || typeof event !== "object") continue
+          const normalized = event as Record<string, unknown>
+          if (normalized.type === "approval_request") {
+            await this.approvalDocuments.store(objectValue(normalized.payload))
+          }
+          const capturedText = toolchainIngestAssistantText(normalized)
+          if (capturedText) {
+            assistantText += capturedText
+          }
+          const chatEndResponse = toolchainIngestChatEndResponse(normalized)
+          if (chatEndResponse) {
+            finalResponse = chatEndResponse
+          }
+          const log = toolchainIngestEventLog(normalized)
+          if (log) {
+            post({
+              type: "toolchain.ingest.event",
+              payload: {
+                chatId,
+                ...log,
+                createdAt: new Date().toISOString(),
+              },
+            })
+          }
+        }
+        cursor = nextCursor
+        if (stream.done) {
+          break
+        }
+      }
+      if (this.activeToolchainIngestChatId !== chatId) {
+        return
+      }
+
+      const rawResponse = finalResponse || assistantText
+      const candidate = parseToolchainIngestResponse(rawResponse)
+      const validation = validateToolchainIngestCandidate(candidate)
+      if (!validation.ok) {
+        post({
+          type: "toolchain.ingest.result",
+          payload: {
+            status: "needs_review",
+            persisted: false,
+            candidate,
+            rawResponse,
+            error: validation.error,
+            completedAt: new Date().toISOString(),
+          },
+        })
+        return
+      }
+
+      const payload = toolchainPayloadFromIngestCandidate(candidate)
+      const recordResult = await this.client.toolchainRecord(validation.kind, payload)
+      post({ type: "toolchain.actionResult", payload: recordResult })
+      post({
+        type: "toolchain.ingest.result",
+        payload: {
+          status: "configured",
+          persisted: true,
+          kind: validation.kind,
+          candidate: payload,
+          rawCandidate: candidate,
+          recordResult,
+          completedAt: new Date().toISOString(),
+        },
+      })
+      await this.refreshToolchainState(post)
+      if (!this.activeEnvironmentRun) {
+        await this.refreshEnvironmentManifest(post)
+      }
+    } catch (error) {
+      post({
+        type: "toolchain.ingest.error",
+        payload: {
+          status: "parse_failed",
+          message: errorMessage(error),
+          chatId,
+          completedAt: new Date().toISOString(),
+        },
+      })
+    } finally {
+      if (!chatId || this.activeToolchainIngestChatId === chatId) {
+        this.activeToolchainIngestChatId = undefined
+      }
+    }
+  }
+
+  private async cancelToolchainIngest(post: PostMessage): Promise<void> {
+    const chatId = this.activeToolchainIngestChatId
+    if (!chatId) {
+      post({
+        type: "toolchain.ingest.error",
+        payload: { status: "canceled", message: "当前没有正在运行的文档解析 Agent。" },
+      })
+      return
+    }
+    this.activeToolchainIngestChatId = undefined
+    try {
+      await this.client.cancelChat(chatId, "user_cancelled")
+    } catch {
+      // The local UI state is already cancelled; stream cleanup may race with the backend.
+    }
+    post({
+      type: "toolchain.ingest.error",
+      payload: {
+        status: "canceled",
+        chatId,
+        message: "文档解析 Agent 已停止。",
+        completedAt: new Date().toISOString(),
+      },
+    })
   }
 
   private async cancelEnvironmentRun(post: PostMessage): Promise<void> {
@@ -1521,6 +1720,10 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined
 }
 
+function textValue(value: unknown, fallback = ""): string {
+  return stringValue(value) ?? fallback
+}
+
 function numberValue(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) return value
   if (typeof value === "string" && value.trim()) {
@@ -1850,6 +2053,334 @@ function buildEnvironmentRunPrompt(
     return `${basePrompt}\n\nAdditional constraint for this run:\n- This is a check-only run.\n- Never run any install command.\n- If an entry is missing, report it as missing and stop before installation.\n`
   }
   return basePrompt
+}
+
+function filterEnvironmentManifest(
+  manifest: Record<string, unknown>,
+  entryIds: string[] | undefined
+): Record<string, unknown> {
+  if (!entryIds?.length) return manifest
+  const ids = new Set(entryIds)
+  const cliTools = filterManifestItems(manifest.cli_tools, "cli", ids)
+  const mcpServers = filterManifestItems(manifest.mcp_servers, "mcp", ids)
+  const skills = filterManifestItems(manifest.skills, "skill", ids)
+  return {
+    ...manifest,
+    cli_tools: cliTools,
+    mcp_servers: mcpServers,
+    skills,
+    prompt: buildSelectedEnvironmentPrompt(cliTools, mcpServers, skills),
+  }
+}
+
+function filterManifestItems(
+  value: unknown,
+  kind: EnvironmentEntryKind,
+  ids: Set<string>
+): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+    .filter((item) => ids.has(environmentEntryId(kind, stringValue(item.name) || "")))
+}
+
+function buildSelectedEnvironmentPrompt(
+  cliTools: Record<string, unknown>[],
+  mcpServers: Record<string, unknown>[],
+  skills: Record<string, unknown>[]
+): string {
+  const manifest = JSON.stringify(
+    {
+      cli_tools: cliTools,
+      mcp_servers: mcpServers,
+      skills,
+    },
+    null,
+    2
+  )
+  return [
+    "You are the EZCode lightweight environment sync agent.\n",
+    "The user selected the manifest entries below. Work only from this filtered ",
+    "manifest and do not inspect, install, or configure unrelated tools.\n\n",
+    "Environment manifest:\n",
+    `\`\`\`json\n${manifest}\n\`\`\`\n\n`,
+    "Procedure:\n",
+    "1. Run each configured `check` command exactly as written.\n",
+    "2. Treat successful checks as ready. For failures, report the missing tool and quote the configured `install` command.\n",
+    "3. Before running an install command, use normal approval and ground the plan in `docs`, `evidence`, `credentials`, `risk_level`, `install_prompt`, and `notes`.\n",
+    "4. Do not invent install steps outside the manifest. Report missing base runtimes as blockers.\n",
+    "5. Finish with a compact status table.\n",
+  ].join("")
+}
+
+function buildToolchainIngestPrompt(input: Record<string, unknown>): string {
+  const repoUrl = stringValue(input.repoUrl)
+  const docsUrl = stringValue(input.docsUrl)
+  const docsText = stringValue(input.docsText)
+  const kindHint = stringValue(input.kindHint)
+  const nameHint = stringValue(input.nameHint)
+  const placementHint = stringValue(input.placementHint)
+  return [
+    "You are the EZCode toolchain documentation parsing agent.\n",
+    "Your only responsibility is to read the repository/documentation context supplied by the user and produce one strict JSON object for the toolchain manifest candidate.\n",
+    "Use normal agent tools/events/logging if you need to inspect reachable pages. Do not use regex-style guessing or fallback heuristics when the documentation is unreadable or incomplete.\n",
+    "If the documentation cannot support a field, return `needs_review: true` with a concise `reason` and preserve the evidence you did find. Do not invent commands.\n\n",
+    `Repository URL: ${repoUrl || "(not provided)"}\n`,
+    `Documentation URL: ${docsUrl || "(not provided)"}\n`,
+    `Kind hint: ${kindHint || "(none)"}\n`,
+    `Name hint: ${nameHint || "(none)"}\n`,
+    `Deployment hint: ${placementHint || "(none)"}\n`,
+    `User supplied documentation text:\n${docsText || "(none)"}\n\n`,
+    "Return JSON only. Required schema:\n",
+    "{\n",
+    '  "kind": "cli | mcp | skill",\n',
+    '  "name": "tool name",\n',
+    '  "alias": "optional display alias",\n',
+    '  "description": "short purpose",\n',
+    '  "source": "package/source label",\n',
+    '  "repo_url": "repository URL",\n',
+    '  "docs": [{"title": "doc title", "url": "doc URL"}],\n',
+    '  "evidence": [{"field": "check/install/placement/credentials/risk", "title": "source title", "url": "source URL", "excerpt": "short source-backed evidence"}],\n',
+    '  "placement": "server | local | both for CLI, server | peer | both for MCP",\n',
+    '  "scope": "user | project for skill",\n',
+    '  "command": "primary command or executable; MCP launch command when kind=mcp",\n',
+    '  "args": ["optional MCP args"],\n',
+    '  "env": {"KEY": "optional MCP env placeholder"},\n',
+    '  "cwd": "optional MCP working directory",\n',
+    '  "path_hint": "optional skill path",\n',
+    '  "check": "exact check command",\n',
+    '  "install": "exact install command",\n',
+    '  "requirements": {"dependency": "version/range"},\n',
+    '  "credentials": ["credential or token names"],\n',
+    '  "risk_level": "low | medium | high",\n',
+    '  "install_prompt": "approval-facing install rationale",\n',
+    '  "verify_prompt": "post-install verification note",\n',
+    '  "notes": ["operator note"],\n',
+    '  "needs_review": false,\n',
+    '  "reason": ""\n',
+    "}\n",
+  ].join("")
+}
+
+function toolchainIngestAssistantText(event: Record<string, unknown>): string {
+  const type = stringValue(event.type)
+  const payload = objectValue(event.payload)
+  if (type === "assistant_delta" || type === "assistant_message") {
+    return textValue(payload.content)
+  }
+  return ""
+}
+
+function toolchainIngestChatEndResponse(event: Record<string, unknown>): string {
+  if (stringValue(event.type) !== "chat_end") return ""
+  return textValue(objectValue(event.payload).response)
+}
+
+function toolchainIngestEventLog(
+  event: Record<string, unknown>
+): { level: "info" | "warning" | "error"; message: string; eventType: string } | undefined {
+  const type = stringValue(event.type)
+  const payload = objectValue(event.payload)
+  if (type === "assistant_delta") return undefined
+  if (type === "assistant_message") {
+    return { level: "info", message: "Agent 已返回结构化候选内容。", eventType: type }
+  }
+  if (type === "tool_call_start") {
+    return {
+      level: "info",
+      message: `调用工具：${textValue(payload.tool_name, "tool")}`,
+      eventType: type,
+    }
+  }
+  if (type === "tool_call_end") {
+    return {
+      level: payload.tool_success === false ? "warning" : "info",
+      message: `工具完成：${textValue(payload.tool_name, "tool")}`,
+      eventType: type,
+    }
+  }
+  if (type === "output") {
+    const content = textValue(payload.content).trim()
+    if (!content) return undefined
+    return { level: "info", message: truncateText(content, 240), eventType: type }
+  }
+  if (type === "error") {
+    return {
+      level: "error",
+      message: textValue(payload.message, "文档解析 Agent 执行失败。"),
+      eventType: type,
+    }
+  }
+  if (type === "chat_end") {
+    return { level: "info", message: "文档解析 Agent 已结束。", eventType: type }
+  }
+  return undefined
+}
+
+function parseToolchainIngestResponse(rawResponse: string): Record<string, unknown> {
+  const parsed = parseJsonObjectFromText(rawResponse)
+  const candidate = objectValue(parsed.candidate)
+  if (Object.keys(candidate).length) return candidate
+  const candidates = Array.isArray(parsed.candidates) ? parsed.candidates : []
+  const first = candidates.find((item) => item && typeof item === "object" && !Array.isArray(item))
+  if (first && typeof first === "object") return first as Record<string, unknown>
+  return parsed
+}
+
+function parseJsonObjectFromText(text: string): Record<string, unknown> {
+  const trimmed = text.trim()
+  if (!trimmed) {
+    throw new Error("文档解析 Agent 没有返回 JSON。")
+  }
+  try {
+    const parsed = JSON.parse(trimmed)
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
+  } catch {
+    // Continue to fenced/block extraction below.
+  }
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  if (fenced?.[1]) {
+    const parsed = JSON.parse(fenced[1].trim())
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
+  }
+  const firstBrace = trimmed.indexOf("{")
+  const lastBrace = trimmed.lastIndexOf("}")
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    const parsed = JSON.parse(trimmed.slice(firstBrace, lastBrace + 1))
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
+  }
+  throw new Error("文档解析 Agent 返回内容不是可解析的 JSON 对象。")
+}
+
+function validateToolchainIngestCandidate(
+  candidate: Record<string, unknown>
+): { ok: true; kind: EnvironmentEntryKind } | { ok: false; error: string } {
+  if (candidate.needs_review === true) {
+    return { ok: false, error: textValue(candidate.reason, "解析结果需要人工确认。") }
+  }
+  const kind = textValue(candidate.kind).toLowerCase()
+  if (!["cli", "mcp", "skill"].includes(kind)) {
+    return { ok: false, error: "解析结果缺少合法 kind：cli | mcp | skill。" }
+  }
+  const name = textValue(candidate.name).trim()
+  if (!name) return { ok: false, error: "解析结果缺少工具名称。" }
+  const docs = Array.isArray(candidate.docs) ? candidate.docs : []
+  const evidence = Array.isArray(candidate.evidence) ? candidate.evidence : []
+  if (!docs.length && !evidence.length) {
+    return { ok: false, error: "解析结果缺少仓库/文档证据。" }
+  }
+  if (!textValue(candidate.check).trim()) {
+    return { ok: false, error: "解析结果缺少检查命令。" }
+  }
+  if (!textValue(candidate.install).trim()) {
+    return { ok: false, error: "解析结果缺少安装命令。" }
+  }
+  if ((kind === "cli" || kind === "mcp") && !textValue(candidate.command).trim()) {
+    return { ok: false, error: "解析结果缺少主命令。" }
+  }
+  if (kind === "cli") {
+    const placement = textValue(candidate.placement)
+    if (!["server", "local", "both"].includes(placement)) {
+      return { ok: false, error: "CLI 部署属性必须是 server、local 或 both。" }
+    }
+  }
+  if (kind === "mcp") {
+    const placement = textValue(candidate.placement)
+    if (!["server", "peer", "both"].includes(placement)) {
+      return { ok: false, error: "MCP 部署属性必须是 server、peer 或 both。" }
+    }
+  }
+  if (kind === "skill") {
+    const scope = textValue(candidate.scope)
+    if (!["user", "project"].includes(scope)) {
+      return { ok: false, error: "Skill 范围必须是 user 或 project。" }
+    }
+  }
+  return { ok: true, kind: kind as EnvironmentEntryKind }
+}
+
+function toolchainPayloadFromIngestCandidate(
+  candidate: Record<string, unknown>
+): Record<string, unknown> {
+  const kind = textValue(candidate.kind).toLowerCase()
+  const payload: Record<string, unknown> = {
+    name: textValue(candidate.name).trim(),
+    enabled: candidate.enabled !== false,
+    check: textValue(candidate.check).trim(),
+    install: textValue(candidate.install).trim(),
+    version: textValue(candidate.version) || undefined,
+    source: textValue(candidate.source),
+    description: textValue(candidate.description),
+    repo_url: textValue(candidate.repo_url),
+    docs: normalizeToolchainDocs(candidate.docs),
+    evidence: normalizeToolchainEvidence(candidate.evidence),
+    requirements: stringMap(candidate.requirements),
+    credentials: toStringArray(candidate.credentials),
+    risk_level: textValue(candidate.risk_level),
+    install_prompt: textValue(candidate.install_prompt),
+    verify_prompt: textValue(candidate.verify_prompt),
+    notes: toStringArray(candidate.notes),
+    last_action: "document_ingest",
+    last_updated: new Date().toISOString(),
+  }
+  if (kind === "cli") {
+    payload.command = textValue(candidate.command).trim()
+    payload.placement = textValue(candidate.placement)
+    payload.capabilities = toStringArray(candidate.capabilities)
+  } else if (kind === "mcp") {
+    payload.command = textValue(candidate.command).trim()
+    payload.args = toStringArray(candidate.args)
+    payload.env = stringMap(candidate.env)
+    payload.cwd = textValue(candidate.cwd) || undefined
+    payload.placement = textValue(candidate.placement)
+    payload.distribution = textValue(candidate.distribution, "command")
+  } else {
+    payload.scope = textValue(candidate.scope)
+    payload.path_hint = textValue(candidate.path_hint) || undefined
+  }
+  return payload
+}
+
+function normalizeToolchainDocs(value: unknown): Array<{ title: string; url: string }> {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+    .map((item) => ({
+      title: textValue(item.title),
+      url: textValue(item.url),
+    }))
+    .filter((item) => item.title || item.url)
+}
+
+function normalizeToolchainEvidence(value: unknown): Record<string, string>[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+    .map((item) =>
+      Object.entries(item).reduce<Record<string, string>>((acc, [key, val]) => {
+        const text = textValue(val).trim()
+        if (text) acc[key] = text
+        return acc
+      }, {})
+    )
+    .filter((item) => Object.keys(item).length > 0)
+}
+
+function stringMap(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {}
+  return Object.entries(value as Record<string, unknown>).reduce<Record<string, string>>(
+    (acc, [key, val]) => {
+      acc[key] = textValue(val)
+      return acc
+    },
+    {}
+  )
 }
 
 function environmentEntrySummary(entries: EnvironmentEntryState[]): string {

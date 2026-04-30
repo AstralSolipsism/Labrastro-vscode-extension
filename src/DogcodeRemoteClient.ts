@@ -256,6 +256,10 @@ export class DogcodeRemoteClient {
     return this.adminPost("/remote/admin/toolchains/list", {})
   }
 
+  async toolchainDashboard(): Promise<JsonObject> {
+    return this.adminPost("/remote/admin/toolchains/dashboard", {})
+  }
+
   async toolchainRecord(kind: string, payload: JsonObject): Promise<JsonObject> {
     return this.adminPost("/remote/admin/toolchains/record", { kind, payload })
   }
