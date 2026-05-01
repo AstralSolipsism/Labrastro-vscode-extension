@@ -3190,14 +3190,6 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
                     </small>
                   </div>
                   <div class="toolchain-detail-section">
-                    <span>最近执行日志</span>
-                    <Show when={environmentSnapshot().logs.length} fallback={<small>尚无环境执行日志。</small>}>
-                      <For each={environmentSnapshot().logs.filter((log) => log.entryId === item().id).slice(-3)}>
-                        {(log) => <pre class="toolchain-mini-log">{log.message}</pre>}
-                      </For>
-                    </Show>
-                  </div>
-                  <div class="toolchain-detail-section">
                     <span>解析 Agent 日志</span>
                     <Show when={toolchainIngestLogs().length} fallback={<small>尚未运行新增能力 Agent。</small>}>
                       <div class="toolchain-ingest-log-list">
@@ -3217,42 +3209,6 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
             </Show>
           </aside>
         </section>
-
-        <Show when={environmentSnapshot().approvals.length}>
-          <section class="settings-section settings-section--flat">
-            <div class="settings-section-heading">
-              <span>等待批准</span>
-              <StatusBadge tone="warning">{String(environmentSnapshot().approvals.length)}</StatusBadge>
-            </div>
-            <div class="environment-approval-list">
-              <For each={environmentSnapshot().approvals}>
-                {(approval) => {
-                  const summary = () => approvalSummary(approval)
-                  return (
-                    <div class="environment-approval-card">
-                      <div class="environment-approval-card__body">
-                        <strong>{summary().title}</strong>
-                        <span>{summary().primary}</span>
-                        <small>{summary().secondary}</small>
-                      </div>
-                      <div class="settings-actions settings-actions--right">
-                        <button class="btn btn-secondary" onClick={() => setSelectedEnvironmentApproval(approval)}>
-                          查看详情
-                        </button>
-                        <button class="btn btn-primary" onClick={() => replyEnvironmentApproval(approval, "allow_once")}>
-                          批准一次
-                        </button>
-                        <button class="btn btn-secondary" onClick={() => replyEnvironmentApproval(approval, "deny_once")}>
-                          拒绝
-                        </button>
-                      </div>
-                    </div>
-                  )
-                }}
-              </For>
-            </div>
-          </section>
-        </Show>
 
         <Show when={selectedEnvironmentApproval()}>
           {(approval) => (

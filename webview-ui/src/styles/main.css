@@ -1700,7 +1700,6 @@ button {
   color: var(--ez-muted);
 }
 
-.toolchain-mini-log,
 .toolchain-ingest-log {
   margin: 0;
   padding: 7px 8px;
