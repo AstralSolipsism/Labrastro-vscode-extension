@@ -30,6 +30,8 @@ interface ServerContextValue {
   adminStateUpdatedAt: () => string | undefined
   adminError: () => string | undefined
   actionResult: () => Record<string, unknown> | undefined
+  serverSettingsState: () => Record<string, unknown> | undefined
+  serverSettingsError: () => string | undefined
   toolchainState: () => Record<string, unknown> | undefined
   toolchainActionResult: () => Record<string, unknown> | undefined
   toolchainError: () => string | undefined
@@ -63,6 +65,8 @@ export const ServerProvider: ParentComponent = (props) => {
   const [adminStateUpdatedAt, setAdminStateUpdatedAt] = createSignal<string | undefined>()
   const [adminError, setAdminError] = createSignal<string | undefined>()
   const [actionResult, setActionResult] = createSignal<Record<string, unknown> | undefined>()
+  const [serverSettingsState, setServerSettingsState] = createSignal<Record<string, unknown> | undefined>()
+  const [serverSettingsError, setServerSettingsError] = createSignal<string | undefined>()
   const [toolchainState, setToolchainState] = createSignal<Record<string, unknown> | undefined>()
   const [toolchainActionResult, setToolchainActionResult] = createSignal<Record<string, unknown> | undefined>()
   const [toolchainError, setToolchainError] = createSignal<string | undefined>()
@@ -106,6 +110,13 @@ export const ServerProvider: ParentComponent = (props) => {
       if (msg.type === "admin.actionResult" && typeof msg.payload === "object" && msg.payload) {
         setActionResult(msg.payload as Record<string, unknown>)
         setAdminError(undefined)
+      }
+      if (msg.type === "serverSettings.state" && typeof msg.payload === "object" && msg.payload) {
+        setServerSettingsState(msg.payload as Record<string, unknown>)
+        setServerSettingsError(undefined)
+      }
+      if (msg.type === "serverSettings.error") {
+        setServerSettingsError(typeof msg.message === "string" ? msg.message : "Server settings request failed")
       }
       if (msg.type === "toolchain.state" && typeof msg.payload === "object" && msg.payload) {
         setToolchainState(msg.payload as Record<string, unknown>)
@@ -199,6 +210,8 @@ export const ServerProvider: ParentComponent = (props) => {
     adminStateUpdatedAt,
     adminError,
     actionResult,
+    serverSettingsState,
+    serverSettingsError,
     toolchainState,
     toolchainActionResult,
     toolchainError,

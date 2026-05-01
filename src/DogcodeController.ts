@@ -250,6 +250,23 @@ export class DogcodeController implements vscode.Disposable {
         await this.postConnectionState(post)
         await this.postAdminState(post)
         return true
+      case "serverSettings.read":
+        try {
+          post({ type: "serverSettings.state", payload: await this.client.serverSettingsRead() })
+        } catch (error) {
+          post({ type: "serverSettings.error", message: errorMessage(error) })
+        }
+        return true
+      case "serverSettings.update":
+        try {
+          const payload = await this.client.serverSettingsUpdate(objectValue(message.payload))
+          post({ type: "serverSettings.state", payload })
+          post({ type: "admin.actionResult", payload })
+          await this.postAdminState(post)
+        } catch (error) {
+          post({ type: "serverSettings.error", message: errorMessage(error) })
+        }
+        return true
       case "environment.refreshManifest":
         await this.refreshEnvironmentManifest(post)
         return true

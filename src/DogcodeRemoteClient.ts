@@ -215,6 +215,14 @@ export class DogcodeRemoteClient {
     return this.adminPost("/remote/admin/status", {})
   }
 
+  async serverSettingsRead(): Promise<JsonObject> {
+    return this.adminPost("/remote/admin/server-settings/read", {})
+  }
+
+  async serverSettingsUpdate(payload: JsonObject): Promise<JsonObject> {
+    return this.adminPost("/remote/admin/server-settings/update", payload)
+  }
+
   async capabilities(): Promise<BackendCapabilities> {
     const payload = await this.getJson("/remote/capabilities")
     return normalizeBackendCapabilities(payload)
