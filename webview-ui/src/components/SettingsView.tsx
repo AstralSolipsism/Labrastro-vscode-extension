@@ -192,7 +192,7 @@ const compats: ProviderCompat[] = ["generic", "deepseek", "kimi", "glm", "qwen",
 const settingsTabs: Array<{ id: SettingsTab; label: string; icon: string }> = [
   { id: "executors", label: "执行器管理", icon: "radio-tower" },
   { id: "providers", label: "服务商管理", icon: "server-process" },
-  { id: "toolchains", label: "工具链管理", icon: "tools" },
+  { id: "toolchains", label: "能力管理", icon: "tools" },
   { id: "autoApproval", label: "自动批准", icon: "shield" },
   { id: "other", label: "其他", icon: "settings" },
 ]
@@ -602,6 +602,53 @@ function placementLabel(item: ToolchainDashboardItem): string {
 function toolchainSourceLabel(item: ToolchainDashboardItem): string {
   const firstDoc = item.docs[0]
   return item.repo_url || stringValue(firstDoc?.url) || item.source || "未记录"
+}
+
+function normalizeToolchainUrl(value: string): string {
+  const trimmed = value.trim().toLowerCase()
+  if (!trimmed) return ""
+  try {
+    const url = new URL(trimmed)
+    url.hash = ""
+    if (url.pathname !== "/") {
+      url.pathname = url.pathname.replace(/\/+$/, "")
+    }
+    return url.toString().replace(/\/+$/, "")
+  } catch {
+    return trimmed.replace(/\/+$/, "")
+  }
+}
+
+function toolchainDuplicateInputMatches(
+  items: ToolchainDashboardItem[],
+  repoUrl: string,
+  docsUrl: string,
+): { repo: ToolchainDashboardItem[]; docs: ToolchainDashboardItem[] } {
+  const repo = normalizeToolchainUrl(repoUrl)
+  const docs = normalizeToolchainUrl(docsUrl)
+  const repoMatches = new Map<string, ToolchainDashboardItem>()
+  const docsMatches = new Map<string, ToolchainDashboardItem>()
+  for (const item of items) {
+    const itemRepo = normalizeToolchainUrl(item.repo_url || (item.source.startsWith("http") ? item.source : ""))
+    if (repo && itemRepo && repo === itemRepo) {
+      repoMatches.set(item.id, item)
+    }
+    if (docs) {
+      for (const doc of item.docs) {
+        if (docs === normalizeToolchainUrl(stringValue(doc.url))) {
+          docsMatches.set(item.id, item)
+        }
+      }
+    }
+  }
+  return {
+    repo: [...repoMatches.values()],
+    docs: [...docsMatches.values()],
+  }
+}
+
+function duplicateMatchLabel(item: ToolchainDashboardItem): string {
+  return `${environmentKindLabel(item.kind)} ${item.name}`
 }
 
 function dashboardItemToRecord(item: ToolchainDashboardItem): ToolchainRecord {
@@ -1114,7 +1161,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
     if (!result?.ok) return undefined
     const kind = stringValue(result.kind)
     const name = stringValue(result.name)
-    const label = kind === "cli" ? "CLI" : kind === "mcp" ? "MCP" : kind === "skill" ? "Skill" : "工具链"
+    const label = kind === "cli" ? "CLI" : kind === "mcp" ? "MCP" : kind === "skill" ? "Skill" : "能力"
     if (result.created === true) return `${label} ${name} 已新增。`
     if (result.toolchain) return `${label} ${name} 已保存。`
     return `${label} ${name} 操作已完成。`
@@ -1172,6 +1219,16 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
       ? logs.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
       : []
   })
+  const toolchainIngestDuplicates = createMemo(() =>
+    toolchainDuplicateInputMatches(
+      toolchainDashboardItems(),
+      ingestRepoUrl(),
+      ingestDocsUrl(),
+    )
+  )
+  const hasToolchainIngestDuplicates = createMemo(() =>
+    toolchainIngestDuplicates().repo.length > 0 || toolchainIngestDuplicates().docs.length > 0
+  )
 
   createEffect(() => {
     const selected = selectedToolchainId()
@@ -2303,7 +2360,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
   }
 
   const deleteToolchain = (record: ToolchainRecord) => {
-    if (!globalThis.confirm(`删除 ${record.name}？此操作会从服务器工具链清单移除该条目。`)) return
+    if (!globalThis.confirm(`删除 ${record.name}？此操作会从服务器能力清单移除该条目。`)) return
     vscode.postMessage({
       type: "toolchain.delete",
       kind: record.kind,
@@ -2539,8 +2596,8 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
     <div class="settings-page settings-page--wide">
       <div class="settings-page-header">
         <div>
-          <h2>工具链管理</h2>
-          <p>按服务器给出的权威清单检查和配置本地工具链，执行结果直接留在当前页面。</p>
+          <h2>能力管理</h2>
+          <p>按服务器给出的权威清单检查和配置本地能力，执行结果直接留在当前页面。</p>
           <p class="setting-description">
             当前状态：{environmentRunStatusLabel(environmentSnapshot().status)} · 最近清单刷新：{formatTimestamp(environmentSnapshot().lastManifestAt)}
           </p>
@@ -2551,13 +2608,13 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
             刷新清单
           </button>
           <button class="btn btn-secondary" onClick={() => openCreateToolchain("cli")}>
-            新增 CLI
+            新增 CLI 能力
           </button>
           <button class="btn btn-secondary" onClick={() => openCreateToolchain("mcp")}>
-            新增 MCP
+            新增 MCP 能力
           </button>
           <button class="btn btn-secondary" onClick={() => openCreateToolchain("skill")}>
-            新增 Skill
+            新增 Skill 能力
           </button>
           <Show
             when={!environmentSnapshot().running}
@@ -2595,7 +2652,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
       <section class="settings-section settings-section--flat">
         <div class="settings-section-heading">
           <div>
-            <span>服务器工具链 Manifest</span>
+            <span>服务器能力 Manifest</span>
             <small>这里维护服务器权威清单、文档信息和安装/验证指导；保存不会直接安装。</small>
           </div>
           <button class="btn btn-secondary" onClick={() => vscode.postMessage({ type: "toolchain.refresh" })}>
@@ -2734,8 +2791,8 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
       <div class="settings-page settings-page--wide toolchain-dashboard-page">
         <div class="settings-page-header">
           <div>
-            <h2>工具链管理</h2>
-            <p>按 CLI / MCP / Skill 管理清单；部署属性、安装位置和运行结果在条目内展示。</p>
+            <h2>能力管理</h2>
+            <p>按 CLI / MCP / Skill 管理能力清单；部署属性、安装位置和运行结果在条目内展示。</p>
             <p class="setting-description">
               当前状态：{environmentRunStatusLabel(environmentSnapshot().status)} · 最近清单刷新：{formatTimestamp(environmentSnapshot().lastManifestAt)}
             </p>
@@ -2800,8 +2857,8 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
         <section class="settings-section settings-section--flat toolchain-ingest-panel">
           <div class="settings-section-heading">
             <div>
-              <span>文档解析 Agent</span>
-              <small>从仓库和文档提取清单候选；校验通过后写入服务器 manifest。</small>
+              <span>新增能力</span>
+              <small>通过 fetch_Capabilities 读取文档资料并自动发现官方仓库，识别 CLI / MCP / Skill、部署属性和安装信息。</small>
             </div>
             <StatusBadge tone={toolchainIngestState().running === true ? "warning" : toolchainIngestState().persisted === true ? "success" : "muted"}>
               {toolchainIngestState().running === true ? "运行中" : toolchainIngestState().persisted === true ? "已写入" : "待命"}
@@ -2809,12 +2866,12 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
           </div>
           <div class="toolchain-ingest-grid">
             <label class="field-label">
-              <span>仓库地址</span>
-              <input value={ingestRepoUrl()} placeholder="https://github.com/..." onInput={(event) => setIngestRepoUrl(event.currentTarget.value)} />
+              <span>仓库地址（可选）</span>
+              <input value={ingestRepoUrl()} placeholder="可留空，Agent 可从文档发现" onInput={(event) => setIngestRepoUrl(event.currentTarget.value)} />
             </label>
             <label class="field-label">
-              <span>文档地址</span>
-              <input value={ingestDocsUrl()} placeholder="README / docs URL" onInput={(event) => setIngestDocsUrl(event.currentTarget.value)} />
+              <span>文档地址 / 资料链接</span>
+              <input value={ingestDocsUrl()} placeholder="官方文档、README、安装指南 URL" onInput={(event) => setIngestDocsUrl(event.currentTarget.value)} />
             </label>
             <label class="field-label">
               <span>类型提示</span>
@@ -2830,13 +2887,13 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
               <input value={ingestNameHint()} onInput={(event) => setIngestNameHint(event.currentTarget.value)} />
             </label>
             <label class="field-label">
-              <span>部署提示</span>
-              <input value={ingestPlacementHint()} placeholder="server / local / both / peer / user / project" onInput={(event) => setIngestPlacementHint(event.currentTarget.value)} />
+              <span>可选部署提示</span>
+              <input value={ingestPlacementHint()} placeholder="留空由 Agent 根据 fetch_Capabilities 证据判断" onInput={(event) => setIngestPlacementHint(event.currentTarget.value)} />
             </label>
             <div class="toolchain-ingest-actions">
               <button class="btn btn-primary" onClick={runToolchainIngest} disabled={toolchainIngestState().running === true || (!ingestRepoUrl().trim() && !ingestDocsUrl().trim() && !ingestDocsText().trim())}>
                 <span class="codicon codicon-sparkle" aria-hidden="true" />
-                解析并写入
+                {hasToolchainIngestDuplicates() ? "仍然新增能力" : "新增能力"}
               </button>
               <Show when={toolchainIngestState().running === true}>
                 <button class="btn btn-danger" onClick={cancelToolchainIngest}>
@@ -2850,6 +2907,20 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
             <span>补充文档片段</span>
             <textarea rows={3} value={ingestDocsText()} placeholder="可粘贴 README 安装段落、凭据说明或风险提示" onInput={(event) => setIngestDocsText(event.currentTarget.value)} />
           </label>
+          <Show when={hasToolchainIngestDuplicates()}>
+            <div class="settings-warning toolchain-duplicate-warning">
+              <span class="codicon codicon-warning" aria-hidden="true" />
+              <div>
+                <strong>可能已存在相关能力</strong>
+                <Show when={toolchainIngestDuplicates().repo.length}>
+                  <p>相同仓库：{toolchainIngestDuplicates().repo.map(duplicateMatchLabel).join("、")}</p>
+                </Show>
+                <Show when={toolchainIngestDuplicates().docs.length}>
+                  <p>相同文档：{toolchainIngestDuplicates().docs.map(duplicateMatchLabel).join("、")}</p>
+                </Show>
+              </div>
+            </div>
+          </Show>
         </section>
 
         <section class="toolchain-workbench">
@@ -2875,16 +2946,16 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
               </div>
             </div>
 
-            <div class="toolchain-table" role="table" aria-label="工具链清单">
+            <div class="toolchain-table" role="table" aria-label="能力清单">
               <div class="toolchain-table__row toolchain-table__row--head" role="row">
-                <span>工具名称</span>
+                <span>能力名称</span>
                 <span>类型</span>
                 <span>来源/文档</span>
                 <span>部署属性</span>
                 <span>安装/运行状态</span>
                 <span>操作</span>
               </div>
-              <Show when={filteredToolchainItems().length} fallback={<div class="toolchain-empty">没有匹配的工具链条目。</div>}>
+              <Show when={filteredToolchainItems().length} fallback={<div class="toolchain-empty">没有匹配的能力条目。</div>}>
                 <For each={filteredToolchainItems()}>
                   {(item) => {
                     const record = () => dashboardItemToRecord(item)
@@ -3037,7 +3108,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
                   </div>
                   <div class="toolchain-detail-section">
                     <span>解析 Agent 日志</span>
-                    <Show when={toolchainIngestLogs().length} fallback={<small>尚未运行文档解析。</small>}>
+                    <Show when={toolchainIngestLogs().length} fallback={<small>尚未运行新增能力 Agent。</small>}>
                       <div class="toolchain-ingest-log-list">
                         <For each={toolchainIngestLogs().slice(-6)}>
                           {(log) => (
@@ -3222,7 +3293,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
       <div class="settings-page-header">
         <div>
           <h2>其他</h2>
-          <p>维护与排查入口。普通执行器、服务商和工具链配置不需要使用这里。</p>
+          <p>维护与排查入口。普通执行器、服务商和能力配置不需要使用这里。</p>
         </div>
         <button class="btn btn-secondary" onClick={refreshAdmin}>
           <span class="codicon codicon-refresh" aria-hidden="true" />
@@ -3279,7 +3350,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
             <span class="codicon codicon-settings-gear" aria-hidden="true" />
             dogcode 设置
           </h1>
-          <p>执行器、服务商、工具链、自动批准和其他维护入口。</p>
+          <p>执行器、服务商、能力、自动批准和其他维护入口。</p>
         </div>
         <span class="settings-version">v{server.extensionVersion() || "0.0.0"}</span>
       </div>

@@ -1016,7 +1016,7 @@ export class DogcodeController implements vscode.Disposable {
         type: "toolchain.ingest.error",
         payload: {
           status: "failed",
-          message: "已有文档解析 Agent 正在运行，请先等待当前任务结束。",
+          message: "已有新增能力 Agent 正在运行，请先等待当前任务结束。",
         },
       })
       return
@@ -1041,7 +1041,7 @@ export class DogcodeController implements vscode.Disposable {
         payload: {
           chatId,
           level: "info",
-          message: "文档解析 Agent 已启动。",
+          message: "新增能力 Agent 已启动。",
           createdAt: new Date().toISOString(),
         },
       })
@@ -1147,7 +1147,7 @@ export class DogcodeController implements vscode.Disposable {
     if (!chatId) {
       post({
         type: "toolchain.ingest.error",
-        payload: { status: "canceled", message: "当前没有正在运行的文档解析 Agent。" },
+        payload: { status: "canceled", message: "当前没有正在运行的新增能力 Agent。" },
       })
       return
     }
@@ -1162,7 +1162,7 @@ export class DogcodeController implements vscode.Disposable {
       payload: {
         status: "canceled",
         chatId,
-        message: "文档解析 Agent 已停止。",
+        message: "新增能力 Agent 已停止。",
         completedAt: new Date().toISOString(),
       },
     })
@@ -2121,15 +2121,19 @@ function buildToolchainIngestPrompt(input: Record<string, unknown>): string {
   const nameHint = stringValue(input.nameHint)
   const placementHint = stringValue(input.placementHint)
   return [
-    "You are the EZCode toolchain documentation parsing agent.\n",
-    "Your only responsibility is to read the repository/documentation context supplied by the user and produce one strict JSON object for the toolchain manifest candidate.\n",
-    "Use normal agent tools/events/logging if you need to inspect reachable pages. Do not use regex-style guessing or fallback heuristics when the documentation is unreadable or incomplete.\n",
-    "If the documentation cannot support a field, return `needs_review: true` with a concise `reason` and preserve the evidence you did find. Do not invent commands.\n\n",
-    `Repository URL: ${repoUrl || "(not provided)"}\n`,
+    "You are the EZCode capability intake agent.\n",
+    "Your only responsibility is to read the repository/documentation context supplied by the user and produce one strict JSON object for the capability manifest candidate.\n",
+    "Before deriving fields, call `fetch_capabilities` for every user-provided repository or documentation URL. Treat it as the server-side read-only source reader for capability evidence.\n",
+    "If only a documentation URL is provided, work from that source. A repository URL is optional; when fetched documentation reveals an official GitHub/Git/package source link, call `fetch_capabilities` for that source too when it can improve evidence.\n",
+    "When the fetched page is an index/navigation page or does not provide enough evidence for install/check/placement, follow relevant same-site documentation links returned by `fetch_capabilities`, especially install, setup, configure, authentication, requirements, CLI, MCP, SDK, and reference pages. If the page advertises an `llms.txt` documentation index, fetch it to discover the precise pages before continuing.\n",
+    "Use the normal agent tool/event/logging path for `fetch_capabilities` calls. Do not use browser rendering, shell curl, regex-style guessing, or fallback heuristics when documentation is unreadable or incomplete.\n",
+    "Infer the deployment placement/scope from the repository and documentation: whether the tool can run on the server, must be installed on the local peer, needs both sides, or is a user/project skill. Treat the user's deployment hint only as an optional clue.\n",
+    "Every inferred field must cite evidence returned by `fetch_capabilities`, including heading/anchor/source_url/content_hash/fetched_at when available. If the evidence cannot support a field, including placement/scope, return `needs_review: true` with a concise `reason` and preserve the evidence you did find. Do not invent commands.\n\n",
+    `Repository URL: ${repoUrl || "(optional; may be discovered from docs)"}\n`,
     `Documentation URL: ${docsUrl || "(not provided)"}\n`,
     `Kind hint: ${kindHint || "(none)"}\n`,
     `Name hint: ${nameHint || "(none)"}\n`,
-    `Deployment hint: ${placementHint || "(none)"}\n`,
+    `Optional deployment hint: ${placementHint || "(none; infer from docs)"}\n`,
     `User supplied documentation text:\n${docsText || "(none)"}\n\n`,
     "Return JSON only. Required schema:\n",
     "{\n",
@@ -2140,7 +2144,7 @@ function buildToolchainIngestPrompt(input: Record<string, unknown>): string {
     '  "source": "package/source label",\n',
     '  "repo_url": "repository URL",\n',
     '  "docs": [{"title": "doc title", "url": "doc URL"}],\n',
-    '  "evidence": [{"field": "check/install/placement/credentials/risk", "title": "source title", "url": "source URL", "excerpt": "short source-backed evidence"}],\n',
+    '  "evidence": [{"field": "check/install/placement/credentials/risk", "title": "source title", "url": "source URL", "excerpt": "short source-backed evidence", "heading": "source heading", "anchor": "#anchor", "source_url": "exact fetched source", "content_hash": "sha256", "fetched_at": "ISO timestamp"}],\n',
     '  "placement": "server | local | both for CLI, server | peer | both for MCP",\n',
     '  "scope": "user | project for skill",\n',
     '  "command": "primary command or executable; MCP launch command when kind=mcp",\n',
@@ -2207,12 +2211,12 @@ function toolchainIngestEventLog(
   if (type === "error") {
     return {
       level: "error",
-      message: textValue(payload.message, "文档解析 Agent 执行失败。"),
+      message: textValue(payload.message, "新增能力 Agent 执行失败。"),
       eventType: type,
     }
   }
   if (type === "chat_end") {
-    return { level: "info", message: "文档解析 Agent 已结束。", eventType: type }
+    return { level: "info", message: "新增能力 Agent 已结束。", eventType: type }
   }
   return undefined
 }
@@ -2230,7 +2234,7 @@ function parseToolchainIngestResponse(rawResponse: string): Record<string, unkno
 function parseJsonObjectFromText(text: string): Record<string, unknown> {
   const trimmed = text.trim()
   if (!trimmed) {
-    throw new Error("文档解析 Agent 没有返回 JSON。")
+    throw new Error("新增能力 Agent 没有返回 JSON。")
   }
   try {
     const parsed = JSON.parse(trimmed)
@@ -2255,7 +2259,7 @@ function parseJsonObjectFromText(text: string): Record<string, unknown> {
       return parsed as Record<string, unknown>
     }
   }
-  throw new Error("文档解析 Agent 返回内容不是可解析的 JSON 对象。")
+  throw new Error("新增能力 Agent 返回内容不是可解析的 JSON 对象。")
 }
 
 function validateToolchainIngestCandidate(

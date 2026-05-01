@@ -1417,6 +1417,15 @@ button {
   padding-bottom: 1px;
 }
 
+.toolchain-duplicate-warning {
+  margin-top: 10px;
+}
+
+.toolchain-duplicate-warning p {
+  margin: 2px 0 0;
+  color: var(--ez-muted);
+}
+
 .toolchain-workbench {
   min-height: 520px;
   display: grid;
