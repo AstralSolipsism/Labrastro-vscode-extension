@@ -7,6 +7,7 @@
   --ez-border: var(--vscode-panel-border, rgba(127, 127, 127, 0.28));
   --ez-surface: var(--vscode-editor-background);
   --ez-surface-soft: var(--vscode-input-background, transparent);
+  --ez-input: var(--vscode-input-background, var(--ez-surface));
   --ez-hover: var(--vscode-toolbar-hoverBackground, rgba(127, 127, 127, 0.12));
   --ez-focus: var(--vscode-focusBorder, var(--vscode-textLink-foreground));
   --ez-link: var(--vscode-textLink-foreground);
@@ -427,7 +428,11 @@ button {
 }
 
 .setting-select,
-.setting-input {
+.setting-input,
+.field-label input:not([type="checkbox"]),
+.field-label select,
+.field-label textarea,
+.command-rule-editor__input input {
   width: 100%;
   min-width: 0;
   min-height: 30px;
@@ -435,15 +440,21 @@ button {
   border: 1px solid var(--vscode-input-border, var(--ez-border));
   border-radius: 4px;
   color: var(--vscode-input-foreground, var(--ez-fg));
-  background: var(--vscode-input-background, var(--ez-surface-soft));
+  background: var(--ez-input);
 }
 
-.setting-select {
+.setting-select,
+.field-label select {
   background: var(--vscode-dropdown-background, var(--ez-surface-soft));
+  color: var(--vscode-dropdown-foreground, var(--vscode-input-foreground, var(--ez-fg)));
   border-color: var(--vscode-dropdown-border, var(--ez-border));
 }
 
 .setting-input:focus,
+.field-label input:not([type="checkbox"]):focus,
+.field-label select:focus,
+.field-label textarea:focus,
+.command-rule-editor__input input:focus,
 .setting-select:focus,
 .btn:focus-visible,
 .settings-tab:focus-visible,
@@ -453,6 +464,12 @@ button {
 .compact-row:focus-visible {
   outline: 1px solid var(--ez-focus);
   outline-offset: 1px;
+}
+
+.setting-input::placeholder,
+.field-label input::placeholder,
+.field-label textarea::placeholder {
+  color: var(--vscode-input-placeholderForeground, var(--ez-muted));
 }
 
 .settings-actions {
@@ -909,10 +926,6 @@ button {
   min-width: 0;
   height: 28px;
   padding: 0 8px;
-  border: 1px solid var(--ez-border);
-  border-radius: 4px;
-  color: var(--ez-fg);
-  background: var(--ez-input);
 }
 
 .command-rule-chips,
@@ -1491,7 +1504,7 @@ button {
   border: 1px solid var(--vscode-input-border, var(--ez-border));
   border-radius: var(--ez-radius);
   color: var(--ez-muted);
-  background: var(--vscode-input-background, var(--ez-surface-soft));
+  background: var(--ez-input);
 }
 
 .toolchain-toolbar__search input {
