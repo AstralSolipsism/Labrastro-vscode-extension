@@ -472,6 +472,19 @@ button {
   color: var(--vscode-input-placeholderForeground, var(--ez-muted));
 }
 
+.settings-inline-toggle {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ez-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.settings-inline-toggle input {
+  margin: 0;
+}
 .settings-actions {
   display: flex;
   flex-wrap: wrap;

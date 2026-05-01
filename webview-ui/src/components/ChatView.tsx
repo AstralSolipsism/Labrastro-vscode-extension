@@ -38,9 +38,24 @@ interface ChatWebviewState {
   autoApprovalPlatform?: string
 }
 
+export interface EnvironmentRunRequest {
+  id: string
+  mode: "check" | "configure"
+  executionMode: "serial" | "combined"
+  items: Array<{ id: string; name: string; kind: "cli" | "mcp" | "skill" }>
+}
+
+interface EnvironmentQueueItem {
+  mode: "check" | "configure"
+  entryIds: string[]
+  text: string
+}
+
 interface ChatViewProps {
   historyOpen?: boolean
   onHistoryClose?: () => void
+  pendingEnvironmentRun?: EnvironmentRunRequest
+  onEnvironmentRunConsumed?: (id: string) => void
 }
 
 const ChatView: Component<ChatViewProps> = (props) => {
@@ -52,6 +67,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const [activeChatId, setActiveChatId] = createSignal<string | undefined>()
   const [chatStatus, setChatStatus] = createSignal<"idle" | "running" | "stopping" | "cancelled" | "done" | "error">("idle")
   const [pendingCancel, setPendingCancel] = createSignal(false)
+  const [environmentRunQueue, setEnvironmentRunQueue] = createSignal<EnvironmentQueueItem[]>([])
+  const [lastEnvironmentRunRequestId, setLastEnvironmentRunRequestId] = createSignal("")
   const [pendingApprovals, setPendingApprovals] = createSignal<PendingApproval[]>([])
   const [selectedApproval, setSelectedApproval] = createSignal<PendingApproval | undefined>()
   const [historyQuery, setHistoryQuery] = createSignal("")
@@ -645,7 +662,86 @@ const ChatView: Component<ChatViewProps> = (props) => {
     })
   }
 
+  const startEnvironmentQueueItem = (item: EnvironmentQueueItem) => {
+    const sessionId = trace.currentSessionId()
+    const remoteSessionId = sessionId && !isLocalDraftSessionId(sessionId) ? sessionId : undefined
+
+    if (!sessionId) {
+      trace.startDraftTask(item.text)
+    }
+
+    trace.appendTurn({
+      userMessage: {
+        id: `u-${Date.now()}`,
+        role: "user",
+        text: item.text,
+        parts: [] as MockPart[],
+        timestamp: Date.now(),
+      },
+      assistantMessages: [],
+    })
+
+    setIsWorking(true)
+    setPendingCancel(false)
+    setActiveChatId(undefined)
+    setChatStatus("running")
+    setWorkingText(item.mode === "check" ? "正在检查能力环境" : "正在配置能力环境")
+    setPendingApprovals([])
+    setSelectedApproval(undefined)
+    trace.patchStats({ taskText: item.text, runStatus: "running" })
+    startTimer()
+    vscode.postMessage({
+      type: "environment.chatRun",
+      mode: item.mode,
+      entryIds: item.entryIds,
+      ...(remoteSessionId ? { sessionId: remoteSessionId } : {}),
+    })
+  }
+
+  const startNextEnvironmentQueueItem = () => {
+    if (isWorking()) return
+    const queue = environmentRunQueue()
+    const next = queue[0]
+    if (!next) return
+    setEnvironmentRunQueue(queue.slice(1))
+    startEnvironmentQueueItem(next)
+  }
+
+  const enqueueEnvironmentRun = (request: EnvironmentRunRequest) => {
+    const items = request.items.filter((item) => item.id)
+    if (!items.length) return
+    const action = request.mode === "check" ? "检查" : "配置"
+    const queue: EnvironmentQueueItem[] =
+      request.executionMode === "serial" && items.length > 1
+        ? items.map((item, index) => ({
+            mode: request.mode,
+            entryIds: [item.id],
+            text: `${action}能力：${item.name || item.id} (${index + 1}/${items.length})`,
+          }))
+        : [
+            {
+              mode: request.mode,
+              entryIds: items.map((item) => item.id),
+              text:
+                items.length === 1
+                  ? `${action}能力：${items[0].name || items[0].id}`
+                  : `${request.executionMode === "serial" ? "串行" : "批量"}${action}${items.length} 个能力`,
+            },
+          ]
+    setEnvironmentRunQueue((current) => [...current, ...queue])
+    window.setTimeout(startNextEnvironmentQueueItem, 0)
+  }
+
+  createEffect(() => {
+    const request = props.pendingEnvironmentRun
+    if (!request || request.id === lastEnvironmentRunRequestId()) return
+    setLastEnvironmentRunRequestId(request.id)
+    props.onEnvironmentRunConsumed?.(request.id)
+    enqueueEnvironmentRun(request)
+  })
+
   const handleStop = () => {
+    setEnvironmentRunQueue([])
     const chatId = activeChatId()
     if (chatStatus() === "stopping") return
     setChatStatus("stopping")
@@ -729,6 +825,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         setPendingCancel(false)
         trace.patchStats({ runStatus: chatStatus() === "cancelled" ? "cancelled" : "done" })
         stopTimer()
+        window.setTimeout(startNextEnvironmentQueueItem, 0)
       }
       if (msg.type === "chat.cancelled") {
         setChatStatus("stopping")
@@ -741,6 +838,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         setChatStatus("error")
         setActiveChatId(undefined)
         setPendingCancel(false)
+        setEnvironmentRunQueue([])
         trace.patchStats({ runStatus: "error" })
         stopTimer()
       }

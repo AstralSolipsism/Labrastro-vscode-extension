@@ -43,6 +43,14 @@ type EnvironmentSnapshotStatus = "idle" | "running" | "completed" | "error" | "c
 
 interface SettingsViewProps {
   targetTab?: string
+  onEnvironmentRun?: (request: EnvironmentRunLaunchRequest) => void
+}
+
+interface EnvironmentRunLaunchRequest {
+  id: string
+  mode: "check" | "configure"
+  executionMode: "serial" | "combined"
+  items: Array<{ id: string; name: string; kind: EnvironmentEntryKind }>
 }
 
 interface ProviderModelEntry {
@@ -89,6 +97,7 @@ interface EnvironmentSnapshotState {
   status: EnvironmentSnapshotStatus
   summary: string
   chatId?: string
+  sessionId?: string
   startedAt?: string
   completedAt?: string
   lastManifestAt?: string
@@ -892,6 +901,7 @@ function normalizeEnvironmentSnapshot(value: unknown): EnvironmentSnapshotState 
     status: (["idle", "running", "completed", "error", "canceled"].includes(stringValue(item.status)) ? stringValue(item.status) : "idle") as EnvironmentSnapshotStatus,
     summary: stringValue(item.summary, "环境清单尚未加载。"),
     chatId: stringValue(item.chatId) || undefined,
+    sessionId: stringValue(item.sessionId) || undefined,
     startedAt: stringValue(item.startedAt) || undefined,
     completedAt: stringValue(item.completedAt) || undefined,
     lastManifestAt: stringValue(item.lastManifestAt) || undefined,
@@ -1056,6 +1066,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
   const [ingestKindHint, setIngestKindHint] = createSignal<ToolchainKindFilter>("all")
   const [ingestNameHint, setIngestNameHint] = createSignal("")
   const [ingestPlacementHint, setIngestPlacementHint] = createSignal("")
+  const [toolchainRunSerial, setToolchainRunSerial] = createSignal(true)
   const [serverMaxRunningAgents, setServerMaxRunningAgents] = createSignal(4)
   const [serverMaxShellsPerAgent, setServerMaxShellsPerAgent] = createSignal(1)
   const [serverSettingsDirty, setServerSettingsDirty] = createSignal(false)
@@ -1333,9 +1344,34 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
 
   const refreshAdmin = () => vscode.postMessage({ type: "admin.refresh" })
   const refreshEnvironmentManifest = () => vscode.postMessage({ type: "environment.refreshManifest" })
-  const runEnvironment = (mode: "check" | "configure", entryIds?: string[]) =>
-    vscode.postMessage({ type: "environment.run", mode, entryIds })
+  const environmentRunItems = (entryIds?: string[]) => {
+    const selected = entryIds?.length
+      ? toolchainDashboardItems().filter((item) => entryIds.includes(item.id))
+      : toolchainDashboardItems()
+    return selected.map((item) => ({
+      id: item.id,
+      name: item.name,
+      kind: item.kind,
+    }))
+  }
+  const runEnvironment = (mode: "check" | "configure", entryIds?: string[]) => {
+    const items = environmentRunItems(entryIds)
+    if (!items.length) return
+    const request = {
+      id: `environment-${mode}-${Date.now()}`,
+      mode,
+      executionMode:
+        entryIds?.length === 1 ? "combined" : toolchainRunSerial() ? "serial" : "combined",
+      items,
+    } satisfies EnvironmentRunLaunchRequest
+    if (props.onEnvironmentRun) {
+      props.onEnvironmentRun(request)
+    } else {
+      vscode.postMessage({ type: "environment.chatRun", mode, entryIds: items.map((item) => item.id) })
+    }
+  }
   const stopEnvironmentRun = () => vscode.postMessage({ type: "environment.cancel" })
+
   const refreshServerSettings = () => {
     setServerSettingsBootstrapped(true)
     vscode.postMessage({ type: "serverSettings.read" })
@@ -2857,30 +2893,26 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
             </p>
           </div>
           <div class="settings-actions settings-actions--right">
+            <label class="settings-inline-toggle">
+              <input
+                type="checkbox"
+                checked={toolchainRunSerial()}
+                onChange={(event) => setToolchainRunSerial(event.currentTarget.checked)}
+              />
+              <span>全部操作串行执行</span>
+            </label>
             <button class="btn btn-secondary" onClick={refreshToolchains} disabled={environmentSnapshot().running}>
               <span class="codicon codicon-refresh" aria-hidden="true" />
               刷新
             </button>
-            <Show
-              when={!environmentSnapshot().running}
-              fallback={
-                <button class="btn btn-danger" onClick={stopEnvironmentRun}>
-                  <span class="codicon codicon-debug-stop" aria-hidden="true" />
-                  停止
-                </button>
-              }
-            >
-              <>
-                <button class="btn btn-secondary" onClick={() => runEnvironment("check")} disabled={!environmentSnapshot().entries.length}>
-                  <span class="codicon codicon-search" aria-hidden="true" />
-                  检查全部
-                </button>
-                <button class="btn btn-primary" onClick={() => runEnvironment("configure")} disabled={!environmentSnapshot().entries.length}>
-                  <span class="codicon codicon-tools" aria-hidden="true" />
-                  配置全部
-                </button>
-              </>
-            </Show>
+            <button class="btn btn-secondary" onClick={() => runEnvironment("check")} disabled={!environmentSnapshot().entries.length || environmentSnapshot().running}>
+              <span class="codicon codicon-search" aria-hidden="true" />
+              检查全部
+            </button>
+            <button class="btn btn-primary" onClick={() => runEnvironment("configure")} disabled={!environmentSnapshot().entries.length || environmentSnapshot().running}>
+              <span class="codicon codicon-tools" aria-hidden="true" />
+              配置全部
+            </button>
           </div>
         </div>
 

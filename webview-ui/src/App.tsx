@@ -33,6 +33,13 @@ const AgentManagerView = lazy(() => import("./components/AgentManagerView"))
 type ViewType = "chat" | "settings" | "about" | "agentManager"
 const VALID_VIEWS = new Set<string>(["chat", "settings", "about", "agentManager"])
 
+interface EnvironmentRunRequest {
+  id: string
+  mode: "check" | "configure"
+  executionMode: "serial" | "combined"
+  items: Array<{ id: string; name: string; kind: "cli" | "mcp" | "skill" }>
+}
+
 // ─────────────────────────────────────────────────────────────
 // 内部内容组件（在 Context Provider 树内部使用）
 // ─────────────────────────────────────────────────────────────
@@ -47,6 +54,7 @@ const AppContent: Component = () => {
   const [panelIntent, setPanelIntent] = createSignal<TraceNavigationIntent | undefined>(undefined)
   const [settingsTab, setSettingsTab] = createSignal<string | undefined>(undefined)
   const [sessionHistoryOpen, setSessionHistoryOpen] = createSignal(false)
+  const [pendingEnvironmentRun, setPendingEnvironmentRun] = createSignal<EnvironmentRunRequest | undefined>()
 
   /**
    * 面板模式标识。
@@ -99,6 +107,13 @@ const AppContent: Component = () => {
     vscode.postMessage({ type: "closePanel" })
   }
 
+  const handleEnvironmentRun = (request: EnvironmentRunRequest) => {
+    setCurrentView("chat")
+    setIsPanelMode(false)
+    setSessionHistoryOpen(false)
+    setPendingEnvironmentRun(request)
+  }
+
   return (
     <>
       {/* 面板模式：显示返回按钮顶栏（由 SettingsPanelProvider 驱动） */}
@@ -130,11 +145,20 @@ const AppContent: Component = () => {
           <ChatView
             historyOpen={sessionHistoryOpen()}
             onHistoryClose={() => setSessionHistoryOpen(false)}
+            pendingEnvironmentRun={pendingEnvironmentRun()}
+            onEnvironmentRunConsumed={(id) => {
+              if (pendingEnvironmentRun()?.id === id) {
+                setPendingEnvironmentRun(undefined)
+              }
+            }}
           />
         </Match>
         <Match when={currentView() === "settings"}>
           <Suspense fallback={null}>
-            <SettingsView targetTab={settingsTab()} />
+            <SettingsView
+              targetTab={settingsTab()}
+              onEnvironmentRun={handleEnvironmentRun}
+            />
           </Suspense>
         </Match>
         <Match when={currentView() === "about"}>

@@ -66,6 +66,7 @@ interface EnvironmentSnapshot {
   status: "idle" | "running" | "completed" | "error" | "canceled"
   summary: string
   chatId?: string
+  sessionId?: string
   startedAt?: string
   completedAt?: string
   lastManifestAt?: string
@@ -336,6 +337,18 @@ export class DogcodeController implements vscode.Disposable {
           )
         }
         return true
+      case "environment.chatRun":
+        if (message.mode === "check" || message.mode === "configure") {
+          void this.startEnvironmentChatRun(
+            message.mode,
+            post,
+            Array.isArray(message.entryIds)
+              ? message.entryIds.map((item) => String(item)).filter(Boolean)
+              : undefined,
+            stringValue(message.sessionId)
+          )
+        }
+        return true
       case "environment.cancel":
         await this.cancelEnvironmentRun(post)
         return true
@@ -436,6 +449,17 @@ export class DogcodeController implements vscode.Disposable {
         return true
       case "session.load":
         await this.loadSession(stringValue(message.sessionId) || "", post)
+        return true
+      case "session.openInChat":
+        {
+          const sessionId = stringValue(message.sessionId) || ""
+          if (!sessionId) {
+            post({ type: "session.error", message: "缺少会话 ID。" })
+            return true
+          }
+          await this.loadSession(sessionId, post)
+          post({ type: "navigate", view: "chat" })
+        }
         return true
       case "session.new":
         await this.createSession(post)
@@ -984,6 +1008,11 @@ export class DogcodeController implements vscode.Disposable {
         }
         cursor = nextCursor
         if (this.activeEnvironmentRun?.cancelled) {
+          this.finalizeEnvironmentRun(true, post)
+          post({
+            type: "environment.run.completed",
+            payload: this.environmentSnapshot,
+          })
           break
         }
         if (stream.done) {
@@ -992,6 +1021,7 @@ export class DogcodeController implements vscode.Disposable {
             type: "environment.run.completed",
             payload: this.environmentSnapshot,
           })
+          await this.refreshEnvironmentSessionList(post)
           break
         }
       }
@@ -1021,6 +1051,190 @@ export class DogcodeController implements vscode.Disposable {
       this.activeEnvironmentRun = undefined
       post({ type: "environment.snapshot", payload: this.environmentSnapshot })
       post({ type: "environment.run.error", message: errorMessage(error) })
+      await this.refreshEnvironmentSessionList(post)
+    }
+  }
+
+  private async startEnvironmentChatRun(
+    mode: EnvironmentRunMode,
+    post: PostMessage,
+    entryIds?: string[],
+    requestedSessionId?: string
+  ): Promise<void> {
+    if (this.activeEnvironmentRun) {
+      post({
+        type: "environment.run.error",
+        message: "已有环境任务正在运行，请先停止当前任务。",
+      })
+      post({ type: "chat.error", message: "已有环境任务正在运行，请先停止当前任务。" })
+      return
+    }
+
+    let chatId = ""
+    let sessionId = requestedSessionId
+    try {
+      const manifest = await this.ensureEnvironmentManifest(post)
+      const runManifest = filterEnvironmentManifest(manifest, entryIds)
+      const entries = buildEnvironmentEntries(runManifest)
+      if (entries.length === 0) {
+        const message = "当前服务器没有配置任何环境条目。"
+        const history = environmentRunHistory(this.environmentSnapshot)
+        this.environmentSnapshot = {
+          ...createEmptyEnvironmentSnapshot(),
+          status: "error",
+          summary: message,
+          error: "environment_manifest_empty",
+          lastManifestAt:
+            stringValue(manifest.loadedAt) || this.environmentSnapshot.lastManifestAt,
+          ...history,
+        }
+        post({ type: "environment.snapshot", payload: this.environmentSnapshot })
+        post({ type: "environment.run.error", message })
+        post({ type: "chat.error", message })
+        return
+      }
+
+      const prompt = buildEnvironmentRunPrompt(runManifest, mode)
+      const start = await this.client.startChat(prompt, sessionId)
+      chatId = String(start.chat_id || "")
+      if (!chatId) {
+        throw new Error("environment_chat_id_missing")
+      }
+      this.activeChatId = chatId
+      post({ type: "chat.session", chatId, sessionId })
+
+      this.activeEnvironmentRun = {
+        chatId,
+        mode,
+        cancelled: false,
+        currentToolMatches: new Map(),
+      }
+      const history = environmentRunHistory(this.environmentSnapshot)
+      this.environmentSnapshot = {
+        mode,
+        running: true,
+        status: "running",
+        summary: mode === "check" ? "正在检查当前环境..." : "正在配置当前环境...",
+        chatId,
+        sessionId,
+        startedAt: new Date().toISOString(),
+        completedAt: undefined,
+        lastManifestAt:
+          stringValue(runManifest.loadedAt) || this.environmentSnapshot.lastManifestAt,
+        error: undefined,
+        entries,
+        approvals: [],
+        logs: [],
+        ...history,
+      }
+      post({ type: "environment.run.started", payload: { mode, chatId } })
+      post({ type: "environment.snapshot", payload: this.environmentSnapshot })
+
+      let cursor = 0
+      while (!this.disposed && this.activeEnvironmentRun?.chatId === chatId) {
+        const stream = await this.client.streamChat(chatId, cursor, 2)
+        const events = Array.isArray(stream.events) ? stream.events : []
+        const nextCursor = Number(stream.next_cursor ?? cursor)
+        if (events.length) {
+          for (const event of events) {
+            if (
+              event &&
+              event.type === "remote_peer_ready" &&
+              typeof event.payload === "object" &&
+              event.payload
+            ) {
+              const remoteSessionId = stringValue(
+                (event.payload as Record<string, unknown>).session_id
+              )
+              if (remoteSessionId && sessionId && remoteSessionId !== sessionId) {
+                post({
+                  type: "chat.error",
+                  message: `会话绑定异常：当前会话 ${sessionId}，远端返回 ${remoteSessionId}。`,
+                })
+                return
+              }
+              if (remoteSessionId && remoteSessionId !== this.currentSessionId) {
+                post({ type: "session.adopted", sessionId: remoteSessionId })
+              }
+              sessionId = remoteSessionId || sessionId
+              this.currentSessionId = sessionId
+              if (this.currentSessionId) {
+                await this.context.workspaceState.update(
+                  "dogcode.currentSessionId",
+                  this.currentSessionId
+                )
+              }
+            }
+          }
+          for (const event of events) {
+            if (!event || typeof event !== "object") continue
+            const normalized = event as Record<string, unknown>
+            if (normalized.type === "approval_request") {
+              await this.approvalDocuments.store(
+                objectValue(normalized.payload)
+              )
+            }
+            this.applyEnvironmentEvent(normalized, post)
+          }
+          post({ type: "chat.events", chatId, events })
+          post({ type: "environment.snapshot", payload: this.environmentSnapshot })
+        }
+        cursor = nextCursor
+        if (this.activeEnvironmentRun?.cancelled) {
+          this.finalizeEnvironmentRun(true, post)
+          post({
+            type: "environment.run.completed",
+            payload: this.environmentSnapshot,
+          })
+          post({ type: "chat.done", chatId })
+          if (this.activeChatId === chatId) {
+            this.activeChatId = undefined
+          }
+          break
+        }
+        if (stream.done) {
+          this.finalizeEnvironmentRun(false, post)
+          post({
+            type: "environment.run.completed",
+            payload: this.environmentSnapshot,
+          })
+          try {
+            await this.refreshSessions()
+            post({
+              type: "session.list",
+              sessions: this.sessions,
+              fingerprint: this.sessionFingerprint,
+            })
+          } catch {
+            // Environment completion should not fail because history refresh failed.
+          }
+          post({ type: "chat.done", chatId })
+          if (this.activeChatId === chatId) {
+            this.activeChatId = undefined
+          }
+          break
+        }
+      }
+    } catch (error) {
+      const completedAt = new Date().toISOString()
+      this.environmentSnapshot = {
+        ...this.environmentSnapshot,
+        running: false,
+        status: "error",
+        summary: "环境任务执行失败",
+        error: errorMessage(error),
+        completedAt,
+        lastRunSummary: "环境任务执行失败",
+        lastRunCompletedAt: completedAt,
+        lastRunStatus: "error",
+      }
+      this.activeEnvironmentRun = undefined
+      if (this.activeChatId === chatId) {
+        this.activeChatId = undefined
+      }
+      post({ type: "environment.snapshot", payload: this.environmentSnapshot })
+      post({ type: "environment.run.error", message: errorMessage(error) })
+      post({ type: "chat.error", message: errorMessage(error) })
     }
   }
 
@@ -1207,7 +1421,12 @@ export class DogcodeController implements vscode.Disposable {
     this.activeEnvironmentRun = undefined
     post({ type: "environment.snapshot", payload: this.environmentSnapshot })
     post({ type: "environment.run.completed", payload: this.environmentSnapshot })
-    await this.client.stopPeer()
+    try {
+      await this.client.cancelChat(run.chatId, "user_cancelled")
+    } catch {
+      // The UI state is already cancelled; backend cancellation may race with completion.
+    }
+    await this.refreshEnvironmentSessionList(post)
   }
 
   private applyEnvironmentEvent(
@@ -1218,6 +1437,22 @@ export class DogcodeController implements vscode.Disposable {
     if (!run) return
     const type = String(event.type || "")
     const payload = objectValue(event.payload)
+    if (type === "remote_peer_ready") {
+      const sessionId = stringValue(payload.session_id) || ""
+      if (sessionId) {
+        this.environmentSnapshot = {
+          ...this.environmentSnapshot,
+          sessionId,
+        }
+        this.appendEnvironmentLog("info", `环境 Agent 会话已绑定：${sessionId}`)
+      }
+      return
+    }
+    if (type === "chat_cancelled") {
+      run.cancelled = true
+      this.appendEnvironmentLog("warning", "环境 Agent 会话已停止。")
+      return
+    }
     if (type === "output") {
       this.appendEnvironmentLog("info", truncateText(stringValue(payload.content) || "", 1200))
       return
@@ -1251,7 +1486,7 @@ export class DogcodeController implements vscode.Disposable {
         previewError: stringValue(payload.preview_error),
         rawPayload: payload,
       }
-      if (run.mode === "check") {
+      if (run.mode === "check" && match?.phase === "install") {
         if (match?.entry.id) {
           this.updateEnvironmentEntry(match.entry.id, {
             status: "missing",
@@ -1525,6 +1760,19 @@ export class DogcodeController implements vscode.Disposable {
     }
     this.activeEnvironmentRun = undefined
     post({ type: "environment.snapshot", payload: this.environmentSnapshot })
+  }
+
+  private async refreshEnvironmentSessionList(post: PostMessage): Promise<void> {
+    try {
+      await this.refreshSessions()
+      post({
+        type: "session.list",
+        sessions: this.sessions,
+        fingerprint: this.sessionFingerprint,
+      })
+    } catch {
+      // Session history refresh should not mask the environment run result.
+    }
   }
 
   private async startChat(
