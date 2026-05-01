@@ -18,7 +18,7 @@ import {
 
 type ProviderType = "openai_chat" | "anthropic_messages" | "openai_responses"
 type ProviderCompat = "generic" | "deepseek" | "kimi" | "glm" | "qwen" | "zenmux"
-type SettingsTab = "executors" | "providers" | "toolchains" | "autoApproval" | "other"
+type SettingsTab = "executors" | "providers" | "toolchains" | "serverSettings" | "autoApproval" | "other"
 type ModelTarget = "main" | "sub" | "both"
 type ModelDetailMode = "fetched" | "custom"
 type ModelActionIntent = "" | "savePreset" | "activateMain" | "activateSub" | "activateBoth"
@@ -193,6 +193,7 @@ const settingsTabs: Array<{ id: SettingsTab; label: string; icon: string }> = [
   { id: "executors", label: "执行器管理", icon: "radio-tower" },
   { id: "providers", label: "服务商管理", icon: "server-process" },
   { id: "toolchains", label: "能力管理", icon: "tools" },
+  { id: "serverSettings", label: "服务端设置", icon: "server-environment" },
   { id: "autoApproval", label: "自动批准", icon: "shield" },
   { id: "other", label: "其他", icon: "settings" },
 ]
@@ -205,6 +206,8 @@ function normalizeSettingsTab(value: unknown): SettingsTab | undefined {
       return "executors"
     case "toolchains":
       return "toolchains"
+    case "serverSettings":
+      return "serverSettings"
     case "autoApproval":
       return "autoApproval"
     case "other":
@@ -1039,6 +1042,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
   const [customModelDraft, setCustomModelDraft] = createSignal("")
   const [actionIntent, setActionIntent] = createSignal<ModelActionIntent>("")
   const [environmentBootstrapped, setEnvironmentBootstrapped] = createSignal(false)
+  const [serverSettingsBootstrapped, setServerSettingsBootstrapped] = createSignal(false)
   const [selectedEnvironmentApproval, setSelectedEnvironmentApproval] = createSignal<EnvironmentApprovalState | undefined>()
   const [toolchainBootstrapped, setToolchainBootstrapped] = createSignal(false)
   const [toolchainEditor, setToolchainEditor] = createSignal<ToolchainEditorState | undefined>()
@@ -1052,6 +1056,9 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
   const [ingestKindHint, setIngestKindHint] = createSignal<ToolchainKindFilter>("all")
   const [ingestNameHint, setIngestNameHint] = createSignal("")
   const [ingestPlacementHint, setIngestPlacementHint] = createSignal("")
+  const [serverMaxRunningAgents, setServerMaxRunningAgents] = createSignal(4)
+  const [serverMaxShellsPerAgent, setServerMaxShellsPerAgent] = createSignal(1)
+  const [serverSettingsDirty, setServerSettingsDirty] = createSignal(false)
   const [autoApprovalOptions, setAutoApprovalOptions] = createSignal<Record<string, boolean>>(DEFAULT_AUTO_APPROVE_OPTIONS)
   const [allowedCommandInput, setAllowedCommandInput] = createSignal("")
   const [deniedCommandInput, setDeniedCommandInput] = createSignal("")
@@ -1212,6 +1219,21 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
     toolchainDashboardItems()[0]
   )
   const toolchainSummary = createMemo(() => summarizeToolchainDashboard(toolchainDashboardItems()))
+  const serverSettingsPayload = createMemo(() => {
+    const direct = server.serverSettingsState()
+    if (direct && Object.keys(direct).length) return direct
+    const admin = server.adminState()
+    return {
+      settings: objectValue(admin.server_settings),
+      runtime: objectValue(admin.agent_runtime),
+    }
+  })
+  const agentRuntimeSettings = createMemo(() =>
+    objectValue(objectValue(serverSettingsPayload().settings).agent_runtime)
+  )
+  const agentRuntimeState = createMemo(() =>
+    objectValue(serverSettingsPayload().runtime || server.adminState().agent_runtime)
+  )
   const toolchainIngestState = createMemo(() => server.toolchainIngestState())
   const toolchainIngestLogs = createMemo(() => {
     const logs = toolchainIngestState().logs
@@ -1314,6 +1336,26 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
   const runEnvironment = (mode: "check" | "configure", entryIds?: string[]) =>
     vscode.postMessage({ type: "environment.run", mode, entryIds })
   const stopEnvironmentRun = () => vscode.postMessage({ type: "environment.cancel" })
+  const refreshServerSettings = () => {
+    setServerSettingsBootstrapped(true)
+    vscode.postMessage({ type: "serverSettings.read" })
+  }
+  const saveServerSettings = () => {
+    const maxAgents = Math.max(1, Math.floor(serverMaxRunningAgents()))
+    const maxShells = Math.max(1, Math.floor(serverMaxShellsPerAgent()))
+    setServerMaxRunningAgents(maxAgents)
+    setServerMaxShellsPerAgent(maxShells)
+    setServerSettingsDirty(false)
+    vscode.postMessage({
+      type: "serverSettings.update",
+      payload: {
+        agent_runtime: {
+          max_running_agents: maxAgents,
+          max_shells_per_agent: maxShells,
+        },
+      },
+    })
+  }
   const runToolchainIngest = () => {
     vscode.postMessage({
       type: "toolchain.ingest.run",
@@ -1580,6 +1622,23 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
       setEnvironmentBootstrapped(true)
       refreshEnvironmentManifest()
     }
+  })
+
+  createEffect(() => {
+    if (activeTab() !== "serverSettings") return
+    if (!serverSettingsBootstrapped()) {
+      setServerSettingsBootstrapped(true)
+      vscode.postMessage({ type: "serverSettings.read" })
+    }
+  })
+
+  createEffect(() => {
+    if (serverSettingsDirty()) return
+    const settings = agentRuntimeSettings()
+    const maxAgents = numberValue(settings.max_running_agents, 4)
+    const maxShells = numberValue(settings.max_shells_per_agent, 1)
+    setServerMaxRunningAgents(Math.max(1, Math.floor(maxAgents)))
+    setServerMaxShellsPerAgent(Math.max(1, Math.floor(maxShells)))
   })
 
   createEffect(() => {
@@ -3176,6 +3235,99 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
       </div>
     )
 
+  const renderServerSettings = () => {
+    const runtime = agentRuntimeState()
+    return (
+      <div class="settings-page">
+        <div class="settings-page-header">
+          <div>
+            <h2>服务端设置</h2>
+            <p>管理所有 Agent 类型共享的服务端运行并发和 shell 执行并发。</p>
+          </div>
+          <div class="settings-actions settings-actions--right">
+            <button class="btn btn-secondary" onClick={refreshServerSettings}>
+              <span class="codicon codicon-refresh" aria-hidden="true" />
+              刷新
+            </button>
+            <button class="btn btn-primary" onClick={saveServerSettings} disabled={!serverSettingsDirty()}>
+              <span class="codicon codicon-save" aria-hidden="true" />
+              保存
+            </button>
+          </div>
+        </div>
+
+        <Show when={server.serverSettingsError()}>
+          <div class="settings-error">{server.serverSettingsError()}</div>
+        </Show>
+        <Show when={server.actionResult()?.ok === true && Object.keys(objectValue(objectValue(server.actionResult()?.settings).agent_runtime)).length > 0 && !serverSettingsDirty()}>
+          <div class="settings-success">服务端设置已保存并重载。</div>
+        </Show>
+
+        <section class="settings-section settings-section--flat">
+          <div class="settings-section-heading">
+            <span>Agent 运行限制</span>
+            <StatusBadge tone="muted">全局</StatusBadge>
+          </div>
+          <div class="settings-form-grid settings-form-grid--two">
+            <label class="field-label">
+              <span>同时允许运行的 Agent 数</span>
+              <input
+                type="number"
+                min="1"
+                step="1"
+                value={serverMaxRunningAgents()}
+                onInput={(event) => {
+                  setServerMaxRunningAgents(Math.max(1, Math.floor(Number(event.currentTarget.value) || 1)))
+                  setServerSettingsDirty(true)
+                }}
+              />
+            </label>
+            <label class="field-label">
+              <span>每个 Agent 同时允许的 shell 执行数</span>
+              <input
+                type="number"
+                min="1"
+                step="1"
+                value={serverMaxShellsPerAgent()}
+                onInput={(event) => {
+                  setServerMaxShellsPerAgent(Math.max(1, Math.floor(Number(event.currentTarget.value) || 1)))
+                  setServerSettingsDirty(true)
+                }}
+              />
+            </label>
+          </div>
+        </section>
+
+        <section class="settings-section settings-section--flat">
+          <div class="settings-section-heading">
+            <span>当前运行态</span>
+            <StatusBadge tone={numberValue(runtime.queued_agents, 0) > 0 ? "warning" : "success"}>
+              {numberValue(runtime.running_agents, 0)} / {numberValue(runtime.max_running_agents, serverMaxRunningAgents())}
+            </StatusBadge>
+          </div>
+          <div class="toolchain-detail-grid">
+            <div class="toolchain-detail-block">
+              <span>运行中 Agent</span>
+              <strong>{String(numberValue(runtime.running_agents, 0))}</strong>
+            </div>
+            <div class="toolchain-detail-block">
+              <span>排队 Agent</span>
+              <strong>{String(numberValue(runtime.queued_agents, 0))}</strong>
+            </div>
+            <div class="toolchain-detail-block">
+              <span>shell 使用</span>
+              <strong>{String(Object.keys(objectValue(runtime.shell_usage)).length)}</strong>
+            </div>
+            <div class="toolchain-detail-block">
+              <span>shell 排队</span>
+              <strong>{String(Object.values(objectValue(runtime.queued_shells)).reduce<number>((sum, item) => sum + numberValue(item, 0), 0))}</strong>
+            </div>
+          </div>
+        </section>
+      </div>
+    )
+  }
+
   const renderCommandRuleEditor = (
     kind: "allow" | "deny",
     title: string,
@@ -3335,6 +3487,8 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
         return renderProviderManagement()
       case "toolchains":
         return renderToolchains()
+      case "serverSettings":
+        return renderServerSettings()
       case "autoApproval":
         return renderAutoApproval()
       case "other":
@@ -3350,7 +3504,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
             <span class="codicon codicon-settings-gear" aria-hidden="true" />
             dogcode 设置
           </h1>
-          <p>执行器、服务商、能力、自动批准和其他维护入口。</p>
+          <p>执行器、服务商、能力、服务端设置、自动批准和其他维护入口。</p>
         </div>
         <span class="settings-version">v{server.extensionVersion() || "0.0.0"}</span>
       </div>
