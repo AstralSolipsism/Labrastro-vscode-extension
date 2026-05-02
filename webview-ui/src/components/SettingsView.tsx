@@ -7,6 +7,7 @@ import {
   shouldSyncHostDraft,
   validateHostUrlInput,
 } from "../utils/host-url"
+import { t, locale, setLocale, LOCALES, type Locale } from "../i18n"
 import {
   ApprovalDetailsDialog,
   DEFAULT_AUTO_APPROVE_OPTIONS,
@@ -228,13 +229,13 @@ interface ToolchainEditorState {
 const providerTypes: ProviderType[] = ["openai_chat", "anthropic_messages", "openai_responses"]
 const compats: ProviderCompat[] = ["generic", "deepseek", "kimi", "glm", "qwen", "zenmux"]
 
-const settingsTabs: Array<{ id: SettingsTab; label: string; icon: string }> = [
-  { id: "executors", label: "执行器管理", icon: "radio-tower" },
-  { id: "providers", label: "服务商管理", icon: "server-process" },
-  { id: "toolchains", label: "能力管理", icon: "tools" },
-  { id: "serverSettings", label: "服务端设置", icon: "server-environment" },
-  { id: "autoApproval", label: "自动批准", icon: "shield" },
-  { id: "other", label: "其他", icon: "settings" },
+const settingsTabDefs: Array<{ id: SettingsTab; labelKey: string; icon: string }> = [
+  { id: "executors", labelKey: "settings.tab.executors", icon: "radio-tower" },
+  { id: "providers", labelKey: "settings.tab.providers", icon: "server-process" },
+  { id: "toolchains", labelKey: "settings.tab.toolchains", icon: "tools" },
+  { id: "serverSettings", labelKey: "settings.tab.serverSettings", icon: "server-environment" },
+  { id: "autoApproval", labelKey: "settings.tab.autoApproval", icon: "shield" },
+  { id: "other", labelKey: "settings.tab.other", icon: "settings" },
 ]
 
 function normalizeSettingsTab(value: unknown): SettingsTab | undefined {
@@ -1923,7 +1924,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
               <div class="settings-badge-group">
                 <StatusBadge>{modelDetailMode() === "custom" ? "自定义模型名" : "模型详情"}</StatusBadge>
                 <Show when={currentDetailHasSavedPreset()}>
-                  <StatusBadge>已保存预设</StatusBadge>
+                  <StatusBadge>{t("model.savedPresets")}</StatusBadge>
                 </Show>
                 <Show when={currentDetailIsMain()}>
                   <StatusBadge tone="success">当前主模型</StatusBadge>
@@ -2033,8 +2034,8 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
     <div class="settings-page settings-page--narrow">
       <div class="settings-page-header">
         <div>
-          <h2>主执行器配置</h2>
-          <p>管理主执行器的位置与引擎，后续 subagent 可独立配置。</p>
+          <h2>{t("executor.title")}</h2>
+          <p>{t("executor.description")}</p>
         </div>
         <button
           class={`btn btn-secondary ${refreshLoading() ? "btn--loading" : ""}`}
@@ -2053,7 +2054,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
             <span class={`codicon codicon-${executorLocation() === "local" ? "device-desktop" : "cloud"}`} aria-hidden="true" />
           </div>
           <div class="executor-status-card__body">
-            <small>运行位置</small>
+            <small>{t("executor.location.label")}</small>
             <strong>{executorLocationLabel(executorLocation())}</strong>
           </div>
         </div>
@@ -2062,7 +2063,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
             <span class={`codicon codicon-${executorEngineOption().icon}`} aria-hidden="true" />
           </div>
           <div class="executor-status-card__body">
-            <small>执行器引擎</small>
+            <small>{t("executor.engine.label")}</small>
             <strong>{executorEngineOption().label}</strong>
           </div>
         </div>
@@ -2075,8 +2076,8 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
             />
           </div>
           <div class="executor-status-card__body">
-            <small>连接状态</small>
-            <strong>{connectionStatus() === "ready" ? "已连接" : connectionStatus() === "error" ? "不可用" : "未连接"}</strong>
+            <small>{t("executor.status.connectionStatus")}</small>
+            <strong>{connectionStatus() === "ready" ? t("executor.status.connected") : connectionStatus() === "error" ? t("executor.status.unavailable") : t("executor.status.disconnected")}</strong>
           </div>
         </div>
       </section>
@@ -2102,8 +2103,8 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
           <div class="executor-picker-modal" role="dialog" aria-modal="true" aria-label="选择主执行器" onClick={(e) => e.stopPropagation()}>
             <div class="settings-modal__header">
               <div>
-                <h3>选择主执行器</h3>
-                <p>先选择运行位置，再选择执行器引擎。</p>
+                <h3>{t("executor.picker.title")}</h3>
+                <p>{t("executor.picker.subtitle")}</p>
               </div>
               <button class="ez-icon-button" type="button" title="关闭" onClick={closeExecutorPicker}>
                 <span class="codicon codicon-close" aria-hidden="true" />
@@ -2114,7 +2115,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
             <div class="executor-picker-step">
               <div class="executor-picker-step__title">
                 <StatusBadge>1</StatusBadge>
-                <span>运行位置</span>
+                <span>{t("executor.location.label")}</span>
               </div>
               <div class="executor-location-grid">
                 <button
@@ -2146,7 +2147,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
             <div class="executor-picker-step">
               <div class="executor-picker-step__title">
                 <StatusBadge>2</StatusBadge>
-                <span>执行器引擎</span>
+                <span>{t("executor.engine.label")}</span>
               </div>
               <div class="executor-engine-grid">
                 <For each={EXECUTOR_ENGINES}>
@@ -2167,7 +2168,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
                         <small>{engine.description}</small>
                       </div>
                       <Show when={!engine.ready}>
-                        <span class="executor-engine-card__badge">🚧 建设中</span>
+                        <span class="executor-engine-card__badge">{t("executor.comingSoon")}</span>
                       </Show>
                     </button>
                   )}
@@ -2212,31 +2213,31 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
             <div class="executor-config-panel__header">
               <span class="codicon codicon-radio-tower" aria-hidden="true" />
               <div>
-                <strong>远端 EZCode 执行器</strong>
-                <small>配置远程 dogcode 服务的连接地址与认证密钥</small>
+                <strong>{t("executor.remote.title")}</strong>
+                <small>{t("executor.remote.desc")}</small>
               </div>
             </div>
 
             {/* 连接详情卡片 */}
             <div class="executor-config-detail">
               <div class="executor-config-detail__row">
-                <span class="executor-config-detail__label">请求地址</span>
+                <span class="executor-config-detail__label">{t("executor.remote.requestUrl")}</span>
                 <span class="executor-config-detail__value">{stringValue(server.connectionState().hostUrl, "未配置")}</span>
               </div>
               <div class="executor-config-detail__row">
-                <span class="executor-config-detail__label">Host 来源</span>
+                <span class="executor-config-detail__label">{t("executor.remote.hostSource")}</span>
                 <StatusBadge tone={hostUrlConfigured() ? "success" : "warning"}>{hostUrlSource()}</StatusBadge>
               </div>
               <div class="executor-config-detail__row">
                 <span class="executor-config-detail__label">Admin secret</span>
                 <StatusBadge tone={server.connectionState().adminSecretSet ? "success" : "warning"}>
-                  {server.connectionState().adminSecretSet ? "已保存" : "未保存"}
+                  {server.connectionState().adminSecretSet ? t("executor.remote.saved") : t("executor.remote.notSaved")}
                 </StatusBadge>
               </div>
               <div class="executor-config-detail__row">
                 <span class="executor-config-detail__label">Bootstrap secret</span>
                 <StatusBadge tone={server.connectionState().bootstrapSecretSet ? "success" : "warning"}>
-                  {server.connectionState().bootstrapSecretSet ? "已保存" : "未保存"}
+                  {server.connectionState().bootstrapSecretSet ? t("executor.remote.saved") : t("executor.remote.notSaved")}
                 </StatusBadge>
               </div>
             </div>
@@ -2252,7 +2253,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
               <div class="executor-config-notice executor-config-notice--info">
                 <span class="codicon codicon-info" aria-hidden="true" />
                 <div>
-                  <strong>旧配置已迁移</strong>
+                  <strong>{t("executor.remote.migrated")}</strong>
                   <span>{connectionMigrationMessage()}</span>
                 </div>
               </div>
@@ -2267,7 +2268,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
               <div class="executor-config-notice executor-config-notice--success">
                 <span class="codicon codicon-check" aria-hidden="true" />
                 <div>
-                  <strong>保存结果</strong>
+                  <strong>{t("executor.remote.saveResult")}</strong>
                   <span>{connectionSaveMessage()}</span>
                 </div>
               </div>
@@ -2308,14 +2309,14 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
                     <span class="codicon codicon-key" aria-hidden="true" />
                     Admin secret
                   </span>
-                  <input class="executor-config-field__input" value={adminSecret()} type="password" placeholder="留空则保留已保存值" onInput={(event) => setAdminSecret(event.currentTarget.value)} />
+                  <input class="executor-config-field__input" value={adminSecret()} type="password" placeholder={t("provider.apiKeyPlaceholder")} onInput={(event) => setAdminSecret(event.currentTarget.value)} />
                 </label>
                 <label class="executor-config-field">
                   <span class="executor-config-field__label">
                     <span class="codicon codicon-shield" aria-hidden="true" />
                     Bootstrap secret
                   </span>
-                  <input class="executor-config-field__input" value={bootstrapSecret()} type="password" placeholder="留空则保留已保存值" onInput={(event) => setBootstrapSecret(event.currentTarget.value)} />
+                  <input class="executor-config-field__input" value={bootstrapSecret()} type="password" placeholder={t("provider.apiKeyPlaceholder")} onInput={(event) => setBootstrapSecret(event.currentTarget.value)} />
                 </label>
               </div>
             </div>
@@ -2327,7 +2328,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
                 disabled={saveLoading()}
               >
                 <span class={`codicon codicon-${saveLoading() ? "loading" : saveSuccess() ? "check" : "save"}`} aria-hidden="true" />
-                {saveLoading() ? "保存中…" : saveSuccess() ? "已保存" : "保存连接配置"}
+                {saveLoading() ? "保存中…" : saveSuccess() ? t("executor.remote.saved") : "保存连接配置"}
               </button>
               <button
                 class={`btn btn-secondary ${refreshLoading() ? "btn--loading" : ""}`}
@@ -2346,8 +2347,8 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
           <section class="executor-coming-soon">
             <span class="codicon codicon-device-desktop" aria-hidden="true" />
             <div>
-              <strong>本地 EZCode 执行器</strong>
-              <p>本地模式将在本机启动 dogcode 服务，无需连接远端。该功能正在建设中。</p>
+              <strong>{t("executor.local.title")}</strong>
+              <p>{t("executor.local.desc")}</p>
             </div>
           </section>
         </Show>
@@ -2359,11 +2360,11 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
     <div class="settings-page settings-page--wide">
       <div class="settings-page-header">
         <div>
-          <h2>服务商管理</h2>
+          <h2>{t("provider.title")}</h2>
           <p>按“服务商 → 模型 → 主/副模型”的路径完成配置，API Key 保存在 host 配置中，前端不回显明文。</p>
           <p class="setting-description">
             实际请求 Host：{stringValue(server.connectionState().hostUrl, "未配置")} · Admin：
-            {adminUsable() ? "可用" : "不可用"} · 最近刷新：{server.adminStateUpdatedAt() || "尚未刷新"}
+            {adminUsable() ? "可用" : t("executor.status.unavailable")} · 最近刷新：{server.adminStateUpdatedAt() || "尚未刷新"}
           </p>
         </div>
         <div class="settings-actions settings-actions--right">
@@ -2476,7 +2477,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
                 </select>
               </label>
               <label class="field-label">
-                <span>兼容模式</span>
+                <span>{t("provider.compat")}</span>
                 <select class="setting-select" value={providerCompat()} onChange={(event) => setProviderCompat(event.currentTarget.value as ProviderCompat)}>
                   <For each={compats}>{(item) => <option value={item}>{item}</option>}</For>
                 </select>
@@ -2563,7 +2564,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
                         </span>
                         <span class="settings-badge-group provider-model-row__meta">
                           <Show when={presetCount > 0}>
-                            <StatusBadge>已保存预设</StatusBadge>
+                            <StatusBadge>{t("model.savedPresets")}</StatusBadge>
                           </Show>
                           <Show when={isMain}>
                             <StatusBadge tone="success">主</StatusBadge>
@@ -2795,7 +2796,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
                   <div class="toolchain-row__title">
                     <strong>{item.name}</strong>
                     <StatusBadge tone={item.enabled === false ? "muted" : "success"}>
-                      {item.enabled === false ? "已停用" : "已启用"}
+                      {item.enabled === false ? t("provider.disabled") : t("provider.enabled")}
                     </StatusBadge>
                     <Show when={item.version}>
                       <StatusBadge>{item.version}</StatusBadge>
@@ -2843,14 +2844,14 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
           </div>
           <div class="toolchain-editor__grid">
             <label class="field-label">
-              <span>名称</span>
+              <span>{t("toolchain.editor.name")}</span>
               <input value={editor.name} disabled={editor.mode === "edit"} onInput={(event) => patchToolchainEditor({ name: event.currentTarget.value })} />
             </label>
             <label class="field-label">
-              <span>状态</span>
+              <span>{t("toolchain.filterStatus")}</span>
               <select value={editor.enabled ? "true" : "false"} onChange={(event) => patchToolchainEditor({ enabled: event.currentTarget.value === "true" })}>
-                <option value="true">启用</option>
-                <option value="false">停用</option>
+                <option value="true">{t("provider.enable")}</option>
+                <option value="false">{t("provider.disable")}</option>
               </select>
             </label>
             <label class="field-label">
@@ -2986,7 +2987,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
             <textarea rows={3} value={editor.notesText} placeholder="每行一条，例如不要自动安装 Node" onInput={(event) => patchToolchainEditor({ notesText: event.currentTarget.value })} />
           </label>
           <div class="toolchain-editor__footer">
-            <button class="btn btn-secondary" onClick={() => setToolchainEditor(undefined)}>取消</button>
+            <button class="btn btn-secondary" onClick={() => setToolchainEditor(undefined)}>{t("executor.picker.cancel")}</button>
             <button class="btn btn-primary" onClick={saveToolchain} disabled={!editor.name.trim()}>
               保存
             </button>
@@ -3000,7 +3001,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
     <div class="settings-page settings-page--wide">
       <div class="settings-page-header">
         <div>
-          <h2>能力管理</h2>
+          <h2>{t("toolchain.title")}</h2>
           <p>按服务器给出的权威清单检查和配置本地能力，执行结果直接留在当前页面。</p>
           <p class="setting-description">
             当前状态：{environmentRunStatusLabel(environmentSnapshot().status)} · 最近清单刷新：{formatTimestamp(environmentSnapshot().lastManifestAt)}
@@ -3195,7 +3196,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
       <div class="settings-page settings-page--wide toolchain-dashboard-page">
         <div class="settings-page-header">
           <div>
-            <h2>能力管理</h2>
+            <h2>{t("toolchain.title")}</h2>
             <p>按 CLI / MCP / Skill 管理能力清单；部署属性、安装位置和运行结果在条目内展示。</p>
             <p class="setting-description">
               当前状态：{environmentRunStatusLabel(environmentSnapshot().status)} · 最近清单刷新：{formatTimestamp(environmentSnapshot().lastManifestAt)}
@@ -3349,7 +3350,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
             <div class="toolchain-table" role="table" aria-label="能力清单">
               <div class="toolchain-table__row toolchain-table__row--head" role="row">
                 <span>能力名称</span>
-                <span>类型</span>
+                <span>{t("toolchain.filterKind")}</span>
                 <span>来源/文档</span>
                 <span>部署属性</span>
                 <span>安装/运行状态</span>
@@ -3538,7 +3539,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
       <div class="settings-page">
         <div class="settings-page-header">
           <div>
-            <h2>服务端设置</h2>
+            <h2>{t("serverSettings.title")}</h2>
             <p>管理所有 Agent 类型共享的服务端运行并发和 shell 执行并发。</p>
           </div>
           <div class="settings-actions settings-actions--right">
@@ -3604,7 +3605,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
           </div>
           <div class="toolchain-detail-grid">
             <div class="toolchain-detail-block">
-              <span>运行中 Agent</span>
+              <span>{t("serverSettings.runningAgents")}</span>
               <strong>{String(numberValue(runtime.running_agents, 0))}</strong>
             </div>
             <div class="toolchain-detail-block">
@@ -3685,10 +3686,10 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
 
       <section class="settings-section settings-section--flat command-approval-section">
         <div class="settings-section-heading">
-          <span>执行命令</span>
+          <span>{t("autoApproval.execute")}</span>
           <div class="settings-badge-group">
             <StatusBadge tone={autoApprovalOptions().execute ? "warning" : "muted"}>
-              {autoApprovalOptions().execute ? "聊天栏已开启" : "聊天栏未开启"}
+              {autoApprovalOptions().execute ? t("autoApproval.enabled") : t("autoApproval.disabled")}
             </StatusBadge>
             <StatusBadge>{autoApprovalPlatform()}</StatusBadge>
           </div>
@@ -3699,23 +3700,23 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
         <div class="command-rule-grid">
           {renderCommandRuleEditor(
             "allow",
-            "命令白名单",
-            "支持前缀匹配与 *。每个子命令都必须命中。",
+            t("autoApproval.allowList"),
+            t("autoApproval.allowListDesc"),
             allowedCommands(),
             allowedCommandInput(),
             setAllowedCommandInput
           )}
           {renderCommandRuleEditor(
             "deny",
-            "命令黑名单",
-            "更具体的黑名单会自动拒绝命令。",
+            t("autoApproval.denyList"),
+            t("autoApproval.denyListDesc"),
             deniedCommands(),
             deniedCommandInput(),
             setDeniedCommandInput
           )}
         </div>
         <div class="command-rule-examples">
-          <span>示例</span>
+          <span>{t("autoApproval.examples")}</span>
           <code>git status</code>
           <code>npm test</code>
           <code>pytest</code>
@@ -3724,13 +3725,13 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
         <Show when={allowedCommands().includes("*")}>
           <div class="settings-warning">
             <span class="codicon codicon-warning" aria-hidden="true" />
-            <span>* 会允许普通命令全匹配，请用黑名单覆盖高风险命令；危险 shell 替换仍会进入人工审批。</span>
+            <span>{t("autoApproval.wildcardWarning")}</span>
           </div>
         </Show>
         <Show when={autoApprovalOptions().execute && allowedCommands().length === 0}>
           <div class="settings-warning">
             <span class="codicon codicon-warning" aria-hidden="true" />
-            <span>执行自动批准已开启，但命令白名单为空，shell 审批仍会要求人工确认。</span>
+            <span>{t("autoApproval.emptyAllowListWarning")}</span>
           </div>
         </Show>
       </section>
@@ -3741,35 +3742,61 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
     <div class="settings-page settings-page--narrow">
       <div class="settings-page-header">
         <div>
-          <h2>其他</h2>
-          <p>维护与排查入口。普通执行器、服务商和能力配置不需要使用这里。</p>
+          <h2>{t("other.title")}</h2>
+          <p>{t("other.desc")}</p>
         </div>
         <button class="btn btn-secondary" onClick={refreshAdmin}>
           <span class="codicon codicon-refresh" aria-hidden="true" />
           刷新
         </button>
       </div>
+
+      <section class="settings-section settings-section--flat language-section">
+        <div class="settings-section-heading">
+          <span class="codicon codicon-globe" aria-hidden="true" />
+          <span>{t("other.language")}</span>
+        </div>
+        <p class="settings-empty-note">{t("other.languageDesc")}</p>
+        <div class="language-picker">
+          <For each={LOCALES as unknown as { id: string; label: string; nativeLabel: string }[]}>
+            {(loc) => (
+              <button
+                type="button"
+                class={`language-option ${locale() === loc.id ? "language-option--active" : ""}`}
+                onClick={() => setLocale(loc.id as Locale, (msg) => vscode.postMessage(msg))}
+              >
+                <span class="language-option__native">{loc.nativeLabel}</span>
+                <span class="language-option__label">{loc.label}</span>
+                <Show when={locale() === loc.id}>
+                  <span class="codicon codicon-check" aria-hidden="true" />
+                </Show>
+              </button>
+            )}
+          </For>
+        </div>
+      </section>
+
       <Show when={server.adminError()}>
         <div class="settings-error">{server.adminError()}</div>
       </Show>
       <details class="settings-details">
         <summary>
           <span class="codicon codicon-output" aria-hidden="true" />
-          最近一次操作
+          {t("other.lastAction")}
         </summary>
         <pre class="settings-result">{JSON.stringify(server.actionResult() || {}, null, 2)}</pre>
       </details>
       <details class="settings-details">
         <summary>
           <span class="codicon codicon-radio-tower" aria-hidden="true" />
-          连接状态
+          {t("other.connectionState")}
         </summary>
         <pre class="settings-result">{JSON.stringify(server.connectionState(), null, 2)}</pre>
       </details>
       <details class="settings-details">
         <summary>
           <span class="codicon codicon-server-process" aria-hidden="true" />
-          Admin 状态
+          {t("other.adminState")}
         </summary>
         <pre class="settings-result">{JSON.stringify(server.adminState(), null, 2)}</pre>
       </details>
@@ -3799,26 +3826,26 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
         <div>
           <h1>
             <span class="codicon codicon-settings-gear" aria-hidden="true" />
-            dogcode 设置
+            {t("settings.title")}
           </h1>
-          <p>执行器、服务商、能力、服务端设置、自动批准和其他维护入口。</p>
+          <p>{t("settings.subtitle")}</p>
         </div>
         <span class="settings-version">v{server.extensionVersion() || "0.0.0"}</span>
       </div>
 
       <div class="settings-shell">
         <nav class="settings-tab-list" aria-label="dogcode settings">
-          <For each={settingsTabs}>
+          <For each={settingsTabDefs}>
             {(tab) => (
               <button
                 type="button"
                 class={`settings-tab ${activeTab() === tab.id ? "settings-tab--active" : ""}`}
                 aria-current={activeTab() === tab.id ? "page" : undefined}
-                title={tab.label}
+                title={t(tab.labelKey)}
                 onClick={() => switchTab(tab.id)}
               >
                 <span class={`codicon codicon-${tab.icon}`} aria-hidden="true" />
-                <span class="settings-tab__label">{tab.label}</span>
+                <span class="settings-tab__label">{t(tab.labelKey)}</span>
               </button>
             )}
           </For>

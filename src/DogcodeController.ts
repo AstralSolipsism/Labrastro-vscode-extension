@@ -165,6 +165,7 @@ export class DogcodeController implements vscode.Disposable {
     post({ type: "connection.state", payload: this.client.startupConnectionState() })
     post({ type: "environment.snapshot", payload: this.environmentSnapshot })
     post({ type: "executorType.state", payload: this.getExecutorType() })
+    post({ type: "locale.state", locale: this.context.workspaceState.get<string>("dogcode.locale") || vscode.env.language })
     post({
       type: "startup.metric",
       payload: { name: "initial-state-ready", elapsedMs: Date.now() - startedAt },
@@ -519,6 +520,9 @@ export class DogcodeController implements vscode.Disposable {
         return true
       case "executorType.get":
         post({ type: "executorType.state", payload: this.getExecutorType() })
+        return true
+      case "locale.save":
+        await this.context.workspaceState.update("dogcode.locale", stringValue(message.locale) || "")
         return true
       default:
         return false

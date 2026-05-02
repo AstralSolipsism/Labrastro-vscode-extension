@@ -2378,3 +2378,60 @@ button {
 .executor-config-field__input::placeholder {
   color: var(--vscode-input-placeholderForeground, var(--ez-muted));
 }
+
+/* ── 语言选择器 ── */
+
+.language-section {
+  margin-top: 8px;
+}
+
+.language-picker {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.language-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 110px;
+  padding: 12px 18px;
+  border-radius: var(--ez-radius);
+  border: 1.5px solid var(--ez-border);
+  background: var(--ez-surface);
+  color: var(--ez-fg);
+  cursor: pointer;
+  transition: border-color 0.18s, background 0.18s, box-shadow 0.18s;
+  position: relative;
+}
+
+.language-option:hover {
+  border-color: var(--ez-focus);
+  background: var(--ez-hover);
+}
+
+.language-option--active {
+  border-color: var(--ez-focus);
+  background: var(--ez-surface-soft);
+  box-shadow: 0 0 0 1.5px var(--ez-focus);
+}
+
+.language-option__native {
+  font-size: 1.1em;
+  font-weight: 600;
+}
+
+.language-option__label {
+  font-size: 0.82em;
+  color: var(--ez-muted);
+}
+
+.language-option .codicon-check {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  color: var(--ez-focus);
+  font-size: 12px;
+}

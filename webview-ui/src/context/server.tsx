@@ -12,6 +12,7 @@
 
 import { createContext, useContext, createSignal, onMount, onCleanup, ParentComponent } from "solid-js"
 import { useVSCode, type ExtensionMessage } from "./vscode"
+import { setLocale, resolveLocale } from "../i18n"
 
 // ─────────────────────────────────────────────────────────────
 // 类型定义
@@ -203,6 +204,9 @@ export const ServerProvider: ParentComponent = (props) => {
       }
       if (msg.type === "executorType.state" && typeof msg.payload === "object" && msg.payload) {
         setExecutorType(msg.payload as { location: string; engine: string })
+      }
+      if (msg.type === "locale.state" && typeof msg.locale === "string") {
+        setLocale(resolveLocale(msg.locale))
       }
     })
 

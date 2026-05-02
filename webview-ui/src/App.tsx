@@ -20,6 +20,7 @@ import { ServerProvider } from "./context/server"
 import type { TraceNavigationIntent } from "./types/trace"
 import ChatView from "./components/ChatView"
 import { IconButton } from "./components/common/IconButton"
+import { t } from "./i18n"
 import "./styles/main.css"
 
 const SettingsView = lazy(() => import("./components/SettingsView"))
@@ -119,14 +120,14 @@ const AppContent: Component = () => {
       {/* 面板模式：显示返回按钮顶栏（由 SettingsPanelProvider 驱动） */}
       <Show when={isPanelMode()}>
         <div class="panel-header">
-          <IconButton icon="close" title="关闭" onClick={handleClosePanel} />
+          <IconButton icon="close" title={t("panel.close")} onClick={handleClosePanel} />
           <span class="panel-title">
             {
               currentView() === "settings"
-                ? "设置"
+                ? t("panel.settings")
                 : currentView() === "about"
-                  ? "关于"
-                  : "Trace Preview"
+                  ? t("panel.about")
+                  : t("panel.tracePreview")
             }
           </span>
         </div>
