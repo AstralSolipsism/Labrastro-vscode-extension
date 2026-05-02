@@ -5,6 +5,7 @@
  */
 
 import { Component } from "solid-js"
+import { t } from "../i18n"
 import { useServer } from "../context/server"
 
 const AboutView: Component = () => {
@@ -24,36 +25,36 @@ const AboutView: Component = () => {
 
       <div class="about-content">
         <div class="about-section">
-          <h3>架构演示</h3>
+          <h3>{t("about.architecture")}</h3>
           <p>
-            dogcode 前端用于承载中心化自托管 coding agent 的 VS Code 侧边栏体验。
+            {t("about.architectureDesc")}
           </p>
         </div>
 
         <div class="about-section">
-          <h3>技术栈</h3>
+          <h3>{t("about.techStack")}</h3>
           <div class="tech-stack">
             <div class="tech-item">
-              <span class="tech-badge">Extension Host</span>
-              <span class="tech-desc">TypeScript + VS Code API</span>
+              <span class="tech-badge">{t("about.extensionHost")}</span>
+              <span class="tech-desc">{t("about.extensionHostDesc")}</span>
             </div>
             <div class="tech-item">
-              <span class="tech-badge">Webview</span>
-              <span class="tech-desc">SolidJS + CSS</span>
+              <span class="tech-badge">{t("about.webview")}</span>
+              <span class="tech-desc">{t("about.webviewDesc")}</span>
             </div>
             <div class="tech-item">
-              <span class="tech-badge">构建</span>
-              <span class="tech-desc">esbuild (IIFE + CJS)</span>
+              <span class="tech-badge">{t("about.build")}</span>
+              <span class="tech-desc">{t("about.buildDesc")}</span>
             </div>
             <div class="tech-item">
-              <span class="tech-badge">通信</span>
-              <span class="tech-desc">postMessage 双向消息</span>
+              <span class="tech-badge">{t("about.communication")}</span>
+              <span class="tech-desc">{t("about.communicationDesc")}</span>
             </div>
           </div>
         </div>
 
         <div class="about-section">
-          <h3>核心模式</h3>
+          <h3>{t("about.corePatterns")}</h3>
           <ul class="feature-list">
             <li>WebviewView（侧边栏）+ WebviewPanel（编辑器标签页）</li>
             <li>CSP 安全策略 + Nonce 脚本加载</li>

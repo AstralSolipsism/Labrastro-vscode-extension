@@ -18,13 +18,13 @@ const AgentManagerView: Component<AgentManagerViewProps> = () => {
         <span class="codicon codicon-list-tree" aria-hidden="true" />
         <div>
           <h2>Trace Preview</h2>
-          <p>完整 DAG 深查页已从侧边栏主路径移出，后续作为独立面板恢复。</p>
+          <p>{t("agentManager.desc")}</p>
         </div>
       </header>
 
       <Show
         when={trace.allSessions().length > 0}
-        fallback={<p class="agent-manager-placeholder__empty">当前没有可查看的会话。</p>}
+        fallback={<p class="agent-manager-placeholder__empty">{t("agentManager.noSessions")}</p>}
       >
         <div class="agent-manager-session-list">
           <For each={trace.allSessions()}>

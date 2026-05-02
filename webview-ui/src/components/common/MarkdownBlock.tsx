@@ -1,4 +1,5 @@
 import { Component, createMemo } from "solid-js"
+import { t } from "../../i18n"
 import { Marked, type Tokens } from "marked"
 import DOMPurify from "dompurify"
 import hljs from "highlight.js/lib/core"
@@ -92,7 +93,7 @@ const renderer = {
       `<div class="markdown-code-block" data-code-block="true">`,
       `<div class="markdown-code-block__header">`,
       `<span class="markdown-code-block__language">${escapeHtml(label)}</span>`,
-      `<button class="markdown-code-block__copy" data-copy-code="true">复制</button>`,
+      `<button class="markdown-code-block__copy" data-copy-code="true">${escapeHtml(t("markdown.copy"))}</button>`,
       `</div>`,
       `<pre class="markdown-code"><code class="hljs${language ? ` language-${escapeHtml(language)}` : ""}">${highlighted}</code></pre>`,
       `</div>`,
@@ -102,7 +103,7 @@ const renderer = {
     const href = sanitizeHref(token.href)
     const text = token.text || token.title || href
     if (!href) return escapeHtml(text)
-    return `<a class="markdown-image-link" href="${escapeAttribute(href)}">图片链接：${escapeHtml(text)}</a>`
+    return `<a class="markdown-image-link" href="${escapeAttribute(href)}">${t("markdown.imageLink", { text: escapeHtml(text) })}</a>`
   },
 }
 
@@ -133,7 +134,7 @@ export const MarkdownBlock: Component<MarkdownBlockProps> = (props) => {
         try {
           await navigator.clipboard?.writeText(code)
         } catch {
-          vscode.postMessage({ type: "showInfo", text: "复制失败：当前环境不允许访问剪贴板。" })
+          vscode.postMessage({ type: "showInfo", text: t("markdown.copyFailed") })
         }
       }
       return
