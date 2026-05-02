@@ -1,5 +1,6 @@
 import * as vscode from "vscode"
 import * as fs from "fs/promises"
+import { constants as fsConstants } from "fs"
 import * as path from "path"
 import { spawn, type ChildProcessWithoutNullStreams } from "child_process"
 import { buildStartupConnectionState } from "./startup-state"
@@ -90,6 +91,8 @@ export async function retryInvalidPeerTokenOnce<T>(
 export class DogcodeRemoteClient {
   private peerProcess: ChildProcessWithoutNullStreams | undefined
   private peerInfo: PeerInfo | undefined
+  private peerStartupPromise: Promise<PeerInfo> | undefined
+  private peerStartupGeneration = 0
 
   constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -362,6 +365,8 @@ export class DogcodeRemoteClient {
   }
 
   async stopPeer(): Promise<void> {
+    this.peerStartupGeneration += 1
+    this.peerStartupPromise = undefined
     const peer = this.peerInfo
     if (peer) {
       try {
@@ -406,6 +411,23 @@ export class DogcodeRemoteClient {
     if (this.peerInfo && this.isPeerRunning()) {
       return this.peerInfo
     }
+    if (this.peerStartupPromise) {
+      return this.peerStartupPromise
+    }
+
+    const generation = this.peerStartupGeneration
+    const startup = this.startPeer(generation)
+    this.peerStartupPromise = startup
+    try {
+      return await startup
+    } finally {
+      if (this.peerStartupPromise === startup) {
+        this.peerStartupPromise = undefined
+      }
+    }
+  }
+
+  private async startPeer(generation: number): Promise<PeerInfo> {
     const bootstrapSecret = await this.context.secrets.get("dogcode.bootstrapSecret")
     if (!bootstrapSecret) {
       throw new Error("Bootstrap secret is not configured.")
@@ -416,12 +438,19 @@ export class DogcodeRemoteClient {
       "X-RC-Bootstrap-Secret": bootstrapSecret,
     })
     const token = parseBootstrapToken(script)
+    if (this.peerStartupGeneration !== generation) {
+      throw new Error("Peer startup was cancelled.")
+    }
     const binaryPath = await this.ensurePeerBinary()
     const peerInfoPath = path.join(this.context.globalStorageUri.fsPath, "peer-info.json")
     await fs.rm(peerInfoPath, { force: true })
 
+    if (this.peerStartupGeneration !== generation) {
+      throw new Error("Peer startup was cancelled.")
+    }
+
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd()
-    this.peerProcess = spawn(
+    const peerProcess = spawn(
       binaryPath,
       [
         "--host",
@@ -437,15 +466,31 @@ export class DogcodeRemoteClient {
       ],
       { cwd: workspaceRoot }
     )
-    this.peerProcess.stdout.on("data", (chunk) => console.log(`[dogcode peer] ${chunk}`))
-    this.peerProcess.stderr.on("data", (chunk) => console.warn(`[dogcode peer] ${chunk}`))
-    this.peerProcess.on("exit", () => {
-      this.peerProcess = undefined
-      this.peerInfo = undefined
+    if (this.peerStartupGeneration !== generation) {
+      if (peerProcess.exitCode === null) {
+        peerProcess.kill()
+      }
+      throw new Error("Peer startup was cancelled.")
+    }
+    this.peerProcess = peerProcess
+    peerProcess.stdout.on("data", (chunk) => console.log(`[dogcode peer] ${chunk}`))
+    peerProcess.stderr.on("data", (chunk) => console.warn(`[dogcode peer] ${chunk}`))
+    peerProcess.on("exit", () => {
+      if (this.peerProcess === peerProcess) {
+        this.peerProcess = undefined
+        this.peerInfo = undefined
+      }
     })
 
-    this.peerInfo = await waitForPeerInfo(peerInfoPath)
-    return this.peerInfo
+    const peerInfo = await waitForPeerInfo(peerInfoPath)
+    if (this.peerStartupGeneration !== generation) {
+      if (peerProcess.exitCode === null) {
+        peerProcess.kill()
+      }
+      throw new Error("Peer startup was cancelled.")
+    }
+    this.peerInfo = peerInfo
+    return peerInfo
   }
 
   private isPeerRunning(): boolean {
@@ -515,14 +560,70 @@ export class DogcodeRemoteClient {
   private async ensurePeerBinary(): Promise<string> {
     const platform = peerPlatform()
     const filename = process.platform === "win32" ? "rcoder-peer.exe" : "rcoder-peer"
-    const binaryPath = path.join(this.context.globalStorageUri.fsPath, "bin", filename)
-    await fs.mkdir(path.dirname(binaryPath), { recursive: true })
+    const version = await this.peerArtifactVersionSegment()
+    const binaryPath = path.join(
+      this.context.globalStorageUri.fsPath,
+      "bin",
+      `${platform.os}-${platform.arch}`,
+      version,
+      filename
+    )
+    try {
+      await fs.mkdir(path.dirname(binaryPath), { recursive: true })
+      if (await isUsableFile(binaryPath)) {
+        await this.ensurePeerBinaryExecutable(binaryPath)
+        return binaryPath
+      }
+      await removeEmptyFile(binaryPath)
+    } catch (error) {
+      throw peerBinaryAccessError(error, binaryPath)
+    }
+
     const content = await this.requestBuffer(`/remote/artifacts/${platform.os}/${platform.arch}/rcoder-peer`)
-    await fs.writeFile(binaryPath, content)
+    try {
+      return await this.installPeerBinary(binaryPath, content)
+    } catch (error) {
+      throw peerBinaryAccessError(error, binaryPath)
+    }
+  }
+
+  private async peerArtifactVersionSegment(): Promise<string> {
+    try {
+      const backendCapabilities = await this.capabilities()
+      return safePathSegment(backendCapabilities.serverVersion, "unknown")
+    } catch (error) {
+      console.warn("[dogcode] unable to read backend version for peer artifact cache", error)
+      return "unknown"
+    }
+  }
+
+  private async installPeerBinary(binaryPath: string, content: Buffer): Promise<string> {
+    const tempPath = path.join(
+      path.dirname(binaryPath),
+      `${path.basename(binaryPath)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`
+    )
+    try {
+      await fs.writeFile(tempPath, content, { flag: "wx" })
+      try {
+        await fs.copyFile(tempPath, binaryPath, fsConstants.COPYFILE_EXCL)
+      } catch (error) {
+        if (errorCode(error) === "EEXIST" && await isUsableFile(binaryPath)) {
+          await this.ensurePeerBinaryExecutable(binaryPath)
+          return binaryPath
+        }
+        throw error
+      }
+      await this.ensurePeerBinaryExecutable(binaryPath)
+      return binaryPath
+    } finally {
+      await fs.rm(tempPath, { force: true })
+    }
+  }
+
+  private async ensurePeerBinaryExecutable(binaryPath: string): Promise<void> {
     if (process.platform !== "win32") {
       await fs.chmod(binaryPath, 0o755)
     }
-    return binaryPath
   }
 
   private async postJson(pathname: string, payload: JsonObject, headers: Record<string, string> = {}): Promise<JsonObject> {
@@ -620,6 +721,56 @@ function peerPlatform(): { os: string; arch: string } {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function errorCode(error: unknown): string {
+  const maybeCode = error && typeof error === "object"
+    ? (error as { code?: unknown }).code
+    : undefined
+  return typeof maybeCode === "string" ? maybeCode : ""
+}
+
+function peerBinaryAccessError(error: unknown, binaryPath: string): Error {
+  const code = errorCode(error)
+  if (code === "EBUSY" || code === "EPERM" || code === "EACCES") {
+    return new Error(
+      `本地 peer 二进制无法写入：${binaryPath} 被占用或无权限访问。请结束旧的 rcoder-peer.exe 进程，或执行 Developer: Reload Window 后重试。原始错误：${errorMessage(error)}`
+    )
+  }
+  return error instanceof Error ? error : new Error(String(error))
+}
+
+function safePathSegment(value: string, fallback: string): string {
+  const sanitized = value
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+  return sanitized || fallback
+}
+
+async function isUsableFile(filePath: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(filePath)
+    return stat.isFile() && stat.size > 0
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") {
+      return false
+    }
+    throw error
+  }
+}
+
+async function removeEmptyFile(filePath: string): Promise<void> {
+  try {
+    const stat = await fs.stat(filePath)
+    if (stat.isFile() && stat.size === 0) {
+      await fs.rm(filePath, { force: true })
+    }
+  } catch (error) {
+    if (errorCode(error) !== "ENOENT") {
+      throw error
+    }
+  }
 }
 
 function connectionMessage(

@@ -1,4 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { EventEmitter } from "events"
+import * as fsSync from "fs"
+import * as fs from "fs/promises"
+import * as os from "os"
+import * as path from "path"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const vscodeMock = vi.hoisted(() => ({
   dogcodeInspect: undefined as Record<string, string> | undefined,
@@ -11,6 +16,14 @@ const vscodeMock = vi.hoisted(() => ({
     Workspace: 2,
     WorkspaceFolder: 3,
   },
+}))
+
+const childProcessMock = vi.hoisted(() => ({
+  spawn: vi.fn(),
+}))
+
+const fsPromisesMock = vi.hoisted(() => ({
+  writeFileOverride: undefined as undefined | ((...args: unknown[]) => Promise<void>),
 }))
 
 vi.mock("vscode", () => ({
@@ -38,6 +51,20 @@ vi.mock("vscode", () => ({
   },
 }))
 
+vi.mock("child_process", () => ({
+  spawn: childProcessMock.spawn,
+}))
+
+vi.mock("fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("fs/promises")>("fs/promises")
+  return {
+    ...actual,
+    writeFile: (...args: unknown[]) => fsPromisesMock.writeFileOverride
+      ? fsPromisesMock.writeFileOverride(...args)
+      : actual.writeFile(...(args as Parameters<typeof actual.writeFile>)),
+  }
+})
+
 import {
   DogcodeRemoteClient,
   RemoteError,
@@ -52,7 +79,120 @@ beforeEach(() => {
   vscodeMock.ezcodeInspect = undefined
   vscodeMock.updates = []
   vscodeMock.ignoreUpdates = false
+  childProcessMock.spawn.mockReset()
+  fsPromisesMock.writeFileOverride = undefined
 })
+
+const tempDirs: string[] = []
+
+afterEach(async () => {
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+  fsPromisesMock.writeFileOverride = undefined
+  await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })))
+  tempDirs.length = 0
+})
+
+async function makeTempStorage(): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "dogcode-peer-"))
+  tempDirs.push(dir)
+  return dir
+}
+
+function makePeerContext(storagePath: string) {
+  return {
+    secrets: {
+      get: vi.fn(async (key: string) => key === "dogcode.bootstrapSecret" ? "bootstrap-secret" : undefined),
+      store: vi.fn(async () => undefined),
+    },
+    globalStorageUri: { fsPath: storagePath },
+  }
+}
+
+function mockPeerSpawn(): void {
+  childProcessMock.spawn.mockImplementation((_binaryPath: string, args: string[]) => {
+    const peerInfoIndex = args.indexOf("--peer-info-file")
+    const peerInfoPath = String(args[peerInfoIndex + 1])
+    fsSync.writeFileSync(
+      peerInfoPath,
+      JSON.stringify({ peer_id: "peer-1", peer_token: "peer-token-1" }),
+      "utf-8"
+    )
+
+    const peerProcess = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter
+      stderr: EventEmitter
+      exitCode: number | null
+      kill: ReturnType<typeof vi.fn>
+    }
+    peerProcess.stdout = new EventEmitter()
+    peerProcess.stderr = new EventEmitter()
+    peerProcess.exitCode = null
+    peerProcess.kill = vi.fn(() => {
+      peerProcess.exitCode = 0
+      peerProcess.emit("exit", 0, null)
+      return true
+    })
+    return peerProcess
+  })
+}
+
+function peerTarget() {
+  const osName =
+    process.platform === "win32" ? "windows" : process.platform === "darwin" ? "darwin" : "linux"
+  const arch = process.arch === "arm64" ? "arm64" : "amd64"
+  const filename = process.platform === "win32" ? "rcoder-peer.exe" : "rcoder-peer"
+  return { os: osName, arch, filename }
+}
+
+function expectedPeerBinaryPath(storagePath: string, serverVersion = "0.2.9"): string {
+  const target = peerTarget()
+  return path.join(storagePath, "bin", `${target.os}-${target.arch}`, serverVersion, target.filename)
+}
+
+function mockPeerFetch(artifactContent = Buffer.from("peer-binary"), serverVersion = "0.2.9") {
+  const target = peerTarget()
+  const fetchMock = vi.fn(async (input: unknown) => {
+    const url = String(input)
+    if (url.endsWith("/remote/bootstrap.sh")) {
+      return new Response('TOKEN="${RC_TOKEN:-bootstrap-token}"')
+    }
+    if (url.endsWith("/remote/capabilities")) {
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          api_version: 1,
+          server_version: serverVersion,
+          capabilities: {
+            sessions: true,
+            chat_stream: true,
+            fresh_session_without_session_hint: true,
+            peer_token_heartbeat_refresh: true,
+          },
+        }),
+        { headers: { "Content-Type": "application/json" } }
+      )
+    }
+    if (url.endsWith(`/remote/artifacts/${target.os}/${target.arch}/rcoder-peer`)) {
+      return new Response(new Uint8Array(artifactContent), {
+        headers: { "Content-Type": "application/octet-stream" },
+      })
+    }
+    if (url.endsWith("/remote/environment/manifest")) {
+      return new Response(
+        JSON.stringify({ ok: true, cli_tools: [], mcp_servers: [], skills: [] }),
+        { headers: { "Content-Type": "application/json" } }
+      )
+    }
+    return new Response(JSON.stringify({ error: "unexpected_url", url }), { status: 500 })
+  })
+  vi.stubGlobal("fetch", fetchMock)
+  return fetchMock
+}
+
+function fetchPathCount(fetchMock: ReturnType<typeof vi.fn>, pathname: string): number {
+  return fetchMock.mock.calls.filter(([input]) => String(input).endsWith(pathname)).length
+}
 
 describe("DogcodeRemoteClient remote errors", () => {
   it("keeps HTTP status and backend error code", async () => {
@@ -119,6 +259,73 @@ describe("DogcodeRemoteClient peer retry strategy", () => {
 
     expect(attempts).toBe(1)
     expect(recoveries).toBe(0)
+  })
+})
+
+describe("DogcodeRemoteClient peer startup", () => {
+  it("shares concurrent environment manifest startup across one peer process and one artifact download", async () => {
+    const storagePath = await makeTempStorage()
+    const context = makePeerContext(storagePath)
+    const fetchMock = mockPeerFetch()
+    mockPeerSpawn()
+
+    const client = new DogcodeRemoteClient(context as never)
+    await Promise.all([client.environmentManifest(), client.environmentManifest()])
+
+    expect(fetchPathCount(fetchMock, "/remote/bootstrap.sh")).toBe(1)
+    expect(fetchPathCount(fetchMock, "/remote/capabilities")).toBe(1)
+    expect(fetchPathCount(fetchMock, `/remote/artifacts/${peerTarget().os}/${peerTarget().arch}/rcoder-peer`)).toBe(1)
+    expect(fetchPathCount(fetchMock, "/remote/environment/manifest")).toBe(2)
+    expect(childProcessMock.spawn).toHaveBeenCalledTimes(1)
+    expect(childProcessMock.spawn.mock.calls[0][0]).toBe(expectedPeerBinaryPath(storagePath))
+  })
+
+  it("reuses an existing versioned peer binary without downloading the artifact", async () => {
+    const storagePath = await makeTempStorage()
+    const binaryPath = expectedPeerBinaryPath(storagePath)
+    await fs.mkdir(path.dirname(binaryPath), { recursive: true })
+    await fs.writeFile(binaryPath, "cached-binary")
+    const context = makePeerContext(storagePath)
+    const fetchMock = mockPeerFetch()
+    mockPeerSpawn()
+
+    const client = new DogcodeRemoteClient(context as never)
+    await client.environmentManifest()
+
+    expect(fetchPathCount(fetchMock, `/remote/artifacts/${peerTarget().os}/${peerTarget().arch}/rcoder-peer`)).toBe(0)
+    expect(childProcessMock.spawn).toHaveBeenCalledTimes(1)
+    expect(childProcessMock.spawn.mock.calls[0][0]).toBe(binaryPath)
+  })
+
+  it("downloads the peer artifact into the versioned cache path before spawning", async () => {
+    const storagePath = await makeTempStorage()
+    const artifactContent = Buffer.from("downloaded-peer-binary")
+    const context = makePeerContext(storagePath)
+    mockPeerFetch(artifactContent)
+    mockPeerSpawn()
+
+    const client = new DogcodeRemoteClient(context as never)
+    await client.environmentManifest()
+
+    const binaryPath = expectedPeerBinaryPath(storagePath)
+    expect(await fs.readFile(binaryPath)).toEqual(artifactContent)
+    expect(childProcessMock.spawn).toHaveBeenCalledTimes(1)
+    expect(childProcessMock.spawn.mock.calls[0][0]).toBe(binaryPath)
+  })
+
+  it("reports local peer binary file locks as a local remediation error", async () => {
+    const storagePath = await makeTempStorage()
+    const context = makePeerContext(storagePath)
+    mockPeerFetch()
+    const busyError = Object.assign(new Error("resource busy or locked"), { code: "EBUSY" })
+    fsPromisesMock.writeFileOverride = async () => {
+      throw busyError
+    }
+
+    const client = new DogcodeRemoteClient(context as never)
+
+    await expect(client.environmentManifest()).rejects.toThrow(/本地 peer 二进制无法写入.*rcoder-peer/)
+    expect(childProcessMock.spawn).not.toHaveBeenCalled()
   })
 })
 
