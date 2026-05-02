@@ -3,6 +3,7 @@
   "displayName": "dogcode",
   "description": "dogcode central self-hosted coding agent frontend for VS Code",
   "version": "0.1.0",
+  "license": "AGPL-3.0-or-later",
   "publisher": "dogcode",
   "icon": "assets/icons/doge.png",
   "engines": {
