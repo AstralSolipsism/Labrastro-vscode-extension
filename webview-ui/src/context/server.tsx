@@ -39,6 +39,8 @@ interface ServerContextValue {
   environmentManifest: () => Record<string, unknown> | undefined
   environmentSnapshot: () => Record<string, unknown>
   environmentError: () => string | undefined
+  /** 主执行器类型（位置 + 引擎） */
+  executorType: () => { location: string; engine: string }
 }
 
 const ServerContext = createContext<ServerContextValue>()
@@ -78,6 +80,10 @@ export const ServerProvider: ParentComponent = (props) => {
   const [environmentManifest, setEnvironmentManifest] = createSignal<Record<string, unknown> | undefined>()
   const [environmentSnapshot, setEnvironmentSnapshot] = createSignal<Record<string, unknown>>({})
   const [environmentError, setEnvironmentError] = createSignal<string | undefined>()
+  const [executorType, setExecutorType] = createSignal<{ location: string; engine: string }>({
+    location: "remote",
+    engine: "ezcode",
+  })
 
   onMount(() => {
     const unsubscribe = vscode.onMessage((msg: ExtensionMessage) => {
@@ -195,6 +201,9 @@ export const ServerProvider: ParentComponent = (props) => {
       if (msg.type === "startup.metric") {
         console.log("[dogcode startup]", msg.payload)
       }
+      if (msg.type === "executorType.state" && typeof msg.payload === "object" && msg.payload) {
+        setExecutorType(msg.payload as { location: string; engine: string })
+      }
     })
 
     onCleanup(unsubscribe)
@@ -219,6 +228,7 @@ export const ServerProvider: ParentComponent = (props) => {
     environmentManifest,
     environmentSnapshot,
     environmentError,
+    executorType,
   }
 
   return <ServerContext.Provider value={value}>{props.children}</ServerContext.Provider>

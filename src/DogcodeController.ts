@@ -164,6 +164,7 @@ export class DogcodeController implements vscode.Disposable {
     post({ type: "autoApproval.state", payload: this.getAutoApprovalState() })
     post({ type: "connection.state", payload: this.client.startupConnectionState() })
     post({ type: "environment.snapshot", payload: this.environmentSnapshot })
+    post({ type: "executorType.state", payload: this.getExecutorType() })
     post({
       type: "startup.metric",
       payload: { name: "initial-state-ready", elapsedMs: Date.now() - startedAt },
@@ -509,6 +510,16 @@ export class DogcodeController implements vscode.Disposable {
       case "approval.openDetails":
         await this.approvalDocuments.open(stringValue(message.approvalId) || "")
         return true
+      case "executorType.save":
+        await this.context.workspaceState.update("dogcode.executorType", {
+          location: stringValue(message.location) || "remote",
+          engine: stringValue(message.engine) || "ezcode",
+        })
+        this.broadcastExecutorType()
+        return true
+      case "executorType.get":
+        post({ type: "executorType.state", payload: this.getExecutorType() })
+        return true
       default:
         return false
     }
@@ -547,6 +558,21 @@ export class DogcodeController implements vscode.Disposable {
 
   private broadcastAutoApprovalState(): void {
     const payload = { type: "autoApproval.state", payload: this.getAutoApprovalState() }
+    for (const post of this.webviewPosts) {
+      this.postWebviewMessage(post, payload)
+    }
+  }
+
+  private getExecutorType(): { location: string; engine: string } {
+    const stored = this.context.workspaceState.get<Record<string, string>>("dogcode.executorType")
+    return {
+      location: stored?.location || "remote",
+      engine: stored?.engine || "ezcode",
+    }
+  }
+
+  private broadcastExecutorType(): void {
+    const payload = { type: "executorType.state", payload: this.getExecutorType() }
     for (const post of this.webviewPosts) {
       this.postWebviewMessage(post, payload)
     }

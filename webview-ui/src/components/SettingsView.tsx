@@ -19,6 +19,36 @@ import {
 type ProviderType = "openai_chat" | "anthropic_messages" | "openai_responses"
 type ProviderCompat = "generic" | "deepseek" | "kimi" | "glm" | "qwen" | "zenmux"
 type SettingsTab = "executors" | "providers" | "toolchains" | "serverSettings" | "autoApproval" | "other"
+
+/** 主执行器运行位置 */
+type ExecutorLocation = "local" | "remote"
+
+/** 执行器引擎类型 */
+type ExecutorEngine = "ezcode" | "claude" | "codex" | "gemini" | "astrbot"
+
+interface ExecutorEngineOption {
+  id: ExecutorEngine
+  label: string
+  icon: string
+  description: string
+  ready: boolean
+}
+
+const EXECUTOR_ENGINES: ExecutorEngineOption[] = [
+  { id: "ezcode",  label: "EZCode",  icon: "radio-tower",  description: "dogcode 执行器",        ready: true  },
+  { id: "claude",  label: "Claude",  icon: "sparkle",      description: "Anthropic Claude API",  ready: false },
+  { id: "codex",   label: "Codex",   icon: "code",         description: "OpenAI Codex CLI",      ready: false },
+  { id: "gemini",  label: "Gemini",  icon: "star-empty",   description: "Google Gemini CLI",     ready: false },
+  { id: "astrbot", label: "AstrBot", icon: "rocket",       description: "AstrBot 多平台框架",     ready: false },
+]
+
+function executorLocationLabel(location: ExecutorLocation): string {
+  return location === "local" ? "本地" : "远端"
+}
+
+function executorEngineLabel(engine: ExecutorEngine): string {
+  return EXECUTOR_ENGINES.find((e) => e.id === engine)?.label || engine
+}
 type ModelTarget = "main" | "sub" | "both"
 type ModelDetailMode = "fetched" | "custom"
 type ModelActionIntent = "" | "savePreset" | "activateMain" | "activateSub" | "activateBoth"
@@ -1024,6 +1054,16 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
 
   const [activeTab, setActiveTab] = createSignal<SettingsTab>("providers")
 
+  /* ── 主执行器选择器状态 ── */
+  const [executorPickerOpen, setExecutorPickerOpen] = createSignal(false)
+  const [pickerLocation, setPickerLocation] = createSignal<ExecutorLocation>("remote")
+  const [pickerEngine, setPickerEngine] = createSignal<ExecutorEngine>("ezcode")
+
+  /* ── 按钮 loading 状态 ── */
+  const [refreshLoading, setRefreshLoading] = createSignal(false)
+  const [saveLoading, setSaveLoading] = createSignal(false)
+  const [saveSuccess, setSaveSuccess] = createSignal(false)
+
   const [hostUrl, setHostUrl] = createSignal("")
   const [adminSecret, setAdminSecret] = createSignal("")
   const [bootstrapSecret, setBootstrapSecret] = createSignal("")
@@ -1342,7 +1382,43 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
     vscode.postMessage({ type: "settingsTabChanged", tab })
   }
 
-  const refreshAdmin = () => vscode.postMessage({ type: "admin.refresh" })
+  const refreshAdmin = () => {
+    setRefreshLoading(true)
+    vscode.postMessage({ type: "admin.refresh" })
+    setTimeout(() => setRefreshLoading(false), 1200)
+  }
+
+  /* ── 主执行器相关 ── */
+  const executorLocation = createMemo(() => {
+    const loc = server.executorType().location
+    return (loc === "local" || loc === "remote") ? loc as ExecutorLocation : "remote"
+  })
+  const executorEngine = createMemo(() => {
+    const eng = server.executorType().engine
+    const valid: ExecutorEngine[] = ["ezcode", "claude", "codex", "gemini", "astrbot"]
+    return valid.includes(eng as ExecutorEngine) ? eng as ExecutorEngine : "ezcode"
+  })
+  const executorEngineOption = createMemo(() =>
+    EXECUTOR_ENGINES.find((e) => e.id === executorEngine()) || EXECUTOR_ENGINES[0]
+  )
+
+  const openExecutorPicker = () => {
+    setPickerLocation(executorLocation())
+    setPickerEngine(executorEngine())
+    setExecutorPickerOpen(true)
+  }
+  const closeExecutorPicker = () => setExecutorPickerOpen(false)
+  const confirmExecutorPicker = () => {
+    const selectedEngine = EXECUTOR_ENGINES.find((e) => e.id === pickerEngine())
+    if (selectedEngine && !selectedEngine.ready) return
+    setExecutorPickerOpen(false)
+    vscode.postMessage({
+      type: "executorType.save",
+      location: pickerLocation(),
+      engine: pickerEngine(),
+    })
+  }
+
   const refreshEnvironmentManifest = () => vscode.postMessage({ type: "environment.refreshManifest" })
   const environmentRunItems = (entryIds?: string[]) => {
     const selected = entryIds?.length
@@ -1477,6 +1553,7 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
       setPendingHostSave(undefined)
       return
     }
+    setSaveLoading(true)
     const requestedHostUrl = validation.value
     setHostUrl(requestedHostUrl)
     setPendingHostSave(requestedHostUrl)
@@ -1490,6 +1567,11 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
     })
     setAdminSecret("")
     setBootstrapSecret("")
+    setTimeout(() => {
+      setSaveLoading(false)
+      setSaveSuccess(true)
+      setTimeout(() => setSaveSuccess(false), 1500)
+    }, 800)
   }
 
   const resetProviderForm = () => {
@@ -1951,98 +2033,325 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
     <div class="settings-page settings-page--narrow">
       <div class="settings-page-header">
         <div>
-          <h2>执行器管理</h2>
-          <p>管理当前 VS Code 前端连接的 dogcode 执行器地址和密钥；后续可在这里接入更多 agent 执行器。</p>
+          <h2>主执行器配置</h2>
+          <p>管理主执行器的位置与引擎，后续 subagent 可独立配置。</p>
         </div>
-        <button class="btn btn-secondary" onClick={refreshAdmin}>
-          <span class="codicon codicon-refresh" aria-hidden="true" />
-          刷新
+        <button
+          class={`btn btn-secondary ${refreshLoading() ? "btn--loading" : ""}`}
+          onClick={refreshAdmin}
+          disabled={refreshLoading()}
+        >
+          <span class={`codicon codicon-${refreshLoading() ? "loading" : "refresh"}`} aria-hidden="true" />
+          {refreshLoading() ? "刷新中…" : "刷新状态"}
         </button>
       </div>
 
-      <section class="settings-section">
-        <div class="settings-status-line">
-          <StatusBadge tone={connectionStatus() === "ready" ? "success" : connectionStatus() === "error" ? "warning" : "muted"}>
-            {connectionStatus() === "ready" ? "执行器可用" : connectionStatus() === "error" ? "执行器不可用" : "执行器连接未完成"}
-          </StatusBadge>
-          <StatusBadge tone={hostUrlConfigured() ? "success" : "warning"}>
-            Host 来源：{hostUrlSource()}
-          </StatusBadge>
-          <StatusBadge tone={server.connectionState().adminSecretSet ? "success" : "warning"}>
-            Admin secret {server.connectionState().adminSecretSet ? "已保存" : "未保存"}
-          </StatusBadge>
-          <StatusBadge tone={server.connectionState().bootstrapSecretSet ? "success" : "warning"}>
-            Bootstrap secret {server.connectionState().bootstrapSecretSet ? "已保存" : "未保存"}
-          </StatusBadge>
+      {/* ── ① 状态总览 ── */}
+      <section class="executor-status-bar">
+        <div class="executor-status-card">
+          <div class="executor-status-card__icon">
+            <span class={`codicon codicon-${executorLocation() === "local" ? "device-desktop" : "cloud"}`} aria-hidden="true" />
+          </div>
+          <div class="executor-status-card__body">
+            <small>运行位置</small>
+            <strong>{executorLocationLabel(executorLocation())}</strong>
+          </div>
         </div>
-        <p class="setting-description">当前实际请求执行器：{stringValue(server.connectionState().hostUrl, "未配置")}</p>
-        <Show when={hostUrlError()}>
-          <div class="settings-error">{hostUrlError()}</div>
-        </Show>
-        <Show when={connectionMigrationMessage()}>
-          <div class="settings-action-result">
-            <div>
-              <strong>旧配置已迁移</strong>
-              <small>{connectionMigrationMessage()}</small>
-            </div>
+        <div class="executor-status-card">
+          <div class="executor-status-card__icon">
+            <span class={`codicon codicon-${executorEngineOption().icon}`} aria-hidden="true" />
           </div>
-        </Show>
-        <Show when={connectionMessage() && !connectionMigrationMessage()}>
-          <div class="settings-error">{connectionMessage()}</div>
-        </Show>
-        <Show when={connectionSaveMessage()}>
-          <div class="settings-action-result">
-            <div>
-              <strong>Host URL 保存结果</strong>
-              <small>{connectionSaveMessage()}</small>
-            </div>
+          <div class="executor-status-card__body">
+            <small>执行器引擎</small>
+            <strong>{executorEngineOption().label}</strong>
           </div>
-        </Show>
-        <Show when={hostUrlDraftDiffers()}>
-          <div class="settings-action-result">
-            <div>
-              <strong>Host URL 输入框尚未生效</strong>
-              <small>实际请求仍使用 {currentHostUrl()}；点击“保存执行器连接”后才会切换。</small>
-            </div>
-          </div>
-        </Show>
-        <Show when={isDefaultLocalHost()}>
-          <div class="settings-action-result">
-            <div>
-              <strong>当前执行器是本机默认地址</strong>
-              <small>如果 dogcode 执行器部署在服务器，请改为服务器地址，例如 http://192.168.50.149:8765。</small>
-            </div>
-          </div>
-        </Show>
-        <div class="settings-form-grid">
-          <label class="field-label">
-            <span>Host URL</span>
-            <input class="setting-input" value={hostUrl()} placeholder="http://192.168.50.149:8765" onInput={(event) => {
-              setHostUrlDirty(true)
-              setHostUrl(event.currentTarget.value)
-              setPendingHostSave(undefined)
-              setHostUrlError(undefined)
-              setHostUrlSyncLock(undefined)
-              const key = connectionSaveResultKey(server.connectionSaveResult())
-              if (key) setDismissedConnectionSaveResultKey(key)
-            }} />
-          </label>
-          <label class="field-label">
-            <span>Admin secret</span>
-            <input class="setting-input" value={adminSecret()} type="password" placeholder="留空则保留本地已保存值" onInput={(event) => setAdminSecret(event.currentTarget.value)} />
-          </label>
-          <label class="field-label">
-            <span>Bootstrap secret</span>
-            <input class="setting-input" value={bootstrapSecret()} type="password" placeholder="留空则保留本地已保存值" onInput={(event) => setBootstrapSecret(event.currentTarget.value)} />
-          </label>
         </div>
-        <div class="settings-actions">
-          <button class="btn btn-primary" onClick={saveConnection}>
-            <span class="codicon codicon-save" aria-hidden="true" />
-            保存执行器连接
-          </button>
+        <div class="executor-status-card">
+          <div class="executor-status-card__icon">
+            <span
+              class={`codicon codicon-${connectionStatus() === "ready" ? "pass-filled" : connectionStatus() === "error" ? "error" : "circle-large-outline"}`}
+              aria-hidden="true"
+              style={connectionStatus() === "ready" ? "color:var(--ez-success)" : connectionStatus() === "error" ? "color:var(--ez-error)" : "color:var(--ez-muted)"}
+            />
+          </div>
+          <div class="executor-status-card__body">
+            <small>连接状态</small>
+            <strong>{connectionStatus() === "ready" ? "已连接" : connectionStatus() === "error" ? "不可用" : "未连接"}</strong>
+          </div>
         </div>
       </section>
+
+      <div class="settings-actions" style="margin:12px 0">
+        <button class="btn btn-primary" onClick={openExecutorPicker}>
+          <span class="codicon codicon-settings-gear" aria-hidden="true" />
+          切换主执行器
+        </button>
+        <button
+          class={`btn btn-secondary ${refreshLoading() ? "btn--loading" : ""}`}
+          onClick={refreshAdmin}
+          disabled={refreshLoading()}
+        >
+          <span class={`codicon codicon-${refreshLoading() ? "loading" : "refresh"}`} aria-hidden="true" />
+          {refreshLoading() ? "刷新中…" : "刷新"}
+        </button>
+      </div>
+
+      {/* ── ② 弹出式两步选择卡片 ── */}
+      <Show when={executorPickerOpen()}>
+        <div class="settings-overlay settings-overlay--center" onClick={closeExecutorPicker}>
+          <div class="executor-picker-modal" role="dialog" aria-modal="true" aria-label="选择主执行器" onClick={(e) => e.stopPropagation()}>
+            <div class="settings-modal__header">
+              <div>
+                <h3>选择主执行器</h3>
+                <p>先选择运行位置，再选择执行器引擎。</p>
+              </div>
+              <button class="ez-icon-button" type="button" title="关闭" onClick={closeExecutorPicker}>
+                <span class="codicon codicon-close" aria-hidden="true" />
+              </button>
+            </div>
+
+            {/* 第 1 步：位置 */}
+            <div class="executor-picker-step">
+              <div class="executor-picker-step__title">
+                <StatusBadge>1</StatusBadge>
+                <span>运行位置</span>
+              </div>
+              <div class="executor-location-grid">
+                <button
+                  type="button"
+                  class={`executor-location-card ${pickerLocation() === "local" ? "executor-location-card--active" : ""}`}
+                  onClick={() => setPickerLocation("local")}
+                >
+                  <span class="codicon codicon-device-desktop" aria-hidden="true" />
+                  <div>
+                    <strong>本地</strong>
+                    <small>在本机运行执行器</small>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  class={`executor-location-card ${pickerLocation() === "remote" ? "executor-location-card--active" : ""}`}
+                  onClick={() => setPickerLocation("remote")}
+                >
+                  <span class="codicon codicon-cloud" aria-hidden="true" />
+                  <div>
+                    <strong>远端</strong>
+                    <small>连接远程服务</small>
+                  </div>
+                </button>
+              </div>
+            </div>
+
+            {/* 第 2 步：引擎 */}
+            <div class="executor-picker-step">
+              <div class="executor-picker-step__title">
+                <StatusBadge>2</StatusBadge>
+                <span>执行器引擎</span>
+              </div>
+              <div class="executor-engine-grid">
+                <For each={EXECUTOR_ENGINES}>
+                  {(engine) => (
+                    <button
+                      type="button"
+                      class={[
+                        "executor-engine-card",
+                        pickerEngine() === engine.id ? "executor-engine-card--active" : "",
+                        !engine.ready ? "executor-engine-card--disabled" : "",
+                      ].filter(Boolean).join(" ")}
+                      disabled={!engine.ready}
+                      onClick={() => { if (engine.ready) setPickerEngine(engine.id) }}
+                    >
+                      <span class={`codicon codicon-${engine.icon}`} aria-hidden="true" />
+                      <div>
+                        <strong>{engine.label}</strong>
+                        <small>{engine.description}</small>
+                      </div>
+                      <Show when={!engine.ready}>
+                        <span class="executor-engine-card__badge">🚧 建设中</span>
+                      </Show>
+                    </button>
+                  )}
+                </For>
+              </div>
+            </div>
+
+            <div class="settings-actions settings-actions--right">
+              <button class="btn btn-secondary" type="button" onClick={closeExecutorPicker}>
+                取消
+              </button>
+              <button
+                class="btn btn-primary"
+                type="button"
+                onClick={confirmExecutorPicker}
+                disabled={!EXECUTOR_ENGINES.find((e) => e.id === pickerEngine())?.ready}
+              >
+                <span class="codicon codicon-check" aria-hidden="true" />
+                确认选择
+              </button>
+            </div>
+          </div>
+        </div>
+      </Show>
+
+      {/* ── ③ 按组合分发的配置面板 ── */}
+      <Show
+        when={executorEngineOption().ready}
+        fallback={
+          <section class="executor-coming-soon">
+            <span class="codicon codicon-tools" aria-hidden="true" />
+            <div>
+              <strong>{executorEngineOption().label} 执行器正在建设中</strong>
+              <p>该执行器引擎尚未实现，敬请期待。当前可使用 EZCode 执行器。</p>
+            </div>
+          </section>
+        }
+      >
+        {/* EZCode 远端配置 */}
+        <Show when={executorEngine() === "ezcode" && executorLocation() === "remote"}>
+          <section class="executor-config-panel">
+            <div class="executor-config-panel__header">
+              <span class="codicon codicon-radio-tower" aria-hidden="true" />
+              <div>
+                <strong>远端 EZCode 执行器</strong>
+                <small>配置远程 dogcode 服务的连接地址与认证密钥</small>
+              </div>
+            </div>
+
+            {/* 连接详情卡片 */}
+            <div class="executor-config-detail">
+              <div class="executor-config-detail__row">
+                <span class="executor-config-detail__label">请求地址</span>
+                <span class="executor-config-detail__value">{stringValue(server.connectionState().hostUrl, "未配置")}</span>
+              </div>
+              <div class="executor-config-detail__row">
+                <span class="executor-config-detail__label">Host 来源</span>
+                <StatusBadge tone={hostUrlConfigured() ? "success" : "warning"}>{hostUrlSource()}</StatusBadge>
+              </div>
+              <div class="executor-config-detail__row">
+                <span class="executor-config-detail__label">Admin secret</span>
+                <StatusBadge tone={server.connectionState().adminSecretSet ? "success" : "warning"}>
+                  {server.connectionState().adminSecretSet ? "已保存" : "未保存"}
+                </StatusBadge>
+              </div>
+              <div class="executor-config-detail__row">
+                <span class="executor-config-detail__label">Bootstrap secret</span>
+                <StatusBadge tone={server.connectionState().bootstrapSecretSet ? "success" : "warning"}>
+                  {server.connectionState().bootstrapSecretSet ? "已保存" : "未保存"}
+                </StatusBadge>
+              </div>
+            </div>
+
+            {/* 提示信息区 */}
+            <Show when={hostUrlError()}>
+              <div class="executor-config-notice executor-config-notice--error">
+                <span class="codicon codicon-error" aria-hidden="true" />
+                <span>{hostUrlError()}</span>
+              </div>
+            </Show>
+            <Show when={connectionMigrationMessage()}>
+              <div class="executor-config-notice executor-config-notice--info">
+                <span class="codicon codicon-info" aria-hidden="true" />
+                <div>
+                  <strong>旧配置已迁移</strong>
+                  <span>{connectionMigrationMessage()}</span>
+                </div>
+              </div>
+            </Show>
+            <Show when={connectionMessage() && !connectionMigrationMessage()}>
+              <div class="executor-config-notice executor-config-notice--error">
+                <span class="codicon codicon-warning" aria-hidden="true" />
+                <span>{connectionMessage()}</span>
+              </div>
+            </Show>
+            <Show when={connectionSaveMessage()}>
+              <div class="executor-config-notice executor-config-notice--success">
+                <span class="codicon codicon-check" aria-hidden="true" />
+                <div>
+                  <strong>保存结果</strong>
+                  <span>{connectionSaveMessage()}</span>
+                </div>
+              </div>
+            </Show>
+            <Show when={hostUrlDraftDiffers()}>
+              <div class="executor-config-notice executor-config-notice--warning">
+                <span class="codicon codicon-warning" aria-hidden="true" />
+                <span>输入框内容尚未生效，实际请求仍使用 {currentHostUrl()}。</span>
+              </div>
+            </Show>
+            <Show when={isDefaultLocalHost()}>
+              <div class="executor-config-notice executor-config-notice--info">
+                <span class="codicon codicon-info" aria-hidden="true" />
+                <span>当前为本机默认地址。如需连接远程服务器，请修改为对应地址，如 http://192.168.50.149:8765。</span>
+              </div>
+            </Show>
+
+            {/* 表单 */}
+            <div class="executor-config-form">
+              <label class="executor-config-field">
+                <span class="executor-config-field__label">
+                  <span class="codicon codicon-globe" aria-hidden="true" />
+                  Host URL
+                </span>
+                <input class="executor-config-field__input" value={hostUrl()} placeholder="http://192.168.50.149:8765" onInput={(event) => {
+                  setHostUrlDirty(true)
+                  setHostUrl(event.currentTarget.value)
+                  setPendingHostSave(undefined)
+                  setHostUrlError(undefined)
+                  setHostUrlSyncLock(undefined)
+                  const key = connectionSaveResultKey(server.connectionSaveResult())
+                  if (key) setDismissedConnectionSaveResultKey(key)
+                }} />
+              </label>
+              <div class="executor-config-form__secrets">
+                <label class="executor-config-field">
+                  <span class="executor-config-field__label">
+                    <span class="codicon codicon-key" aria-hidden="true" />
+                    Admin secret
+                  </span>
+                  <input class="executor-config-field__input" value={adminSecret()} type="password" placeholder="留空则保留已保存值" onInput={(event) => setAdminSecret(event.currentTarget.value)} />
+                </label>
+                <label class="executor-config-field">
+                  <span class="executor-config-field__label">
+                    <span class="codicon codicon-shield" aria-hidden="true" />
+                    Bootstrap secret
+                  </span>
+                  <input class="executor-config-field__input" value={bootstrapSecret()} type="password" placeholder="留空则保留已保存值" onInput={(event) => setBootstrapSecret(event.currentTarget.value)} />
+                </label>
+              </div>
+            </div>
+
+            <div class="executor-config-panel__footer">
+              <button
+                class={`btn btn-primary ${saveLoading() ? "btn--loading" : ""} ${saveSuccess() ? "btn--success" : ""}`}
+                onClick={saveConnection}
+                disabled={saveLoading()}
+              >
+                <span class={`codicon codicon-${saveLoading() ? "loading" : saveSuccess() ? "check" : "save"}`} aria-hidden="true" />
+                {saveLoading() ? "保存中…" : saveSuccess() ? "已保存" : "保存连接配置"}
+              </button>
+              <button
+                class={`btn btn-secondary ${refreshLoading() ? "btn--loading" : ""}`}
+                onClick={refreshAdmin}
+                disabled={refreshLoading()}
+              >
+                <span class={`codicon codicon-${refreshLoading() ? "loading" : "refresh"}`} aria-hidden="true" />
+                {refreshLoading() ? "刷新中…" : "测试连接"}
+              </button>
+            </div>
+          </section>
+        </Show>
+
+        {/* EZCode 本地配置 */}
+        <Show when={executorEngine() === "ezcode" && executorLocation() === "local"}>
+          <section class="executor-coming-soon">
+            <span class="codicon codicon-device-desktop" aria-hidden="true" />
+            <div>
+              <strong>本地 EZCode 执行器</strong>
+              <p>本地模式将在本机启动 dogcode 服务，无需连接远端。该功能正在建设中。</p>
+            </div>
+          </section>
+        </Show>
+      </Show>
     </div>
   )
 

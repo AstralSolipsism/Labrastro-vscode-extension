@@ -507,6 +507,12 @@ button {
   color: var(--ez-fg);
   background: transparent;
   cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s, box-shadow 0.15s, opacity 0.15s;
+  user-select: none;
+}
+
+.btn:active:not(:disabled) {
+  transform: scale(0.96);
 }
 
 .btn:disabled {
@@ -524,6 +530,10 @@ button {
   background: var(--vscode-button-hoverBackground, var(--vscode-button-background));
 }
 
+.btn-primary:active:not(:disabled) {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--vscode-button-background) 35%, transparent);
+}
+
 .btn-danger {
   color: var(--ez-error);
   border-color: color-mix(in srgb, var(--ez-error) 45%, var(--ez-border));
@@ -536,6 +546,28 @@ button {
 .btn-secondary:hover:not(:disabled),
 .btn:hover:not(:disabled) {
   background: var(--ez-hover);
+}
+
+/* ── 按钮 loading 状态 ── */
+.btn--loading {
+  pointer-events: none;
+  opacity: 0.72;
+}
+
+.btn--loading .codicon {
+  animation: btn-spin 0.7s linear infinite;
+}
+
+@keyframes btn-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ── 按钮成功闪现 ── */
+.btn--success {
+  border-color: var(--ez-success) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ez-success) 25%, transparent);
+  transition: box-shadow 0.3s, border-color 0.3s;
 }
 
 .provider-workbench {
@@ -1904,4 +1936,445 @@ button {
 .agent-manager-session:hover,
 .agent-manager-session--active {
   background: var(--ez-hover);
+}
+
+/* ══════════════════════════════════════════════════
+   执行器管理 – 主执行器配置改版
+   ══════════════════════════════════════════════════ */
+
+/* ── 状态总览区 ── */
+.executor-status-bar {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.executor-status-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--ez-border);
+  border-radius: var(--ez-radius);
+  background: var(--ez-surface-soft);
+}
+
+.executor-status-card__icon {
+  font-size: 20px;
+  color: var(--ez-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+}
+
+.executor-status-card__body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.executor-status-card__body small {
+  color: var(--ez-muted);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.executor-status-card__body strong {
+  font-size: 14px;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── 选择器弹出 Modal ── */
+.executor-picker-modal {
+  width: min(100%, 520px);
+  max-height: 90vh;
+  overflow: auto;
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+  border: 1px solid var(--ez-border);
+  border-radius: var(--ez-radius);
+  background: var(--ez-surface);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.28);
+  animation: executor-picker-enter 0.18s ease-out;
+}
+
+@keyframes executor-picker-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* ── 选择步骤 ── */
+.executor-picker-step {
+  display: grid;
+  gap: 10px;
+}
+
+.executor-picker-step__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+/* ── 位置选择卡片 ── */
+.executor-location-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.executor-location-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--ez-border);
+  border-radius: var(--ez-radius);
+  color: var(--ez-fg);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+
+.executor-location-card > .codicon {
+  font-size: 22px;
+  color: var(--ez-muted);
+  min-width: 28px;
+  text-align: center;
+}
+
+.executor-location-card div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.executor-location-card strong {
+  font-size: 13px;
+}
+
+.executor-location-card small {
+  color: var(--ez-muted);
+  font-size: 11px;
+}
+
+.executor-location-card:hover {
+  border-color: color-mix(in srgb, var(--ez-focus) 40%, var(--ez-border));
+  background: var(--ez-hover);
+}
+
+.executor-location-card--active {
+  border-color: var(--ez-focus);
+  background: color-mix(in srgb, var(--ez-focus) 10%, transparent);
+  box-shadow: 0 0 0 1px var(--ez-focus);
+}
+
+.executor-location-card--active > .codicon {
+  color: var(--ez-focus);
+}
+
+/* ── 引擎选择卡片网格 ── */
+.executor-engine-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.executor-engine-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--ez-border);
+  border-radius: var(--ez-radius);
+  color: var(--ez-fg);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+
+.executor-engine-card > .codicon {
+  font-size: 20px;
+  color: var(--ez-muted);
+}
+
+.executor-engine-card div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.executor-engine-card strong {
+  font-size: 13px;
+}
+
+.executor-engine-card small {
+  color: var(--ez-muted);
+  font-size: 11px;
+}
+
+.executor-engine-card:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--ez-focus) 40%, var(--ez-border));
+  background: var(--ez-hover);
+}
+
+.executor-engine-card--active {
+  border-color: var(--ez-focus);
+  background: color-mix(in srgb, var(--ez-focus) 10%, transparent);
+  box-shadow: 0 0 0 1px var(--ez-focus);
+}
+
+.executor-engine-card--active > .codicon {
+  color: var(--ez-focus);
+}
+
+.executor-engine-card--disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.executor-engine-card--disabled:hover {
+  border-color: var(--ez-border);
+  background: transparent;
+}
+
+.executor-engine-card__badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ez-warning) 15%, transparent);
+  color: var(--ez-warning);
+  font-size: 10px;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+/* ── 建设中占位面板 ── */
+.executor-coming-soon {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 18px;
+  border: 1px dashed var(--ez-border);
+  border-radius: var(--ez-radius);
+  background: color-mix(in srgb, var(--ez-surface-soft) 60%, transparent);
+}
+
+.executor-coming-soon > .codicon {
+  font-size: 24px;
+  color: var(--ez-muted);
+  min-width: 28px;
+}
+
+.executor-coming-soon strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 14px;
+}
+
+.executor-coming-soon p {
+  margin: 0;
+  color: var(--ez-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* ── 配置面板（卡片式） ── */
+.executor-config-panel {
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+  padding: 18px;
+  border: 1px solid var(--ez-border);
+  border-radius: var(--ez-radius);
+  background: color-mix(in srgb, var(--ez-surface) 80%, var(--ez-surface-soft));
+}
+
+.executor-config-panel__header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.executor-config-panel__header > .codicon {
+  font-size: 22px;
+  color: var(--ez-link);
+}
+
+.executor-config-panel__header div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.executor-config-panel__header strong {
+  font-size: 14px;
+}
+
+.executor-config-panel__header small {
+  color: var(--ez-muted);
+  font-size: 12px;
+}
+
+.executor-config-panel__footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+/* ── 连接详情 ── */
+.executor-config-detail {
+  display: grid;
+  gap: 1px;
+  border: 1px solid var(--ez-border);
+  border-radius: var(--ez-radius);
+  overflow: hidden;
+  background: var(--ez-border);
+}
+
+.executor-config-detail__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  background: var(--ez-surface-soft);
+}
+
+.executor-config-detail__label {
+  color: var(--ez-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.executor-config-detail__value {
+  font-size: 12px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  color: var(--ez-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+
+/* ── 提示通知 ── */
+.executor-config-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--ez-radius);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.executor-config-notice > .codicon {
+  min-width: 16px;
+  margin-top: 1px;
+}
+
+.executor-config-notice div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.executor-config-notice strong {
+  font-size: 12px;
+}
+
+.executor-config-notice--info {
+  background: color-mix(in srgb, var(--ez-link) 8%, transparent);
+  color: var(--ez-link);
+}
+
+.executor-config-notice--success {
+  background: color-mix(in srgb, var(--ez-success) 8%, transparent);
+  color: var(--ez-success);
+}
+
+.executor-config-notice--warning {
+  background: color-mix(in srgb, var(--ez-warning) 8%, transparent);
+  color: var(--ez-warning);
+}
+
+.executor-config-notice--error {
+  background: color-mix(in srgb, var(--ez-error) 8%, transparent);
+  color: var(--ez-error);
+}
+
+/* ── 配置表单 ── */
+.executor-config-form {
+  display: grid;
+  gap: 12px;
+}
+
+.executor-config-form__secrets {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.executor-config-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.executor-config-field__label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ez-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.executor-config-field__label > .codicon {
+  font-size: 14px;
+}
+
+.executor-config-field__input {
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid var(--vscode-input-border, var(--ez-border));
+  border-radius: 5px;
+  color: var(--vscode-input-foreground, var(--ez-fg));
+  background: var(--ez-input);
+  font: inherit;
+  transition: border-color 0.15s;
+}
+
+.executor-config-field__input:focus {
+  outline: 1px solid var(--ez-focus);
+  outline-offset: 1px;
+}
+
+.executor-config-field__input::placeholder {
+  color: var(--vscode-input-placeholderForeground, var(--ez-muted));
 }
