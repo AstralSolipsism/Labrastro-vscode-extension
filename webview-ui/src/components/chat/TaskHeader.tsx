@@ -1,4 +1,5 @@
 import { Component, Show, createSignal } from "solid-js"
+import { t } from "../../i18n"
 import { IconButton } from "../common/IconButton"
 import { TraceRibbon } from "../trace/TraceRibbon"
 import { ContextWindowProgress } from "./ContextWindowProgress"
@@ -73,17 +74,17 @@ export const TaskHeader: Component<TaskHeaderProps> = (props) => {
   const statusLabel = () => {
     switch (props.runStatus) {
       case "running":
-        return "运行中"
+        return t("task.status.running")
       case "stopping":
-        return "正在停止"
+        return t("task.status.stopping")
       case "cancelled":
-        return "已停止"
+        return t("task.status.cancelled")
       case "error":
-        return "异常"
+        return t("task.status.error")
       case "done":
-        return "完成"
+        return t("task.status.done")
       default:
-        return props.isWorking ? "运行中" : "就绪"
+        return props.isWorking ? t("task.status.running") : t("task.status.ready")
     }
   }
 
@@ -101,7 +102,7 @@ export const TaskHeader: Component<TaskHeaderProps> = (props) => {
               class={`codicon codicon-chevron-${expanded() ? "down" : "right"} task-header__chevron`}
               aria-hidden="true"
             />
-            <span class="task-header__label">任务</span>
+            <span class="task-header__label">{t("task.label")}</span>
             <span class="task-header__status">{statusLabel()}</span>
             <Show when={!expanded()}>
               <span class="task-header__preview">{props.taskText}</span>
@@ -111,7 +112,7 @@ export const TaskHeader: Component<TaskHeaderProps> = (props) => {
             <Show when={props.isWorking || props.runStatus === "stopping"}>
               <IconButton
                 icon="debug-stop"
-                title={props.runStatus === "stopping" ? "正在停止" : "停止当前会话"}
+                title={props.runStatus === "stopping" ? t("task.status.stopping") : "停止当前会话"}
                 disabled={props.runStatus === "stopping"}
                 onClick={(event) => {
                   event.stopPropagation()
@@ -121,7 +122,7 @@ export const TaskHeader: Component<TaskHeaderProps> = (props) => {
             </Show>
             <IconButton
               icon="fold"
-              title="压缩上下文"
+              title={t("task.compactContext")}
               disabled={props.isWorking}
               onClick={(event) => {
                 event.stopPropagation()
@@ -130,7 +131,7 @@ export const TaskHeader: Component<TaskHeaderProps> = (props) => {
             />
             <IconButton
               icon="close"
-              title="结束并开始新任务"
+              title={t("task.closeAndNew")}
               onClick={(event) => {
                 event.stopPropagation()
                 props.onClose?.()
@@ -153,7 +154,7 @@ export const TaskHeader: Component<TaskHeaderProps> = (props) => {
         <div class="task-header__metrics">
           <Show
             when={hasContextUsage()}
-            fallback={<span class="task-header__metric task-header__metric--muted">上下文未知</span>}
+            fallback={<span class="task-header__metric task-header__metric--muted">{t("task.contextUnknown")}</span>}
           >
             <ContextWindowProgress
               contextTokens={props.contextTokens}
@@ -161,7 +162,7 @@ export const TaskHeader: Component<TaskHeaderProps> = (props) => {
               maxOutputTokens={props.maxOutputTokens}
             />
             <span class="task-header__metric" title={`剩余上下文 ${formatLargeNumber(remainingContext())}`}>
-              剩余 {formatLargeNumber(remainingContext())}
+              {t("task.remaining", { n: formatLargeNumber(remainingContext()) })}
             </span>
           </Show>
           <Show when={hasTokenUsage()}>
@@ -175,9 +176,9 @@ export const TaskHeader: Component<TaskHeaderProps> = (props) => {
             </span>
           </Show>
           <Show when={cacheHitTokens() !== null}>
-            <span class="task-header__metric" title="缓存命中 tokens">
+            <span class="task-header__metric" title={t("task.cacheHitTokens")}>
               <span class="codicon codicon-symbol-event" aria-hidden="true" />
-              命中 {formatLargeNumber(cacheHitTokens() || 0)}
+              {t("task.cacheHit", { n: formatLargeNumber(cacheHitTokens() || 0) })}
             </span>
           </Show>
           <Show when={typeof props.totalCost === "number" && props.totalCost > 0}>
@@ -189,45 +190,45 @@ export const TaskHeader: Component<TaskHeaderProps> = (props) => {
           <div class="task-header__expanded">
             <p>{props.taskText}</p>
             <div class="task-header__grid">
-              <span>上下文</span>
+              <span>{t("task.context")}</span>
               <strong>
-                <Show when={hasContextUsage()} fallback="未知">
+                <Show when={hasContextUsage()} fallback={t("task.unknown")}>
                   {formatLargeNumber(props.contextTokens)} / {formatLargeNumber(props.contextWindow)} ({contextRatio()}%)
                 </Show>
               </strong>
-              <span>剩余上下文</span>
+              <span>{t("task.remainingContextLabel")}</span>
               <strong>
-                <Show when={hasContextUsage()} fallback="未知">
+                <Show when={hasContextUsage()} fallback={t("task.unknown")}>
                   {formatLargeNumber(remainingContext())}
                 </Show>
               </strong>
-              <span>缓存</span>
+              <span>{t("task.cache")}</span>
               <strong>
                 <Show
                   when={typeof props.cacheReads === "number" || typeof props.cacheWrites === "number"}
-                  fallback="未知"
+                  fallback={t("task.unknown")}
                 >
-                  {formatLargeNumber(props.cacheReads || 0)} 命中 / {formatLargeNumber(props.cacheWrites || 0)} 写入
+                  {t("task.cacheHitSlash", { hit: formatLargeNumber(props.cacheReads || 0), write: formatLargeNumber(props.cacheWrites || 0) })}
                 </Show>
               </strong>
-              <span>缓存命中率</span>
+              <span>{t("task.cacheHitRate")}</span>
               <strong>
-                <Show when={cacheHitRate() !== null} fallback="未知">
+                <Show when={cacheHitRate() !== null} fallback={t("task.unknown")}>
                   {formatPercent(cacheHitRate() || 0)}
                 </Show>
               </strong>
-              <span>输出上限</span>
+              <span>{t("task.outputLimit")}</span>
               <strong>
-                <Show when={props.maxOutputTokens > 0} fallback="未知">
+                <Show when={props.maxOutputTokens > 0} fallback={t("task.unknown")}>
                   {formatLargeNumber(props.maxOutputTokens)}
                 </Show>
               </strong>
               <Show when={props.model}>
-                <span>模型</span>
+                <span>{t("task.model")}</span>
                 <strong>{props.model}</strong>
               </Show>
               <Show when={props.mode}>
-                <span>模式</span>
+                <span>{t("task.mode")}</span>
                 <strong>{props.mode}</strong>
               </Show>
             </div>

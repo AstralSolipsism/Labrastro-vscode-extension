@@ -5,6 +5,7 @@
  */
 
 import { Component, Show } from "solid-js"
+import { t } from "../../i18n"
 
 interface WorkingIndicatorProps {
   isWorking: boolean
@@ -17,7 +18,7 @@ export const WorkingIndicator: Component<WorkingIndicatorProps> = (props) => {
     <Show when={props.isWorking}>
       <div class="working-indicator">
         <span class="working-spinner" />
-        <span class="working-text">{props.text || "正在思考..."}</span>
+        <span class="working-text">{props.text || t("chat.thinking")}</span>
         <Show when={props.elapsed}>
           <span class="working-elapsed">{props.elapsed}</span>
         </Show>

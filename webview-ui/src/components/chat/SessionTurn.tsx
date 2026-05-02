@@ -1,4 +1,5 @@
 import { Component, For, Match, Show, Suspense, Switch, createEffect, createMemo, createSignal, lazy } from "solid-js"
+import { t } from "../../i18n"
 import type { MockTurn, MockPart, MockMessage } from "./mock-data"
 import {
   TOOL_STATUS_TO_TRACE_STATUS,
@@ -25,23 +26,27 @@ const MarkdownBlock = lazy(async () => ({
   default: (await import("../common/MarkdownBlock")).MarkdownBlock,
 }))
 
-const TOOL_LABELS: Record<string, string> = {
-  read_file: "读取文件",
-  write_file: "写入文件",
-  edit_file: "编辑文件",
-  shell: "执行命令",
-  grep: "搜索文本",
-  glob: "匹配文件",
-  mcp: "MCP 工具",
-  agent: "子代理",
-  spawn_agent: "启动子代理",
-  send_input: "发送给子代理",
-  wait_agent: "等待子代理",
-  write_to_file: "写入文件",
-  execute_command: "执行命令",
-  list_directory: "列出目录",
-  search_files: "搜索文件",
-  apply_patch: "修改文件",
+
+function getToolLabel(name: string): string {
+  const labels: Record<string, string> = {
+    read_file: t("tool.readFile"),
+    write_file: t("tool.writeFile"),
+    edit_file: t("tool.editFile"),
+    shell: t("tool.shell"),
+    grep: t("tool.grep"),
+    glob: t("tool.glob"),
+    mcp: t("tool.mcp"),
+    agent: t("tool.agent"),
+    spawn_agent: t("tool.spawnAgent"),
+    send_input: t("tool.sendInput"),
+    wait_agent: t("tool.waitAgent"),
+    write_to_file: t("tool.writeToFile"),
+    execute_command: t("tool.executeCommand"),
+    list_directory: t("tool.listDirectory"),
+    search_files: t("tool.searchFiles"),
+    apply_patch: t("tool.applyPatch"),
+  }
+  return labels[name] || name
 }
 
 const TOOL_ICONS: Record<string, string> = {
@@ -180,7 +185,7 @@ const ToolPart: Component<PartProps> = (props) => {
           <span class={`codicon codicon-${TOOL_ICONS[toolName()] || "tools"}`} aria-hidden="true" />
         </span>
         <span class="tool-card__body">
-          <span class="tool-card__title">{TOOL_LABELS[toolName()] || toolName()}</span>
+          <span class="tool-card__title">{getToolLabel(toolName()) || toolName()}</span>
           <Show when={subtitle()}>
             <span class="tool-card__subtitle">{subtitle()}</span>
           </Show>
@@ -195,23 +200,23 @@ const ToolPart: Component<PartProps> = (props) => {
       <Show when={open()}>
         <div class="tool-card__details">
           <Show when={props.part.toolInput && Object.keys(props.part.toolInput).length > 0}>
-            <ToolSection title="参数">
+            <ToolSection title={t("tool.section.params")}>
               <pre class="tool-card__code">{formatJson(props.part.toolInput)}</pre>
             </ToolSection>
           </Show>
           <Show when={props.part.approvalId}>
-            <ToolSection title="审批">
+            <ToolSection title={t("tool.section.approval")}>
               <div class="tool-card__approval">
-                <span>{props.part.approvalReason || "该工具调用需要批准。"}</span>
+                <span>{props.part.approvalReason || t("tool.approval.needsApproval")}</span>
                 <Show when={props.part.approvalDecision}>
                   <strong>
                     {props.part.approvalDecision === "deny_once"
-                      ? "已拒绝"
+                      ? t("tool.approval.denied")
                       : props.part.approvalDecision === "auto_denied"
-                        ? "自动拒绝"
+                        ? t("tool.approval.autoDenied")
                         : props.part.approvalDecision === "auto_approved"
-                          ? "自动批准"
-                          : "已批准"}
+                          ? t("tool.approval.autoApproved")
+                          : t("tool.approval.approved")}
                   </strong>
                 </Show>
               </div>
@@ -219,12 +224,12 @@ const ToolPart: Component<PartProps> = (props) => {
             </ToolSection>
           </Show>
           <Show when={props.part.toolOutput}>
-            <ToolSection title={props.part.status === "running" ? "实时输出" : "结果"}>
+            <ToolSection title={props.part.status === "running" ? t("tool.section.liveOutput") : t("tool.section.result")}>
               <ToolOutput part={props.part} />
             </ToolSection>
           </Show>
           <Show when={props.part.toolResultMeta && Object.keys(props.part.toolResultMeta).length > 0}>
-            <ToolSection title="元数据">
+            <ToolSection title={t("tool.section.metadata")}>
               <pre class="tool-card__code">{formatJson(props.part.toolResultMeta)}</pre>
             </ToolSection>
           </Show>
@@ -255,21 +260,21 @@ const ToolOutput: Component<{ part: MockPart }> = (props) => (
 )
 
 function approvalDecisionLabel(decision?: string, status?: string): string {
-  if (decision === "deny_once") return "已拒绝"
-  if (decision === "auto_denied") return "自动拒绝"
-  if (decision === "auto_approved") return "自动批准"
-  if (decision === "allow_once") return "已批准"
-  if (status === "approved" || status === "running" || status === "complete") return "已批准"
-  if (status === "denied" || status === "cancelled") return "已拒绝"
-  return "待批准"
+  if (decision === "deny_once") return t("tool.approval.denied")
+  if (decision === "auto_denied") return t("tool.approval.autoDenied")
+  if (decision === "auto_approved") return t("tool.approval.autoApproved")
+  if (decision === "allow_once") return t("tool.approval.approved")
+  if (status === "approved" || status === "running" || status === "complete") return t("tool.approval.approved")
+  if (status === "denied" || status === "cancelled") return t("tool.approval.denied")
+  return t("tool.approval.pending")
 }
 
 function shellEmptyText(status?: string): string {
-  if (status === "awaiting_approval") return "等待审批后执行。"
-  if (status === "approved") return "已批准，等待执行输出。"
-  if (status === "running") return "命令执行中，等待输出。"
-  if (status === "error") return "命令执行失败，未返回输出。"
-  return "暂无输出。"
+  if (status === "awaiting_approval") return t("tool.shell.awaitingApproval")
+  if (status === "approved") return t("tool.shell.approved")
+  if (status === "running") return t("tool.shell.running")
+  if (status === "error") return t("tool.shell.error")
+  return t("tool.shell.noOutput")
 }
 
 function shellStreamLabel(stream: ShellOutputStream): string {
@@ -294,7 +299,7 @@ const ShellToolPart: Component<PartProps> = (props) => {
   const status = () => traceStatusForPart(props.part)
   const selected = () => Boolean(props.part.traceNodeId && props.part.traceNodeId === props.selectedTraceNodeId)
   const toolName = () => props.part.tool || "shell"
-  const command = createMemo(() => extractShellCommand(props.part.toolInput) || "命令内容不可用")
+  const command = createMemo(() => extractShellCommand(props.part.toolInput) || t("tool.shell.commandUnavailable"))
   const duration = () => toolDurationLabel(props.part)
   const detailInput = createMemo(() => omitShellCommandFields(props.part.toolInput))
   const outputChunks = createMemo<ShellOutputChunk[]>(() => {
@@ -343,7 +348,7 @@ const ShellToolPart: Component<PartProps> = (props) => {
           <span class="codicon codicon-terminal" aria-hidden="true" />
         </span>
         <span class="tool-card__body">
-          <span class="tool-card__title">{TOOL_LABELS[toolName()] || "执行命令"}</span>
+          <span class="tool-card__title">{getToolLabel(toolName()) || t("tool.executeCommand")}</span>
         </span>
         <span class={markerClass(kind(), status(), selected())} title={getTraceStatusLabel(status())} />
         <span class="tool-card__status">{props.part.status ? getToolExecutionStatusLabel(props.part.status) : getTraceStatusLabel(status())}</span>
@@ -363,7 +368,7 @@ const ShellToolPart: Component<PartProps> = (props) => {
           <Show when={props.part.approvalId}>
             <div class="shell-card__approval">
               <span class="codicon codicon-shield" aria-hidden="true" />
-              <span>{props.part.approvalReason || "该命令需要批准后执行。"}</span>
+              <span>{props.part.approvalReason || t("tool.shell.needsApproval")}</span>
               <strong>{approvalDecisionLabel(props.part.approvalDecision, props.part.status)}</strong>
             </div>
           </Show>
@@ -403,7 +408,7 @@ const ShellToolPart: Component<PartProps> = (props) => {
               onClick={() => setDetailsOpen((value) => !value)}
             >
               <span class={`codicon codicon-chevron-${detailsOpen() ? "down" : "right"}`} aria-hidden="true" />
-              <span>详情</span>
+              <span>{t("tool.section.details")}</span>
             </button>
           </Show>
         </div>
@@ -411,30 +416,30 @@ const ShellToolPart: Component<PartProps> = (props) => {
         <Show when={detailsOpen() && hasDetails()}>
           <div class="tool-card__details shell-card__details">
             <Show when={Object.keys(detailInput()).length > 0}>
-              <ToolSection title="参数">
+              <ToolSection title={t("tool.section.params")}>
                 <pre class="tool-card__code">{formatJson(detailInput())}</pre>
               </ToolSection>
             </Show>
             <Show when={props.part.approvalId}>
-              <ToolSection title="审批">
+              <ToolSection title={t("tool.section.approval")}>
                 <div class="shell-card__approval-detail">
-                  <span>{props.part.approvalReason || "该命令需要批准后执行。"}</span>
+                  <span>{props.part.approvalReason || t("tool.shell.needsApproval")}</span>
                   <strong>{approvalDecisionLabel(props.part.approvalDecision, props.part.status)}</strong>
                 </div>
               </ToolSection>
             </Show>
             <Show when={shouldShowShellFinalOutput(props.part.toolOutput, props.part.toolFinalOutput)}>
-              <ToolSection title="最终结果">
+              <ToolSection title={t("tool.section.finalResult")}>
                 <pre class="tool-card__output">{props.part.toolFinalOutput}</pre>
               </ToolSection>
             </Show>
             <Show when={props.part.toolResultMeta && Object.keys(props.part.toolResultMeta).length > 0}>
-              <ToolSection title="元数据">
+              <ToolSection title={t("tool.section.metadata")}>
                 <pre class="tool-card__code">{formatJson(props.part.toolResultMeta)}</pre>
               </ToolSection>
             </Show>
             <Show when={props.part.toolOutputTruncated}>
-              <div class="shell-card__truncation-note">输出过长，主面板只保留最近输出。</div>
+              <div class="shell-card__truncation-note">{t("tool.shell.truncated")}</div>
             </Show>
           </div>
         </Show>
@@ -485,7 +490,7 @@ const SessionPart: Component<PartProps> = (props) => {
     >
       <span class={markerClass(kind(), status())} aria-hidden="true" />
       <span class="session-card__body">
-        <span class="session-card__title">{props.part.sessionTitle || props.part.sessionId || "会话"}</span>
+        <span class="session-card__title">{props.part.sessionTitle || props.part.sessionId || t("tool.session.default")}</span>
         <Show when={props.part.sessionSummary}>
           <span class="session-card__summary">{props.part.sessionSummary}</span>
         </Show>
@@ -516,7 +521,7 @@ const RemoteStatusPart: Component<PartProps> = (props) => {
       <button type="button" class="remote-status-card__header" onClick={() => setOpen((value) => !value)}>
         <span class="codicon codicon-remote-explorer" aria-hidden="true" />
         <span class="remote-status-card__body">
-          <span class="remote-status-card__title">远程会话已连接</span>
+          <span class="remote-status-card__title">{t("tool.remote.connected")}</span>
           <span class="remote-status-card__meta">
             {props.part.remoteMode || "-"} · {props.part.remoteModel || "-"}
           </span>
@@ -545,7 +550,7 @@ const TerminalPart: Component<PartProps> = (props) => {
     <div class="terminal-card">
       <button type="button" class="terminal-card__header" onClick={() => setOpen((value) => !value)}>
         <span class="codicon codicon-terminal" aria-hidden="true" />
-        <span>{props.part.terminalTitle || "终端输出"}</span>
+        <span>{props.part.terminalTitle || t("tool.terminal.default")}</span>
         <span class={`codicon codicon-chevron-${open() ? "down" : "right"}`} aria-hidden="true" />
       </button>
       <Show when={open()}>
@@ -563,7 +568,7 @@ const ViewPart: Component<PartProps> = (props) => {
       <button type="button" class="view-card__header" onClick={() => setOpen((value) => !value)}>
         <span class="codicon codicon-layout" aria-hidden="true" />
         <span class="view-card__body">
-          <span class="view-card__title">{props.part.viewTitle || "结构化视图"}</span>
+          <span class="view-card__title">{props.part.viewTitle || t("tool.view.default")}</span>
           <span class="view-card__meta">{props.part.viewType || "view"}</span>
         </span>
         <span class={`codicon codicon-chevron-${open() ? "down" : "right"}`} aria-hidden="true" />
@@ -590,7 +595,7 @@ const ContextEventPart: Component<PartProps> = (props) => {
       <button type="button" class="context-event-card__header" onClick={() => setOpen((value) => !value)}>
         <span class="codicon codicon-file-submodule" aria-hidden="true" />
         <span class="context-event-card__body">
-          <span class="context-event-card__title">{props.part.contextTitle || "上下文事件"}</span>
+          <span class="context-event-card__title">{props.part.contextTitle || t("tool.context.default")}</span>
           <span class="context-event-card__meta">{String(props.part.contextPayload?.phase || props.part.contextPayload?.strategy || "")}</span>
         </span>
         <span class={`codicon codicon-chevron-${open() ? "down" : "right"}`} aria-hidden="true" />
@@ -609,17 +614,19 @@ const ContextEventPart: Component<PartProps> = (props) => {
   )
 }
 
-const UI_EVENT_LABELS: Record<string, string> = {
-  remote: "远程",
-  mcp: "MCP",
-  model: "模型",
-  session: "会话",
-  command: "命令",
-  approval: "审批",
-  system: "系统",
-  agent: "智能体",
+function getUiEventLabel(kind: string): string {
+  const labels: Record<string, string> = {
+    remote: t("uiEvent.remote"),
+    mcp: "MCP",
+    model: t("uiEvent.model"),
+    session: t("uiEvent.session"),
+    command: t("uiEvent.command"),
+    approval: t("uiEvent.approval"),
+    system: t("uiEvent.system"),
+    agent: t("uiEvent.agent"),
+  }
+  return labels[kind] || kind
 }
-
 const UI_EVENT_ICONS: Record<string, string> = {
   remote: "remote-explorer",
   mcp: "server-process",
@@ -634,7 +641,7 @@ const UI_EVENT_ICONS: Record<string, string> = {
 const UiEventPart: Component<PartProps> = (props) => {
   const [open, setOpen] = createSignal(false)
   const kind = () => props.part.uiEventKind || "system"
-  const label = () => UI_EVENT_LABELS[kind()] || kind()
+  const label = () => getUiEventLabel(kind()) || kind()
   const icon = () => UI_EVENT_ICONS[kind()] || "output"
   const level = () => props.part.uiEventLevel || "info"
   const summary = () => markdownSummary(props.part.uiEventPayload || {})
@@ -668,7 +675,7 @@ const PartView: Component<PartProps> = (props) => {
     <Switch
       fallback={
         <div class="parallel-card">
-          <div class="parallel-card__title">{props.part.parallelTitle || "并发批次"}</div>
+          <div class="parallel-card__title">{props.part.parallelTitle || t("tool.parallel.default")}</div>
           <For each={props.part.parallelItems || []}>
             {(item) => (
               <PartView
@@ -746,7 +753,7 @@ export const SessionTurn: Component<SessionTurnProps> = (props) => {
               <div class="assistant-message__body">
                 <div class="message-action-row">
                   <Show when={message.traceNodeId}>
-                    <IconButton icon="inspect" title="定位轨迹节点" onClick={() => props.onTraceNodeSelect?.(message.traceNodeId as string)} />
+                    <IconButton icon="inspect" title={t("tool.locateTraceNode")} onClick={() => props.onTraceNodeSelect?.(message.traceNodeId as string)} />
                   </Show>
                 </div>
                 <For each={message.parts}>

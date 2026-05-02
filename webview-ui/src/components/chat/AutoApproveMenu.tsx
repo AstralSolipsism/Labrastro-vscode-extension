@@ -1,4 +1,5 @@
 import { Component, For } from "solid-js"
+import { t } from "../../i18n"
 
 interface AutoApproveMenuProps {
   enabledOptions: Record<string, boolean>
@@ -6,27 +7,28 @@ interface AutoApproveMenuProps {
   onToggleOption?: (key: string, value: boolean) => void
 }
 
-const OPTIONS = [
-  { key: "readOnly", label: "读取", icon: "eye" },
-  { key: "write", label: "写入", icon: "edit" },
-  { key: "delete", label: "删除", icon: "trash" },
-  { key: "execute", label: "执行", icon: "terminal" },
-  { key: "mcp", label: "MCP", icon: "extensions" },
-]
 
 export const AutoApproveMenu: Component<AutoApproveMenuProps> = (props) => {
+  const options = () => [
+    { key: "readOnly", label: t("autoApproveMenu.read"), icon: "eye" },
+    { key: "write", label: t("autoApproveMenu.write"), icon: "edit" },
+    { key: "delete", label: t("autoApproveMenu.delete"), icon: "trash" },
+    { key: "execute", label: t("autoApproveMenu.execute"), icon: "terminal" },
+    { key: "mcp", label: "MCP", icon: "extensions" },
+  ]
+
   const titleFor = (key: string, label: string) => {
     if (key !== "execute") return label
     return props.allowedCommands?.length
-      ? "仅自动批准白名单命令"
-      : "仅自动批准白名单命令；当前白名单为空"
+      ? t("autoApproveMenu.onlyWhitelist")
+      : t("autoApproveMenu.onlyWhitelistEmpty")
   }
 
   return (
     <div class="auto-approve-bar">
-      <span class="auto-approve-label">自动批准</span>
+      <span class="auto-approve-label">{t("autoApproveMenu.label")}</span>
       <div class="auto-approve-options">
-        <For each={OPTIONS}>
+        <For each={options()}>
           {(option) => (
             <button
               type="button"

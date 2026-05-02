@@ -1,4 +1,5 @@
 import { Component, For, Show } from "solid-js"
+import { t } from "../../i18n"
 import { useAutoScroll } from "../../hooks/useAutoScroll"
 import { SessionTurn } from "./SessionTurn"
 import { WelcomeState } from "./WelcomeState"
@@ -59,7 +60,7 @@ export const MessageList: Component<MessageListProps> = (props) => {
 
       <Show when={autoScroll.userScrolled()}>
         <div class="scroll-to-bottom">
-          <IconButton icon="chevron-down" title="滚动到底部" onClick={() => autoScroll.resume()} />
+          <IconButton icon="chevron-down" title={t("chat.scrollToBottom")} onClick={() => autoScroll.resume()} />
         </div>
       </Show>
     </div>

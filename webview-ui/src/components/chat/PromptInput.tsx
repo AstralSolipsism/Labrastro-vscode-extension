@@ -34,7 +34,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         ref={textareaRef}
         class="prompt-input"
         classList={{ "prompt-input--disabled": props.disabled }}
-        placeholder="输入任务，Enter 发送"
+        placeholder={t("chat.promptPlaceholder")}
         value={text()}
         rows={1}
         disabled={props.disabled}
@@ -61,10 +61,10 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
           </button>
         </div>
         <div class="prompt-input-actions">
-          <IconButton icon="symbol-misc" title="增强提示" />
+          <IconButton icon="symbol-misc" title={t("chat.enhancePrompt")} />
           <IconButton
             icon="arrow-up"
-            title="发送"
+            title={t("chat.send")}
             disabled={!text().trim() || props.disabled}
             onClick={handleSend}
           />

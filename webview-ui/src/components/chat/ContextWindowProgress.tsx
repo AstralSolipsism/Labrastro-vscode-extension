@@ -8,6 +8,7 @@
  */
 
 import { Component, Show, createMemo } from "solid-js"
+import { t } from "../../i18n"
 
 interface ContextWindowProgressProps {
   /** 上下文窗口总大小 */
@@ -52,7 +53,10 @@ export const ContextWindowProgress: Component<ContextWindowProgressProps> = (pro
       <span class="context-progress-label">{formatLargeNumber(safeTokens())}</span>
       <div
         class="context-progress-bar"
-        title={`已用 ${formatLargeNumber(safeTokens())} / ${formatLargeNumber(safeWindow())} tokens`}
+        title={t("contextProgress.used", {
+          used: formatLargeNumber(safeTokens()),
+          total: formatLargeNumber(safeWindow()),
+        })}
       >
         {/* 已用部分 */}
         <div
