@@ -114,6 +114,9 @@
     "compile": "node esbuild.js",
     "watch": "node esbuild.js --watch",
     "watch:fast": "node esbuild.js --watch --fast",
+    "typecheck:extension": "tsc -p tsconfig.json --noEmit",
+    "typecheck:webview": "tsc -p webview-ui/tsconfig.json --noEmit",
+    "typecheck": "npm run typecheck:extension && npm run typecheck:webview",
     "package": "node esbuild.js --production",
     "package:vsix": "vsce package --out dogcode.vsix",
     "test:auto-approval": "vitest run webview-ui/src/utils/command-auto-approval.test.ts"
