@@ -50,15 +50,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     this.webviewView = webviewView
     this.isWebviewReady = false
 
-    // 先写入带 CSP 的 HTML，再启用脚本选项。
-    // VS Code 会在 options 更新时推送当前 HTML；若此时还是空 HTML，
-    // Extension Development Host 会记录 missing-csp warning。
-    webviewView.webview.html = this.getHtmlForWebview(webviewView.webview)
-
+    // 先启用脚本与本地资源访问，再写入 HTML，确保首轮加载可执行前端 bundle。
     webviewView.webview.options = {
       enableScripts: true,
       localResourceRoots: [this.extensionUri],
     }
+    webviewView.webview.html = this.getHtmlForWebview(webviewView.webview)
 
     // 设置消息处理器
     this.setupMessageHandler(webviewView.webview)

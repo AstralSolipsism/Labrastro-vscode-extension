@@ -1,5 +1,6 @@
 import { Component, For, Show } from "solid-js"
 import { useTrace } from "../context/trace"
+import { t } from "../i18n"
 import type { TraceNavigationIntent } from "../types/trace"
 
 interface AgentManagerViewProps {

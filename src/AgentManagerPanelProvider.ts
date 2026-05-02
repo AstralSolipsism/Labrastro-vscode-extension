@@ -75,11 +75,11 @@ export class AgentManagerPanelProvider implements vscode.Disposable {
       dark: vscode.Uri.joinPath(this.extensionUri, "assets", "icons", "dogcode-dark.svg"),
     }
 
-    panel.webview.html = this.getHtml(panel.webview)
     panel.webview.options = {
       enableScripts: true,
       localResourceRoots: [this.extensionUri],
     }
+    panel.webview.html = this.getHtml(panel.webview)
 
     const closePanelDisposable = panel.webview.onDidReceiveMessage((msg) => {
       if (msg.type === "closePanel") {

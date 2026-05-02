@@ -127,12 +127,12 @@ export class SettingsPanelProvider implements vscode.Disposable {
       dark: vscode.Uri.joinPath(this.extensionUri, "assets", "icons", "dogcode-dark.svg"),
     }
 
-    // 先写入带 CSP 的 HTML，再启用脚本选项，避免空 HTML 触发 missing-csp warning。
-    panel.webview.html = this.getHtml(panel.webview)
+    // 先启用脚本与本地资源访问，再写入 HTML，确保首轮加载可执行前端 bundle。
     panel.webview.options = {
       enableScripts: true,
       localResourceRoots: [this.extensionUri],
     }
+    panel.webview.html = this.getHtml(panel.webview)
     let disposed = false
     const postToWebview = (payload: Record<string, unknown>) => {
       if (disposed) return

@@ -1,5 +1,6 @@
 import { Component, createSignal } from "solid-js"
 import { IconButton } from "../common/IconButton"
+import { t } from "../../i18n"
 
 interface PromptInputProps {
   disabled?: boolean
