@@ -270,6 +270,35 @@ export class DogcodeController implements vscode.Disposable {
           post({ type: "serverSettings.error", message: errorMessage(error) })
         }
         return true
+      case "runtime.submit":
+        try {
+          const payload = this.runtimeSubmitPayload(objectValue(message.payload))
+          post({ type: "runtime.task", payload: await this.client.runtimeSubmit(payload) })
+        } catch (error) {
+          post({ type: "runtime.error", message: errorMessage(error) })
+        }
+        return true
+      case "runtime.events":
+        try {
+          post({ type: "runtime.events", payload: await this.client.runtimeEvents(objectValue(message.payload)) })
+        } catch (error) {
+          post({ type: "runtime.error", message: errorMessage(error) })
+        }
+        return true
+      case "runtime.cancel":
+        try {
+          post({ type: "runtime.cancelled", payload: await this.client.runtimeCancel(objectValue(message.payload)) })
+        } catch (error) {
+          post({ type: "runtime.error", message: errorMessage(error) })
+        }
+        return true
+      case "runtime.retry":
+        try {
+          post({ type: "runtime.task", payload: await this.client.runtimeRetry(objectValue(message.payload)) })
+        } catch (error) {
+          post({ type: "runtime.error", message: errorMessage(error) })
+        }
+        return true
       case "environment.refreshManifest":
         await this.refreshEnvironmentManifest(post)
         return true
@@ -579,6 +608,19 @@ export class DogcodeController implements vscode.Disposable {
     const payload = { type: "executorType.state", payload: this.getExecutorType() }
     for (const post of this.webviewPosts) {
       this.postWebviewMessage(post, payload)
+    }
+  }
+
+  private runtimeSubmitPayload(payload: Record<string, unknown>): Record<string, unknown> {
+    const metadata: Record<string, unknown> = {
+      ...objectValue(payload.metadata),
+    }
+    if (!metadata.workspace_root && vscode.workspace.workspaceFolders?.[0]?.uri.fsPath) {
+      metadata.workspace_root = vscode.workspace.workspaceFolders[0].uri.fsPath
+    }
+    return {
+      ...payload,
+      metadata,
     }
   }
 

@@ -218,6 +218,46 @@ describe("DogcodeRemoteClient remote errors", () => {
   })
 })
 
+describe("DogcodeRemoteClient runtime admin API", () => {
+  it("posts Runtime task actions through admin endpoints", async () => {
+    vscodeMock.dogcodeValue = "http://127.0.0.1:8765"
+    const context = {
+      secrets: {
+        get: vi.fn(async (key: string) => key === "dogcode.adminSecret" ? "admin-secret" : undefined),
+      },
+    }
+    const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
+      const url = new URL(String(input))
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          path: url.pathname,
+          body: JSON.parse(String(init?.body || "{}")),
+          adminSecret: (init?.headers as Record<string, string>)["X-RC-Admin-Secret"],
+        }),
+        { headers: { "Content-Type": "application/json" } }
+      )
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    const client = new DogcodeRemoteClient(context as never)
+
+    await expect(client.runtimeSubmit({ agent_id: "reviewer" })).resolves.toMatchObject({
+      path: "/remote/admin/runtime/submit",
+      body: { agent_id: "reviewer" },
+      adminSecret: "admin-secret",
+    })
+    await expect(client.runtimeEvents({ task_id: "task-1", after_seq: 1 })).resolves.toMatchObject({
+      path: "/remote/admin/runtime/events",
+    })
+    await expect(client.runtimeCancel({ task_id: "task-1" })).resolves.toMatchObject({
+      path: "/remote/admin/runtime/cancel",
+    })
+    await expect(client.runtimeRetry({ task_id: "task-1" })).resolves.toMatchObject({
+      path: "/remote/admin/runtime/retry",
+    })
+  })
+})
+
 describe("DogcodeRemoteClient peer retry strategy", () => {
   it("recovers once for invalid peer token", async () => {
     let attempts = 0

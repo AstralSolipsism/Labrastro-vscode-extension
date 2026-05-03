@@ -226,6 +226,22 @@ export class DogcodeRemoteClient {
     return this.adminPost("/remote/admin/server-settings/update", payload)
   }
 
+  async runtimeSubmit(payload: JsonObject): Promise<JsonObject> {
+    return this.adminPost("/remote/admin/runtime/submit", payload)
+  }
+
+  async runtimeEvents(payload: JsonObject): Promise<JsonObject> {
+    return this.adminPost("/remote/admin/runtime/events", payload)
+  }
+
+  async runtimeCancel(payload: JsonObject): Promise<JsonObject> {
+    return this.adminPost("/remote/admin/runtime/cancel", payload)
+  }
+
+  async runtimeRetry(payload: JsonObject): Promise<JsonObject> {
+    return this.adminPost("/remote/admin/runtime/retry", payload)
+  }
+
   async capabilities(): Promise<BackendCapabilities> {
     const payload = await this.getJson("/remote/capabilities")
     return normalizeBackendCapabilities(payload)
