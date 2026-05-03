@@ -7,6 +7,16 @@ import {
   shouldSyncHostDraft,
   validateHostUrlInput,
 } from "../utils/host-url"
+import {
+  formatAgentConfigList,
+  makeUniqueAgentConfigId,
+  parseAgentConfigListText,
+  renameRecordKey,
+  replaceRuntimeProfileReferences,
+  resolveNewAgentRuntimeProfile,
+  toggleAgentConfigListValue,
+  validateAgentConfigId,
+} from "../utils/agent-config"
 import { t, locale, setLocale, LOCALES, type Locale } from "../i18n"
 import {
   ApprovalDetailsDialog,
@@ -19,7 +29,7 @@ import {
 
 type ProviderType = "openai_chat" | "anthropic_messages" | "openai_responses"
 type ProviderCompat = "generic" | "deepseek" | "kimi" | "glm" | "qwen" | "zenmux"
-type SettingsTab = "executors" | "providers" | "toolchains" | "serverSettings" | "autoApproval" | "other"
+type SettingsTab = "executors" | "providers" | "toolchains" | "serverSettings" | "agentConfig" | "autoApproval" | "other"
 
 /** 主执行器运行位置 */
 type ExecutorLocation = "local" | "remote"
@@ -226,6 +236,246 @@ interface ToolchainEditorState {
   notesText: string
 }
 
+/* ── Agent 配置类型 ── */
+
+/** Runtime Profile 编辑器状态 */
+interface RuntimeProfileDraft {
+  id: string
+  executor: string
+  execution_location: string
+  runtime_home_policy: string
+  approval_mode: string
+  config_isolation: string
+  model: string
+  command: string
+  argsText: string
+  envText: string
+  credentialRefsText: string
+  mcpServersText: string
+}
+
+/** Agent 定义编辑器状态 */
+interface AgentDefinitionDraft {
+  id: string
+  name: string
+  description: string
+  runtime_profile: string
+  capabilitiesText: string
+  systemAppend: string
+  agentMd: string
+  mcpServersText: string
+  skillsText: string
+  max_concurrent_tasks: number
+  credentialRefsText: string
+}
+
+interface RuntimeOption {
+  value: string
+  labelKey: string
+  descKey: string
+}
+
+const PROFILE_EXECUTOR_OPTIONS: RuntimeOption[] = [
+  { value: "reuleauxcoder", labelKey: "agentConfig.profile.executor.reuleauxcoder", descKey: "agentConfig.profile.executor.reuleauxcoder.desc" },
+  { value: "codex", labelKey: "agentConfig.profile.executor.codex", descKey: "agentConfig.profile.executor.codex.desc" },
+  { value: "claude", labelKey: "agentConfig.profile.executor.claude", descKey: "agentConfig.profile.executor.claude.desc" },
+  { value: "gemini", labelKey: "agentConfig.profile.executor.gemini", descKey: "agentConfig.profile.executor.gemini.desc" },
+  { value: "fake", labelKey: "agentConfig.profile.executor.fake", descKey: "agentConfig.profile.executor.fake.desc" },
+]
+const PROFILE_EXECUTION_LOCATION_OPTIONS: RuntimeOption[] = [
+  { value: "daemon_worktree", labelKey: "agentConfig.profile.executionLocation.daemonWorktree", descKey: "agentConfig.profile.executionLocation.daemonWorktree.desc" },
+  { value: "local_workspace", labelKey: "agentConfig.profile.executionLocation.localWorkspace", descKey: "agentConfig.profile.executionLocation.localWorkspace.desc" },
+  { value: "remote_server", labelKey: "agentConfig.profile.executionLocation.remoteServer", descKey: "agentConfig.profile.executionLocation.remoteServer.desc" },
+]
+const PROFILE_HOME_POLICY_OPTIONS: RuntimeOption[] = [
+  { value: "per_task", labelKey: "agentConfig.profile.runtimeHomePolicy.perTask", descKey: "agentConfig.profile.runtimeHomePolicy.perTask.desc" },
+  { value: "shared", labelKey: "agentConfig.profile.runtimeHomePolicy.shared", descKey: "agentConfig.profile.runtimeHomePolicy.shared.desc" },
+  { value: "inherit", labelKey: "agentConfig.profile.runtimeHomePolicy.inherit", descKey: "agentConfig.profile.runtimeHomePolicy.inherit.desc" },
+  { value: "none", labelKey: "agentConfig.profile.runtimeHomePolicy.none", descKey: "agentConfig.profile.runtimeHomePolicy.none.desc" },
+]
+const PROFILE_APPROVAL_MODE_OPTIONS: RuntimeOption[] = [
+  { value: "full", labelKey: "agentConfig.profile.approvalMode.full", descKey: "agentConfig.profile.approvalMode.full.desc" },
+  { value: "auto", labelKey: "agentConfig.profile.approvalMode.auto", descKey: "agentConfig.profile.approvalMode.auto.desc" },
+  { value: "none", labelKey: "agentConfig.profile.approvalMode.none", descKey: "agentConfig.profile.approvalMode.none.desc" },
+]
+const PROFILE_CONFIG_ISOLATION_OPTIONS: RuntimeOption[] = [
+  { value: "", labelKey: "agentConfig.profile.configIsolation.default", descKey: "agentConfig.profile.configIsolation.default.desc" },
+  { value: "per_agent", labelKey: "agentConfig.profile.configIsolation.perAgent", descKey: "agentConfig.profile.configIsolation.perAgent.desc" },
+  { value: "per_task", labelKey: "agentConfig.profile.configIsolation.perTask", descKey: "agentConfig.profile.configIsolation.perTask.desc" },
+  { value: "shared", labelKey: "agentConfig.profile.configIsolation.shared", descKey: "agentConfig.profile.configIsolation.shared.desc" },
+  { value: "inherit", labelKey: "agentConfig.profile.configIsolation.inherit", descKey: "agentConfig.profile.configIsolation.inherit.desc" },
+]
+const AGENT_CAPABILITY_OPTIONS: RuntimeOption[] = [
+  { value: "read_repo", labelKey: "agentConfig.agent.capability.readRepo", descKey: "agentConfig.agent.capability.readRepo.desc" },
+  { value: "code_review", labelKey: "agentConfig.agent.capability.codeReview", descKey: "agentConfig.agent.capability.codeReview.desc" },
+  { value: "edit_code", labelKey: "agentConfig.agent.capability.editCode", descKey: "agentConfig.agent.capability.editCode.desc" },
+  { value: "run_tests", labelKey: "agentConfig.agent.capability.runTests", descKey: "agentConfig.agent.capability.runTests.desc" },
+  { value: "open_pr", labelKey: "agentConfig.agent.capability.openPr", descKey: "agentConfig.agent.capability.openPr.desc" },
+  { value: "use_mcp", labelKey: "agentConfig.agent.capability.useMcp", descKey: "agentConfig.agent.capability.useMcp.desc" },
+]
+
+function emptyProfileDraft(id = ""): RuntimeProfileDraft {
+  return {
+    id,
+    executor: "reuleauxcoder",
+    execution_location: "local_workspace",
+    runtime_home_policy: "per_task",
+    approval_mode: "full",
+    config_isolation: "",
+    model: "",
+    command: "",
+    argsText: "",
+    envText: "",
+    credentialRefsText: "",
+    mcpServersText: "",
+  }
+}
+
+function emptyAgentDraft(id = ""): AgentDefinitionDraft {
+  return {
+    id,
+    name: "",
+    description: "",
+    runtime_profile: "",
+    capabilitiesText: "",
+    systemAppend: "",
+    agentMd: "",
+    mcpServersText: "",
+    skillsText: "",
+    max_concurrent_tasks: 1,
+    credentialRefsText: "",
+  }
+}
+
+/** 将后端 profile 对象转为编辑器 draft */
+function profileToDraft(id: string, profile: Record<string, unknown>): RuntimeProfileDraft {
+  return {
+    id,
+    executor: stringValue(profile.executor, "reuleauxcoder"),
+    execution_location: stringValue(profile.execution_location, "local_workspace"),
+    runtime_home_policy: stringValue(profile.runtime_home_policy, "per_task"),
+    approval_mode: stringValue(profile.approval_mode, "full"),
+    config_isolation: stringValue(profile.config_isolation),
+    model: stringValue(profile.model),
+    command: stringValue(profile.command),
+    argsText: Array.isArray(profile.args) ? JSON.stringify(profile.args) : "",
+    envText: profile.env && typeof profile.env === "object" ? JSON.stringify(profile.env, null, 2) : "",
+    credentialRefsText: kvObjectToText(objectValue(profile.credential_refs)),
+    mcpServersText: profile.mcp && typeof profile.mcp === "object"
+      ? stringArray((profile.mcp as Record<string, unknown>).servers).join("\n")
+      : "",
+  }
+}
+
+/** 将后端 agent 对象转为编辑器 draft */
+function agentToDraft(id: string, agent: Record<string, unknown>): AgentDefinitionDraft {
+  const prompt = objectValue(agent.prompt)
+  const mcp = objectValue(agent.mcp)
+  return {
+    id,
+    name: stringValue(agent.name),
+    description: stringValue(agent.description),
+    runtime_profile: stringValue(agent.runtime_profile),
+    capabilitiesText: stringArray(agent.capabilities).join(", "),
+    systemAppend: stringValue(prompt.system_append),
+    agentMd: stringValue(prompt.agent_md),
+    mcpServersText: stringArray(mcp.servers).join("\n"),
+    skillsText: stringArray(agent.skills).join(", "),
+    max_concurrent_tasks: numberValue(agent.max_concurrent_tasks, 1),
+    credentialRefsText: kvObjectToText(objectValue(agent.credential_refs)),
+  }
+}
+
+function parseJsonDraftField(text: string, label: string): unknown {
+  const trimmed = text.trim()
+  if (!trimmed) return undefined
+  try {
+    return JSON.parse(trimmed) as unknown
+  } catch (error) {
+    throw new Error(`${label} JSON 无效：${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+/** 将 draft 转回后端 profile payload 格式 */
+function profileDraftToPayload(draft: RuntimeProfileDraft): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    executor: draft.executor,
+    execution_location: draft.execution_location,
+    runtime_home_policy: draft.runtime_home_policy,
+    approval_mode: draft.approval_mode,
+  }
+  if (draft.config_isolation.trim()) payload.config_isolation = draft.config_isolation.trim()
+  if (draft.model) payload.model = draft.model
+  if (draft.command) payload.command = draft.command
+  const args = parseJsonDraftField(draft.argsText, "Args")
+  if (args !== undefined && !Array.isArray(args)) throw new Error("Args 必须是 JSON 数组。")
+  if (args !== undefined) payload.args = args
+  const env = parseJsonDraftField(draft.envText, "Env")
+  if (env !== undefined && (!env || typeof env !== "object" || Array.isArray(env))) {
+    throw new Error("Env 必须是 JSON 对象。")
+  }
+  if (env !== undefined) payload.env = env
+  const credRefs = textToKvObject(draft.credentialRefsText)
+  if (Object.keys(credRefs).length) payload.credential_refs = credRefs
+  const mcpServers = parseAgentConfigListText(draft.mcpServersText)
+  if (mcpServers.length) payload.mcp = { servers: mcpServers }
+  return payload
+}
+
+/** 将 draft 转回后端 agent payload 格式 */
+function agentDraftToPayload(draft: AgentDefinitionDraft): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    name: draft.name || draft.id,
+    max_concurrent_tasks: Math.max(1, Math.floor(draft.max_concurrent_tasks)),
+  }
+  if (draft.description) payload.description = draft.description
+  if (draft.runtime_profile) payload.runtime_profile = draft.runtime_profile
+  const capabilities = parseAgentConfigListText(draft.capabilitiesText)
+  if (capabilities.length) payload.capabilities = capabilities
+  const prompt: Record<string, string> = {}
+  if (draft.systemAppend) prompt.system_append = draft.systemAppend
+  if (draft.agentMd) prompt.agent_md = draft.agentMd
+  if (Object.keys(prompt).length) payload.prompt = prompt
+  const mcpServers = parseAgentConfigListText(draft.mcpServersText)
+  if (mcpServers.length) payload.mcp = { servers: mcpServers }
+  const skills = parseAgentConfigListText(draft.skillsText)
+  if (skills.length) payload.skills = skills
+  const credRefs = textToKvObject(draft.credentialRefsText)
+  if (Object.keys(credRefs).length) payload.credential_refs = credRefs
+  return payload
+}
+
+/** key=value 文本转对象 */
+function textToKvObject(text: string): Record<string, string> {
+  const result: Record<string, string> = {}
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    const eq = trimmed.indexOf("=")
+    if (eq > 0) {
+      result[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim()
+    }
+  }
+  return result
+}
+
+/** 对象转 key=value 文本 */
+function kvObjectToText(obj: Record<string, unknown>): string {
+  return Object.entries(obj)
+    .filter(([, value]) => value !== undefined && value !== null)
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join("\n")
+}
+
+function runtimeOptionDescription(options: RuntimeOption[], value: string): string {
+  const option = options.find((item) => item.value === value)
+  return option ? t(option.descKey) : ""
+}
+
+function optionValues(options: RuntimeOption[]): string[] {
+  return options.map((item) => item.value)
+}
+
 const providerTypes: ProviderType[] = ["openai_chat", "anthropic_messages", "openai_responses"]
 const compats: ProviderCompat[] = ["generic", "deepseek", "kimi", "glm", "qwen", "zenmux"]
 
@@ -234,6 +484,7 @@ const settingsTabDefs: Array<{ id: SettingsTab; labelKey: string; icon: string }
   { id: "providers", labelKey: "settings.tab.providers", icon: "server-process" },
   { id: "toolchains", labelKey: "settings.tab.toolchains", icon: "tools" },
   { id: "serverSettings", labelKey: "settings.tab.serverSettings", icon: "server-environment" },
+  { id: "agentConfig", labelKey: "settings.tab.agentConfig", icon: "hubot" },
   { id: "autoApproval", labelKey: "settings.tab.autoApproval", icon: "shield" },
   { id: "other", labelKey: "settings.tab.other", icon: "settings" },
 ]
@@ -248,6 +499,8 @@ function normalizeSettingsTab(value: unknown): SettingsTab | undefined {
       return "toolchains"
     case "serverSettings":
       return "serverSettings"
+    case "agentConfig":
+      return "agentConfig"
     case "autoApproval":
       return "autoApproval"
     case "other":
@@ -1118,6 +1371,25 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
   const [deniedCommands, setDeniedCommands] = createSignal<string[]>([])
   const [autoApprovalPlatform, setAutoApprovalPlatform] = createSignal("browser")
 
+  /* ── Agent 配置编辑器状态 ── */
+  const [agentConfigBootstrapped, setAgentConfigBootstrapped] = createSignal(false)
+  const [agentConfigDirty, setAgentConfigDirty] = createSignal(false)
+  const [selectedProfileId, setSelectedProfileId] = createSignal("")
+  const [selectedAgentId, setSelectedAgentId] = createSignal("")
+  const [profileDrafts, setProfileDrafts] = createSignal<Record<string, RuntimeProfileDraft>>({})
+  const [agentDrafts, setAgentDrafts] = createSignal<Record<string, AgentDefinitionDraft>>({})
+  const [agentConfigSavePending, setAgentConfigSavePending] = createSignal(false)
+  const [agentConfigSaved, setAgentConfigSaved] = createSignal(false)
+  const [agentConfigError, setAgentConfigError] = createSignal("")
+  const [runtimeTask, setRuntimeTask] = createSignal<Record<string, unknown> | undefined>()
+  const [runtimeEvents, setRuntimeEvents] = createSignal<Record<string, unknown>[]>([])
+  const [runtimeError, setRuntimeError] = createSignal("")
+  const [runtimeSubmitting, setRuntimeSubmitting] = createSignal(false)
+  const [runtimePolling, setRuntimePolling] = createSignal(false)
+  let profileExecutorSelect: HTMLSelectElement | undefined
+  let agentNameInput: HTMLInputElement | undefined
+  const [runtimePrompt, setRuntimePrompt] = createSignal("请用一句话回复 EZCode runtime smoke")
+
   const [profileId, setProfileId] = createSignal("")
   const [profileProvider, setProfileProvider] = createSignal("deepseek")
   const [profileModel, setProfileModel] = createSignal("")
@@ -1285,6 +1557,87 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
   )
   const agentRuntimeState = createMemo(() =>
     objectValue(serverSettingsPayload().runtime || server.adminState().agent_runtime)
+
+  )  /* ── Agent 配置 computed ── */
+  const agentRuntimeProfiles = createMemo(() => {
+    const settings = agentRuntimeSettings()
+    const profiles = objectValue(settings.runtime_profiles)
+    return Object.entries(profiles).map(([id, value]) => ({
+      id,
+      ...(typeof value === "object" && value ? value as Record<string, unknown> : {}),
+    }))
+  })
+  const agentRuntimeAgents = createMemo(() => {
+    const settings = agentRuntimeSettings()
+    const agents = objectValue(settings.agents)
+    return Object.entries(agents).map(([id, value]) => ({
+      id,
+      ...(typeof value === "object" && value ? value as Record<string, unknown> : {}),
+    }))
+  })
+  const registeredMcpServers = createMemo(() => {
+    const groups = toolchainGroups()
+    return groups.mcp.map((item) => item.name)
+  })
+  const profileIdList = createMemo(() => Object.keys(profileDrafts()))
+  const currentProfileDraft = createMemo(() => profileDrafts()[selectedProfileId()])
+  const currentAgentDraft = createMemo(() => agentDrafts()[selectedAgentId()])
+  const savedProfileIdSet = createMemo(() => new Set(agentRuntimeProfiles().map((profile) => profile.id)))
+  const savedAgentIdSet = createMemo(() => new Set(agentRuntimeAgents().map((agent) => agent.id)))
+  const currentProfileIdLocked = createMemo(() => savedProfileIdSet().has(selectedProfileId()))
+  const currentAgentIdLocked = createMemo(() => savedAgentIdSet().has(selectedAgentId()))
+  const runtimeModelOptions = createMemo(() => {
+    const seen = new Set<string>()
+    const result: Array<{ value: string; label: string; detail: string }> = []
+    for (const profile of profiles()) {
+      const model = stringValue(profile.model)
+      if (!model || seen.has(model)) continue
+      seen.add(model)
+      const id = stringValue(profile.id)
+      const provider = stringValue(profile.provider)
+      const marks = [
+        id === activeMain() ? t("agentConfig.profile.model.activeMain") : "",
+        id === activeSub() ? t("agentConfig.profile.model.activeSub") : "",
+      ].filter(Boolean)
+      result.push({
+        value: model,
+        label: model,
+        detail: [provider, id, ...marks].filter(Boolean).join(" / "),
+      })
+    }
+    const current = currentProfileDraft()?.model.trim()
+    if (current && !seen.has(current)) {
+      result.push({
+        value: current,
+        label: current,
+        detail: t("agentConfig.profile.model.currentCustom"),
+      })
+    }
+    return result
+  })
+  const skillNameOptions = createMemo(() =>
+    toolchainGroups().skill.map((item) => item.name).filter(Boolean)
+  )
+  const profileMcpValidationWarnings = createMemo(() => {
+    const draft = currentProfileDraft()
+    if (!draft) return []
+    const registered = registeredMcpServers()
+    return draft.mcpServersText.split("\n").map((s) => s.trim()).filter(Boolean)
+      .filter((name) => !registered.includes(name))
+  })
+  const agentMcpValidationWarnings = createMemo(() => {
+    const draft = currentAgentDraft()
+    if (!draft) return []
+    const registered = registeredMcpServers()
+    return draft.mcpServersText.split("\n").map((s) => s.trim()).filter(Boolean)
+      .filter((name) => !registered.includes(name))
+  })
+  const selectedRuntimeTaskId = createMemo(() => stringValue(runtimeTask()?.id))
+  const runtimeLastSeq = createMemo(() =>
+    runtimeEvents().reduce((max, event) => Math.max(max, numberValue(event.seq, 0)), 0)
+  )
+  const runtimeTerminal = createMemo(() =>
+    runtimeEvents().some((event) => ["completed", "failed", "cancelled", "canceled"].includes(stringValue(event.type)))
   )
   const toolchainIngestState = createMemo(() => server.toolchainIngestState())
   const toolchainIngestLogs = createMemo(() => {
@@ -1378,12 +1731,439 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
 
   const closeModelDetail = () => setModelDetailOpen(false)
 
-  const switchTab = (tab: SettingsTab) => {
+    /* ── Agent 配置 tab 切换初始化 ── */
+  createEffect(() => {
+    if (activeTab() === "agentConfig" && !agentConfigBootstrapped()) {
+      setAgentConfigBootstrapped(true)
+      refreshServerSettings()
+    }
+  })
+  createEffect(() => {
+    const profiles = agentRuntimeProfiles()
+    const agents = agentRuntimeAgents()
+    if (!agentConfigDirty()) {
+      const pDrafts: Record<string, RuntimeProfileDraft> = {}
+      for (const p of profiles) pDrafts[p.id] = profileToDraft(p.id, p)
+      setProfileDrafts(pDrafts)
+      const aDrafts: Record<string, AgentDefinitionDraft> = {}
+      for (const a of agents) aDrafts[a.id] = agentToDraft(a.id, a)
+      setAgentDrafts(aDrafts)
+    }
+  })
+
+  let runtimePollTimer: ReturnType<typeof setInterval> | undefined
+
+  const stopRuntimePolling = () => {
+    if (runtimePollTimer) {
+      clearInterval(runtimePollTimer)
+      runtimePollTimer = undefined
+    }
+    setRuntimePolling(false)
+  }
+
+  const requestRuntimeEvents = (taskId: string, afterSeq = runtimeLastSeq()) => {
+    if (!taskId) return
+    vscode.postMessage({
+      type: "runtime.events",
+      payload: {
+        task_id: taskId,
+        after_seq: afterSeq,
+      },
+    })
+  }
+
+  const startRuntimePolling = (taskId: string) => {
+    stopRuntimePolling()
+    if (!taskId) return
+    setRuntimePolling(true)
+    requestRuntimeEvents(taskId, 0)
+    runtimePollTimer = setInterval(() => requestRuntimeEvents(taskId), 1500)
+  }
+
+  onCleanup(stopRuntimePolling)
+
+  onMount(() => {
+    const unsubscribe = vscode.onMessage((msg) => {
+      if (msg.type === "serverSettings.state" && agentConfigSavePending()) {
+        setAgentConfigSavePending(false)
+        setAgentConfigDirty(false)
+        setAgentConfigSaved(true)
+        setAgentConfigError("")
+      }
+      if (msg.type === "serverSettings.error" && agentConfigSavePending()) {
+        setAgentConfigSavePending(false)
+        setAgentConfigSaved(false)
+        setAgentConfigError(typeof msg.message === "string" ? msg.message : "Server settings request failed")
+      }
+      if (msg.type === "runtime.task" && typeof msg.payload === "object" && msg.payload) {
+        const payload = objectValue(msg.payload)
+        const task = objectValue(payload.task)
+        setRuntimeTask(task)
+        setRuntimeEvents([])
+        setRuntimeError("")
+        setRuntimeSubmitting(false)
+        startRuntimePolling(stringValue(task.id))
+      }
+      if (msg.type === "runtime.events" && typeof msg.payload === "object" && msg.payload) {
+        const events = Array.isArray(objectValue(msg.payload).events)
+          ? objectValue(msg.payload).events as Record<string, unknown>[]
+          : []
+        if (events.length) {
+          setRuntimeEvents((current) => {
+            const next = [...current]
+            const seen = new Set(next.map((event) => numberValue(event.seq, 0)))
+            for (const event of events) {
+              const seq = numberValue(event.seq, 0)
+              if (!seen.has(seq)) next.push(event)
+            }
+            return next.sort((a, b) => numberValue(a.seq, 0) - numberValue(b.seq, 0))
+          })
+        }
+      }
+      if (msg.type === "runtime.cancelled" && typeof msg.payload === "object" && msg.payload) {
+        setRuntimeError("")
+        requestRuntimeEvents(selectedRuntimeTaskId())
+      }
+      if (msg.type === "runtime.error") {
+        setRuntimeSubmitting(false)
+        stopRuntimePolling()
+        setRuntimeError(typeof msg.message === "string" ? msg.message : "Runtime request failed")
+      }
+    })
+    onCleanup(unsubscribe)
+  })
+
+  createEffect(() => {
+    if (runtimeTerminal()) stopRuntimePolling()
+  })
+
+const switchTab = (tab: SettingsTab) => {
     setActiveTab(tab)
     vscode.postMessage({ type: "settingsTabChanged", tab })
   }
 
-  const refreshAdmin = () => {
+    /* ── Agent 配置 CRUD ── */
+  const markAgentConfigDirty = () => {
+    setAgentConfigDirty(true)
+    setAgentConfigSaved(false)
+    setAgentConfigError("")
+  }
+
+  const focusAfterRender = (focus: () => void) => {
+    setTimeout(focus, 0)
+  }
+
+  const agentConfigIdErrorMessage = (code: "empty" | "invalid" | "duplicate", id: string) => {
+    if (code === "empty") return t("agentConfig.id.empty")
+    if (code === "invalid") return t("agentConfig.id.invalid")
+    return t("agentConfig.id.duplicate", { id })
+  }
+
+  const validateAgentConfigDrafts = () => {
+    const profiles = profileDrafts()
+    const agents = agentDrafts()
+    for (const [id, profile] of Object.entries(profiles)) {
+      const validation = validateAgentConfigId(profile.id || id, Object.keys(profiles), id)
+      if (!validation.ok) throw new Error(agentConfigIdErrorMessage(validation.code, validation.id || id))
+    }
+    for (const [id, agent] of Object.entries(agents)) {
+      const validation = validateAgentConfigId(agent.id || id, Object.keys(agents), id)
+      if (!validation.ok) throw new Error(agentConfigIdErrorMessage(validation.code, validation.id || id))
+    }
+    for (const [id, agent] of Object.entries(agents)) {
+      if (agent.runtime_profile && !profiles[agent.runtime_profile]) {
+        throw new Error(`Agent ${id} 引用的 Runtime Profile 不存在：${agent.runtime_profile}`)
+      }
+    }
+  }
+
+  const saveAgentConfig = () => {
+    let profiles: Record<string, unknown>
+    let agents: Record<string, unknown>
+    try {
+      validateAgentConfigDrafts()
+      profiles = {}
+      for (const [id, draft] of Object.entries(profileDrafts())) {
+        profiles[id] = profileDraftToPayload(draft)
+      }
+      agents = {}
+      for (const [id, draft] of Object.entries(agentDrafts())) {
+        agents[id] = agentDraftToPayload(draft)
+      }
+    } catch (error) {
+      setAgentConfigError(error instanceof Error ? error.message : String(error))
+      setAgentConfigSaved(false)
+      return
+    }
+    const maxAgents = Math.max(1, Math.floor(serverMaxRunningAgents()))
+    const maxShells = Math.max(1, Math.floor(serverMaxShellsPerAgent()))
+    setAgentConfigSavePending(true)
+    setAgentConfigSaved(false)
+    setAgentConfigError("")
+    vscode.postMessage({
+      type: "serverSettings.update",
+      payload: {
+        agent_runtime_update_mode: "replace",
+        agent_runtime: {
+          max_running_agents: maxAgents,
+          max_shells_per_agent: maxShells,
+          runtime_profiles: profiles,
+          agents,
+        },
+      },
+    })
+  }
+  const addProfile = () => {
+    const id = makeUniqueAgentConfigId("runtime_profile", [
+      ...Object.keys(profileDrafts()),
+      ...savedProfileIdSet(),
+    ])
+    setProfileDrafts((prev) => ({ ...prev, [id]: emptyProfileDraft(id) }))
+    setSelectedProfileId(id)
+    markAgentConfigDirty()
+    focusAfterRender(() => profileExecutorSelect?.focus())
+  }
+  const renameProfile = (rawId: string, input: HTMLInputElement) => {
+    const oldId = selectedProfileId()
+    if (!oldId || currentProfileIdLocked()) {
+      input.value = oldId
+      return
+    }
+    const validation = validateAgentConfigId(rawId, [
+      ...Object.keys(profileDrafts()),
+      ...savedProfileIdSet(),
+    ], oldId)
+    if (!validation.ok) {
+      setAgentConfigSaved(false)
+      setAgentConfigError(agentConfigIdErrorMessage(validation.code, validation.id || oldId))
+      input.value = oldId
+      return
+    }
+    const newId = validation.id
+    if (newId === oldId) {
+      input.value = oldId
+      return
+    }
+    setProfileDrafts((prev) => renameRecordKey(prev, oldId, newId))
+    setAgentDrafts((prev) => replaceRuntimeProfileReferences(prev, oldId, newId))
+    setSelectedProfileId(newId)
+    markAgentConfigDirty()
+  }
+  const deleteProfile = (id: string) => {
+    const referencedBy = Object.entries(agentDrafts())
+      .filter(([, agent]) => agent.runtime_profile === id)
+      .map(([agentId]) => agentId)
+    if (referencedBy.length) {
+      setAgentConfigError(`Profile ${id} 正被 Agent 引用：${referencedBy.join(", ")}。请先迁移或清空引用。`)
+      return
+    }
+    setProfileDrafts((prev) => {
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
+    if (selectedProfileId() === id) setSelectedProfileId("")
+    markAgentConfigDirty()
+  }
+  const updateProfileField = <K extends keyof RuntimeProfileDraft>(field: K, value: RuntimeProfileDraft[K]) => {
+    const id = selectedProfileId()
+    if (!id) return
+    setProfileDrafts((prev) => ({
+      ...prev,
+      [id]: { ...prev[id], [field]: value },
+    }))
+    markAgentConfigDirty()
+  }
+  const addAgent = () => {
+    const id = makeUniqueAgentConfigId("agent", [
+      ...Object.keys(agentDrafts()),
+      ...savedAgentIdSet(),
+    ])
+    const draft = emptyAgentDraft(id)
+    draft.runtime_profile = resolveNewAgentRuntimeProfile(selectedProfileId(), profileIdList())
+    setAgentDrafts((prev) => ({ ...prev, [id]: draft }))
+    setSelectedAgentId(id)
+    markAgentConfigDirty()
+    focusAfterRender(() => agentNameInput?.focus())
+  }
+  const renameAgent = (rawId: string, input: HTMLInputElement) => {
+    const oldId = selectedAgentId()
+    if (!oldId || currentAgentIdLocked()) {
+      input.value = oldId
+      return
+    }
+    const validation = validateAgentConfigId(rawId, [
+      ...Object.keys(agentDrafts()),
+      ...savedAgentIdSet(),
+    ], oldId)
+    if (!validation.ok) {
+      setAgentConfigSaved(false)
+      setAgentConfigError(agentConfigIdErrorMessage(validation.code, validation.id || oldId))
+      input.value = oldId
+      return
+    }
+    const newId = validation.id
+    if (newId === oldId) {
+      input.value = oldId
+      return
+    }
+    setAgentDrafts((prev) => renameRecordKey(prev, oldId, newId))
+    setSelectedAgentId(newId)
+    markAgentConfigDirty()
+  }
+  const deleteAgent = (id: string) => {
+    setAgentDrafts((prev) => {
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
+    if (selectedAgentId() === id) setSelectedAgentId("")
+    markAgentConfigDirty()
+  }
+  const updateAgentField = <K extends keyof AgentDefinitionDraft>(field: K, value: AgentDefinitionDraft[K]) => {
+    const id = selectedAgentId()
+    if (!id) return
+    setAgentDrafts((prev) => ({
+      ...prev,
+      [id]: { ...prev[id], [field]: value },
+    }))
+    markAgentConfigDirty()
+  }
+
+  const renderStringChoiceList = (
+    values: string[],
+    selectedText: string,
+    onChange: (next: string) => void,
+    emptyMessage: string,
+    delimiter = "\n",
+  ) => {
+    const selected = parseAgentConfigListText(selectedText)
+    const known = values.filter(Boolean)
+    const choices = [
+      ...known,
+      ...selected.filter((value) => !known.includes(value)),
+    ]
+    return (
+      <Show when={choices.length > 0} fallback={<p class="settings-empty-note">{emptyMessage}</p>}>
+        <div class="agent-config-choice-list">
+          <For each={choices}>
+            {(value) => {
+              const checked = selected.includes(value)
+              const unknown = !known.includes(value)
+              return (
+                <label class={`agent-config-choice ${unknown ? "agent-config-choice--unknown" : ""}`}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(e) => onChange(toggleAgentConfigListValue(selectedText, value, e.currentTarget.checked, delimiter))}
+                  />
+                  <span>{value}</span>
+                  <Show when={unknown}>
+                    <small>{t("agentConfig.choice.unregistered")}</small>
+                  </Show>
+                </label>
+              )
+            }}
+          </For>
+        </div>
+      </Show>
+    )
+  }
+
+  const renderRuntimeChoiceList = (
+    options: RuntimeOption[],
+    selectedText: string,
+    onChange: (next: string) => void,
+    delimiter = ", ",
+  ) => {
+    const selected = parseAgentConfigListText(selectedText)
+    const knownValues = optionValues(options)
+    const choices: RuntimeOption[] = [
+      ...options,
+      ...selected
+        .filter((value) => !knownValues.includes(value))
+        .map((value) => ({ value, labelKey: value, descKey: "" })),
+    ]
+    return (
+      <div class="agent-config-choice-list agent-config-choice-list--cards">
+        <For each={choices}>
+          {(option) => {
+            const checked = selected.includes(option.value)
+            const known = knownValues.includes(option.value)
+            return (
+              <label class={`agent-config-choice ${known ? "" : "agent-config-choice--unknown"}`}>
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(e) => onChange(toggleAgentConfigListValue(selectedText, option.value, e.currentTarget.checked, delimiter))}
+                />
+                <span>{known ? t(option.labelKey) : option.value}</span>
+                <small>{known ? t(option.descKey) : t("agentConfig.choice.custom")}</small>
+              </label>
+            )
+          }}
+        </For>
+      </div>
+    )
+  }
+
+  const submitRuntimeAgentTask = () => {
+    const agentId = selectedAgentId()
+    if (!agentId) {
+      setRuntimeError("请先选择一个 Agent。")
+      return
+    }
+    const prompt = runtimePrompt().trim()
+    if (!prompt) {
+      setRuntimeError("请输入测试任务。")
+      return
+    }
+    setRuntimeSubmitting(true)
+    setRuntimeError("")
+    setRuntimeTask(undefined)
+    setRuntimeEvents([])
+    stopRuntimePolling()
+    vscode.postMessage({
+      type: "runtime.submit",
+      payload: {
+        agent_id: agentId,
+        issue_id: `manual-smoke-${Date.now()}`,
+        prompt,
+        metadata: {
+          workspace_root: server.workspaceDirectory() || "",
+        },
+      },
+    })
+  }
+
+  const cancelRuntimeAgentTask = () => {
+    const taskId = selectedRuntimeTaskId()
+    if (!taskId) return
+    vscode.postMessage({
+      type: "runtime.cancel",
+      payload: {
+        task_id: taskId,
+        reason: "user_cancelled",
+      },
+    })
+  }
+
+  const retryRuntimeAgentTask = () => {
+    const taskId = selectedRuntimeTaskId()
+    if (!taskId) return
+    setRuntimeSubmitting(true)
+    setRuntimeEvents([])
+    stopRuntimePolling()
+    vscode.postMessage({
+      type: "runtime.retry",
+      payload: {
+        task_id: taskId,
+        new_task_id: `${taskId}-retry-${Date.now()}`,
+      },
+    })
+  }
+
+const refreshAdmin = () => {
     setRefreshLoading(true)
     vscode.postMessage({ type: "admin.refresh" })
     setTimeout(() => setRefreshLoading(false), 1200)
@@ -3626,7 +4406,341 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
     )
   }
 
-  const renderCommandRuleEditor = (
+    const renderAgentConfig = () => (
+    <div class="settings-page">
+      <div class="settings-page-header">
+        <div>
+          <h2>{t("agentConfig.title")}</h2>
+          <p>{t("agentConfig.desc")}</p>
+        </div>
+        <div class="settings-actions settings-actions--right">
+          <button class="btn btn-secondary" onClick={refreshServerSettings}>
+            <span class="codicon codicon-refresh" aria-hidden="true" />
+            刷新
+          </button>
+          <button class="btn btn-primary" onClick={saveAgentConfig} disabled={!agentConfigDirty() || agentConfigSavePending()}>
+            <span class="codicon codicon-save" aria-hidden="true" />
+            {agentConfigSavePending() ? t("agentConfig.saving") : t("agentConfig.save")}
+          </button>
+        </div>
+      </div>
+
+      <Show when={server.serverSettingsError()}>
+        <div class="settings-error">{server.serverSettingsError()}</div>
+      </Show>
+      <Show when={agentConfigError()}>
+        <div class="settings-error">{agentConfigError()}</div>
+      </Show>
+      <Show when={agentConfigSaved()}>
+        <div class="settings-success">{t("agentConfig.saved")}</div>
+      </Show>
+
+      {/* ── Runtime Profiles Section ── */}
+      <section class="settings-section settings-section--flat">
+        <div class="settings-section-heading">
+          <span>{t("agentConfig.profiles")}</span>
+          <StatusBadge tone="muted">{String(Object.keys(profileDrafts()).length)}</StatusBadge>
+        </div>
+        <p class="settings-empty-note">{t("agentConfig.profiles.desc")}</p>
+        <div class="settings-master-detail">
+          <div class="settings-master-list">
+            <div class="settings-master-actions">
+              <button class="btn btn-secondary" onClick={addProfile}>
+                <span class="codicon codicon-add" aria-hidden="true" />
+                {t("agentConfig.profile.add")}
+              </button>
+            </div>
+            <Show when={Object.keys(profileDrafts()).length === 0}>
+              <p class="settings-empty-note">{t("agentConfig.profile.empty")}</p>
+            </Show>
+            <For each={Object.keys(profileDrafts())}>
+              {(pid) => (
+                <div
+                  class={`settings-master-item ${selectedProfileId() === pid ? "settings-master-item--active" : ""}`}
+                  onClick={() => setSelectedProfileId(pid)}
+                >
+                  <div class="settings-master-item__info">
+                    <strong>{pid}</strong>
+                    <small>{profileDrafts()[pid]?.executor} · {profileDrafts()[pid]?.execution_location}</small>
+                  </div>
+                  <button class="btn-icon" onClick={(e) => { e.stopPropagation(); deleteProfile(pid) }} title={t("agentConfig.profile.delete")}>
+                    <span class="codicon codicon-trash" aria-hidden="true" />
+                  </button>
+                </div>
+              )}
+            </For>
+          </div>
+          <div class="settings-detail-panel">
+            <Show when={currentProfileDraft()} fallback={<p class="settings-empty-note">{t("agentConfig.profile.noSelection")}</p>}>
+              <div class="settings-form-grid">
+                <label class="field-label field-label--full"><span>{t("agentConfig.profile.id")}</span>
+                  <input
+                    value={currentProfileDraft()!.id}
+                    disabled={currentProfileIdLocked()}
+                    onChange={(e) => renameProfile(e.currentTarget.value, e.currentTarget)}
+                  />
+                  <small class="field-help">
+                    {currentProfileIdLocked() ? t("agentConfig.profile.idLocked") : t("agentConfig.profile.idHelp")}
+                  </small>
+                </label>
+                <label class="field-label"><span>{t("agentConfig.profile.executor")}</span>
+                  <select ref={profileExecutorSelect} value={currentProfileDraft()!.executor} onChange={(e) => updateProfileField("executor", e.currentTarget.value)}>
+                    <For each={PROFILE_EXECUTOR_OPTIONS}>{(option) => <option value={option.value}>{t(option.labelKey)}</option>}</For>
+                  </select>
+                  <small class="field-help">{runtimeOptionDescription(PROFILE_EXECUTOR_OPTIONS, currentProfileDraft()!.executor)}</small>
+                </label>
+                <label class="field-label"><span>{t("agentConfig.profile.executionLocation")}</span>
+                  <select value={currentProfileDraft()!.execution_location} onChange={(e) => updateProfileField("execution_location", e.currentTarget.value)}>
+                    <For each={PROFILE_EXECUTION_LOCATION_OPTIONS}>{(option) => <option value={option.value}>{t(option.labelKey)}</option>}</For>
+                  </select>
+                  <small class="field-help">{runtimeOptionDescription(PROFILE_EXECUTION_LOCATION_OPTIONS, currentProfileDraft()!.execution_location)}</small>
+                </label>
+                <label class="field-label"><span>{t("agentConfig.profile.model")}</span>
+                  <select value={currentProfileDraft()!.model} onChange={(e) => updateProfileField("model", e.currentTarget.value)}>
+                    <option value="">{t("agentConfig.profile.model.default")}</option>
+                    <For each={runtimeModelOptions()}>{(option) => (
+                      <option value={option.value}>{option.label} · {option.detail}</option>
+                    )}</For>
+                  </select>
+                  <small class="field-help">
+                    {runtimeModelOptions().length > 0 ? t("agentConfig.profile.model.help") : t("agentConfig.profile.model.empty")}
+                  </small>
+                </label>
+                <label class="field-label"><span>{t("agentConfig.profile.runtimeHomePolicy")}</span>
+                  <select value={currentProfileDraft()!.runtime_home_policy} onChange={(e) => updateProfileField("runtime_home_policy", e.currentTarget.value)}>
+                    <For each={PROFILE_HOME_POLICY_OPTIONS}>{(option) => <option value={option.value}>{t(option.labelKey)}</option>}</For>
+                  </select>
+                  <small class="field-help">{runtimeOptionDescription(PROFILE_HOME_POLICY_OPTIONS, currentProfileDraft()!.runtime_home_policy)}</small>
+                </label>
+                <label class="field-label"><span>{t("agentConfig.profile.approvalMode")}</span>
+                  <select value={currentProfileDraft()!.approval_mode} onChange={(e) => updateProfileField("approval_mode", e.currentTarget.value)}>
+                    <For each={PROFILE_APPROVAL_MODE_OPTIONS}>{(option) => <option value={option.value}>{t(option.labelKey)}</option>}</For>
+                  </select>
+                  <small class="field-help">{runtimeOptionDescription(PROFILE_APPROVAL_MODE_OPTIONS, currentProfileDraft()!.approval_mode)}</small>
+                </label>
+                <label class="field-label field-label--full"><span>{t("agentConfig.profile.mcpServers")}</span>
+                  {renderStringChoiceList(
+                    registeredMcpServers(),
+                    currentProfileDraft()!.mcpServersText,
+                    (next) => updateProfileField("mcpServersText", next),
+                    t("agentConfig.profile.mcpServers.empty"),
+                  )}
+                  <small class="field-help">{t("agentConfig.profile.mcpServersDesc")}</small>
+                </label>
+                <Show when={profileMcpValidationWarnings().length > 0}>
+                  <div class="settings-warning">
+                    <span class="codicon codicon-warning" aria-hidden="true" />
+                    <span>{t("agentConfig.profile.mcpNotRegistered")}: {profileMcpValidationWarnings().join(", ")}</span>
+                  </div>
+                </Show>
+                <details class="settings-details settings-details--embedded field-label--full">
+                  <summary>
+                    <span class="codicon codicon-settings-gear" aria-hidden="true" />
+                    {t("agentConfig.advanced")}
+                  </summary>
+                  <div class="settings-form-grid">
+                    <label class="field-label"><span>{t("agentConfig.profile.command")}</span>
+                      <input value={currentProfileDraft()!.command} onInput={(e) => updateProfileField("command", e.currentTarget.value)} placeholder={currentProfileDraft()!.executor} />
+                      <small class="field-help">{t("agentConfig.profile.commandDesc")}</small>
+                    </label>
+                    <label class="field-label"><span>{t("agentConfig.profile.configIsolation")}</span>
+                      <select value={currentProfileDraft()!.config_isolation} onChange={(e) => updateProfileField("config_isolation", e.currentTarget.value)}>
+                        <For each={PROFILE_CONFIG_ISOLATION_OPTIONS}>{(option) => <option value={option.value}>{t(option.labelKey)}</option>}</For>
+                      </select>
+                      <small class="field-help">{runtimeOptionDescription(PROFILE_CONFIG_ISOLATION_OPTIONS, currentProfileDraft()!.config_isolation)}</small>
+                    </label>
+                    <label class="field-label"><span>{t("agentConfig.profile.args")}</span>
+                      <textarea rows={3} value={currentProfileDraft()!.argsText} onInput={(e) => updateProfileField("argsText", e.currentTarget.value)} placeholder={'["--flag"]'} />
+                      <small class="field-help">{t("agentConfig.profile.argsDesc")}</small>
+                    </label>
+                    <label class="field-label"><span>{t("agentConfig.profile.env")}</span>
+                      <textarea rows={3} value={currentProfileDraft()!.envText} onInput={(e) => updateProfileField("envText", e.currentTarget.value)} placeholder={'{"KEY":"value"}'} />
+                      <small class="field-help">{t("agentConfig.profile.envDesc")}</small>
+                    </label>
+                    <label class="field-label field-label--full"><span>{t("agentConfig.profile.credentialRefs")}</span>
+                      <textarea rows={3} value={currentProfileDraft()!.credentialRefsText} onInput={(e) => updateProfileField("credentialRefsText", e.currentTarget.value)} placeholder={t("agentConfig.profile.credentialRefsDesc")} />
+                      <small class="field-help">{t("agentConfig.profile.credentialRefsHelp")}</small>
+                    </label>
+                  </div>
+                </details>
+              </div>
+            </Show>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Agents Section ── */}
+      <section class="settings-section settings-section--flat">
+        <div class="settings-section-heading">
+          <span>{t("agentConfig.agents")}</span>
+          <StatusBadge tone="muted">{String(Object.keys(agentDrafts()).length)}</StatusBadge>
+        </div>
+        <p class="settings-empty-note">{t("agentConfig.agents.desc")}</p>
+        <div class="settings-master-detail">
+          <div class="settings-master-list">
+            <div class="settings-master-actions">
+              <button class="btn btn-secondary" onClick={addAgent}>
+                <span class="codicon codicon-add" aria-hidden="true" />
+                {t("agentConfig.agent.add")}
+              </button>
+            </div>
+            <Show when={Object.keys(agentDrafts()).length === 0}>
+              <p class="settings-empty-note">{t("agentConfig.agent.empty")}</p>
+            </Show>
+            <For each={Object.keys(agentDrafts())}>
+              {(aid) => (
+                <div
+                  class={`settings-master-item ${selectedAgentId() === aid ? "settings-master-item--active" : ""}`}
+                  onClick={() => setSelectedAgentId(aid)}
+                >
+                  <div class="settings-master-item__info">
+                    <strong>{agentDrafts()[aid]?.name || aid}</strong>
+                    <small>{agentDrafts()[aid]?.runtime_profile || "—"}</small>
+                  </div>
+                  <button class="btn-icon" onClick={(e) => { e.stopPropagation(); deleteAgent(aid) }} title={t("agentConfig.agent.delete")}>
+                    <span class="codicon codicon-trash" aria-hidden="true" />
+                  </button>
+                </div>
+              )}
+            </For>
+          </div>
+          <div class="settings-detail-panel">
+            <Show when={currentAgentDraft()} fallback={<p class="settings-empty-note">{t("agentConfig.agent.noSelection")}</p>}>
+              <div class="settings-form-grid">
+                <label class="field-label field-label--full"><span>{t("agentConfig.agent.id")}</span>
+                  <input
+                    value={currentAgentDraft()!.id}
+                    disabled={currentAgentIdLocked()}
+                    onChange={(e) => renameAgent(e.currentTarget.value, e.currentTarget)}
+                  />
+                  <small class="field-help">
+                    {currentAgentIdLocked() ? t("agentConfig.agent.idLocked") : t("agentConfig.agent.idHelp")}
+                  </small>
+                </label>
+                <label class="field-label"><span>{t("agentConfig.agent.name")}</span>
+                  <input ref={agentNameInput} value={currentAgentDraft()!.name} onInput={(e) => updateAgentField("name", e.currentTarget.value)} />
+                </label>
+                <label class="field-label"><span>{t("agentConfig.agent.description")}</span>
+                  <input value={currentAgentDraft()!.description} onInput={(e) => updateAgentField("description", e.currentTarget.value)} />
+                </label>
+                <label class="field-label"><span>{t("agentConfig.agent.runtimeProfile")}</span>
+                  <select value={currentAgentDraft()!.runtime_profile} onChange={(e) => updateAgentField("runtime_profile", e.currentTarget.value)}>
+                    <option value="">{t("agentConfig.agent.runtimeProfile.none")}</option>
+                    <For each={profileIdList()}>{(pid) => <option value={pid}>{pid}</option>}</For>
+                  </select>
+                  <small class="field-help">{t("agentConfig.agent.runtimeProfileDesc")}</small>
+                </label>
+                <label class="field-label"><span>{t("agentConfig.agent.maxConcurrentTasks")}</span>
+                  <input type="number" min="1" step="1" value={currentAgentDraft()!.max_concurrent_tasks} onInput={(e) => updateAgentField("max_concurrent_tasks", Math.max(1, Math.floor(Number(e.currentTarget.value) || 1)))} />
+                  <small class="field-help">{t("agentConfig.agent.maxConcurrentTasksDesc")}</small>
+                </label>
+                <label class="field-label field-label--full"><span>{t("agentConfig.agent.capabilities")}</span>
+                  {renderRuntimeChoiceList(
+                    AGENT_CAPABILITY_OPTIONS,
+                    currentAgentDraft()!.capabilitiesText,
+                    (next) => updateAgentField("capabilitiesText", next),
+                    ", ",
+                  )}
+                  <small class="field-help">{t("agentConfig.agent.capabilitiesDesc")}</small>
+                </label>
+                <label class="field-label field-label--full"><span>{t("agentConfig.agent.systemAppend")}</span>
+                  <textarea rows={4} value={currentAgentDraft()!.systemAppend} onInput={(e) => updateAgentField("systemAppend", e.currentTarget.value)} />
+                  <small class="field-help">{t("agentConfig.agent.systemAppendDesc")}</small>
+                </label>
+                <label class="field-label field-label--full"><span>{t("agentConfig.agent.mcpServers")}</span>
+                  {renderStringChoiceList(
+                    registeredMcpServers(),
+                    currentAgentDraft()!.mcpServersText,
+                    (next) => updateAgentField("mcpServersText", next),
+                    t("agentConfig.profile.mcpServers.empty"),
+                  )}
+                  <small class="field-help">{t("agentConfig.agent.mcpServersDesc")}</small>
+                </label>
+                <Show when={agentMcpValidationWarnings().length > 0}>
+                  <div class="settings-warning">
+                    <span class="codicon codicon-warning" aria-hidden="true" />
+                    <span>{t("agentConfig.profile.mcpNotRegistered")}: {agentMcpValidationWarnings().join(", ")}</span>
+                  </div>
+                </Show>
+                <label class="field-label field-label--full"><span>{t("agentConfig.agent.skills")}</span>
+                  {renderStringChoiceList(
+                    skillNameOptions(),
+                    currentAgentDraft()!.skillsText,
+                    (next) => updateAgentField("skillsText", formatAgentConfigList(parseAgentConfigListText(next), ", ")),
+                    t("agentConfig.agent.skills.empty"),
+                    ", ",
+                  )}
+                  <small class="field-help">{t("agentConfig.agent.skillsDesc")}</small>
+                </label>
+                <details class="settings-details settings-details--embedded field-label--full">
+                  <summary>
+                    <span class="codicon codicon-settings-gear" aria-hidden="true" />
+                    {t("agentConfig.advanced")}
+                  </summary>
+                  <div class="settings-form-grid">
+                    <label class="field-label field-label--full"><span>{t("agentConfig.agent.credentialRefs")}</span>
+                      <textarea rows={3} value={currentAgentDraft()!.credentialRefsText} onInput={(e) => updateAgentField("credentialRefsText", e.currentTarget.value)} placeholder={t("agentConfig.agent.credentialRefsPlaceholder")} />
+                      <small class="field-help">{t("agentConfig.agent.credentialRefsDesc")}</small>
+                    </label>
+                  </div>
+                </details>
+              </div>
+            </Show>
+          </div>
+        </div>
+      </section>
+
+      <section class="settings-section settings-section--flat">
+        <div class="settings-section-heading">
+          <span>{t("agentConfig.runtimeTest.title")}</span>
+          <StatusBadge tone={runtimePolling() ? "warning" : runtimeTerminal() ? "success" : "muted"}>
+            {selectedRuntimeTaskId() || t("agentConfig.runtimeTest.idle")}
+          </StatusBadge>
+        </div>
+        <p class="settings-empty-note">{t("agentConfig.runtimeTest.desc")}</p>
+        <div class="settings-form-grid">
+          <label class="field-label field-label--full"><span>{t("agentConfig.runtimeTest.prompt")}</span>
+            <textarea rows={4} value={runtimePrompt()} onInput={(e) => setRuntimePrompt(e.currentTarget.value)} />
+          </label>
+          <div class="settings-actions settings-actions--left field-label--full">
+            <button class="btn btn-primary" onClick={submitRuntimeAgentTask} disabled={runtimeSubmitting() || !selectedAgentId()}>
+              <span class="codicon codicon-play" aria-hidden="true" />
+              {runtimeSubmitting() ? t("agentConfig.runtimeTest.submitting") : t("agentConfig.runtimeTest.submit")}
+            </button>
+            <button class="btn btn-secondary" onClick={cancelRuntimeAgentTask} disabled={!selectedRuntimeTaskId() || runtimeTerminal()}>
+              <span class="codicon codicon-debug-stop" aria-hidden="true" />
+              {t("agentConfig.runtimeTest.cancel")}
+            </button>
+            <button class="btn btn-secondary" onClick={retryRuntimeAgentTask} disabled={!selectedRuntimeTaskId() || runtimeSubmitting()}>
+              <span class="codicon codicon-refresh" aria-hidden="true" />
+              {t("agentConfig.runtimeTest.retry")}
+            </button>
+          </div>
+        </div>
+        <Show when={runtimeError()}>
+          <div class="settings-error">{runtimeError()}</div>
+        </Show>
+        <Show when={runtimeTask()}>
+          <pre class="settings-result">{JSON.stringify(runtimeTask(), null, 2)}</pre>
+        </Show>
+        <div class="runtime-event-list">
+          <Show when={runtimeEvents().length > 0} fallback={<p class="settings-empty-note">{t("agentConfig.runtimeTest.noEvents")}</p>}>
+            <For each={runtimeEvents()}>
+              {(event) => (
+                <div class="runtime-event">
+                  <span class="runtime-event__seq">#{String(numberValue(event.seq, 0))}</span>
+                  <strong>{stringValue(event.type)}</strong>
+                  <code>{JSON.stringify(objectValue(event.payload))}</code>
+                </div>
+              )}
+            </For>
+          </Show>
+        </div>
+      </section>
+    </div>
+  )
+
+const renderCommandRuleEditor = (
     kind: "allow" | "deny",
     title: string,
     description: string,
@@ -3813,6 +4927,8 @@ const SettingsView: Component<SettingsViewProps> = (props) => {
         return renderToolchains()
       case "serverSettings":
         return renderServerSettings()
+      case "agentConfig":
+        return renderAgentConfig()
       case "autoApproval":
         return renderAutoApproval()
       case "other":

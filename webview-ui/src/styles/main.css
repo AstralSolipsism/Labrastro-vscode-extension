@@ -2435,3 +2435,265 @@ button {
   color: var(--ez-focus);
   font-size: 12px;
 }
+
+/* ══════════════════════════════════════════════════
+   Agent 配置 – Master-Detail 双面板布局
+   ══════════════════════════════════════════════════ */
+
+.settings-section--flat {
+  margin: 18px 0;
+}
+
+.settings-section-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.settings-master-detail {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 0;
+  border: 1px solid var(--ez-border);
+  border-radius: var(--ez-radius);
+  overflow: hidden;
+  min-height: 200px;
+}
+
+.settings-master-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-right: 1px solid var(--ez-border);
+  background: color-mix(in srgb, var(--ez-surface-soft) 60%, transparent);
+  overflow-y: auto;
+  max-height: 420px;
+  padding: 8px;
+}
+
+.settings-master-list > .command-rule-editor__input,
+.settings-master-list > .settings-master-actions {
+  margin-bottom: 6px;
+}
+
+.settings-master-actions {
+  display: flex;
+  align-items: center;
+}
+
+.settings-master-actions .btn {
+  width: 100%;
+  justify-content: center;
+}
+
+.settings-master-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--ez-radius);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.settings-master-item:hover {
+  background: var(--ez-hover);
+}
+
+.settings-master-item--active {
+  background: color-mix(in srgb, var(--ez-focus) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ez-focus) 35%, transparent);
+}
+
+.settings-master-item__info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-master-item__info strong {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-master-item__info small {
+  color: var(--ez-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-detail-panel {
+  padding: 14px 18px;
+  overflow-y: auto;
+  max-height: 420px;
+}
+
+.settings-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.settings-form-grid .field-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-form-grid .field-label > span {
+  color: var(--ez-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.settings-form-grid .field-help {
+  color: var(--ez-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.settings-details--embedded {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.settings-details--embedded > summary {
+  padding: 8px 0;
+}
+
+.agent-config-choice-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.agent-config-choice-list--cards {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.agent-config-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--ez-border);
+  border-radius: var(--ez-radius);
+  background: var(--ez-surface);
+  color: var(--ez-text);
+}
+
+.agent-config-choice input {
+  margin-top: 2px;
+}
+
+.agent-config-choice span,
+.agent-config-choice small {
+  overflow-wrap: anywhere;
+}
+
+.agent-config-choice span {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.agent-config-choice small {
+  display: block;
+  color: var(--ez-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.agent-config-choice--unknown {
+  border-color: color-mix(in srgb, var(--ez-warning) 30%, var(--ez-border));
+}
+
+.settings-form-grid .field-label--full {
+  grid-column: 1 / -1;
+}
+
+.settings-warning {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--ez-radius);
+  background: color-mix(in srgb, var(--ez-warning) 8%, transparent);
+  color: var(--ez-warning);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.settings-success {
+  padding: 8px 12px;
+  border-radius: var(--ez-radius);
+  background: color-mix(in srgb, var(--ez-success) 8%, transparent);
+  color: var(--ez-success);
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+
+.runtime-event-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.runtime-event {
+  display: grid;
+  grid-template-columns: 52px 140px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  padding: 8px 10px;
+  border: 1px solid var(--ez-border);
+  border-radius: var(--ez-radius);
+  background: var(--ez-surface-soft);
+  font-size: 12px;
+}
+
+.runtime-event__seq {
+  color: var(--ez-muted);
+}
+
+.runtime-event code {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 760px) {
+  .settings-master-detail {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-master-list {
+    border-right: 0;
+    border-bottom: 1px solid var(--ez-border);
+    max-height: 200px;
+  }
+
+  .settings-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .agent-config-choice-list,
+  .agent-config-choice-list--cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .runtime-event {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
