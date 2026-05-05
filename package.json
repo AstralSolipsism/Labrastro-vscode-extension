@@ -119,7 +119,9 @@
     "typecheck": "npm run typecheck:extension && npm run typecheck:webview",
     "package": "node esbuild.js --production",
     "package:vsix": "vsce package --out dogcode.vsix",
-    "test:auto-approval": "vitest run webview-ui/src/utils/command-auto-approval.test.ts"
+    "test:auto-approval": "vitest run webview-ui/src/utils/command-auto-approval.test.ts",
+    "test:chat": "vitest run webview-ui/src/chat/chatState.test.ts",
+    "test:settings": "vitest run webview-ui/src/settings/utils.test.ts"
   },
   "devDependencies": {
     "@types/node": "^25.5.2",
