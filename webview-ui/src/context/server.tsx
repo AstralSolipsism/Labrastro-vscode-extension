@@ -33,6 +33,7 @@ interface ServerContextValue {
   actionResult: () => Record<string, unknown> | undefined
   serverSettingsState: () => Record<string, unknown> | undefined
   serverSettingsError: () => string | undefined
+  backendCapabilities: () => Record<string, unknown>
   toolchainState: () => Record<string, unknown> | undefined
   toolchainActionResult: () => Record<string, unknown> | undefined
   toolchainError: () => string | undefined
@@ -70,6 +71,7 @@ export const ServerProvider: ParentComponent = (props) => {
   const [actionResult, setActionResult] = createSignal<Record<string, unknown> | undefined>()
   const [serverSettingsState, setServerSettingsState] = createSignal<Record<string, unknown> | undefined>()
   const [serverSettingsError, setServerSettingsError] = createSignal<string | undefined>()
+  const [backendCapabilities, setBackendCapabilities] = createSignal<Record<string, unknown>>({})
   const [toolchainState, setToolchainState] = createSignal<Record<string, unknown> | undefined>()
   const [toolchainActionResult, setToolchainActionResult] = createSignal<Record<string, unknown> | undefined>()
   const [toolchainError, setToolchainError] = createSignal<string | undefined>()
@@ -124,6 +126,9 @@ export const ServerProvider: ParentComponent = (props) => {
       }
       if (msg.type === "serverSettings.error") {
         setServerSettingsError(typeof msg.message === "string" ? msg.message : "Server settings request failed")
+      }
+      if (msg.type === "backend.capabilities" && typeof msg.payload === "object" && msg.payload) {
+        setBackendCapabilities(msg.payload as Record<string, unknown>)
       }
       if (msg.type === "toolchain.state" && typeof msg.payload === "object" && msg.payload) {
         setToolchainState(msg.payload as Record<string, unknown>)
@@ -225,6 +230,7 @@ export const ServerProvider: ParentComponent = (props) => {
     actionResult,
     serverSettingsState,
     serverSettingsError,
+    backendCapabilities,
     toolchainState,
     toolchainActionResult,
     toolchainError,

@@ -118,7 +118,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
           case "openSettings":
             // 侧边栏中点击设置 → 触发命令打开独立 Settings 面板
-            vscode.commands.executeCommand("dogcode.openSettings")
+            vscode.commands.executeCommand(
+              "dogcode.openSettings",
+              typeof message.tab === "string" ? message.tab : undefined
+            )
             break
 
           case "openAbout":

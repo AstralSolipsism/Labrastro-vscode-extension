@@ -17,6 +17,9 @@
 
 .chat-dock {
   flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   padding: 0 10px 8px;
   border-top: 1px solid var(--ez-border);
   background: var(--ez-bg);
@@ -31,7 +34,6 @@
 
 .task-header__top,
 .task-header__metrics,
-.bottom-controls,
 .prompt-input-toolbar,
 .auto-approve-bar {
   display: flex;
@@ -1845,20 +1847,26 @@
   min-height: 30px;
   justify-content: space-between;
   padding: 3px 4px 4px 8px;
+  position: relative;
 }
 
 .prompt-input-selectors,
-.prompt-input-actions,
-.bottom-actions {
+.prompt-input-actions {
   display: flex;
   align-items: center;
   gap: 4px;
+  min-width: 0;
 }
 
-.prompt-selector,
-.bottom-profile {
+.prompt-selector-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+.prompt-selector {
   height: 24px;
   min-width: 0;
+  max-width: 180px;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -1868,18 +1876,186 @@
   color: var(--ez-muted);
   background: transparent;
   cursor: pointer;
+  white-space: nowrap;
 }
 
-.prompt-selector:hover,
-.bottom-profile:hover {
+.prompt-selector--model {
+  max-width: 260px;
+}
+
+.prompt-selector__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prompt-selector__detail {
+  min-width: 0;
+  max-width: 120px;
+  overflow: hidden;
+  color: var(--ez-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prompt-selector:hover:not(:disabled) {
   color: var(--ez-fg);
   background: var(--ez-hover);
 }
 
-.bottom-controls {
-  min-height: 30px;
-  justify-content: space-between;
+.prompt-selector:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.prompt-selector--ready {
+  color: var(--ez-success);
+}
+
+.prompt-selector--warning {
+  color: var(--ez-warning);
+}
+
+.prompt-selector--error {
+  color: var(--ez-error);
+}
+
+.prompt-selector--switching {
+  color: var(--vscode-focusBorder, var(--ez-success));
+}
+
+.prompt-selector--pending {
+  color: var(--ez-warning);
+}
+
+.prompt-selector__spin {
+  animation: ez-spin 1s linear infinite;
+}
+
+.prompt-selector__chevron {
+  font-size: 12px;
+  opacity: 0.72;
+}
+
+.prompt-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  z-index: 20;
+  width: min(260px, calc(100vw - 24px));
+  padding: 4px;
+  border: 1px solid var(--ez-border);
+  border-radius: var(--ez-radius);
+  background: var(--vscode-dropdown-background, var(--ez-surface));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+}
+
+.prompt-menu--model {
+  width: min(320px, calc(100vw - 24px));
+}
+
+.prompt-menu__item {
+  width: 100%;
+  min-height: 34px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--ez-fg);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.prompt-menu__item:hover,
+.prompt-menu__item--selected {
+  background: var(--ez-hover);
+}
+
+.prompt-menu__item small {
+  max-width: 100%;
+  overflow: hidden;
   color: var(--ez-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prompt-menu__section-label {
+  padding: 4px 8px 3px;
+  color: var(--ez-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.prompt-menu__divider {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--ez-border);
+}
+
+.chat-footer-target {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.host-profile-button {
+  max-width: 100%;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--ez-muted);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.host-profile-button:hover {
+  color: var(--ez-fg);
+  background: var(--ez-hover);
+}
+
+.host-profile-button--ready {
+  color: var(--ez-success);
+}
+
+.host-profile-button--warning {
+  color: var(--ez-warning);
+}
+
+.host-profile-button--error {
+  color: var(--ez-error);
+}
+
+.host-profile-button__body {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.host-profile-button__label,
+.host-profile-button small {
+  color: var(--ez-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.host-profile-button strong,
+.host-profile-button small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @keyframes ez-spin {

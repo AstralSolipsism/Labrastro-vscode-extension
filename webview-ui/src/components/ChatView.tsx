@@ -16,6 +16,22 @@ import {
 import { IconButton } from "./common/IconButton"
 import { useTrace } from "../context/trace"
 import { useVSCode } from "../context/vscode"
+import { useServer } from "../context/server"
+import { chatMessages, routeSelectedChatMode } from "../chat/chatMessages"
+import {
+  canUseTaskflow,
+  modelDescription,
+  modelLabel,
+  modelOptionId,
+  modelSwitchAction,
+  modeLabel,
+  normalizeModelOptions,
+  resolveChatModeOptions,
+  resolveHostTargetSummary,
+  resolveModelSelection,
+  resolveModeSelection,
+  shouldAcceptModelSwitchResponse,
+} from "../chat/chatState"
 import { evaluateCommandDecision } from "../utils/command-auto-approval"
 import {
   appendShellOutputChunk,
@@ -58,9 +74,12 @@ interface ChatViewProps {
   onEnvironmentRunConsumed?: (id: string) => void
 }
 
+const MODEL_SWITCH_TIMEOUT_MS = 20_000
+
 const ChatView: Component<ChatViewProps> = (props) => {
   const trace = useTrace()
   const vscode = useVSCode()
+  const server = useServer()
   const [isWorking, setIsWorking] = createSignal(false)
   const [workingText, setWorkingText] = createSignal("正在处理")
   const [workingElapsed, setWorkingElapsed] = createSignal("0:00")
@@ -85,8 +104,30 @@ const ChatView: Component<ChatViewProps> = (props) => {
     sanitizeStringArray(initialWebviewState.autoApprovalDeniedCommands)
   )
   const [autoApprovalPlatform, setAutoApprovalPlatform] = createSignal(initialWebviewState.autoApprovalPlatform || "browser")
+  const [selectedMode, setSelectedMode] = createSignal("")
+  const [selectedModelProfile, setSelectedModelProfile] = createSignal("")
+  const [sessionRuntimeState, setSessionRuntimeState] = createSignal<Record<string, unknown>>({})
+  const [modelSwitching, setModelSwitching] = createSignal(false)
+  const [modelSwitchError, setModelSwitchError] = createSignal("")
+  const [modelRollbackProfile, setModelRollbackProfile] = createSignal("")
+  const [modelSwitchRequestId, setModelSwitchRequestId] = createSignal("")
+  const [pendingModelProfile, setPendingModelProfile] = createSignal("")
 
   const hasMessages = () => trace.turns().length > 0
+  const taskflowAvailable = createMemo(() => canUseTaskflow(server.backendCapabilities()))
+  const modeOptions = createMemo(() => {
+    const remoteMode = trace.stats().mode?.trim()
+    return resolveChatModeOptions(server.adminState(), remoteMode, taskflowAvailable())
+  })
+  const selectedModeLabel = createMemo(() => modeLabel(selectedMode(), modeOptions()))
+  const modelOptions = createMemo(() => normalizeModelOptions(server.adminState(), sessionRuntimeState()))
+  const selectedModelLabel = createMemo(() => modelLabel(selectedModelProfile(), modelOptions(), trace.stats().model))
+  const selectedModelDescription = createMemo(() => modelDescription(selectedModelProfile(), modelOptions(), trace.stats().model))
+  const pendingModelLabel = createMemo(() => {
+    const pending = pendingModelProfile()
+    return pending ? `当前回复结束后切换到 ${modelLabel(pending, modelOptions(), pending)}` : ""
+  })
+  const hostTarget = createMemo(() => resolveHostTargetSummary(server.connectionState(), server.executorType()))
   const taskSummary = () =>
     trace.stats().taskText ||
     trace.turns()[0]?.userMessage.text ||
@@ -128,6 +169,21 @@ const ChatView: Component<ChatViewProps> = (props) => {
     })
   })
 
+  createEffect(() => {
+    const nextMode = resolveModeSelection(selectedMode(), modeOptions(), server.adminState(), trace.stats().mode)
+    if (nextMode !== selectedMode()) setSelectedMode(nextMode)
+  })
+
+  createEffect(() => {
+    const nextProfile = resolveModelSelection(
+      selectedModelProfile(),
+      modelOptions(),
+      server.adminState(),
+      sessionRuntimeState(),
+    )
+    if (nextProfile !== selectedModelProfile()) setSelectedModelProfile(nextProfile)
+  })
+
   const startTimer = () => {
     if (timer) window.clearInterval(timer)
     let seconds = 0
@@ -143,6 +199,76 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const stopTimer = () => {
     if (timer) window.clearInterval(timer)
     timer = undefined
+  }
+
+  let modelSwitchTimer: number | undefined
+
+  const clearModelSwitchTimer = () => {
+    if (modelSwitchTimer) window.clearTimeout(modelSwitchTimer)
+    modelSwitchTimer = undefined
+  }
+
+  const restoreModelAfterSwitchFailure = (message: string) => {
+    const rollback = modelRollbackProfile()
+    if (rollback) setSelectedModelProfile(rollback)
+    clearModelSwitchTimer()
+    setModelSwitching(false)
+    setModelSwitchRequestId("")
+    setModelRollbackProfile("")
+    setModelSwitchError(message)
+    if (environmentRunQueue().length) window.setTimeout(startNextEnvironmentQueueItem, 0)
+  }
+
+  const startModelSwitchTimer = (requestId: string) => {
+    clearModelSwitchTimer()
+    modelSwitchTimer = window.setTimeout(() => {
+      if (modelSwitchRequestId() !== requestId) return
+      restoreModelAfterSwitchFailure("模型切换超时，请检查后端或 Peer 状态。")
+    }, MODEL_SWITCH_TIMEOUT_MS)
+  }
+
+  const switchModelNow = (nextProfile: string) => {
+    const option = modelOptions().find((item) => item.id === nextProfile)
+    if (!option) return false
+    const sessionId = trace.currentSessionId()
+    const remoteSessionId = sessionId && !isLocalDraftSessionId(sessionId) ? sessionId : undefined
+    const requestId = `model-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    setModelRollbackProfile((current) => current || selectedModelProfile())
+    setSelectedModelProfile(nextProfile)
+    setModelSwitching(true)
+    setModelSwitchRequestId(requestId)
+    setModelSwitchError("")
+    startModelSwitchTimer(requestId)
+    chatMessages.switchSessionMainModel(vscode, {
+      sessionId: remoteSessionId,
+      providerId: option.providerId,
+      modelId: option.modelId,
+      requestId,
+    })
+    return true
+  }
+
+  const applyQueuedModelSwitch = () => {
+    const pending = pendingModelProfile()
+    if (!pending || modelSwitching()) return false
+    setPendingModelProfile("")
+    return switchModelNow(pending)
+  }
+
+  const finishChatRun = (
+    nextStatus: "cancelled" | "done" | "error",
+    options: { startNextEnvironment?: boolean } = {},
+  ) => {
+    setIsWorking(false)
+    setChatStatus(nextStatus)
+    setActiveChatId(undefined)
+    setPendingCancel(false)
+    trace.patchStats({ runStatus: nextStatus })
+    stopTimer()
+    const queuedSwitchStarted = applyQueuedModelSwitch()
+    if (options.startNextEnvironment && !queuedSwitchStarted) {
+      window.setTimeout(startNextEnvironmentQueueItem, 0)
+    }
   }
 
   const currentAssistantMessages = (): MockMessage[] => {
@@ -534,12 +660,11 @@ const ChatView: Component<ChatViewProps> = (props) => {
       setWorkingText("正在停止")
       trace.patchStats({ runStatus: "stopping" })
     } else if (type === "chat_cancelled") {
-      setChatStatus("cancelled")
       setPendingCancel(false)
       setPendingApprovals([])
       setSelectedApproval(undefined)
       markActiveToolsCancelled()
-      trace.patchStats({ runStatus: "cancelled" })
+      finishChatRun("cancelled")
     } else if (type === "error") {
       setChatStatus("error")
       trace.patchStats({ runStatus: "error" })
@@ -549,11 +674,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         appendTextPart(String(payload.response), "final", { format: "markdown" })
       }
       trace.saveCurrentSnapshot()
-      setIsWorking(false)
-      setPendingCancel(false)
-      setChatStatus(chatStatus() === "cancelled" ? "cancelled" : "done")
-      trace.patchStats({ runStatus: chatStatus() === "cancelled" ? "cancelled" : "done" })
-      stopTimer()
+      finishChatRun(chatStatus() === "cancelled" ? "cancelled" : "done")
     }
   }
 
@@ -627,9 +748,14 @@ const ChatView: Component<ChatViewProps> = (props) => {
     }
   })
 
-  const handleSend = (text: string) => {
+  const sendChatText = (
+    text: string,
+    options: { modeOverride?: string | null; forceDirect?: boolean } = {},
+  ) => {
     const sessionId = trace.currentSessionId()
     const remoteSessionId = sessionId && !isLocalDraftSessionId(sessionId) ? sessionId : undefined
+    const mode = options.modeOverride === undefined ? selectedMode() : options.modeOverride || ""
+    const route = routeSelectedChatMode(mode, { forceDirect: options.forceDirect })
 
     if (!sessionId) {
       trace.startDraftTask(text)
@@ -653,12 +779,40 @@ const ChatView: Component<ChatViewProps> = (props) => {
     setWorkingText("正在分析请求")
     setPendingApprovals([])
     setSelectedApproval(undefined)
-    trace.patchStats({ taskText: text, runStatus: "running" })
+    trace.patchStats({ taskText: text, runStatus: "running", ...(mode ? { mode } : {}) })
     startTimer()
-    vscode.postMessage({
-      type: "chat.send",
+    chatMessages.send(vscode, {
       text,
-      ...(remoteSessionId ? { sessionId: remoteSessionId } : {}),
+      sessionId: remoteSessionId,
+      ...route,
+    })
+  }
+
+  const handleSend = (text: string) => sendChatText(text)
+
+  const handleModelChange = (profileId: string) => {
+    const nextProfile = profileId.trim()
+    const action = modelSwitchAction(nextProfile, selectedModelProfile(), modelOptions(), {
+      working: isWorking(),
+      switching: modelSwitching(),
+    })
+    if (action === "ignore") return
+    setModelSwitchError("")
+    if (action === "queue") {
+      if (!pendingModelProfile() && !modelSwitching()) {
+        setModelRollbackProfile(selectedModelProfile())
+      }
+      setPendingModelProfile(nextProfile)
+      setSelectedModelProfile(nextProfile)
+      return
+    }
+    switchModelNow(nextProfile)
+  }
+
+  const handleSessionCommand = (command: string) => {
+    sendChatText(command, {
+      forceDirect: true,
+      modeOverride: selectedMode() === "taskflow" ? null : selectedMode(),
     })
   }
 
@@ -758,11 +912,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   }
 
   const sendCancel = (chatId: string) => {
-    vscode.postMessage({
-      type: "chat.cancel",
-      chatId,
-      reason: "user_cancelled",
-    })
+    chatMessages.cancel(vscode, chatId)
   }
 
   const sendApprovalDecision = (approval: PendingApproval, decision: ApprovalDecision, reason?: string) => {
@@ -804,6 +954,51 @@ const ChatView: Component<ChatViewProps> = (props) => {
         setAutoApprovalDeniedCommands(sanitizeStringArray(payload.deniedCommands))
         setAutoApprovalPlatform(String(payload.platform || "browser"))
       }
+      if (
+        (msg.type === "session.loaded" || msg.type === "session.created" || msg.type === "session.state") &&
+        typeof msg.sessionId === "string"
+      ) {
+        const runtime = objectValue(msg.runtimeState || msg.runtime_state)
+        if (Object.keys(runtime).length) {
+          setSessionRuntimeState(runtime)
+        }
+      }
+      if (msg.type === "session.model.state") {
+        const payload = objectValue(msg.payload)
+        const requestId = stringValue(msg.requestId) || stringValue(payload.requestId) || stringValue(payload.request_id) || ""
+        if (!shouldAcceptModelSwitchResponse(modelSwitchRequestId(), requestId)) return
+        const runtime = objectValue(payload.runtime_state || msg.runtimeState || msg.runtime_state)
+        const activeModel = objectValue(payload.active_model)
+        const providerId =
+          stringValue(activeModel.provider_id) ||
+          stringValue(activeModel.provider) ||
+          stringValue(runtime.active_model_provider)
+        const modelId =
+          stringValue(activeModel.model_id) ||
+          stringValue(activeModel.model) ||
+          stringValue(runtime.active_model)
+        const activeProfile = providerId && modelId ? modelOptionId(providerId, modelId) : ""
+        if (Object.keys(runtime).length) setSessionRuntimeState(runtime)
+        if (activeProfile) setSelectedModelProfile(activeProfile)
+        trace.patchStats({
+          model: modelId || stringValue(runtime.model) || trace.stats().model,
+          contextWindow: numberValue(activeModel.max_context_tokens) ?? trace.stats().contextWindow,
+          maxOutputTokens: numberValue(activeModel.max_tokens) ?? trace.stats().maxOutputTokens,
+        })
+        clearModelSwitchTimer()
+        setModelSwitching(false)
+        setModelSwitchRequestId("")
+        setModelSwitchError("")
+        setModelRollbackProfile("")
+        setPendingModelProfile("")
+        if (environmentRunQueue().length) window.setTimeout(startNextEnvironmentQueueItem, 0)
+      }
+      if (msg.type === "session.model.error") {
+        const requestId = stringValue(msg.requestId) || stringValue(msg.request_id) || ""
+        if (!shouldAcceptModelSwitchResponse(modelSwitchRequestId(), requestId)) return
+        restoreModelAfterSwitchFailure(typeof msg.message === "string" ? msg.message : "模型切换失败")
+        if (environmentRunQueue().length) window.setTimeout(startNextEnvironmentQueueItem, 0)
+      }
       if (msg.type === "chat.session" && typeof msg.chatId === "string") {
         setActiveChatId(msg.chatId)
         if (pendingCancel()) {
@@ -819,13 +1014,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         }
       }
       if (msg.type === "chat.done") {
-        setIsWorking(false)
-        setChatStatus(chatStatus() === "cancelled" ? "cancelled" : "done")
-        setActiveChatId(undefined)
-        setPendingCancel(false)
-        trace.patchStats({ runStatus: chatStatus() === "cancelled" ? "cancelled" : "done" })
-        stopTimer()
-        window.setTimeout(startNextEnvironmentQueueItem, 0)
+        finishChatRun(chatStatus() === "cancelled" ? "cancelled" : "done", { startNextEnvironment: true })
       }
       if (msg.type === "chat.cancelled") {
         setChatStatus("stopping")
@@ -834,18 +1023,14 @@ const ChatView: Component<ChatViewProps> = (props) => {
       }
       if (msg.type === "chat.error") {
         appendTextPart(`连接错误：${typeof msg.message === "string" ? msg.message : "unknown error"}`, "error")
-        setIsWorking(false)
-        setChatStatus("error")
-        setActiveChatId(undefined)
-        setPendingCancel(false)
         setEnvironmentRunQueue([])
-        trace.patchStats({ runStatus: "error" })
-        stopTimer()
+        finishChatRun("error")
       }
     })
     onCleanup(() => {
       unsubscribe()
       stopTimer()
+      clearModelSwitchTimer()
     })
   })
 
@@ -871,7 +1056,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         selectedTraceNodeId={trace.selectedTraceNodeId()}
         traceLocale="zh-CN"
         isWorking={isWorking()}
-        onCompact={() => console.log("[dogcode] compact context")}
+        onCompact={() => handleSessionCommand("/compact")}
         onClose={() => trace.clearSession()}
         onStop={handleStop}
         onTraceNodeClick={focusTraceNode}
@@ -918,16 +1103,36 @@ const ChatView: Component<ChatViewProps> = (props) => {
             </For>
           </div>
         </Show>
-        <PromptInput disabled={isWorking()} onSend={handleSend} />
-        <div class="bottom-controls">
-          <button type="button" class="bottom-profile">
+        <PromptInput
+          disabled={isWorking()}
+          modeOptions={modeOptions()}
+          selectedMode={selectedMode()}
+          modeLabel={selectedModeLabel()}
+          onModeChange={setSelectedMode}
+          modelOptions={modelOptions()}
+          selectedModel={selectedModelProfile()}
+          modelLabel={selectedModelLabel()}
+          modelDescription={selectedModelDescription()}
+          modelPendingLabel={pendingModelLabel()}
+          modelSwitching={modelSwitching()}
+          modelError={modelSwitchError()}
+          onModelChange={handleModelChange}
+          onSend={handleSend}
+        />
+        <div class="chat-footer-target">
+          <button
+            type="button"
+            class={`host-profile-button host-profile-button--${hostTarget().tone}`}
+            title={hostTarget().title}
+            onClick={() => chatMessages.openSettings(vscode, "executors")}
+          >
             <span class="codicon codicon-server" aria-hidden="true" />
-            Host profile
+            <span class="host-profile-button__body">
+              <span class="host-profile-button__label">Host profile</span>
+              <strong>{hostTarget().label}</strong>
+              <small>{hostTarget().detail}</small>
+            </span>
           </button>
-          <div class="bottom-actions">
-            <IconButton icon="settings-gear" title="设置" onClick={() => vscode.postMessage({ type: "openSettings" })} />
-            <IconButton icon="feedback" title="反馈" />
-          </div>
         </div>
       </footer>
 
