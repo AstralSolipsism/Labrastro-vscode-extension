@@ -17,6 +17,7 @@ interface PromptInputProps {
   modelSwitching?: boolean
   modelError?: string
   onModelChange?: (modelId: string) => void
+  onModelUnavailable?: () => void
   onSend?: (text: string) => void
 }
 
@@ -46,11 +47,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
   const modeSelectorLabel = () => props.modeLabel || props.selectedMode || "Coder"
   const modelSelectorLabel = () => props.modelLabel || props.selectedModel || "Model"
-  const canSwitchModel = () => !props.modelSwitching && Boolean(props.modelOptions?.length)
+  const hasModelOptions = () => Boolean(props.modelOptions?.length)
+  const canOpenModelSelector = () => !props.modelSwitching
+  const canShowModelMenu = () => canOpenModelSelector() && hasModelOptions()
   const modelSelectorTitle = () => {
     if (props.modelError) return props.modelError
     if (props.modelPendingLabel) return props.modelPendingLabel
-    if (!props.modelOptions?.length) return "没有可用模型，请在 Settings 的服务商页面刷新模型列表"
+    if (!hasModelOptions()) return "没有可用模型，点击刷新服务商模型列表"
     return props.modelDescription || "会话主模型"
   }
 
@@ -127,12 +130,17 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 "prompt-selector--switching": props.modelSwitching,
                 "prompt-selector--pending": Boolean(props.modelPendingLabel),
                 "prompt-selector--error": Boolean(props.modelError),
+                "prompt-selector--empty": !hasModelOptions(),
               }}
               aria-haspopup="menu"
               aria-expanded={modelMenuOpen()}
-              disabled={!canSwitchModel()}
+              disabled={!canOpenModelSelector()}
               onClick={() => {
                 setModeMenuOpen(false)
+                if (!hasModelOptions()) {
+                  props.onModelUnavailable?.()
+                  return
+                }
                 setModelMenuOpen((open) => !open)
               }}
               title={modelSelectorTitle()}
@@ -147,7 +155,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
               </Show>
               <span class="codicon codicon-chevron-down prompt-selector__chevron" aria-hidden="true" />
             </button>
-            <Show when={modelMenuOpen() && canSwitchModel()}>
+            <Show when={modelMenuOpen() && canShowModelMenu()}>
               <div class="prompt-menu prompt-menu--model" role="menu">
                 <div class="prompt-menu__section-label">会话主模型</div>
                 <For each={props.modelOptions || []}>

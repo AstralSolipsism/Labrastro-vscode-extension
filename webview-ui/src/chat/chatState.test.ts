@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { buildChatSendMessage, buildSessionModelSwitchMessage, routeSelectedChatMode } from "./chatMessages"
+import { buildChatSendMessage, buildSessionModelSwitchMessage, chatMessages, routeSelectedChatMode } from "./chatMessages"
 import {
   canUseTaskflow,
   modelDescription,
@@ -62,6 +62,13 @@ describe("chat messages", () => {
       modelId: "V4PRO",
       requestId: "req-1",
     })
+  })
+
+  it("posts admin refresh through the chat message facade", () => {
+    const messages: Record<string, unknown>[] = []
+    chatMessages.refreshAdmin({ postMessage: (message) => messages.push(message) })
+
+    expect(messages).toEqual([{ type: "admin.refresh" }])
   })
 })
 

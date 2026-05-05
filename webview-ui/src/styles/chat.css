@@ -455,6 +455,17 @@
   margin: 8px 2px;
 }
 
+.session-history-error {
+  margin: 6px 2px 10px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--ez-error) 45%, transparent);
+  border-radius: 4px;
+  color: var(--ez-error);
+  background: color-mix(in srgb, var(--ez-error) 10%, transparent);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .session-history-item {
   width: 100%;
   min-height: 64px;
@@ -1928,6 +1939,10 @@
 
 .prompt-selector--pending {
   color: var(--ez-warning);
+}
+
+.prompt-selector--empty {
+  color: var(--ez-muted);
 }
 
 .prompt-selector__spin {

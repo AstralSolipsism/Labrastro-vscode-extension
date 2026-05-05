@@ -81,6 +81,10 @@ export const chatMessages = {
     })
   },
 
+  refreshAdmin(port: ChatMessagePort): void {
+    port.postMessage({ type: "admin.refresh" })
+  },
+
   sessionCommand(port: ChatMessagePort, input: Omit<ChatSendInput, "workflowMode">): void {
     port.postMessage(buildChatSendMessage({ ...input, workflowMode: "chat" }))
   },

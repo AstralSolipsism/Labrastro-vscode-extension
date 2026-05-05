@@ -93,6 +93,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const [historyQuery, setHistoryQuery] = createSignal("")
   const [historySort, setHistorySort] = createSignal<"newest" | "oldest">("newest")
   const [deleteSessionId, setDeleteSessionId] = createSignal<string | undefined>()
+  const [sessionOperationError, setSessionOperationError] = createSignal("")
   const initialWebviewState = vscode.getState<ChatWebviewState>() || {}
   const [autoApproveOptions, setAutoApproveOptions] = createSignal<Record<string, boolean>>(
     sanitizeAutoApproveOptions(initialWebviewState.autoApproveOptions)
@@ -182,6 +183,12 @@ const ChatView: Component<ChatViewProps> = (props) => {
       sessionRuntimeState(),
     )
     if (nextProfile !== selectedModelProfile()) setSelectedModelProfile(nextProfile)
+  })
+
+  createEffect(() => {
+    if (modelOptions().length && modelSwitchError() === "正在刷新模型列表...") {
+      setModelSwitchError("")
+    }
   })
 
   const startTimer = () => {
@@ -738,6 +745,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const confirmDeleteSession = () => {
     const sessionId = deleteSessionId()
     if (!sessionId) return
+    setSessionOperationError("")
     trace.deleteSession(sessionId)
     setDeleteSessionId(undefined)
   }
@@ -747,6 +755,11 @@ const ChatView: Component<ChatViewProps> = (props) => {
       vscode.postMessage({ type: "session.list" })
     }
   })
+
+  const handleModelUnavailable = () => {
+    setModelSwitchError("正在刷新模型列表...")
+    chatMessages.refreshAdmin(vscode)
+  }
 
   const sendChatText = (
     text: string,
@@ -999,6 +1012,12 @@ const ChatView: Component<ChatViewProps> = (props) => {
         restoreModelAfterSwitchFailure(typeof msg.message === "string" ? msg.message : "模型切换失败")
         if (environmentRunQueue().length) window.setTimeout(startNextEnvironmentQueueItem, 0)
       }
+      if (msg.type === "session.deleted") {
+        setSessionOperationError("")
+      }
+      if (msg.type === "session.error") {
+        setSessionOperationError(typeof msg.message === "string" ? msg.message : "会话操作失败")
+      }
       if (msg.type === "chat.session" && typeof msg.chatId === "string") {
         setActiveChatId(msg.chatId)
         if (pendingCancel()) {
@@ -1117,6 +1136,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
           modelSwitching={modelSwitching()}
           modelError={modelSwitchError()}
           onModelChange={handleModelChange}
+          onModelUnavailable={handleModelUnavailable}
           onSend={handleSend}
         />
         <div class="chat-footer-target">
@@ -1187,6 +1207,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
               </div>
             </div>
             <div class="session-history-panel__body">
+              <Show when={sessionOperationError()}>
+                <div class="session-history-error" role="alert">{sessionOperationError()}</div>
+              </Show>
               <Show
                 when={filteredHistorySessions().length > 0}
                 fallback={<p class="session-history-panel__empty">{historyQuery() ? "没有匹配的会话。" : "当前没有可恢复的历史会话。"}</p>}
