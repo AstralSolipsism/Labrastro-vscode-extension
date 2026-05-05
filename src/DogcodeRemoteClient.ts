@@ -23,6 +23,8 @@ export interface BackendCapabilities {
   serverVersion: string
   sessions: boolean
   chatStream: boolean
+  taskflow: boolean
+  issueAssignment: boolean
   freshSessionWithoutSessionHint: boolean
   peerTokenHeartbeatRefresh: boolean
 }
@@ -345,11 +347,32 @@ export class DogcodeRemoteClient {
     }))
   }
 
-  async startChat(prompt: string, sessionId?: string): Promise<JsonObject> {
+  async switchSessionMainModel(
+    sessionId: string | undefined,
+    providerId: string,
+    modelId: string,
+    parameters: JsonObject = {}
+  ): Promise<JsonObject> {
+    return this.postPeerJson("/remote/sessions/model", (peer) => ({
+      peer_token: peer.peer_token,
+      ...(sessionId ? { session_id: sessionId } : {}),
+      provider_id: providerId,
+      model_id: modelId,
+      ...(Object.keys(parameters).length ? { parameters } : {}),
+    }))
+  }
+
+  async startChat(
+    prompt: string,
+    sessionId?: string,
+    options: { mode?: string; workflowMode?: string } = {}
+  ): Promise<JsonObject> {
     return this.postPeerJson("/remote/chat/start", (peer) => ({
       peer_token: peer.peer_token,
       prompt,
       session_hint: sessionId,
+      ...(options.mode?.trim() ? { mode: options.mode.trim() } : {}),
+      ...(options.workflowMode?.trim() ? { workflow_mode: options.workflowMode.trim() } : {}),
     }))
   }
 
@@ -709,6 +732,8 @@ function normalizeBackendCapabilities(payload: JsonObject): BackendCapabilities 
     serverVersion: typeof payload.server_version === "string" ? payload.server_version : "",
     sessions: capabilities.sessions === true,
     chatStream: capabilities.chat_stream === true,
+    taskflow: capabilities.taskflow === true,
+    issueAssignment: capabilities.issue_assignment === true,
     freshSessionWithoutSessionHint: capabilities.fresh_session_without_session_hint === true,
     peerTokenHeartbeatRefresh: capabilities.peer_token_heartbeat_refresh === true,
   }

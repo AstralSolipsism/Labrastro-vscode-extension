@@ -432,9 +432,13 @@ export class DogcodeController implements vscode.Disposable {
         }
         return true
       case "provider.models":
-        await this.runAdminAction(post, () =>
-          this.client.providerModels(objectValue(message.payload))
-        )
+        if (
+          await this.runAdminAction(post, () =>
+            this.client.providerModels(objectValue(message.payload))
+          )
+        ) {
+          await this.postAdminState(post)
+        }
         return true
       case "modelProfile.save":
         if (
@@ -505,9 +509,22 @@ export class DogcodeController implements vscode.Disposable {
           post
         )
         return true
+      case "session.model.switch":
+        await this.switchSessionMainModel(
+          stringValue(message.sessionId),
+          stringValue(message.providerId) || stringValue(message.provider_id) || "",
+          stringValue(message.modelId) || stringValue(message.model_id) || "",
+          objectValue(message.parameters),
+          stringValue(message.requestId) || stringValue(message.request_id) || "",
+          post
+        )
+        return true
       case "chat.send":
         if (typeof message.text === "string") {
-          void this.startChat(message.text, stringValue(message.sessionId), post)
+          void this.startChat(message.text, stringValue(message.sessionId), post, {
+            mode: stringValue(message.mode),
+            workflowMode: stringValue(message.workflowMode) || stringValue(message.workflow_mode),
+          })
         }
         return true
       case "chat.cancel":
@@ -825,6 +842,7 @@ export class DogcodeController implements vscode.Disposable {
         reason: options.reason,
         metadata,
         bundle,
+        runtimeState: objectValue(payload.runtime_state),
         sessions: this.sessions,
         fingerprint: this.sessionFingerprint,
       })
@@ -865,6 +883,7 @@ export class DogcodeController implements vscode.Disposable {
         sessionId: metadata.id,
         metadata,
         bundle,
+        runtimeState: objectValue(payload.runtime_state),
         sessions: this.sessions,
         fingerprint: this.sessionFingerprint,
       })
@@ -940,6 +959,59 @@ export class DogcodeController implements vscode.Disposable {
         return
       }
       post({ type: "session.error", message: `会话视图保存失败：${errorMessage(error)}` })
+    }
+  }
+
+  private async switchSessionMainModel(
+    sessionId: string | undefined,
+    providerId: string,
+    modelId: string,
+    parameters: Record<string, unknown>,
+    requestId: string,
+    post: PostMessage
+  ): Promise<void> {
+    if (!providerId || !modelId) {
+      post({ type: "session.model.error", message: "缺少服务商或模型 ID。", requestId })
+      return
+    }
+    if (this.sessionApiAvailable === false) {
+      post({ type: "session.model.error", message: "当前后端不支持会话模型切换。", requestId })
+      return
+    }
+    try {
+      const payload = await this.client.switchSessionMainModel(sessionId, providerId, modelId, parameters)
+      this.sessionApiAvailable = true
+      const metadata = normalizeSessionMetadata(payload.metadata)
+      if (metadata.id) {
+        this.currentSessionId = metadata.id
+        await this.context.workspaceState.update("dogcode.currentSessionId", metadata.id)
+      }
+      await this.refreshSessions()
+      if (metadata.id) {
+        post({
+          type: "session.state",
+          sessionId: metadata.id,
+          metadata,
+          bundle: buildSessionBundle(payload, metadata),
+          runtimeState: objectValue(payload.runtime_state),
+          sessions: this.sessions,
+          fingerprint: this.sessionFingerprint || stringValue(payload.fingerprint),
+        })
+      }
+      post({
+        type: "session.model.state",
+        sessionId: metadata.id || sessionId,
+        payload,
+        runtimeState: objectValue(payload.runtime_state),
+        providerId,
+        modelId,
+        requestId,
+      })
+    } catch (error) {
+      if (isSessionApiUnavailable(error)) {
+        this.sessionApiAvailable = false
+      }
+      post({ type: "session.model.error", message: errorMessage(error), providerId, modelId, requestId })
     }
   }
 
@@ -1850,7 +1922,8 @@ export class DogcodeController implements vscode.Disposable {
   private async startChat(
     text: string,
     requestedSessionId: string | undefined,
-    post: PostMessage
+    post: PostMessage,
+    options: { mode?: string; workflowMode?: string } = {}
   ): Promise<void> {
     try {
       if (!requestedSessionId && this.sessionInitialization) {
@@ -1878,6 +1951,7 @@ export class DogcodeController implements vscode.Disposable {
             sessionId: metadata.id,
             metadata,
             bundle: buildSessionBundle(created, metadata),
+            runtimeState: objectValue(created.runtime_state),
             sessions: this.sessions,
             fingerprint: this.sessionFingerprint,
           })
@@ -1903,7 +1977,7 @@ export class DogcodeController implements vscode.Disposable {
         return
       }
       post({ type: "chat.started", text })
-      const start = await this.client.startChat(text, sessionId)
+      const start = await this.client.startChat(text, sessionId, options)
       const chatId = String(start.chat_id || "")
       this.activeChatId = chatId
       post({ type: "chat.session", chatId, sessionId })
@@ -2142,6 +2216,9 @@ function buildSessionBundle(
 ): Record<string, unknown> {
   const snapshot = objectValue(payload.snapshot)
   const snapshotSession = objectValue(snapshot.session)
+  const snapshotStats = objectValue(snapshot.stats)
+  const runtimeState = objectValue(payload.runtime_state)
+  const modelProfile = objectValue(payload.model_profile)
   const session = {
     id: metadata.id,
     title:
@@ -2157,11 +2234,31 @@ function buildSessionBundle(
     summary: stringValue(snapshotSession.summary) || metadata.preview,
   }
   const fallback = buildBundleFromMessages(metadata, arrayValue(payload.messages))
+  const fallbackStats = objectValue(fallback.stats)
   return {
     session,
-    stats: Object.keys(objectValue(snapshot.stats)).length
-      ? objectValue(snapshot.stats)
-      : fallback.stats,
+    stats: {
+      ...(Object.keys(snapshotStats).length ? snapshotStats : fallbackStats),
+      model:
+        stringValue(snapshotStats.model) ||
+        stringValue(modelProfile.model) ||
+        stringValue(runtimeState.model) ||
+        metadata.model,
+      mode:
+        stringValue(snapshotStats.mode) ||
+        stringValue(runtimeState.active_mode),
+      contextWindow:
+        numberValue(snapshotStats.contextWindow) ||
+        numberValue(modelProfile.max_context_tokens) ||
+        numberValue(runtimeState.max_context_tokens) ||
+        numberValue(fallbackStats.contextWindow) ||
+        0,
+      maxOutputTokens:
+        numberValue(snapshotStats.maxOutputTokens) ||
+        numberValue(modelProfile.max_tokens) ||
+        numberValue(fallbackStats.maxOutputTokens) ||
+        0,
+    },
     turns: Array.isArray(snapshot.turns) ? snapshot.turns : fallback.turns,
     traceNodes: Array.isArray(snapshot.traceNodes)
       ? snapshot.traceNodes

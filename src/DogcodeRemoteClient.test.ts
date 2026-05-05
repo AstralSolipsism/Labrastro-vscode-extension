@@ -258,6 +258,100 @@ describe("DogcodeRemoteClient runtime admin API", () => {
   })
 })
 
+describe("DogcodeRemoteClient chat start", () => {
+  it("passes mode and workflow routing to the remote chat start endpoint", async () => {
+    vscodeMock.dogcodeValue = "http://127.0.0.1:8765"
+    const context = {
+      secrets: {
+        get: vi.fn(async () => undefined),
+      },
+    }
+    let postedBody: Record<string, unknown> | undefined
+    const fetchMock = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      postedBody = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>
+      return new Response(JSON.stringify({ chat_id: "chat-1" }), {
+        headers: { "Content-Type": "application/json" },
+      })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    const client = new DogcodeRemoteClient(context as never)
+    ;(client as unknown as { peerInfo: { peer_id: string; peer_token: string } }).peerInfo = {
+      peer_id: "peer-1",
+      peer_token: "peer-token-1",
+    }
+    const peerProcess = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter
+      stderr: EventEmitter
+      exitCode: number | null
+      kill: ReturnType<typeof vi.fn>
+    }
+    peerProcess.stdout = new EventEmitter()
+    peerProcess.stderr = new EventEmitter()
+    peerProcess.exitCode = null
+    peerProcess.kill = vi.fn()
+    ;(client as unknown as { peerProcess: typeof peerProcess }).peerProcess = peerProcess
+
+    await expect(client.startChat("hello", "session-1", {
+      mode: "taskflow",
+      workflowMode: "taskflow",
+    })).resolves.toMatchObject({ chat_id: "chat-1" })
+
+    expect(postedBody).toMatchObject({
+      peer_token: "peer-token-1",
+      prompt: "hello",
+      session_hint: "session-1",
+      mode: "taskflow",
+      workflow_mode: "taskflow",
+    })
+  })
+
+  it("switches the current session main model through the peer session endpoint", async () => {
+    vscodeMock.dogcodeValue = "http://127.0.0.1:8765"
+    const context = {
+      secrets: {
+        get: vi.fn(async () => undefined),
+      },
+    }
+    let postedBody: Record<string, unknown> | undefined
+    const fetchMock = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      postedBody = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>
+      return new Response(JSON.stringify({ ok: true, active_model: { provider_id: "deepseek", model_id: "V4PRO" } }), {
+        headers: { "Content-Type": "application/json" },
+      })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    const client = new DogcodeRemoteClient(context as never)
+    ;(client as unknown as { peerInfo: { peer_id: string; peer_token: string } }).peerInfo = {
+      peer_id: "peer-1",
+      peer_token: "peer-token-1",
+    }
+    const peerProcess = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter
+      stderr: EventEmitter
+      exitCode: number | null
+      kill: ReturnType<typeof vi.fn>
+    }
+    peerProcess.stdout = new EventEmitter()
+    peerProcess.stderr = new EventEmitter()
+    peerProcess.exitCode = null
+    peerProcess.kill = vi.fn()
+    ;(client as unknown as { peerProcess: typeof peerProcess }).peerProcess = peerProcess
+
+    await expect(client.switchSessionMainModel("session-1", "deepseek", "V4PRO")).resolves.toMatchObject({
+      ok: true,
+      active_model: { provider_id: "deepseek", model_id: "V4PRO" },
+    })
+
+    expect(fetchMock.mock.calls[0][0]).toBe("http://127.0.0.1:8765/remote/sessions/model")
+    expect(postedBody).toEqual({
+      peer_token: "peer-token-1",
+      session_id: "session-1",
+      provider_id: "deepseek",
+      model_id: "V4PRO",
+    })
+  })
+})
+
 describe("DogcodeRemoteClient peer retry strategy", () => {
   it("recovers once for invalid peer token", async () => {
     let attempts = 0
