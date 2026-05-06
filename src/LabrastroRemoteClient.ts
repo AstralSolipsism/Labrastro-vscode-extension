@@ -16,6 +16,8 @@ import {
 
 export type JsonObject = Record<string, unknown>
 
+export const CHAT_STREAM_TIMEOUT_SEC = 10
+
 export interface BackendCapabilities {
   ok: boolean
   apiVersion: number
@@ -305,10 +307,11 @@ export class LabrastroRemoteClient {
     }))
   }
 
-  async listSessions(limit = 20): Promise<JsonObject> {
+  async listSessions(limit = 20, ifListEtag?: string): Promise<JsonObject> {
     return this.postPeerJson("/remote/sessions/list", (peer) => ({
       peer_token: peer.peer_token,
       limit,
+      ...(ifListEtag ? { if_list_etag: ifListEtag } : {}),
     }))
   }
 
@@ -332,11 +335,16 @@ export class LabrastroRemoteClient {
     }))
   }
 
-  async saveSessionSnapshot(sessionId: string, snapshot: JsonObject): Promise<JsonObject> {
+  async saveSessionSnapshot(
+    sessionId: string,
+    snapshot: JsonObject,
+    snapshotDigest?: string
+  ): Promise<JsonObject> {
     return this.postPeerJson("/remote/sessions/snapshot", (peer) => ({
       peer_token: peer.peer_token,
       session_id: sessionId,
       snapshot,
+      ...(snapshotDigest ? { snapshot_digest: snapshotDigest } : {}),
     }))
   }
 
@@ -369,7 +377,11 @@ export class LabrastroRemoteClient {
     }))
   }
 
-  async streamChat(chatId: string, cursor: number, timeoutSec = 2): Promise<JsonObject> {
+  async streamChat(
+    chatId: string,
+    cursor: number,
+    timeoutSec = CHAT_STREAM_TIMEOUT_SEC
+  ): Promise<JsonObject> {
     const peer = await this.ensurePeer()
     return this.postJson("/remote/chat/stream", {
       peer_token: peer.peer_token,

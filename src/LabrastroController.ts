@@ -121,6 +121,7 @@ export class LabrastroController implements vscode.Disposable {
   private backendCapabilities: BackendCapabilities | null | undefined
   private sessionApiAvailable: boolean | undefined
   private sessionFingerprint: string | undefined
+  private sessionListEtag: string | undefined
   private sessionInitialization: Promise<void> | undefined
   private sessionInitializationToken = 0
   private sessions: SessionMetadataState[] = []
@@ -497,6 +498,7 @@ export class LabrastroController implements vscode.Disposable {
         await this.saveSessionSnapshot(
           stringValue(message.sessionId) || "",
           objectValue(message.snapshot),
+          stringValue(message.snapshotDigest) || stringValue(message.snapshot_digest),
           post
         )
         return true
@@ -768,14 +770,18 @@ export class LabrastroController implements vscode.Disposable {
       return { fingerprint: this.sessionFingerprint }
     }
     try {
-      const payload = await this.client.listSessions(limit)
+      const payload = await this.client.listSessions(limit, this.sessionListEtag)
       this.sessionApiAvailable = true
-      this.sessionFingerprint = stringValue(payload.fingerprint)
-      this.sessions = normalizeSessionMetadataList(payload.sessions)
+      this.sessionFingerprint = stringValue(payload.fingerprint) || this.sessionFingerprint
+      this.sessionListEtag = stringValue(payload.list_etag) || this.sessionListEtag
+      if (payload.sessions_unchanged !== true) {
+        this.sessions = normalizeSessionMetadataList(payload.sessions)
+      }
     } catch (error) {
       if (isSessionApiUnavailable(error)) {
         this.sessionApiAvailable = false
         this.sessionFingerprint = undefined
+        this.sessionListEtag = undefined
         this.sessions = []
         return {}
       }
@@ -933,12 +939,13 @@ export class LabrastroController implements vscode.Disposable {
   private async saveSessionSnapshot(
     sessionId: string,
     snapshot: Record<string, unknown>,
+    snapshotDigest: string | undefined,
     post: PostMessage
   ): Promise<void> {
     if (!sessionId || !Object.keys(snapshot).length) return
     if (this.sessionApiAvailable === false) return
     try {
-      await this.client.saveSessionSnapshot(sessionId, snapshot)
+      await this.client.saveSessionSnapshot(sessionId, snapshot, snapshotDigest)
     } catch (error) {
       if (isSessionApiUnavailable(error)) {
         this.sessionApiAvailable = false

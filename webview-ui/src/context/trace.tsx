@@ -18,6 +18,11 @@ import {
   sessionBundleHasContent,
   shouldIgnoreInitialSessionLoad,
 } from "../utils/session-history"
+import {
+  SNAPSHOT_DEBOUNCE_MS,
+  SNAPSHOT_MAX_INTERVAL_MS,
+  snapshotDigest,
+} from "../utils/snapshot-digest"
 import { buildOrchestrationGraph, getRootSessionId } from "../utils/trace-orchestration"
 import { useVSCode, type ExtensionMessage } from "./vscode"
 
@@ -167,6 +172,33 @@ function normalizeSessionBundle(value: unknown): MockSessionBundle | undefined {
   }
 }
 
+function buildSessionSnapshot(
+  sessionId: string,
+  bundle: MockSessionBundle,
+  updatedAt = new Date().toISOString()
+): Record<string, unknown> {
+  return {
+    version: 1,
+    sessionId,
+    updatedAt,
+    session: bundle.session,
+    stats: bundle.stats,
+    turns: bundle.turns,
+    traceNodes: bundle.traceNodes,
+    traceEdges: bundle.traceEdges,
+    traceUI: bundle.traceUI,
+  }
+}
+
+function buildSessionSnapshotDigestPayload(
+  sessionId: string,
+  bundle: MockSessionBundle
+): Record<string, unknown> {
+  const snapshot = buildSessionSnapshot(sessionId, bundle, "")
+  delete snapshot.updatedAt
+  return snapshot
+}
+
 function mergeRemoteBundleWithDraft(
   remoteBundle: MockSessionBundle,
   draftBundle: MockSessionBundle
@@ -263,6 +295,9 @@ export const TraceProvider: ParentComponent = (props) => {
   const [focusedBranchId, setFocusedBranchId] = createSignal<string | null>(null)
   const [panelIntent, setPanelIntent] = createSignal<TraceNavigationIntent | null>(null)
   let snapshotTimer: number | undefined
+  let snapshotMaxTimer: number | undefined
+  let pendingSnapshot: { sessionId: string; bundle: MockSessionBundle; digest: string } | undefined
+  const lastSnapshotDigests = new Map<string, string>()
 
   const recentSessions = createMemo(() =>
     allSessions().filter((session) => !session.parentSessionId)
@@ -275,29 +310,44 @@ export const TraceProvider: ParentComponent = (props) => {
   )
 
   const getSessionBundle = (sessionId: string) => sessionBundles()[sessionId]
-  const postSessionSnapshot = (sessionId: string, bundle: MockSessionBundle) => {
+  const postSessionSnapshot = (sessionId: string, bundle: MockSessionBundle, digest: string) => {
     vscode.postMessage({
       type: "session.saveSnapshot",
       sessionId,
-      snapshot: {
-        version: 1,
-        sessionId,
-        updatedAt: new Date().toISOString(),
-        session: bundle.session,
-        stats: bundle.stats,
-        turns: bundle.turns,
-        traceNodes: bundle.traceNodes,
-        traceEdges: bundle.traceEdges,
-        traceUI: bundle.traceUI,
-      },
+      snapshot: buildSessionSnapshot(sessionId, bundle),
+      snapshotDigest: digest,
     })
   }
-  const scheduleSessionSnapshot = (sessionId: string, bundle: MockSessionBundle) => {
+  const clearSnapshotTimers = () => {
     if (snapshotTimer) window.clearTimeout(snapshotTimer)
-    snapshotTimer = window.setTimeout(() => {
-      snapshotTimer = undefined
-      postSessionSnapshot(sessionId, bundle)
-    }, 800)
+    if (snapshotMaxTimer) window.clearTimeout(snapshotMaxTimer)
+    snapshotTimer = undefined
+    snapshotMaxTimer = undefined
+  }
+  const flushPendingSnapshot = () => {
+    if (!pendingSnapshot) {
+      clearSnapshotTimers()
+      return
+    }
+    const snapshot = pendingSnapshot
+    pendingSnapshot = undefined
+    clearSnapshotTimers()
+    postSessionSnapshot(snapshot.sessionId, snapshot.bundle, snapshot.digest)
+    lastSnapshotDigests.set(snapshot.sessionId, snapshot.digest)
+  }
+  const scheduleSessionSnapshot = (sessionId: string, bundle: MockSessionBundle) => {
+    const digest = snapshotDigest(buildSessionSnapshotDigestPayload(sessionId, bundle))
+    if (pendingSnapshot?.sessionId === sessionId && pendingSnapshot.digest === digest) return
+    if (!pendingSnapshot && lastSnapshotDigests.get(sessionId) === digest) return
+    if (pendingSnapshot && pendingSnapshot.sessionId !== sessionId) {
+      flushPendingSnapshot()
+    }
+    pendingSnapshot = { sessionId, bundle: cloneValue(bundle), digest }
+    if (snapshotTimer) window.clearTimeout(snapshotTimer)
+    if (!snapshotMaxTimer) {
+      snapshotMaxTimer = window.setTimeout(flushPendingSnapshot, SNAPSHOT_MAX_INTERVAL_MS)
+    }
+    snapshotTimer = window.setTimeout(flushPendingSnapshot, SNAPSHOT_DEBOUNCE_MS)
   }
   const findTraceNodeSessionId = (nodeId: string) => {
     for (const [sessionId, bundle] of Object.entries(sessionBundles())) {
@@ -400,6 +450,7 @@ export const TraceProvider: ParentComponent = (props) => {
   }
 
   const removeSessionBundle = (sessionId: string) => {
+    lastSnapshotDigests.delete(sessionId)
     setSessionBundles((prev) => {
       const next = { ...prev }
       delete next[sessionId]
@@ -409,6 +460,9 @@ export const TraceProvider: ParentComponent = (props) => {
   }
 
   const loadSession = (sessionId: string) => {
+    if (sessionId !== currentSessionId()) {
+      flushPendingSnapshot()
+    }
     const bundle = getSessionBundle(sessionId)
     if (bundle) {
       applyBundleToSignals(sessionId, bundle)
@@ -417,6 +471,7 @@ export const TraceProvider: ParentComponent = (props) => {
   }
 
   const clearSession = () => {
+    flushPendingSnapshot()
     setCurrentSessionId(null)
     setStats(EMPTY_STATS)
     setTurns([])
@@ -433,6 +488,7 @@ export const TraceProvider: ParentComponent = (props) => {
   }
 
   const deleteSession = (sessionId: string) => {
+    flushPendingSnapshot()
     removeSessionBundle(sessionId)
     if (currentSessionId() === sessionId) {
       setCurrentSessionId(null)
@@ -857,6 +913,7 @@ export const TraceProvider: ParentComponent = (props) => {
   }
 
   const startDraftTask = (taskText: string) => {
+    flushPendingSnapshot()
     const sessionId = buildMockId("session")
     const bundle: MockSessionBundle = {
       session: {
@@ -929,7 +986,14 @@ export const TraceProvider: ParentComponent = (props) => {
       window.clearTimeout(snapshotTimer)
       snapshotTimer = undefined
     }
-    postSessionSnapshot(sessionId, bundle)
+    if (snapshotMaxTimer) {
+      window.clearTimeout(snapshotMaxTimer)
+      snapshotMaxTimer = undefined
+    }
+    pendingSnapshot = undefined
+    const digest = snapshotDigest(buildSessionSnapshotDigestPayload(sessionId, bundle))
+    postSessionSnapshot(sessionId, bundle, digest)
+    lastSnapshotDigests.set(sessionId, digest)
   }
 
   onMount(() => {
@@ -1037,8 +1101,8 @@ export const TraceProvider: ParentComponent = (props) => {
     })
 
     onCleanup(() => {
+      flushPendingSnapshot()
       unsubscribe()
-      if (snapshotTimer) window.clearTimeout(snapshotTimer)
     })
   })
 

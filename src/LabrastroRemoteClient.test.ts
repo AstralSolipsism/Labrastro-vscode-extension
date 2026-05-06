@@ -65,6 +65,7 @@ vi.mock("fs/promises", async () => {
 })
 
 import {
+  CHAT_STREAM_TIMEOUT_SEC,
   LabrastroRemoteClient,
   RemoteError,
   isInvalidPeerTokenError,
@@ -351,6 +352,76 @@ describe("LabrastroRemoteClient chat start", () => {
       provider_id: "deepseek",
       model_id: "V4PRO",
     })
+  })
+
+  it("passes session list etag, snapshot digest, and default chat timeout to peer endpoints", async () => {
+    vscodeMock.labrastroValue = "http://127.0.0.1:8765"
+    const context = {
+      secrets: {
+        get: vi.fn(async () => undefined),
+      },
+    }
+    const posted: Array<{ pathname: string; body: Record<string, unknown> }> = []
+    const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
+      const url = new URL(String(input))
+      posted.push({
+        pathname: url.pathname,
+        body: JSON.parse(String(init?.body || "{}")) as Record<string, unknown>,
+      })
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { "Content-Type": "application/json" },
+      })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    const client = new LabrastroRemoteClient(context as never)
+    ;(client as unknown as { peerInfo: { peer_id: string; peer_token: string } }).peerInfo = {
+      peer_id: "peer-1",
+      peer_token: "peer-token-1",
+    }
+    const peerProcess = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter
+      stderr: EventEmitter
+      exitCode: number | null
+      kill: ReturnType<typeof vi.fn>
+    }
+    peerProcess.stdout = new EventEmitter()
+    peerProcess.stderr = new EventEmitter()
+    peerProcess.exitCode = null
+    peerProcess.kill = vi.fn()
+    ;(client as unknown as { peerProcess: typeof peerProcess }).peerProcess = peerProcess
+
+    await client.listSessions(5, "etag-1")
+    await client.saveSessionSnapshot("session-1", { turns: [] }, "digest-1")
+    await client.streamChat("chat-1", 7)
+
+    expect(posted).toEqual([
+      {
+        pathname: "/remote/sessions/list",
+        body: {
+          peer_token: "peer-token-1",
+          limit: 5,
+          if_list_etag: "etag-1",
+        },
+      },
+      {
+        pathname: "/remote/sessions/snapshot",
+        body: {
+          peer_token: "peer-token-1",
+          session_id: "session-1",
+          snapshot: { turns: [] },
+          snapshot_digest: "digest-1",
+        },
+      },
+      {
+        pathname: "/remote/chat/stream",
+        body: {
+          peer_token: "peer-token-1",
+          chat_id: "chat-1",
+          cursor: 7,
+          timeout_sec: CHAT_STREAM_TIMEOUT_SEC,
+        },
+      },
+    ])
   })
 })
 
