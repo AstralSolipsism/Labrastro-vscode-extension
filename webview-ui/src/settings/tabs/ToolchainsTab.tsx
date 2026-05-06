@@ -1,6 +1,7 @@
 import { Component, For, Show } from "solid-js"
 import { t } from "../../i18n"
 import { ApprovalDetailsDialog, approvalSummary, type ApprovalDecision } from "../../components/chat/ApprovalDetailsDialog"
+import { DialogSurface } from "../../components/common/interaction"
 import { StatusBadge } from "../components/StatusBadge"
 import { settingsMessages } from "../settingsMessages"
 import type { SettingsController } from "../useSettingsController"
@@ -270,8 +271,13 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
       editor.kind === "cli" ? "CLI" : editor.kind === "mcp" ? "MCP" : "Skill"
     }`
     return (
-      <div class="settings-overlay settings-overlay--center" role="dialog" aria-modal="true" onClick={() => setToolchainEditor(undefined)}>
-        <div class="settings-modal toolchain-editor" onClick={(event) => event.stopPropagation()}>
+      <DialogSurface
+        ariaLabel={title}
+        backdropClass="settings-overlay settings-overlay--center"
+        surfaceClass="settings-modal toolchain-editor"
+        onClose={() => setToolchainEditor(undefined)}
+        initialFocusSelector=".toolchain-editor input"
+      >
           <div class="settings-modal__header">
             <div>
               <h3>{title}</h3>
@@ -431,8 +437,7 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
               保存
             </button>
           </div>
-        </div>
-      </div>
+      </DialogSurface>
     )
   }
 

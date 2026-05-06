@@ -1,5 +1,6 @@
 import { Component, For, Show } from "solid-js"
 import { t } from "../../i18n"
+import { DialogSurface } from "../../components/common/interaction"
 import { StatusBadge } from "../components/StatusBadge"
 import type { SettingsController } from "../useSettingsController"
 
@@ -119,8 +120,13 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
 
       {/* ── ② 弹出式两步选择卡片 ── */}
       <Show when={executorPickerOpen()}>
-        <div class="settings-overlay settings-overlay--center" onClick={closeExecutorPicker}>
-          <div class="executor-picker-modal" role="dialog" aria-modal="true" aria-label="选择主执行器" onClick={(e) => e.stopPropagation()}>
+        <DialogSurface
+          ariaLabel="选择主执行器"
+          backdropClass="settings-overlay settings-overlay--center"
+          surfaceClass="executor-picker-modal"
+          onClose={closeExecutorPicker}
+          initialFocusSelector=".executor-picker-modal button"
+        >
             <div class="settings-modal__header">
               <div>
                 <h3>{t("executor.picker.title")}</h3>
@@ -210,8 +216,7 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
                 确认选择
               </button>
             </div>
-          </div>
-        </div>
+        </DialogSurface>
       </Show>
 
       {/* ── ③ 按组合分发的配置面板 ── */}

@@ -1,5 +1,6 @@
 import { Component, For, Show } from "solid-js"
 import { t } from "../../i18n"
+import { SelectableList } from "../../components/common/interaction"
 import { StatusBadge } from "../components/StatusBadge"
 import type { SettingsController } from "../useSettingsController"
 
@@ -68,7 +69,10 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
     runtimeOptionDescription,
   } = props.controller
 
-  return (
+  const profileIds = () => Object.keys(profileDrafts())
+  const agentIds = () => Object.keys(agentDrafts())
+
+  return (
     <div class="settings-page">
       <div class="settings-page-header">
         <div>
@@ -115,22 +119,23 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
             <Show when={Object.keys(profileDrafts()).length === 0}>
               <p class="settings-empty-note">{t("agentConfig.profile.empty")}</p>
             </Show>
-            <For each={Object.keys(profileDrafts())}>
-              {(pid) => (
-                <div
-                  class={`settings-master-item ${selectedProfileId() === pid ? "settings-master-item--active" : ""}`}
-                  onClick={() => setSelectedProfileId(pid)}
-                >
-                  <div class="settings-master-item__info">
-                    <strong>{pid}</strong>
-                    <small>{profileDrafts()[pid]?.executor} · {profileDrafts()[pid]?.execution_location}</small>
-                  </div>
-                  <button class="btn-icon" onClick={(e) => { e.stopPropagation(); deleteProfile(pid) }} title={t("agentConfig.profile.delete")}>
-                    <span class="codicon codicon-trash" aria-hidden="true" />
-                  </button>
-                </div>
-              )}
-            </For>
+            <SelectableList
+              ariaLabel={t("agentConfig.profiles")}
+              items={profileIds()}
+              selectedId={selectedProfileId()}
+              onSelect={setSelectedProfileId}
+              renderItem={(pid) => (
+                <div class="settings-master-item__info">
+                  <strong>{pid}</strong>
+                  <small>{profileDrafts()[pid]?.executor} · {profileDrafts()[pid]?.execution_location}</small>
+                </div>
+              )}
+              renderAction={(pid) => (
+                <button class="btn-icon" type="button" onClick={() => deleteProfile(pid)} title={t("agentConfig.profile.delete")} aria-label={t("agentConfig.profile.delete")}>
+                  <span class="codicon codicon-trash" aria-hidden="true" />
+                </button>
+              )}
+            />
           </div>
           <div class="settings-detail-panel">
             <Show when={currentProfileDraft()} fallback={<p class="settings-empty-note">{t("agentConfig.profile.noSelection")}</p>}>
@@ -238,22 +243,23 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
             <Show when={Object.keys(agentDrafts()).length === 0}>
               <p class="settings-empty-note">{t("agentConfig.agent.empty")}</p>
             </Show>
-            <For each={Object.keys(agentDrafts())}>
-              {(aid) => (
-                <div
-                  class={`settings-master-item ${selectedAgentId() === aid ? "settings-master-item--active" : ""}`}
-                  onClick={() => setSelectedAgentId(aid)}
-                >
-                  <div class="settings-master-item__info">
-                    <strong>{agentDrafts()[aid]?.name || aid}</strong>
-                    <small>{agentDrafts()[aid]?.runtime_profile || "—"}</small>
-                  </div>
-                  <button class="btn-icon" onClick={(e) => { e.stopPropagation(); deleteAgent(aid) }} title={t("agentConfig.agent.delete")}>
-                    <span class="codicon codicon-trash" aria-hidden="true" />
-                  </button>
-                </div>
-              )}
-            </For>
+            <SelectableList
+              ariaLabel={t("agentConfig.agents")}
+              items={agentIds()}
+              selectedId={selectedAgentId()}
+              onSelect={setSelectedAgentId}
+              renderItem={(aid) => (
+                <div class="settings-master-item__info">
+                  <strong>{agentDrafts()[aid]?.name || aid}</strong>
+                  <small>{agentDrafts()[aid]?.runtime_profile || "—"}</small>
+                </div>
+              )}
+              renderAction={(aid) => (
+                <button class="btn-icon" type="button" onClick={() => deleteAgent(aid)} title={t("agentConfig.agent.delete")} aria-label={t("agentConfig.agent.delete")}>
+                  <span class="codicon codicon-trash" aria-hidden="true" />
+                </button>
+              )}
+            />
           </div>
           <div class="settings-detail-panel">
             <Show when={currentAgentDraft()} fallback={<p class="settings-empty-note">{t("agentConfig.agent.noSelection")}</p>}>
