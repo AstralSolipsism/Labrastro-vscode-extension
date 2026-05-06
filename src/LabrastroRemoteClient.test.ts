@@ -244,6 +244,10 @@ describe("LabrastroRemoteClient runtime admin API", () => {
       body: { agent_id: "reviewer" },
       adminSecret: "admin-secret",
     })
+    await expect(client.environmentRun({ mode: "check", agent_id: "environment_configurator" })).resolves.toMatchObject({
+      path: "/remote/admin/environment/run",
+      body: { mode: "check", agent_id: "environment_configurator" },
+    })
     await expect(client.runtimeEvents({ task_id: "task-1", after_seq: 1 })).resolves.toMatchObject({
       path: "/remote/admin/runtime/events",
     })

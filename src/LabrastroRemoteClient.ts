@@ -221,6 +221,10 @@ export class LabrastroRemoteClient {
     return this.adminPost("/remote/admin/runtime/submit", payload)
   }
 
+  async environmentRun(payload: JsonObject): Promise<JsonObject> {
+    return this.adminPost("/remote/admin/environment/run", payload)
+  }
+
   async runtimeEvents(payload: JsonObject): Promise<JsonObject> {
     return this.adminPost("/remote/admin/runtime/events", payload)
   }
