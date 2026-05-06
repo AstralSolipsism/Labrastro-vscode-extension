@@ -1,7 +1,28 @@
 export type ProviderType = "openai_chat" | "anthropic_messages" | "openai_responses"
 export type ProviderCompat = "generic" | "deepseek" | "kimi" | "glm" | "qwen" | "zenmux"
+export type ProviderKind =
+  | "openai-compatible"
+  | "openai-responses"
+  | "anthropic"
+  | "deepseek"
+  | "kimi"
+  | "qwen"
+  | "glm"
+  | "zenmux"
+  | "custom"
 export type EnvironmentEntryKind = "cli" | "mcp" | "skill"
 export type EnvironmentSnapshotStatus = "idle" | "running" | "completed" | "error" | "canceled"
+
+export interface ProviderKindOption {
+  id: ProviderKind
+  label: string
+  description: string
+  aliases: string[]
+  defaultBaseUrl?: string
+  helpUrl?: string
+  type: ProviderType
+  compat: ProviderCompat
+}
 
 export interface ProviderDraft {
   providerId: string
@@ -54,6 +75,115 @@ export interface ToolchainEditorState {
   install: string
   repoUrl: string
   docsText: string
+}
+
+export const PROVIDER_TYPE_OPTIONS: ProviderType[] = ["openai_chat", "anthropic_messages", "openai_responses"]
+export const PROVIDER_COMPAT_OPTIONS: ProviderCompat[] = ["generic", "deepseek", "kimi", "glm", "qwen", "zenmux"]
+export const PROVIDER_KIND_REGISTRY: ProviderKindOption[] = [
+  {
+    id: "openai-compatible",
+    label: "OpenAI compatible",
+    description: "适合 OpenAI 格式网关、One API、LiteLLM、New API。",
+    aliases: ["openai", "compatible", "one api", "oneapi", "litellm", "new api", "gateway"],
+    type: "openai_chat",
+    compat: "generic",
+  },
+  {
+    id: "openai-responses",
+    label: "OpenAI Responses",
+    description: "使用 OpenAI Responses API 的原生调用路径。",
+    aliases: ["openai", "responses"],
+    defaultBaseUrl: "https://api.openai.com/v1",
+    type: "openai_responses",
+    compat: "generic",
+  },
+  {
+    id: "anthropic",
+    label: "Anthropic",
+    description: "Claude Messages API。",
+    aliases: ["anthropic", "claude"],
+    defaultBaseUrl: "https://api.anthropic.com",
+    type: "anthropic_messages",
+    compat: "generic",
+  },
+  {
+    id: "deepseek",
+    label: "DeepSeek",
+    description: "OpenAI 格式，应用 DeepSeek 兼容差异。",
+    aliases: ["deepseek", "deepseek-chat", "deepseek-reasoner"],
+    defaultBaseUrl: "https://api.deepseek.com",
+    type: "openai_chat",
+    compat: "deepseek",
+  },
+  {
+    id: "kimi",
+    label: "Kimi",
+    description: "OpenAI 格式，应用 Kimi 兼容差异。",
+    aliases: ["kimi", "moonshot"],
+    defaultBaseUrl: "https://api.moonshot.cn/v1",
+    type: "openai_chat",
+    compat: "kimi",
+  },
+  {
+    id: "qwen",
+    label: "Qwen",
+    description: "OpenAI 格式，应用 Qwen 兼容差异。",
+    aliases: ["qwen", "dashscope", "aliyun", "alibaba"],
+    defaultBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    type: "openai_chat",
+    compat: "qwen",
+  },
+  {
+    id: "glm",
+    label: "GLM",
+    description: "OpenAI 格式，应用 GLM 兼容差异。",
+    aliases: ["glm", "zhipu", "bigmodel"],
+    defaultBaseUrl: "https://open.bigmodel.cn/api/paas/v4",
+    type: "openai_chat",
+    compat: "glm",
+  },
+  {
+    id: "zenmux",
+    label: "ZenMux",
+    description: "ZenMux 兼容网关。",
+    aliases: ["zenmux"],
+    type: "openai_chat",
+    compat: "zenmux",
+  },
+  {
+    id: "custom",
+    label: "自定义",
+    description: "手动指定协议类型与兼容模式。",
+    aliases: ["custom", "manual", "自定义", "手动"],
+    type: "openai_chat",
+    compat: "generic",
+  },
+]
+
+export function resolveProviderProtocol(kind: ProviderKind): Pick<ProviderDraft, "type" | "compat"> {
+  const option = PROVIDER_KIND_REGISTRY.find((item) => item.id === kind)
+  return {
+    type: option?.type || "openai_chat",
+    compat: option?.compat || "generic",
+  }
+}
+
+export function inferProviderKind(input: {
+  providerId?: string
+  baseUrl?: string
+  type?: ProviderType
+  compat?: ProviderCompat
+}): ProviderKind {
+  const text = `${input.providerId || ""} ${input.baseUrl || ""}`.toLowerCase()
+  if (input.type === "anthropic_messages" || text.includes("anthropic") || text.includes("claude")) return "anthropic"
+  if (input.type === "openai_responses") return "openai-responses"
+  if (input.compat && input.compat !== "generic") return input.compat
+  if (text.includes("deepseek")) return "deepseek"
+  if (text.includes("moonshot") || text.includes("kimi")) return "kimi"
+  if (text.includes("dashscope") || text.includes("qwen") || text.includes("aliyun")) return "qwen"
+  if (text.includes("bigmodel") || text.includes("zhipu") || text.includes("glm")) return "glm"
+  if (text.includes("zenmux")) return "zenmux"
+  return "openai-compatible"
 }
 
 export function providerDraftToPayload(draft: ProviderDraft): Record<string, unknown> {

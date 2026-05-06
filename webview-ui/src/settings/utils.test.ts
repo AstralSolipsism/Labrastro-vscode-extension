@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest"
 import {
+  PROVIDER_KIND_REGISTRY,
   agentDefinitionDraftToPayload,
+  inferProviderKind,
   modelProfilePayload,
   normalizeEnvironmentSnapshot,
   providerDraftToPayload,
+  resolveProviderProtocol,
   runtimeProfileDraftToPayload,
   toolchainEditorToPayload,
   uniqueCommandRules,
@@ -26,6 +29,53 @@ describe("settings utils", () => {
       api_key: undefined,
       enabled: true,
     })
+  })
+
+  it("maps provider kinds to the saved protocol fields", () => {
+    expect(resolveProviderProtocol("deepseek")).toEqual({
+      type: "openai_chat",
+      compat: "deepseek",
+    })
+    expect(resolveProviderProtocol("anthropic")).toEqual({
+      type: "anthropic_messages",
+      compat: "generic",
+    })
+    expect(resolveProviderProtocol("openai-responses")).toEqual({
+      type: "openai_responses",
+      compat: "generic",
+    })
+  })
+
+  it("keeps provider types searchable without changing the save payload schema", () => {
+    const deepseek = PROVIDER_KIND_REGISTRY.find((kind) => kind.id === "deepseek")
+    expect(deepseek).toMatchObject({
+      label: "DeepSeek",
+      aliases: expect.arrayContaining(["deepseek"]),
+      defaultBaseUrl: "https://api.deepseek.com",
+      type: "openai_chat",
+      compat: "deepseek",
+    })
+  })
+
+  it("infers provider kinds from saved provider metadata", () => {
+    expect(inferProviderKind({
+      providerId: "moonshot",
+      baseUrl: "https://api.moonshot.cn/v1",
+      type: "openai_chat",
+      compat: "generic",
+    })).toBe("kimi")
+    expect(inferProviderKind({
+      providerId: "claude",
+      baseUrl: "https://api.anthropic.com",
+      type: "anthropic_messages",
+      compat: "generic",
+    })).toBe("anthropic")
+    expect(inferProviderKind({
+      providerId: "private-gateway",
+      baseUrl: "https://llm.example.test/v1",
+      type: "openai_chat",
+      compat: "generic",
+    })).toBe("openai-compatible")
   })
 
   it("builds model profile payloads", () => {

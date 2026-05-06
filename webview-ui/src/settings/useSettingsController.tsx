@@ -1343,7 +1343,7 @@ export function createSettingsController(props: SettingsViewProps) {
 
   const [providerId, setProviderId] = createSignal("deepseek")
   const [providerType, setProviderType] = createSignal<ProviderType>("openai_chat")
-  const [providerCompat, setProviderCompat] = createSignal<ProviderCompat>("deepseek")
+  const [providerCompat, setProviderCompat] = createSignal<ProviderCompat>("generic")
   const [providerBaseUrl, setProviderBaseUrl] = createSignal("https://api.deepseek.com")
   const [providerApiKey, setProviderApiKey] = createSignal("")
   const [providerModel, setProviderModel] = createSignal("")
@@ -2421,16 +2421,17 @@ const refreshAdmin = () => {
     })
   }
 
-  const testProvider = (model = profileModel() || providerModel()) => {
-    if (!model) return
-    setProviderModel(model)
-    setProfileModel(model)
+  const testProvider = (model = providerModel()) => {
+    const modelId = model.trim()
+
+    if (!modelId) return
+    setProviderModel(modelId)
     setActionIntent("")
     vscode.postMessage({
       type: "provider.test",
       payload: {
         provider_id: providerId(),
-        model,
+        model: modelId,
         prompt: "ping",
       },
     })
