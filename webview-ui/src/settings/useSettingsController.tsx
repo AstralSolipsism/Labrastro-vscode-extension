@@ -137,6 +137,8 @@ interface EnvironmentSnapshotState {
   status: EnvironmentSnapshotStatus
   summary: string
   chatId?: string
+  taskId?: string
+  agentId?: string
   sessionId?: string
   startedAt?: string
   completedAt?: string
@@ -312,6 +314,9 @@ const AGENT_CAPABILITY_OPTIONS: RuntimeOption[] = [
   { value: "run_tests", labelKey: "agentConfig.agent.capability.runTests", descKey: "agentConfig.agent.capability.runTests.desc" },
   { value: "open_pr", labelKey: "agentConfig.agent.capability.openPr", descKey: "agentConfig.agent.capability.openPr.desc" },
   { value: "use_mcp", labelKey: "agentConfig.agent.capability.useMcp", descKey: "agentConfig.agent.capability.useMcp.desc" },
+  { value: "environment.check", labelKey: "agentConfig.agent.capability.environmentCheck", descKey: "agentConfig.agent.capability.environmentCheck.desc" },
+  { value: "environment.configure", labelKey: "agentConfig.agent.capability.environmentConfigure", descKey: "agentConfig.agent.capability.environmentConfigure.desc" },
+  { value: "environment.manifest.read", labelKey: "agentConfig.agent.capability.environmentManifestRead", descKey: "agentConfig.agent.capability.environmentManifestRead.desc" },
 ]
 
 function emptyProfileDraft(id = ""): RuntimeProfileDraft {
@@ -1200,6 +1205,8 @@ function normalizeEnvironmentSnapshot(value: unknown): EnvironmentSnapshotState 
     status: (["idle", "running", "completed", "error", "canceled"].includes(stringValue(item.status)) ? stringValue(item.status) : "idle") as EnvironmentSnapshotStatus,
     summary: stringValue(item.summary, "环境清单尚未加载。"),
     chatId: stringValue(item.chatId) || undefined,
+    taskId: stringValue(item.taskId) || undefined,
+    agentId: stringValue(item.agentId) || undefined,
     sessionId: stringValue(item.sessionId) || undefined,
     startedAt: stringValue(item.startedAt) || undefined,
     completedAt: stringValue(item.completedAt) || undefined,
@@ -1353,6 +1360,7 @@ export function createSettingsController(props: SettingsViewProps) {
   const [customModelDraft, setCustomModelDraft] = createSignal("")
   const [actionIntent, setActionIntent] = createSignal<ModelActionIntent>("")
   const [environmentBootstrapped, setEnvironmentBootstrapped] = createSignal(false)
+  const [selectedEnvironmentAgentId, setSelectedEnvironmentAgentId] = createSignal("")
   const [serverSettingsBootstrapped, setServerSettingsBootstrapped] = createSignal(false)
   const [selectedEnvironmentApproval, setSelectedEnvironmentApproval] = createSignal<EnvironmentApprovalState | undefined>()
   const [toolchainBootstrapped, setToolchainBootstrapped] = createSignal(false)
@@ -1565,7 +1573,7 @@ export function createSettingsController(props: SettingsViewProps) {
     objectValue(serverSettingsPayload().runtime || server.adminState().agent_runtime)
 
   )  /* ── Agent 配置 computed ── */
-  const agentRuntimeProfiles = createMemo(() => {
+  const agentRuntimeProfiles = createMemo<Array<Record<string, unknown> & { id: string }>>(() => {
     const settings = agentRuntimeSettings()
     const profiles = objectValue(settings.runtime_profiles)
     return Object.entries(profiles).map(([id, value]) => ({
@@ -1573,15 +1581,21 @@ export function createSettingsController(props: SettingsViewProps) {
       ...(typeof value === "object" && value ? value as Record<string, unknown> : {}),
     }))
   })
-  const agentRuntimeAgents = createMemo(() => {
-    const settings = agentRuntimeSettings()
-    const agents = objectValue(settings.agents)
-    return Object.entries(agents).map(([id, value]) => ({
-      id,
-      ...(typeof value === "object" && value ? value as Record<string, unknown> : {}),
-    }))
-  })
-  const registeredMcpServers = createMemo(() => {
+  const agentRuntimeAgents = createMemo<Array<Record<string, unknown> & { id: string }>>(() => {
+    const settings = agentRuntimeSettings()
+    const agents = objectValue(settings.agents)
+    return Object.entries(agents).map(([id, value]) => ({
+      id,
+      ...(typeof value === "object" && value ? value as Record<string, unknown> : {}),
+    }))
+  })
+  const environmentAgentCandidates = createMemo<Array<Record<string, unknown> & { id: string }>>(() =>
+    agentRuntimeAgents().filter((agent) => {
+      const capabilities = stringArray(agent.capabilities)
+      return capabilities.includes("environment.check") || capabilities.includes("environment.configure")
+    })
+  )
+  const registeredMcpServers = createMemo(() => {
     const groups = toolchainGroups()
     return groups.mcp.map((item) => item.name)
   })
@@ -1671,6 +1685,18 @@ export function createSettingsController(props: SettingsViewProps) {
     }
     if (!items.some((item) => item.id === selected)) {
       setSelectedToolchainId(items[0].id)
+    }
+  })
+
+  createEffect(() => {
+    const candidates = environmentAgentCandidates()
+    const selected = selectedEnvironmentAgentId()
+    if (!candidates.length) {
+      if (selected) setSelectedEnvironmentAgentId("")
+      return
+    }
+    if (!selected || !candidates.some((agent) => agent.id === selected)) {
+      setSelectedEnvironmentAgentId(candidates[0].id)
     }
   })
 
@@ -2219,18 +2245,11 @@ const refreshAdmin = () => {
   const runEnvironment = (mode: "check" | "configure", entryIds?: string[]) => {
     const items = environmentRunItems(entryIds)
     if (!items.length) return
-    const request = {
-      id: `environment-${mode}-${Date.now()}`,
-      mode,
-      executionMode:
-        entryIds?.length === 1 ? "combined" : toolchainRunSerial() ? "serial" : "combined",
-      items,
-    } satisfies EnvironmentRunLaunchRequest
-    if (props.onEnvironmentRun) {
-      props.onEnvironmentRun(request)
-    } else {
-      settingsMessages.runEnvironmentInChat(vscode, mode, items.map((item) => item.id))
+    const agentId = selectedEnvironmentAgentId()
+    if (!agentId) {
+      return
     }
+    settingsMessages.runEnvironment(vscode, mode, items.map((item) => item.id), agentId)
   }
   const stopEnvironmentRun = () => settingsMessages.cancelEnvironment(vscode)
 
@@ -2712,6 +2731,8 @@ const refreshAdmin = () => {
     setActionIntent,
     environmentBootstrapped,
     setEnvironmentBootstrapped,
+    selectedEnvironmentAgentId,
+    setSelectedEnvironmentAgentId,
     serverSettingsBootstrapped,
     setServerSettingsBootstrapped,
     selectedEnvironmentApproval,
@@ -2848,6 +2869,7 @@ const refreshAdmin = () => {
     agentRuntimeState,
     agentRuntimeProfiles,
     agentRuntimeAgents,
+    environmentAgentCandidates,
     registeredMcpServers,
     profileIdList,
     currentProfileDraft,
