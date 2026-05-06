@@ -1,7 +1,7 @@
 /**
  * Webview 前端入口。
  *
- * 这是 esbuild 的入口文件，会被编译为 dist/webview.js (IIFE 格式)。
+ * 这是 esbuild 的入口文件，会被编译为 dist/webview.js 并通过 ESM module script 加载。
  * SolidJS 的 render() 函数将 <App /> 挂载到 HTML 模板中的 #root 元素上。
  *
  * 生命周期：

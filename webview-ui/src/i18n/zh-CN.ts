@@ -69,7 +69,7 @@ const zhCN: Record<string, string> = {
 
   // ── SettingsView — 服务商管理 ──
   "provider.title": "服务商管理",
-  "provider.desc": "按\u201c服务商 \u2192 模型 \u2192 主/副模型\u201d路径完成配置，API Key 保存在 host 配置中，前端不回显明文。",
+  "provider.desc": "管理服务商连接、凭据和模型目录，API Key 保存在 host 配置中，前端不回显明文。",
   "provider.requestHost": "实际请求 Host",
   "provider.admin": "Admin",
   "provider.available": "可用",
@@ -376,7 +376,7 @@ const zhCN: Record<string, string> = {
   "about.webview": "Webview",
   "about.webviewDesc": "SolidJS + CSS",
   "about.build": "构建",
-  "about.buildDesc": "esbuild (IIFE + CJS)",
+  "about.buildDesc": "esbuild (ESM + CJS)",
   "about.communication": "通信",
   "about.communicationDesc": "postMessage 双向消息",
   "about.corePatterns": "核心模式",

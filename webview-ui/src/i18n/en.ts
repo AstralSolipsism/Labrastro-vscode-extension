@@ -69,7 +69,7 @@ const en: Record<string, string> = {
 
   // ── SettingsView — Providers ──
   "provider.title": "Provider Management",
-  "provider.desc": "Configure via Provider → Model → Main/Sub model path. API Keys are stored on the host and not echoed in plaintext.",
+  "provider.desc": "Manage provider connections, credentials, and model catalogs. API keys are stored on the host and not echoed in plaintext.",
   "provider.requestHost": "Request Host",
   "provider.admin": "Admin",
   "provider.available": "Available",
@@ -376,7 +376,7 @@ const en: Record<string, string> = {
   "about.webview": "Webview",
   "about.webviewDesc": "SolidJS + CSS",
   "about.build": "Build",
-  "about.buildDesc": "esbuild (IIFE + CJS)",
+  "about.buildDesc": "esbuild (ESM + CJS)",
   "about.communication": "Communication",
   "about.communicationDesc": "postMessage bidirectional messaging",
   "about.corePatterns": "Core Patterns",

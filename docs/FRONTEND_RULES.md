@@ -272,17 +272,25 @@ VS Code 的 CSS 变量**自动跟随用户主题**。当用户在 VS Code 中切
 
 ## 6. 构建与打包
 
-### 规则 6.1 — Webview 必须打包为 IIFE 格式
+### 规则 6.1 — Webview 使用 ESM 分包并由 nonce module script 加载
 
-Webview 的 `<script>` 标签不支持 `type="module"`（受 CSP nonce 限制），必须使用 IIFE：
+当前项目的 Webview 入口使用 `<script type="module" nonce="...">`，构建产物允许 ESM chunk 分包。所有入口脚本、chunk、CSS 和静态资源必须通过 Extension Host 转换为 `webview.asWebviewUri(...)` 后注入 HTML，并继续受 nonce CSP 约束：
 
 ```javascript
 // esbuild.js
 {
-  format: "iife",      // ✅ 立即执行函数表达式
-  platform: "browser", // ✅ 浏览器环境
-  bundle: true,        // ✅ 打包所有依赖
+  format: "esm",       // Webview 入口使用 type="module"
+  splitting: true,     // 允许 chunk 分包
+  platform: "browser", // 浏览器环境，但仍受 VS Code CSP 限制
+  bundle: true,        // 打包所有依赖
+  outdir: "dist",
 }
+```
+
+HTML 侧必须给 module script 添加 nonce：
+
+```html
+<script type="module" nonce="${nonce}" src="${scriptUri}"></script>
 ```
 
 ### 规则 6.2 — Extension Host 必须打包为 CJS 格式
@@ -457,7 +465,7 @@ postMessage({ type: "filePreview", lines: first100Lines, totalLines: 5000 })
 | 4 | 在 Webview 中直接 fetch 外部 API | CSP 拦截 | Extension Host 代理请求 |
 | 5 | 使用 `localStorage` | 数据不稳定或丢失 | 使用 `getState/setState` |
 | 6 | 未处理 `onDidDispose` | 内存泄漏 | 在 dispose 中清理定时器和订阅 |
-| 7 | ESM 格式的 script | CSP 拦截 `type="module"` | 打包为 IIFE 格式 |
+| 7 | ESM chunk 未通过 `asWebviewUri()` 注入 | chunk/CSS 404 或 CSP 拦截 | 所有本地资源都由 Extension Host 转成 Webview URI，并保留 nonce module script |
 | 8 | 硬编码颜色 | 深色/浅色主题不适配 | 使用 `--vscode-*` CSS 变量 |
 | 9 | 外部 CDN 引用 | CSP 拦截 | 打包到 dist/ |
 | 10 | Extension 未等 webviewReady 就发消息 | 消息丢失 | 实现 ready 握手协议 |
