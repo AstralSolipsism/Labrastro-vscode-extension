@@ -11,8 +11,7 @@ import {
   type HostUrlState,
   normalizeHostUrl,
   resolveHostUrlState,
-  selectDogcodeHostWriteSource,
-  selectMigrationWriteSource,
+  selectLabrastroHostWriteSource,
 } from "./host-config"
 
 export type JsonObject = Record<string, unknown>
@@ -40,9 +39,6 @@ export interface ConnectionState {
   peerId?: string
   status: "checking" | "missing-config" | "ready" | "error"
   message?: string
-  hostUrlMigratedFromEzcode?: boolean
-  legacyHostUrl?: string
-  legacyHostUrlSource?: HostUrlSource
   hostUrlSaveRequested?: string
   hostUrlSaveApplied?: boolean
 }
@@ -90,7 +86,7 @@ export async function retryInvalidPeerTokenOnce<T>(
   }
 }
 
-export class DogcodeRemoteClient {
+export class LabrastroRemoteClient {
   private peerProcess: ChildProcessWithoutNullStreams | undefined
   private peerInfo: PeerInfo | undefined
   private peerStartupPromise: Promise<PeerInfo> | undefined
@@ -114,9 +110,8 @@ export class DogcodeRemoteClient {
   }
 
   async connectionState(): Promise<ConnectionState> {
-    const migration = await this.ensureHostUrlMigrated()
-    const adminSecret = await this.context.secrets.get("dogcode.adminSecret")
-    const bootstrapSecret = await this.context.secrets.get("dogcode.bootstrapSecret")
+    const adminSecret = await this.context.secrets.get("labrastro.adminSecret")
+    const bootstrapSecret = await this.context.secrets.get("labrastro.bootstrapSecret")
     const host = this.hostUrlState()
     const adminMissing = !host.url || !adminSecret
     if (!adminMissing) {
@@ -134,9 +129,6 @@ export class DogcodeRemoteClient {
           peerId: this.peerInfo?.peer_id,
           status: "error",
           message: `Admin API unreachable at ${host.url}: ${errorMessage(error)}`,
-          hostUrlMigratedFromEzcode: Boolean(migration),
-          legacyHostUrl: migration?.legacyHostUrl || host.legacyHostUrl,
-          legacyHostUrlSource: migration?.legacyHostUrlSource || host.legacyHostUrlSource,
         }
       }
     }
@@ -152,10 +144,7 @@ export class DogcodeRemoteClient {
       peerConnected: this.isPeerRunning(),
       peerId: this.peerInfo?.peer_id,
       status: missing ? "missing-config" : "ready",
-      message: migration?.message || connectionMessage(host, Boolean(adminSecret), Boolean(bootstrapSecret)),
-      hostUrlMigratedFromEzcode: Boolean(migration),
-      legacyHostUrl: migration?.legacyHostUrl || host.legacyHostUrl,
-      legacyHostUrlSource: migration?.legacyHostUrlSource || host.legacyHostUrlSource,
+      message: connectionMessage(host, Boolean(adminSecret), Boolean(bootstrapSecret)),
     }
   }
 
@@ -168,9 +157,9 @@ export class DogcodeRemoteClient {
     if (options.hostUrl !== undefined && options.hostUrl.trim()) {
       requestedHostUrl = normalizeHostUrl(options.hostUrl)
       try {
-        await this.updateDogcodeHostUrl(
+        await this.updateLabrastroHostUrl(
           requestedHostUrl,
-          selectDogcodeHostWriteSource(this.dogcodeHostInspection())
+          selectLabrastroHostWriteSource(this.labrastroHostInspection())
         )
       } catch (error) {
         const host = this.hostUrlState()
@@ -178,8 +167,8 @@ export class DogcodeRemoteClient {
           hostUrl: host.url,
           hostUrlConfigured: host.configured,
           hostUrlSource: host.source,
-          adminSecretSet: Boolean(await this.context.secrets.get("dogcode.adminSecret")),
-          bootstrapSecretSet: Boolean(await this.context.secrets.get("dogcode.bootstrapSecret")),
+          adminSecretSet: Boolean(await this.context.secrets.get("labrastro.adminSecret")),
+          bootstrapSecretSet: Boolean(await this.context.secrets.get("labrastro.bootstrapSecret")),
           adminReachable: false,
           peerConnected: this.isPeerRunning(),
           peerId: this.peerInfo?.peer_id,
@@ -191,10 +180,10 @@ export class DogcodeRemoteClient {
       }
     }
     if (options.adminSecret !== undefined && options.adminSecret.trim()) {
-      await this.context.secrets.store("dogcode.adminSecret", options.adminSecret.trim())
+      await this.context.secrets.store("labrastro.adminSecret", options.adminSecret.trim())
     }
     if (options.bootstrapSecret !== undefined && options.bootstrapSecret.trim()) {
-      await this.context.secrets.store("dogcode.bootstrapSecret", options.bootstrapSecret.trim())
+      await this.context.secrets.store("labrastro.bootstrapSecret", options.bootstrapSecret.trim())
       await this.stopPeer()
     }
     const state = await this.connectionState()
@@ -425,7 +414,7 @@ export class DogcodeRemoteClient {
   }
 
   private async adminPost(pathname: string, payload: JsonObject): Promise<JsonObject> {
-    const adminSecret = await this.context.secrets.get("dogcode.adminSecret")
+    const adminSecret = await this.context.secrets.get("labrastro.adminSecret")
     if (!adminSecret) {
       throw new Error("Admin secret is not configured.")
     }
@@ -467,7 +456,7 @@ export class DogcodeRemoteClient {
   }
 
   private async startPeer(generation: number): Promise<PeerInfo> {
-    const bootstrapSecret = await this.context.secrets.get("dogcode.bootstrapSecret")
+    const bootstrapSecret = await this.context.secrets.get("labrastro.bootstrapSecret")
     if (!bootstrapSecret) {
       throw new Error("Bootstrap secret is not configured.")
     }
@@ -512,8 +501,8 @@ export class DogcodeRemoteClient {
       throw new Error("Peer startup was cancelled.")
     }
     this.peerProcess = peerProcess
-    peerProcess.stdout.on("data", (chunk) => console.log(`[dogcode peer] ${chunk}`))
-    peerProcess.stderr.on("data", (chunk) => console.warn(`[dogcode peer] ${chunk}`))
+    peerProcess.stdout.on("data", (chunk) => console.log(`[labrastro peer] ${chunk}`))
+    peerProcess.stderr.on("data", (chunk) => console.warn(`[labrastro peer] ${chunk}`))
     peerProcess.on("exit", () => {
       if (this.peerProcess === peerProcess) {
         this.peerProcess = undefined
@@ -537,50 +526,25 @@ export class DogcodeRemoteClient {
   }
 
   private hostUrlState(): HostUrlState {
-    const config = this.dogcodeConfig()
+    const config = this.labrastroConfig()
     return resolveHostUrlState(
-      this.dogcodeHostInspection(config),
-      config.get<string>("hostUrl", DEFAULT_HOST_URL),
-      this.ezcodeHostInspection()
+      this.labrastroHostInspection(config),
+      config.get<string>("hostUrl", DEFAULT_HOST_URL)
     )
   }
 
-  private async ensureHostUrlMigrated(): Promise<HostUrlState | undefined> {
-    const host = this.hostUrlState()
-    if (!host.migratedFromEzcode || !host.legacyHostUrl) {
-      return undefined
-    }
-    try {
-      await this.updateDogcodeHostUrl(
-        host.legacyHostUrl,
-        selectMigrationWriteSource(host.migrationTargetSource)
-      )
-      return host
-    } catch (error) {
-      console.warn("[dogcode] legacy ezcode host migration failed", error)
-      return {
-        ...host,
-        message: `检测到 EZCode 旧 Host 配置 ${host.legacyHostUrl}，但自动迁移到 dogcode 失败：${errorMessage(error)}。本次仍会使用旧 Host 发起请求。`,
-      }
-    }
-  }
-
-  private dogcodeConfig(source?: HostUrlSource): vscode.WorkspaceConfiguration {
+  private labrastroConfig(source?: HostUrlSource): vscode.WorkspaceConfiguration {
     const resource = source === "workspace-folder"
       ? vscode.workspace.workspaceFolders?.[0]?.uri
       : undefined
-    return vscode.workspace.getConfiguration("dogcode", resource)
+    return vscode.workspace.getConfiguration("labrastro", resource)
   }
 
-  private dogcodeHostInspection(config = this.dogcodeConfig()): HostUrlInspection | undefined {
+  private labrastroHostInspection(config = this.labrastroConfig()): HostUrlInspection | undefined {
     return config.inspect<string>("hostUrl")
   }
 
-  private ezcodeHostInspection(): HostUrlInspection | undefined {
-    return vscode.workspace.getConfiguration("ezcode").inspect<string>("hostUrl")
-  }
-
-  private async updateDogcodeHostUrl(value: string, source: HostUrlSource): Promise<void> {
+  private async updateLabrastroHostUrl(value: string, source: HostUrlSource): Promise<void> {
     const normalizedSource =
       source === "workspace-folder" && vscode.workspace.workspaceFolders?.[0]
         ? "workspace-folder"
@@ -593,7 +557,7 @@ export class DogcodeRemoteClient {
         : normalizedSource === "workspace"
           ? vscode.ConfigurationTarget.Workspace
           : vscode.ConfigurationTarget.Global
-    await this.dogcodeConfig(normalizedSource).update("hostUrl", value, target)
+    await this.labrastroConfig(normalizedSource).update("hostUrl", value, target)
   }
 
   private async ensurePeerBinary(): Promise<string> {
@@ -631,7 +595,7 @@ export class DogcodeRemoteClient {
       const backendCapabilities = await this.capabilities()
       return safePathSegment(backendCapabilities.serverVersion, "unknown")
     } catch (error) {
-      console.warn("[dogcode] unable to read backend version for peer artifact cache", error)
+      console.warn("[labrastro] unable to read backend version for peer artifact cache", error)
       return "unknown"
     }
   }
@@ -666,7 +630,6 @@ export class DogcodeRemoteClient {
   }
 
   private async postJson(pathname: string, payload: JsonObject, headers: Record<string, string> = {}): Promise<JsonObject> {
-    await this.ensureHostUrlMigrated()
     const response = await fetch(this.hostUrl + pathname, {
       method: "POST",
       headers: {
@@ -679,13 +642,11 @@ export class DogcodeRemoteClient {
   }
 
   private async getJson(pathname: string, headers: Record<string, string> = {}): Promise<JsonObject> {
-    await this.ensureHostUrlMigrated()
     const response = await fetch(this.hostUrl + pathname, { headers })
     return parseJsonResponse(response)
   }
 
   private async requestText(pathname: string, headers: Record<string, string> = {}): Promise<string> {
-    await this.ensureHostUrlMigrated()
     const response = await fetch(this.hostUrl + pathname, { headers })
     if (!response.ok) {
       throw new Error(`${response.status} ${await response.text()}`)
@@ -694,7 +655,6 @@ export class DogcodeRemoteClient {
   }
 
   private async requestBuffer(pathname: string): Promise<Buffer> {
-    await this.ensureHostUrlMigrated()
     const response = await fetch(this.hostUrl + pathname)
     if (!response.ok) {
       throw new Error(`${response.status} ${await response.text()}`)

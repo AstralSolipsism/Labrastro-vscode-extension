@@ -85,7 +85,7 @@ export const ServerProvider: ParentComponent = (props) => {
   const [environmentError, setEnvironmentError] = createSignal<string | undefined>()
   const [executorType, setExecutorType] = createSignal<{ location: string; engine: string }>({
     location: "remote",
-    engine: "ezcode",
+    engine: "labrastro",
   })
 
   onMount(() => {
@@ -95,11 +95,11 @@ export const ServerProvider: ParentComponent = (props) => {
         setConnected(true)
         setWorkspaceDirectory(msg.workspaceDirectory as string | undefined)
         setExtensionVersion(msg.extensionVersion as string | undefined)
-        console.log("[dogcode startup]", {
+        console.log("[labrastro startup]", {
           name: "ready-received",
           elapsedMs: Math.round(performance.now()),
         })
-        console.log("[dogcode] 已连接到 Extension Host", msg)
+        console.log("[labrastro] 已连接到 Extension Host", msg)
       }
       if (msg.type === "connection.state" && typeof msg.payload === "object" && msg.payload) {
         setConnectionState(msg.payload as Record<string, unknown>)
@@ -205,7 +205,7 @@ export const ServerProvider: ParentComponent = (props) => {
         setEnvironmentError(typeof msg.message === "string" ? msg.message : "Environment run failed")
       }
       if (msg.type === "startup.metric") {
-        console.log("[dogcode startup]", msg.payload)
+        console.log("[labrastro startup]", msg.payload)
       }
       if (msg.type === "executorType.state" && typeof msg.payload === "object" && msg.payload) {
         setExecutorType(msg.payload as { location: string; engine: string })

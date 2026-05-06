@@ -6,9 +6,8 @@ import * as path from "path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const vscodeMock = vi.hoisted(() => ({
-  dogcodeInspect: undefined as Record<string, string> | undefined,
-  dogcodeValue: undefined as string | undefined,
-  ezcodeInspect: undefined as Record<string, string> | undefined,
+  labrastroInspect: undefined as Record<string, string> | undefined,
+  labrastroValue: undefined as string | undefined,
   updates: [] as Array<{ section: string; key: string; value: string; target: number }>,
   ignoreUpdates: false,
   targets: {
@@ -29,22 +28,22 @@ const fsPromisesMock = vi.hoisted(() => ({
 vi.mock("vscode", () => ({
   ConfigurationTarget: vscodeMock.targets,
   workspace: {
-    workspaceFolders: [{ uri: { fsPath: "G:/AboutDEV/EZCode" } }],
+    workspaceFolders: [{ uri: { fsPath: "G:/AboutDEV/Labrastro" } }],
     getConfiguration: (section: string) => ({
-      inspect: () => section === "dogcode" ? vscodeMock.dogcodeInspect : vscodeMock.ezcodeInspect,
-      get: (_key: string, fallback: string) => section === "dogcode"
-        ? (vscodeMock.dogcodeValue ?? fallback)
+      inspect: () => section === "labrastro" ? vscodeMock.labrastroInspect : undefined,
+      get: (_key: string, fallback: string) => section === "labrastro"
+        ? (vscodeMock.labrastroValue ?? fallback)
         : fallback,
       update: async (key: string, value: string, target: number) => {
         vscodeMock.updates.push({ section, key, value, target })
-        if (section !== "dogcode" || key !== "hostUrl" || vscodeMock.ignoreUpdates) return
-        vscodeMock.dogcodeValue = value
+        if (section !== "labrastro" || key !== "hostUrl" || vscodeMock.ignoreUpdates) return
+        vscodeMock.labrastroValue = value
         if (target === vscodeMock.targets.WorkspaceFolder) {
-          vscodeMock.dogcodeInspect = { workspaceFolderValue: value }
+          vscodeMock.labrastroInspect = { workspaceFolderValue: value }
         } else if (target === vscodeMock.targets.Workspace) {
-          vscodeMock.dogcodeInspect = { workspaceValue: value }
+          vscodeMock.labrastroInspect = { workspaceValue: value }
         } else {
-          vscodeMock.dogcodeInspect = { globalValue: value }
+          vscodeMock.labrastroInspect = { globalValue: value }
         }
       },
     }),
@@ -66,17 +65,16 @@ vi.mock("fs/promises", async () => {
 })
 
 import {
-  DogcodeRemoteClient,
+  LabrastroRemoteClient,
   RemoteError,
   isInvalidPeerTokenError,
   parseJsonResponse,
   retryInvalidPeerTokenOnce,
-} from "./DogcodeRemoteClient"
+} from "./LabrastroRemoteClient"
 
 beforeEach(() => {
-  vscodeMock.dogcodeInspect = undefined
-  vscodeMock.dogcodeValue = undefined
-  vscodeMock.ezcodeInspect = undefined
+  vscodeMock.labrastroInspect = undefined
+  vscodeMock.labrastroValue = undefined
   vscodeMock.updates = []
   vscodeMock.ignoreUpdates = false
   childProcessMock.spawn.mockReset()
@@ -94,7 +92,7 @@ afterEach(async () => {
 })
 
 async function makeTempStorage(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "dogcode-peer-"))
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "labrastro-peer-"))
   tempDirs.push(dir)
   return dir
 }
@@ -102,7 +100,7 @@ async function makeTempStorage(): Promise<string> {
 function makePeerContext(storagePath: string) {
   return {
     secrets: {
-      get: vi.fn(async (key: string) => key === "dogcode.bootstrapSecret" ? "bootstrap-secret" : undefined),
+      get: vi.fn(async (key: string) => key === "labrastro.bootstrapSecret" ? "bootstrap-secret" : undefined),
       store: vi.fn(async () => undefined),
     },
     globalStorageUri: { fsPath: storagePath },
@@ -194,7 +192,7 @@ function fetchPathCount(fetchMock: ReturnType<typeof vi.fn>, pathname: string): 
   return fetchMock.mock.calls.filter(([input]) => String(input).endsWith(pathname)).length
 }
 
-describe("DogcodeRemoteClient remote errors", () => {
+describe("LabrastroRemoteClient remote errors", () => {
   it("keeps HTTP status and backend error code", async () => {
     const response = new Response(
       JSON.stringify({ error: "invalid_peer_token", message: "expired" }),
@@ -218,12 +216,12 @@ describe("DogcodeRemoteClient remote errors", () => {
   })
 })
 
-describe("DogcodeRemoteClient runtime admin API", () => {
+describe("LabrastroRemoteClient runtime admin API", () => {
   it("posts Runtime task actions through admin endpoints", async () => {
-    vscodeMock.dogcodeValue = "http://127.0.0.1:8765"
+    vscodeMock.labrastroValue = "http://127.0.0.1:8765"
     const context = {
       secrets: {
-        get: vi.fn(async (key: string) => key === "dogcode.adminSecret" ? "admin-secret" : undefined),
+        get: vi.fn(async (key: string) => key === "labrastro.adminSecret" ? "admin-secret" : undefined),
       },
     }
     const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
@@ -239,7 +237,7 @@ describe("DogcodeRemoteClient runtime admin API", () => {
       )
     })
     vi.stubGlobal("fetch", fetchMock)
-    const client = new DogcodeRemoteClient(context as never)
+    const client = new LabrastroRemoteClient(context as never)
 
     await expect(client.runtimeSubmit({ agent_id: "reviewer" })).resolves.toMatchObject({
       path: "/remote/admin/runtime/submit",
@@ -258,9 +256,9 @@ describe("DogcodeRemoteClient runtime admin API", () => {
   })
 })
 
-describe("DogcodeRemoteClient chat start", () => {
+describe("LabrastroRemoteClient chat start", () => {
   it("passes mode and workflow routing to the remote chat start endpoint", async () => {
-    vscodeMock.dogcodeValue = "http://127.0.0.1:8765"
+    vscodeMock.labrastroValue = "http://127.0.0.1:8765"
     const context = {
       secrets: {
         get: vi.fn(async () => undefined),
@@ -274,7 +272,7 @@ describe("DogcodeRemoteClient chat start", () => {
       })
     })
     vi.stubGlobal("fetch", fetchMock)
-    const client = new DogcodeRemoteClient(context as never)
+    const client = new LabrastroRemoteClient(context as never)
     ;(client as unknown as { peerInfo: { peer_id: string; peer_token: string } }).peerInfo = {
       peer_id: "peer-1",
       peer_token: "peer-token-1",
@@ -306,7 +304,7 @@ describe("DogcodeRemoteClient chat start", () => {
   })
 
   it("switches the current session main model through the peer session endpoint", async () => {
-    vscodeMock.dogcodeValue = "http://127.0.0.1:8765"
+    vscodeMock.labrastroValue = "http://127.0.0.1:8765"
     const context = {
       secrets: {
         get: vi.fn(async () => undefined),
@@ -320,7 +318,7 @@ describe("DogcodeRemoteClient chat start", () => {
       })
     })
     vi.stubGlobal("fetch", fetchMock)
-    const client = new DogcodeRemoteClient(context as never)
+    const client = new LabrastroRemoteClient(context as never)
     ;(client as unknown as { peerInfo: { peer_id: string; peer_token: string } }).peerInfo = {
       peer_id: "peer-1",
       peer_token: "peer-token-1",
@@ -352,7 +350,7 @@ describe("DogcodeRemoteClient chat start", () => {
   })
 })
 
-describe("DogcodeRemoteClient peer retry strategy", () => {
+describe("LabrastroRemoteClient peer retry strategy", () => {
   it("recovers once for invalid peer token", async () => {
     let attempts = 0
     let recoveries = 0
@@ -396,14 +394,14 @@ describe("DogcodeRemoteClient peer retry strategy", () => {
   })
 })
 
-describe("DogcodeRemoteClient peer startup", () => {
+describe("LabrastroRemoteClient peer startup", () => {
   it("shares concurrent environment manifest startup across one peer process and one artifact download", async () => {
     const storagePath = await makeTempStorage()
     const context = makePeerContext(storagePath)
     const fetchMock = mockPeerFetch()
     mockPeerSpawn()
 
-    const client = new DogcodeRemoteClient(context as never)
+    const client = new LabrastroRemoteClient(context as never)
     await Promise.all([client.environmentManifest(), client.environmentManifest()])
 
     expect(fetchPathCount(fetchMock, "/remote/bootstrap.sh")).toBe(1)
@@ -423,7 +421,7 @@ describe("DogcodeRemoteClient peer startup", () => {
     const fetchMock = mockPeerFetch()
     mockPeerSpawn()
 
-    const client = new DogcodeRemoteClient(context as never)
+    const client = new LabrastroRemoteClient(context as never)
     await client.environmentManifest()
 
     expect(fetchPathCount(fetchMock, `/remote/artifacts/${peerTarget().os}/${peerTarget().arch}/rcoder-peer`)).toBe(0)
@@ -438,7 +436,7 @@ describe("DogcodeRemoteClient peer startup", () => {
     mockPeerFetch(artifactContent)
     mockPeerSpawn()
 
-    const client = new DogcodeRemoteClient(context as never)
+    const client = new LabrastroRemoteClient(context as never)
     await client.environmentManifest()
 
     const binaryPath = expectedPeerBinaryPath(storagePath)
@@ -456,78 +454,76 @@ describe("DogcodeRemoteClient peer startup", () => {
       throw busyError
     }
 
-    const client = new DogcodeRemoteClient(context as never)
+    const client = new LabrastroRemoteClient(context as never)
 
     await expect(client.environmentManifest()).rejects.toThrow(/本地 peer 二进制无法写入.*rcoder-peer/)
     expect(childProcessMock.spawn).not.toHaveBeenCalled()
   })
 })
 
-describe("DogcodeRemoteClient host config saves", () => {
+describe("LabrastroRemoteClient host config saves", () => {
   const context = {
     secrets: {
       get: vi.fn(async () => undefined),
       store: vi.fn(async () => undefined),
     },
-    globalStorageUri: { fsPath: "G:/AboutDEV/EZCode/.tmp" },
+    globalStorageUri: { fsPath: "G:/AboutDEV/Labrastro/.tmp" },
   }
 
   it("writes host updates to the active workspace-folder override level", async () => {
-    vscodeMock.dogcodeInspect = { workspaceFolderValue: "http://127.0.0.1:8765" }
-    vscodeMock.dogcodeValue = "http://127.0.0.1:8765"
-    const client = new DogcodeRemoteClient(context as never)
+    vscodeMock.labrastroInspect = { workspaceFolderValue: "http://127.0.0.1:8765" }
+    vscodeMock.labrastroValue = "http://127.0.0.1:8765"
+    const client = new LabrastroRemoteClient(context as never)
 
-    const state = await client.saveConnection({ hostUrl: "https://dogcode.outlune.com" })
+    const state = await client.saveConnection({ hostUrl: "https://labrastro.outlune.com" })
 
     expect(vscodeMock.updates[0]).toMatchObject({
-      section: "dogcode",
+      section: "labrastro",
       key: "hostUrl",
-      value: "https://dogcode.outlune.com",
+      value: "https://labrastro.outlune.com",
       target: vscodeMock.targets.WorkspaceFolder,
     })
     expect(state).toMatchObject({
-      hostUrl: "https://dogcode.outlune.com",
+      hostUrl: "https://labrastro.outlune.com",
       hostUrlSource: "workspace-folder",
-      hostUrlSaveRequested: "https://dogcode.outlune.com",
+      hostUrlSaveRequested: "https://labrastro.outlune.com",
       hostUrlSaveApplied: true,
     })
   })
 
   it("returns an explicit save mismatch result when effective host does not change", async () => {
-    vscodeMock.dogcodeInspect = { globalValue: "http://127.0.0.1:8765" }
-    vscodeMock.dogcodeValue = "http://127.0.0.1:8765"
+    vscodeMock.labrastroInspect = { globalValue: "http://127.0.0.1:8765" }
+    vscodeMock.labrastroValue = "http://127.0.0.1:8765"
     vscodeMock.ignoreUpdates = true
-    const client = new DogcodeRemoteClient(context as never)
+    const client = new LabrastroRemoteClient(context as never)
 
-    const state = await client.saveConnection({ hostUrl: "https://dogcode.outlune.com" })
+    const state = await client.saveConnection({ hostUrl: "https://labrastro.outlune.com" })
 
     expect(state).toMatchObject({
       hostUrl: "http://127.0.0.1:8765",
       status: "error",
-      hostUrlSaveRequested: "https://dogcode.outlune.com",
+      hostUrlSaveRequested: "https://labrastro.outlune.com",
       hostUrlSaveApplied: false,
     })
   })
 
-  it("keeps manually saved dogcode host ahead of legacy ezcode host", async () => {
-    vscodeMock.dogcodeInspect = { globalValue: "http://127.0.0.1:8765" }
-    vscodeMock.dogcodeValue = "http://127.0.0.1:8765"
-    vscodeMock.ezcodeInspect = { globalValue: "http://192.168.50.149:8765" }
-    const client = new DogcodeRemoteClient(context as never)
+  it("writes host updates to the global Labrastro setting when only a global override exists", async () => {
+    vscodeMock.labrastroInspect = { globalValue: "http://127.0.0.1:8765" }
+    vscodeMock.labrastroValue = "http://127.0.0.1:8765"
+    const client = new LabrastroRemoteClient(context as never)
 
-    const state = await client.saveConnection({ hostUrl: "https://dogcode.outlune.com" })
+    const state = await client.saveConnection({ hostUrl: "https://labrastro.outlune.com" })
 
     expect(vscodeMock.updates[0]).toMatchObject({
-      section: "dogcode",
+      section: "labrastro",
       key: "hostUrl",
-      value: "https://dogcode.outlune.com",
+      value: "https://labrastro.outlune.com",
       target: vscodeMock.targets.Global,
     })
     expect(state).toMatchObject({
-      hostUrl: "https://dogcode.outlune.com",
+      hostUrl: "https://labrastro.outlune.com",
       hostUrlSource: "global",
-      hostUrlMigratedFromEzcode: false,
-      hostUrlSaveRequested: "https://dogcode.outlune.com",
+      hostUrlSaveRequested: "https://labrastro.outlune.com",
       hostUrlSaveApplied: true,
     })
   })

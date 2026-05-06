@@ -1,11 +1,11 @@
 {
-  "name": "dogcode",
-  "displayName": "dogcode",
-  "description": "dogcode central self-hosted coding agent frontend for VS Code",
+  "name": "labrastro-vscode",
+  "displayName": "Labrastro",
+  "description": "Labrastro VS Code entrypoint for centralized self-hosted coding agents.",
   "version": "0.1.0",
   "license": "AGPL-3.0-or-later",
-  "publisher": "dogcode",
-  "icon": "assets/icons/doge.png",
+  "publisher": "labrastro",
+  "icon": "assets/icons/labrastro.png",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -14,98 +14,98 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/AstralSolipsism/dogcode.git"
+    "url": "https://github.com/AstralSolipsism/Labrastro.git"
   },
-  "homepage": "https://github.com/AstralSolipsism/dogcode#readme",
+  "homepage": "https://github.com/AstralSolipsism/Labrastro#readme",
   "bugs": {
-    "url": "https://github.com/AstralSolipsism/dogcode/issues"
+    "url": "https://github.com/AstralSolipsism/Labrastro/issues"
   },
   "activationEvents": [
-    "onView:dogcode.SidebarProvider",
-    "onCommand:dogcode.newTask",
-    "onCommand:dogcode.openSessionHistory",
-    "onCommand:dogcode.openSettings",
-    "onCommand:dogcode.openAbout",
-    "onCommand:dogcode.openAgentManager"
+    "onView:labrastro.SidebarProvider",
+    "onCommand:labrastro.newTask",
+    "onCommand:labrastro.openSessionHistory",
+    "onCommand:labrastro.openSettings",
+    "onCommand:labrastro.openAbout",
+    "onCommand:labrastro.openAgentManager"
   ],
   "main": "./dist/extension.js",
   "contributes": {
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "dogcode-ActivityBar",
-          "title": "dogcode",
-          "icon": "assets/icons/dogcode-activitybar.svg"
+          "id": "labrastro-ActivityBar",
+          "title": "Labrastro",
+          "icon": "assets/icons/labrastro-activitybar.svg"
         }
       ]
     },
     "views": {
-      "dogcode-ActivityBar": [
+      "labrastro-ActivityBar": [
         {
           "type": "webview",
-          "id": "dogcode.SidebarProvider",
-          "name": "dogcode"
+          "id": "labrastro.SidebarProvider",
+          "name": "Labrastro"
         }
       ]
     },
     "commands": [
       {
-        "command": "dogcode.newTask",
+        "command": "labrastro.newTask",
         "title": "新建对话",
         "icon": "$(add)"
       },
       {
-        "command": "dogcode.openSessionHistory",
+        "command": "labrastro.openSessionHistory",
         "title": "Session History",
         "icon": "$(history)"
       },
       {
-        "command": "dogcode.openSettings",
+        "command": "labrastro.openSettings",
         "title": "Settings",
         "icon": "$(settings-gear)"
       },
       {
-        "command": "dogcode.openAbout",
+        "command": "labrastro.openAbout",
         "title": "About",
         "icon": "$(info)"
       },
       {
-        "command": "dogcode.openAgentManager",
-        "title": "Open dogcode Trace Preview",
+        "command": "labrastro.openAgentManager",
+        "title": "Open Labrastro Trace Preview",
         "icon": "$(list-tree)"
       }
     ],
     "configuration": {
-      "title": "dogcode",
+      "title": "Labrastro",
       "properties": {
-        "dogcode.hostUrl": {
+        "labrastro.hostUrl": {
           "type": "string",
           "default": "http://127.0.0.1:8765",
-          "description": "dogcode host HTTP base URL."
+          "description": "Labrastro host HTTP base URL."
         }
       }
     },
     "menus": {
       "view/title": [
         {
-          "command": "dogcode.newTask",
+          "command": "labrastro.newTask",
           "group": "navigation@0",
-          "when": "view == dogcode.SidebarProvider"
+          "when": "view == labrastro.SidebarProvider"
         },
         {
-          "command": "dogcode.openSessionHistory",
+          "command": "labrastro.openSessionHistory",
           "group": "navigation@0.5",
-          "when": "view == dogcode.SidebarProvider"
+          "when": "view == labrastro.SidebarProvider"
         },
         {
-          "command": "dogcode.openSettings",
+          "command": "labrastro.openSettings",
           "group": "navigation@1",
-          "when": "view == dogcode.SidebarProvider"
+          "when": "view == labrastro.SidebarProvider"
         },
         {
-          "command": "dogcode.openAbout",
+          "command": "labrastro.openAbout",
           "group": "navigation@2",
-          "when": "view == dogcode.SidebarProvider"
+          "when": "view == labrastro.SidebarProvider"
         }
       ]
     }
@@ -118,7 +118,7 @@
     "typecheck:webview": "tsc -p webview-ui/tsconfig.json --noEmit",
     "typecheck": "npm run typecheck:extension && npm run typecheck:webview",
     "package": "node esbuild.js --production",
-    "package:vsix": "vsce package --out dogcode.vsix",
+    "package:vsix": "vsce package --out labrastro-vscode.vsix",
     "test:auto-approval": "vitest run webview-ui/src/utils/command-auto-approval.test.ts",
     "test:chat": "vitest run webview-ui/src/chat/chatState.test.ts",
     "test:settings": "vitest run webview-ui/src/settings/utils.test.ts"

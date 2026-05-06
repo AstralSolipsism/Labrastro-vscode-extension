@@ -34,7 +34,7 @@ type SettingsTab = "executors" | "providers" | "toolchains" | "serverSettings" |
 type ExecutorLocation = "local" | "remote"
 
 /** 执行器引擎类型 */
-type ExecutorEngine = "ezcode" | "claude" | "codex" | "gemini" | "astrbot"
+type ExecutorEngine = "labrastro" | "claude" | "codex" | "gemini" | "astrbot"
 
 interface ExecutorEngineOption {
   id: ExecutorEngine
@@ -45,7 +45,7 @@ interface ExecutorEngineOption {
 }
 
 const EXECUTOR_ENGINES: ExecutorEngineOption[] = [
-  { id: "ezcode",  label: "EZCode",  icon: "radio-tower",  description: "dogcode 执行器",        ready: true  },
+  { id: "labrastro",  label: "Labrastro",  icon: "radio-tower",  description: "Labrastro 执行器",        ready: true  },
   { id: "claude",  label: "Claude",  icon: "sparkle",      description: "Anthropic Claude API",  ready: false },
   { id: "codex",   label: "Codex",   icon: "code",         description: "OpenAI Codex CLI",      ready: false },
   { id: "gemini",  label: "Gemini",  icon: "star-empty",   description: "Google Gemini CLI",     ready: false },
@@ -1290,10 +1290,6 @@ function formatConnectionSaveResult(result: Record<string, unknown> | undefined)
   const requested = stringValue(result.hostUrlSaveRequested)
   const effective = stringValue(result.hostUrl)
   const source = stringValue(result.hostUrlSource, "unknown")
-  if (result.hostUrlMigratedFromEzcode === true) {
-    const legacyHost = stringValue(result.legacyHostUrl, effective)
-    return `已从 EZCode 旧配置迁移到 dogcode：${legacyHost}。当前实际请求 Host：${effective}（来源：${source}）。`
-  }
   if (requested && (result.hostUrlSaveApplied !== true || effective !== requested)) {
     return `保存未生效：请求保存 ${requested}，当前实际请求 Host 仍是 ${effective || "未配置"}（来源：${source}）。`
   }
@@ -1322,7 +1318,7 @@ export function createSettingsController(props: SettingsViewProps) {
   /* ── 主执行器选择器状态 ── */
   const [executorPickerOpen, setExecutorPickerOpen] = createSignal(false)
   const [pickerLocation, setPickerLocation] = createSignal<ExecutorLocation>("remote")
-  const [pickerEngine, setPickerEngine] = createSignal<ExecutorEngine>("ezcode")
+  const [pickerEngine, setPickerEngine] = createSignal<ExecutorEngine>("labrastro")
 
   /* ── 按钮 loading 状态 ── */
   const [refreshLoading, setRefreshLoading] = createSignal(false)
@@ -1405,7 +1401,7 @@ export function createSettingsController(props: SettingsViewProps) {
   const setAgentNameInput = (element: HTMLInputElement) => {
     agentNameInput = element
   }
-  const [runtimePrompt, setRuntimePrompt] = createSignal("请用一句话回复 EZCode runtime smoke")
+  const [runtimePrompt, setRuntimePrompt] = createSignal("请用一句话回复 Labrastro runtime smoke")
 
   const [profileId, setProfileId] = createSignal("")
   const [profileProvider, setProfileProvider] = createSignal("deepseek")
@@ -1452,13 +1448,6 @@ export function createSettingsController(props: SettingsViewProps) {
   })
   const connectionStatus = createMemo(() => stringValue(server.connectionState().status, "missing-config"))
   const connectionMessage = createMemo(() => stringValue(server.connectionState().message))
-  const connectionMigrationMessage = createMemo(() => {
-    const state = server.connectionState()
-    if (state.hostUrlMigratedFromEzcode !== true) return undefined
-    const legacyHost = stringValue(state.legacyHostUrl, stringValue(state.hostUrl))
-    const source = stringValue(state.legacyHostUrlSource, stringValue(state.hostUrlSource, "unknown"))
-    return `已从 EZCode 旧配置迁移到 dogcode：${legacyHost}（来源：${source}）。`
-  })
   const connectionSaveMessage = createMemo(() => {
     const result = server.connectionSaveResult()
     const key = connectionSaveResultKey(result)
@@ -2192,8 +2181,8 @@ const refreshAdmin = () => {
   })
   const executorEngine = createMemo(() => {
     const eng = server.executorType().engine
-    const valid: ExecutorEngine[] = ["ezcode", "claude", "codex", "gemini", "astrbot"]
-    return valid.includes(eng as ExecutorEngine) ? eng as ExecutorEngine : "ezcode"
+    const valid: ExecutorEngine[] = ["labrastro", "claude", "codex", "gemini", "astrbot"]
+    return valid.includes(eng as ExecutorEngine) ? eng as ExecutorEngine : "labrastro"
   })
   const executorEngineOption = createMemo(() =>
     EXECUTOR_ENGINES.find((e) => e.id === executorEngine()) || EXECUTOR_ENGINES[0]
@@ -2830,7 +2819,6 @@ const refreshAdmin = () => {
     providerErrorMessage,
     connectionStatus,
     connectionMessage,
-    connectionMigrationMessage,
     connectionSaveMessage,
     currentHostUrl,
     hostUrlSource,

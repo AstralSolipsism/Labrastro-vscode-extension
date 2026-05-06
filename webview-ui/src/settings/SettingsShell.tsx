@@ -29,7 +29,7 @@ export const SettingsShell: Component<SettingsShellProps> = (props) => {
       </div>
 
       <div class="settings-shell">
-        <nav class="settings-tab-list" aria-label="dogcode settings">
+        <nav class="settings-tab-list" aria-label="Labrastro settings">
           <For each={controller.settingsTabDefs}>
             {(tab) => (
               <button

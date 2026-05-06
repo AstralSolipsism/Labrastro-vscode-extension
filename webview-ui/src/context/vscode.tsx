@@ -41,7 +41,7 @@ function getVSCodeAPI(): VSCodeAPI {
       cachedApi = acquireVsCodeApi()
     } else {
       // 在 VS Code 外运行时使用 Mock（用于开发调试）
-      console.warn("[dogcode] 非 VS Code 环境，使用 Mock API")
+      console.warn("[labrastro] 非 VS Code 环境，使用 Mock API")
       cachedApi = {
         postMessage: (msg) => console.log("[Mock] postMessage:", msg),
         getState: () => undefined,

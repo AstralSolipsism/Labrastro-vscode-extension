@@ -1,4 +1,4 @@
-export const LEGACY_BACKEND_UPGRADE_MESSAGE = "服务端版本过旧，需要升级 dogcode backend。"
+export const LEGACY_BACKEND_UPGRADE_MESSAGE = "服务端版本过旧，需要升级 Labrastro backend。"
 
 export interface SessionStartCapabilities {
   freshSessionWithoutSessionHint?: boolean

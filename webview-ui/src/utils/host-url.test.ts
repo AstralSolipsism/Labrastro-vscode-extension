@@ -8,7 +8,7 @@ import {
 
 describe("host url input", () => {
   it("normalizes single-slash https typo and trailing slashes", () => {
-    expect(normalizeHostUrlInput(" https:/dogcode.outlune.com/ ")).toBe("https://dogcode.outlune.com")
+    expect(normalizeHostUrlInput(" https:/labrastro.outlune.com/ ")).toBe("https://labrastro.outlune.com")
   })
 
   it("accepts http and https URLs", () => {
@@ -16,16 +16,16 @@ describe("host url input", () => {
       ok: true,
       value: "http://192.168.50.149:8765",
     })
-    expect(validateHostUrlInput("https:/dogcode.outlune.com")).toMatchObject({
+    expect(validateHostUrlInput("https:/labrastro.outlune.com")).toMatchObject({
       ok: true,
-      value: "https://dogcode.outlune.com",
+      value: "https://labrastro.outlune.com",
     })
   })
 
   it("rejects invalid protocols", () => {
-    expect(validateHostUrlInput("ftp://dogcode.outlune.com")).toMatchObject({
+    expect(validateHostUrlInput("ftp://labrastro.outlune.com")).toMatchObject({
       ok: false,
-      value: "ftp://dogcode.outlune.com",
+      value: "ftp://labrastro.outlune.com",
     })
   })
 })
@@ -45,7 +45,7 @@ describe("host draft sync", () => {
       shouldSyncHostDraft({
         currentHostUrl: "http://192.168.50.149:8765",
         dirty: false,
-        pendingHostSave: "https://dogcode.outlune.com",
+        pendingHostSave: "https://labrastro.outlune.com",
       })
     ).toBe(false)
   })
@@ -55,7 +55,7 @@ describe("host draft sync", () => {
       shouldSyncHostDraft({
         currentHostUrl: "http://192.168.50.149:8765",
         dirty: false,
-        syncLock: "https://dogcode.outlune.com",
+        syncLock: "https://labrastro.outlune.com",
       })
     ).toBe(false)
   })
@@ -66,16 +66,16 @@ describe("host save result", () => {
     expect(
       resolveHostSaveResult(
         {
-          hostUrlSaveRequested: "https://dogcode.outlune.com",
+          hostUrlSaveRequested: "https://labrastro.outlune.com",
           hostUrlSaveApplied: true,
-          hostUrl: "https://dogcode.outlune.com",
+          hostUrl: "https://labrastro.outlune.com",
         },
-        "https://dogcode.outlune.com"
+        "https://labrastro.outlune.com"
       )
     ).toMatchObject({
-      hostUrl: "https://dogcode.outlune.com",
+      hostUrl: "https://labrastro.outlune.com",
       dirty: false,
-      syncLock: "https://dogcode.outlune.com",
+      syncLock: "https://labrastro.outlune.com",
     })
   })
 
@@ -83,14 +83,14 @@ describe("host save result", () => {
     expect(
       resolveHostSaveResult(
         {
-          hostUrlSaveRequested: "https://dogcode.outlune.com",
+          hostUrlSaveRequested: "https://labrastro.outlune.com",
           hostUrlSaveApplied: true,
           hostUrl: "http://192.168.50.149:8765",
         },
-        "https://dogcode.outlune.com"
+        "https://labrastro.outlune.com"
       )
     ).toMatchObject({
-      hostUrl: "https://dogcode.outlune.com",
+      hostUrl: "https://labrastro.outlune.com",
       dirty: true,
     })
   })

@@ -368,7 +368,7 @@ function executorEngineLabel(engine?: string): string {
   if (engine === "codex") return "Codex"
   if (engine === "gemini") return "Gemini"
   if (engine === "astrbot") return "AstrBot"
-  return "EZCode"
+  return "Labrastro"
 }
 
 function builtinModeLabel(id: string): string {

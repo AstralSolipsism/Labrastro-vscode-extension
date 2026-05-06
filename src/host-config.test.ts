@@ -2,61 +2,58 @@ import { describe, expect, it } from "vitest"
 import {
   DEFAULT_HOST_URL,
   resolveHostUrlState,
-  selectDogcodeHostWriteSource,
+  selectLabrastroHostWriteSource,
 } from "./host-config"
 
 describe("host config resolution", () => {
-  it("uses and marks legacy ezcode host when dogcode host is unconfigured", () => {
+  it("uses the default localhost host when Labrastro host is unconfigured", () => {
     expect(
       resolveHostUrlState(
         { defaultValue: DEFAULT_HOST_URL },
-        DEFAULT_HOST_URL,
-        { globalValue: "http://192.168.50.149:8765" }
+        DEFAULT_HOST_URL
       )
     ).toMatchObject({
-      url: "http://192.168.50.149:8765",
-      configured: true,
-      source: "global",
-      migratedFromEzcode: true,
-      legacyHostUrl: "http://192.168.50.149:8765",
+      url: DEFAULT_HOST_URL,
+      configured: false,
+      source: "default",
     })
   })
 
-  it("keeps explicit dogcode remote host over legacy ezcode host", () => {
+  it("uses an explicit Labrastro global host", () => {
     expect(
       resolveHostUrlState(
-        { globalValue: "https://dogcode.outlune.com" },
-        "https://dogcode.outlune.com",
-        { globalValue: "http://192.168.50.149:8765" }
+        { globalValue: "https://labrastro.outlune.com" },
+        "https://labrastro.outlune.com"
       )
     ).toMatchObject({
-      url: "https://dogcode.outlune.com",
+      url: "https://labrastro.outlune.com",
       configured: true,
       source: "global",
-      migratedFromEzcode: false,
     })
   })
 
-  it("migrates legacy remote host over explicit default localhost dogcode host", () => {
+  it("prefers the most specific Labrastro host override", () => {
     expect(
       resolveHostUrlState(
-        { globalValue: "http://127.0.0.1:8765" },
-        "http://127.0.0.1:8765",
-        { globalValue: "http://192.168.50.149:8765" }
+        {
+          globalValue: "https://global.example.com",
+          workspaceValue: "https://workspace.example.com",
+          workspaceFolderValue: "https://folder.example.com",
+        },
+        "https://folder.example.com"
       )
     ).toMatchObject({
-      url: "http://192.168.50.149:8765",
+      url: "https://folder.example.com",
       configured: true,
-      source: "global",
-      migratedFromEzcode: true,
+      source: "workspace-folder",
     })
   })
 
-  it("selects the active dogcode override level when saving host", () => {
-    expect(selectDogcodeHostWriteSource({ workspaceFolderValue: "http://127.0.0.1:8765" })).toBe("workspace-folder")
-    expect(selectDogcodeHostWriteSource({ workspaceValue: "http://127.0.0.1:8765" })).toBe("workspace")
-    expect(selectDogcodeHostWriteSource({ globalValue: "http://127.0.0.1:8765" })).toBe("global")
-    expect(selectDogcodeHostWriteSource(undefined)).toBe("global")
+  it("selects the active Labrastro override level when saving host", () => {
+    expect(selectLabrastroHostWriteSource({ workspaceFolderValue: "http://127.0.0.1:8765" })).toBe("workspace-folder")
+    expect(selectLabrastroHostWriteSource({ workspaceValue: "http://127.0.0.1:8765" })).toBe("workspace")
+    expect(selectLabrastroHostWriteSource({ globalValue: "http://127.0.0.1:8765" })).toBe("global")
+    expect(selectLabrastroHostWriteSource(undefined)).toBe("global")
   })
 })
 

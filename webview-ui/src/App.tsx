@@ -70,7 +70,7 @@ const AppContent: Component = () => {
     const unsubscribe = vscode.onMessage((msg: ExtensionMessage) => {
       // ① 视图导航（来自 SettingsPanelProvider 或侧边栏命令）
       if (msg.type === "navigate" && typeof msg.view === "string" && VALID_VIEWS.has(msg.view)) {
-        console.log("[dogcode] 导航到视图:", msg.view, msg.tab ? `tab=${msg.tab}` : "")
+        console.log("[labrastro] 导航到视图:", msg.view, msg.tab ? `tab=${msg.tab}` : "")
         setCurrentView(msg.view as ViewType)
         setPanelNodeId(typeof msg.nodeId === "string" ? msg.nodeId : undefined)
         setPanelBranchId(typeof msg.branchId === "string" ? msg.branchId : undefined)

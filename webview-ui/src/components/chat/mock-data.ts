@@ -129,7 +129,7 @@ const now = new Date("2026-04-26T08:00:00.000Z").toISOString()
 export const mockRecentSessions: MockSession[] = [
   {
     id: "s1",
-    title: "验证 dogcode 侧边栏 MVP",
+    title: "验证 Labrastro 侧边栏 MVP",
     updatedAt: now,
     kind: "main",
     state: "active",
@@ -138,7 +138,7 @@ export const mockRecentSessions: MockSession[] = [
 ]
 
 export const mockStats: MockTaskStats = {
-  taskText: "精简 dogcode 前端侧边栏，去掉重型 DAG 和冗余装饰。",
+  taskText: "精简 Labrastro 前端侧边栏，去掉重型 DAG 和冗余装饰。",
   tokensIn: 18240,
   tokensOut: 4120,
   cacheReads: 32000,
@@ -248,7 +248,7 @@ export const mockTurns: MockTurn[] = [
     userMessage: {
       id: "user-1",
       role: "user",
-      text: "把 dogcode 前端侧边栏收敛成 MVP，布局和样式对齐 Kilo v5。",
+      text: "把 Labrastro 前端侧边栏收敛成 MVP，布局和样式对齐 Kilo v5。",
       parts: [],
       timestamp: Date.now() - 120000,
       traceNodeId: "trace-user-1",
@@ -274,7 +274,7 @@ export const mockTurns: MockTurn[] = [
             id: "part-tool-1",
             type: "tool",
             tool: "list_directory",
-            toolInput: { path: "dogcode-frontend" },
+            toolInput: { path: "labrastro-vscode" },
             toolOutput: "已确认 Solid Webview、mock 数据和 Trace 组件位置。",
             status: "complete",
             traceNodeId: "trace-tool-1",

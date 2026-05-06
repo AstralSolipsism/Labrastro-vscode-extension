@@ -23,7 +23,6 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
     executorEngine,
     hostUrlConfigured,
     hostUrlSource,
-    connectionMigrationMessage,
     connectionMessage,
     connectionSaveMessage,
     hostUrlError,
@@ -223,13 +222,13 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
             <span class="codicon codicon-tools" aria-hidden="true" />
             <div>
               <strong>{executorEngineOption().label} 执行器正在建设中</strong>
-              <p>该执行器引擎尚未实现，敬请期待。当前可使用 EZCode 执行器。</p>
+              <p>该执行器引擎尚未实现，敬请期待。当前可使用 Labrastro 执行器。</p>
             </div>
           </section>
         }
       >
-        {/* EZCode 远端配置 */}
-        <Show when={executorEngine() === "ezcode" && executorLocation() === "remote"}>
+        {/* Labrastro 远端配置 */}
+        <Show when={executorEngine() === "labrastro" && executorLocation() === "remote"}>
           <section class="executor-config-panel">
             <div class="executor-config-panel__header">
               <span class="codicon codicon-radio-tower" aria-hidden="true" />
@@ -270,16 +269,7 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
                 <span>{hostUrlError()}</span>
               </div>
             </Show>
-            <Show when={connectionMigrationMessage()}>
-              <div class="executor-config-notice executor-config-notice--info">
-                <span class="codicon codicon-info" aria-hidden="true" />
-                <div>
-                  <strong>{t("executor.remote.migrated")}</strong>
-                  <span>{connectionMigrationMessage()}</span>
-                </div>
-              </div>
-            </Show>
-            <Show when={connectionMessage() && !connectionMigrationMessage()}>
+            <Show when={connectionMessage()}>
               <div class="executor-config-notice executor-config-notice--error">
                 <span class="codicon codicon-warning" aria-hidden="true" />
                 <span>{connectionMessage()}</span>
@@ -363,8 +353,8 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
           </section>
         </Show>
 
-        {/* EZCode 本地配置 */}
-        <Show when={executorEngine() === "ezcode" && executorLocation() === "local"}>
+        {/* Labrastro 本地配置 */}
+        <Show when={executorEngine() === "labrastro" && executorLocation() === "local"}>
           <section class="executor-coming-soon">
             <span class="codicon codicon-device-desktop" aria-hidden="true" />
             <div>

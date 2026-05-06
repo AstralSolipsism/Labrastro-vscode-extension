@@ -164,7 +164,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   let timer: number | undefined
 
   onMount(() => {
-    console.log("[dogcode startup]", {
+    console.log("[labrastro startup]", {
       name: "first-chat-render",
       elapsedMs: Math.round(performance.now()),
     })

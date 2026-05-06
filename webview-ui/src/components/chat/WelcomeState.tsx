@@ -23,7 +23,7 @@ export const WelcomeState: Component<WelcomeStateProps> = (props) => {
     <div class="welcome-state">
       <div class="welcome-state__mark">
         <span class="codicon codicon-remote-explorer" aria-hidden="true" />
-        <span>dogcode</span>
+        <span>Labrastro</span>
       </div>
       <p class="welcome-state__copy">{t("chat.welcome")}</p>
 

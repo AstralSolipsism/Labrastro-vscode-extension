@@ -1,4 +1,4 @@
-import type { ConnectionState } from "./DogcodeRemoteClient"
+import type { ConnectionState } from "./LabrastroRemoteClient"
 
 export interface StartupConnectionInput {
   hostUrl: string
@@ -19,6 +19,6 @@ export function buildStartupConnectionState(input: StartupConnectionInput): Conn
     peerConnected: input.peerConnected,
     peerId: input.peerId,
     status: "checking",
-    message: "正在检查 dogcode 连接状态。",
+    message: "正在检查 Labrastro 连接状态。",
   }
 }

@@ -38,7 +38,7 @@ $args = @(
   $workspaceRoot
 )
 
-Write-Host "Launching dogcode extension host:"
+Write-Host "Launching labrastro extension host:"
 Write-Host "  Command: $CodeCommand"
 Write-Host "  Extension: $extensionRoot"
 Write-Host "  User data: $userDataDir"

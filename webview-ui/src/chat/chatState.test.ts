@@ -128,9 +128,9 @@ describe("chat state", () => {
         status: "ready",
         adminReachable: true,
       },
-      { engine: "ezcode", location: "remote" },
+      { engine: "labrastro", location: "remote" },
     )).toMatchObject({
-      label: "EZCode · Remote",
+      label: "Labrastro · Remote",
       detail: "http://127.0.0.1:8765",
       tone: "ready",
     })

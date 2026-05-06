@@ -1,7 +1,7 @@
 import * as vscode from "vscode"
 import * as fs from "fs"
 import * as path from "path"
-import { BackendCapabilities, DogcodeRemoteClient, isRemoteError } from "./DogcodeRemoteClient"
+import { BackendCapabilities, LabrastroRemoteClient, isRemoteError } from "./LabrastroRemoteClient"
 import { canStartSessionlessChat, LEGACY_BACKEND_UPGRADE_MESSAGE } from "./session-start"
 
 type PostMessage = (message: Record<string, unknown>) => Thenable<boolean> | void
@@ -101,7 +101,7 @@ interface AutoApprovalState {
   platform: NodeJS.Platform
 }
 
-const AUTO_APPROVAL_STATE_KEY = "dogcode.autoApproval"
+const AUTO_APPROVAL_STATE_KEY = "labrastro.autoApproval"
 const DEFAULT_AUTO_APPROVAL_OPTIONS: Record<AutoApprovalOptionKey, boolean> = {
   readOnly: false,
   write: false,
@@ -111,8 +111,8 @@ const DEFAULT_AUTO_APPROVAL_OPTIONS: Record<AutoApprovalOptionKey, boolean> = {
   unknown: false,
 }
 
-export class DogcodeController implements vscode.Disposable {
-  private readonly client: DogcodeRemoteClient
+export class LabrastroController implements vscode.Disposable {
+  private readonly client: LabrastroRemoteClient
   private readonly approvalDocuments: ApprovalDocumentProvider
   private activeChatId: string | undefined
   private currentSessionId: string | undefined
@@ -131,7 +131,7 @@ export class DogcodeController implements vscode.Disposable {
   private disposed = false
 
   constructor(private readonly context: vscode.ExtensionContext) {
-    this.client = new DogcodeRemoteClient(context)
+    this.client = new LabrastroRemoteClient(context)
     this.approvalDocuments = new ApprovalDocumentProvider()
     this.context.subscriptions.push(
       vscode.workspace.registerTextDocumentContentProvider(
@@ -165,7 +165,7 @@ export class DogcodeController implements vscode.Disposable {
     post({ type: "connection.state", payload: this.client.startupConnectionState() })
     post({ type: "environment.snapshot", payload: this.environmentSnapshot })
     post({ type: "executorType.state", payload: this.getExecutorType() })
-    post({ type: "locale.state", locale: this.context.workspaceState.get<string>("dogcode.locale") || vscode.env.language })
+    post({ type: "locale.state", locale: this.context.workspaceState.get<string>("labrastro.locale") || vscode.env.language })
     post({
       type: "startup.metric",
       payload: { name: "initial-state-ready", elapsedMs: Date.now() - startedAt },
@@ -558,9 +558,9 @@ export class DogcodeController implements vscode.Disposable {
         await this.approvalDocuments.open(stringValue(message.approvalId) || "")
         return true
       case "executorType.save":
-        await this.context.workspaceState.update("dogcode.executorType", {
+        await this.context.workspaceState.update("labrastro.executorType", {
           location: stringValue(message.location) || "remote",
-          engine: stringValue(message.engine) || "ezcode",
+          engine: stringValue(message.engine) || "labrastro",
         })
         this.broadcastExecutorType()
         return true
@@ -568,7 +568,7 @@ export class DogcodeController implements vscode.Disposable {
         post({ type: "executorType.state", payload: this.getExecutorType() })
         return true
       case "locale.save":
-        await this.context.workspaceState.update("dogcode.locale", stringValue(message.locale) || "")
+        await this.context.workspaceState.update("labrastro.locale", stringValue(message.locale) || "")
         return true
       default:
         return false
@@ -614,10 +614,10 @@ export class DogcodeController implements vscode.Disposable {
   }
 
   private getExecutorType(): { location: string; engine: string } {
-    const stored = this.context.workspaceState.get<Record<string, string>>("dogcode.executorType")
+    const stored = this.context.workspaceState.get<Record<string, string>>("labrastro.executorType")
     return {
       location: stored?.location || "remote",
-      engine: stored?.engine || "ezcode",
+      engine: stored?.engine || "labrastro",
     }
   }
 
@@ -752,7 +752,7 @@ export class DogcodeController implements vscode.Disposable {
         })
         return
       }
-      const storedSessionId = this.context.workspaceState.get<string>("dogcode.currentSessionId")
+      const storedSessionId = this.context.workspaceState.get<string>("labrastro.currentSessionId")
       const storedExists = Boolean(
         storedSessionId && this.sessions.some((session) => session.id === storedSessionId)
       )
@@ -766,7 +766,7 @@ export class DogcodeController implements vscode.Disposable {
         return
       }
       this.currentSessionId = undefined
-      await this.context.workspaceState.update("dogcode.currentSessionId", undefined)
+      await this.context.workspaceState.update("labrastro.currentSessionId", undefined)
       post({
         type: "session.list",
         sessions: this.sessions,
@@ -832,7 +832,7 @@ export class DogcodeController implements vscode.Disposable {
       const metadata = normalizeSessionMetadata(payload.metadata)
       const bundle = buildSessionBundle(payload, metadata)
       this.currentSessionId = metadata.id
-      this.context.workspaceState.update("dogcode.currentSessionId", metadata.id)
+      this.context.workspaceState.update("labrastro.currentSessionId", metadata.id)
       if (!options.suppressListRefresh) {
         await this.refreshSessions()
       }
@@ -857,7 +857,7 @@ export class DogcodeController implements vscode.Disposable {
   ): Promise<void> {
     if (this.sessionApiAvailable === false) {
       this.currentSessionId = undefined
-      await this.context.workspaceState.update("dogcode.currentSessionId", undefined)
+      await this.context.workspaceState.update("labrastro.currentSessionId", undefined)
       post({
         type: "session.list",
         sessions: this.sessions,
@@ -871,7 +871,7 @@ export class DogcodeController implements vscode.Disposable {
       const metadata = normalizeSessionMetadata(payload.metadata)
       const bundle = buildSessionBundle(payload, metadata)
       this.currentSessionId = metadata.id
-      this.context.workspaceState.update("dogcode.currentSessionId", metadata.id)
+      this.context.workspaceState.update("labrastro.currentSessionId", metadata.id)
       if (!options.suppressListRefresh) {
         await this.refreshSessions()
       }
@@ -891,7 +891,7 @@ export class DogcodeController implements vscode.Disposable {
       if (isSessionApiUnavailable(error)) {
         this.sessionApiAvailable = false
         this.currentSessionId = undefined
-        await this.context.workspaceState.update("dogcode.currentSessionId", undefined)
+        await this.context.workspaceState.update("labrastro.currentSessionId", undefined)
         post({
           type: "session.list",
           sessions: this.sessions,
@@ -918,7 +918,7 @@ export class DogcodeController implements vscode.Disposable {
       const deletedCurrent = this.currentSessionId === sessionId
       if (deletedCurrent) {
         this.currentSessionId = undefined
-        await this.context.workspaceState.update("dogcode.currentSessionId", undefined)
+        await this.context.workspaceState.update("labrastro.currentSessionId", undefined)
       }
       await this.refreshSessions()
       post({
@@ -984,7 +984,7 @@ export class DogcodeController implements vscode.Disposable {
       const metadata = normalizeSessionMetadata(payload.metadata)
       if (metadata.id) {
         this.currentSessionId = metadata.id
-        await this.context.workspaceState.update("dogcode.currentSessionId", metadata.id)
+        await this.context.workspaceState.update("labrastro.currentSessionId", metadata.id)
       }
       await this.refreshSessions()
       if (metadata.id) {
@@ -1304,7 +1304,7 @@ export class DogcodeController implements vscode.Disposable {
               this.currentSessionId = sessionId
               if (this.currentSessionId) {
                 await this.context.workspaceState.update(
-                  "dogcode.currentSessionId",
+                  "labrastro.currentSessionId",
                   this.currentSessionId
                 )
               }
@@ -1944,7 +1944,7 @@ export class DogcodeController implements vscode.Disposable {
           const metadata = normalizeSessionMetadata(created.metadata)
           sessionId = metadata.id
           this.currentSessionId = metadata.id
-          await this.context.workspaceState.update("dogcode.currentSessionId", metadata.id)
+          await this.context.workspaceState.update("labrastro.currentSessionId", metadata.id)
           await this.refreshSessions()
           post({
             type: "session.created",
@@ -1962,7 +1962,7 @@ export class DogcodeController implements vscode.Disposable {
           this.sessionApiAvailable = false
           sessionId = undefined
           this.currentSessionId = undefined
-          await this.context.workspaceState.update("dogcode.currentSessionId", undefined)
+          await this.context.workspaceState.update("labrastro.currentSessionId", undefined)
         }
       }
       if (
@@ -2013,7 +2013,7 @@ export class DogcodeController implements vscode.Disposable {
               this.currentSessionId = remoteSessionId || sessionId
               if (this.currentSessionId) {
                 await this.context.workspaceState.update(
-                  "dogcode.currentSessionId",
+                  "labrastro.currentSessionId",
                   this.currentSessionId
                 )
               }
@@ -2533,7 +2533,7 @@ function buildSelectedEnvironmentPrompt(
     2
   )
   return [
-    "You are the EZCode lightweight environment sync agent.\n",
+    "You are the Labrastro lightweight environment sync agent.\n",
     "The user selected the manifest entries below. Work only from this filtered ",
     "manifest and do not inspect, install, or configure unrelated tools.\n\n",
     "Environment manifest:\n",
@@ -2555,7 +2555,7 @@ function buildToolchainIngestPrompt(input: Record<string, unknown>): string {
   const nameHint = stringValue(input.nameHint)
   const placementHint = stringValue(input.placementHint)
   return [
-    "You are the EZCode capability intake agent.\n",
+    "You are the Labrastro capability intake agent.\n",
     "Your only responsibility is to read the repository/documentation context supplied by the user and produce one strict JSON object for the capability manifest candidate.\n",
     "Before deriving fields, call `fetch_capabilities` for every user-provided repository or documentation URL. Treat it as the server-side read-only source reader for capability evidence.\n",
     "If only a documentation URL is provided, work from that source. A repository URL is optional; when fetched documentation reveals an official GitHub/Git/package source link, call `fetch_capabilities` for that source too when it can improve evidence.\n",
@@ -2923,7 +2923,7 @@ function toStringArray(value: unknown): string[] {
 }
 
 class ApprovalDocumentProvider implements vscode.TextDocumentContentProvider {
-  static readonly scheme = "dogcode-approval"
+  static readonly scheme = "labrastro-approval"
   private readonly documents = new Map<string, string>()
   private readonly approvals = new Map<string, ApprovalDetail>()
 
@@ -2943,7 +2943,7 @@ class ApprovalDocumentProvider implements vscode.TextDocumentContentProvider {
   async open(approvalId: string): Promise<void> {
     const detail = this.approvals.get(approvalId)
     if (!detail) {
-      void vscode.window.showWarningMessage("dogcode approval details are no longer available.")
+      void vscode.window.showWarningMessage("Labrastro approval details are no longer available.")
       return
     }
     const targetColumn =
@@ -3009,7 +3009,7 @@ class ApprovalDocumentProvider implements vscode.TextDocumentContentProvider {
     const fileName = sanitizeFileName(pathValue.split(/[\\/]/).pop() || `${toolName}.txt`)
     return {
       approvalId,
-      title: `dogcode Approval: ${toolName} ${fileName}`,
+      title: `Labrastro Approval: ${toolName} ${fileName}`,
       fileName,
       markdown:
         stringValue(payload.content) ||

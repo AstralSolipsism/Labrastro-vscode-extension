@@ -11,11 +11,6 @@ export interface HostUrlState {
   url: string
   configured: boolean
   source: HostUrlSource
-  migratedFromEzcode: boolean
-  legacyHostUrl?: string
-  legacyHostUrlSource?: HostUrlSource
-  migrationTargetSource?: HostUrlSource
-  message?: string
 }
 
 export const DEFAULT_HOST_URL = "http://127.0.0.1:8765"
@@ -46,52 +41,25 @@ export function configuredHostUrlFromInspection(
 }
 
 export function resolveHostUrlState(
-  dogcodeInspected: HostUrlInspection | undefined,
-  dogcodeEffectiveValue: string | undefined,
-  ezcodeInspected: HostUrlInspection | undefined
+  labrastroInspected: HostUrlInspection | undefined,
+  labrastroEffectiveValue: string | undefined
 ): HostUrlState {
-  const dogcodeConfigured = configuredHostUrlFromInspection(dogcodeInspected)
-  const legacyConfigured = configuredHostUrlFromInspection(ezcodeInspected)
-  const dogcodeUrl = normalizeHostUrl(dogcodeEffectiveValue || dogcodeConfigured?.url || DEFAULT_HOST_URL)
-  const legacyUrl = normalizeHostUrl(legacyConfigured?.url)
-  const shouldUseLegacy =
-    Boolean(legacyConfigured && legacyUrl && !isDefaultLocalHost(legacyUrl)) &&
-    (!dogcodeConfigured || !dogcodeUrl || isDefaultLocalHost(dogcodeUrl))
-
-  if (shouldUseLegacy && legacyConfigured) {
-    return {
-      url: legacyUrl,
-      configured: true,
-      source: legacyConfigured.source,
-      migratedFromEzcode: true,
-      legacyHostUrl: legacyUrl,
-      legacyHostUrlSource: legacyConfigured.source,
-      migrationTargetSource: legacyConfigured.source,
-      message: `已从 EZCode 旧 Host 配置迁移到 dogcode：${legacyUrl}。`,
-    }
-  }
+  const labrastroConfigured = configuredHostUrlFromInspection(labrastroInspected)
+  const labrastroUrl = normalizeHostUrl(labrastroEffectiveValue || labrastroConfigured?.url || DEFAULT_HOST_URL)
 
   return {
-    url: dogcodeUrl,
-    configured: Boolean(dogcodeConfigured),
-    source: dogcodeConfigured?.source || (dogcodeInspected ? "default" : "unknown"),
-    migratedFromEzcode: false,
-    legacyHostUrl: legacyUrl || undefined,
-    legacyHostUrlSource: legacyConfigured?.source,
+    url: labrastroUrl,
+    configured: Boolean(labrastroConfigured),
+    source: labrastroConfigured?.source || (labrastroInspected ? "default" : "unknown"),
   }
 }
 
-export function selectDogcodeHostWriteSource(
-  dogcodeInspected: HostUrlInspection | undefined
+export function selectLabrastroHostWriteSource(
+  labrastroInspected: HostUrlInspection | undefined
 ): HostUrlSource {
-  const configured = configuredHostUrlFromInspection(dogcodeInspected)
+  const configured = configuredHostUrlFromInspection(labrastroInspected)
   if (configured?.source === "workspace-folder") return "workspace-folder"
   if (configured?.source === "workspace") return "workspace"
-  return "global"
-}
-
-export function selectMigrationWriteSource(source: HostUrlSource | undefined): HostUrlSource {
-  if (source === "workspace-folder" || source === "workspace") return source
   return "global"
 }
 

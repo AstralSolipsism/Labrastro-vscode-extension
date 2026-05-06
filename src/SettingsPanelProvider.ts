@@ -1,6 +1,6 @@
 import * as vscode from "vscode"
 import { buildWebviewHtml } from "./webview-html"
-import { DogcodeController } from "./DogcodeController"
+import { LabrastroController } from "./LabrastroController"
 
 /**
  * 面板视图类型。
@@ -12,14 +12,14 @@ type PanelView = "settings" | "about"
 
 /** 面板标题映射 */
 const PANEL_TITLES: Record<PanelView, string> = {
-  settings: "dogcode Settings",
-  about: "dogcode About",
+  settings: "Labrastro Settings",
+  about: "Labrastro About",
 }
 
 /** 从 panel viewType 字符串推断视图类型 */
 function viewFromType(viewType: string): PanelView | undefined {
-  if (viewType === "dogcode.settingsPanel") return "settings"
-  if (viewType === "dogcode.aboutPanel") return "about"
+  if (viewType === "labrastro.settingsPanel") return "settings"
+  if (viewType === "labrastro.aboutPanel") return "about"
   return undefined
 }
 
@@ -49,7 +49,7 @@ export class SettingsPanelProvider implements vscode.Disposable {
 
   constructor(
     private readonly extensionUri: vscode.Uri,
-    private readonly dogcode: DogcodeController
+    private readonly labrastro: LabrastroController
   ) {}
 
   // ─────────────────────────────────────────────────────────
@@ -73,20 +73,20 @@ export class SettingsPanelProvider implements vscode.Disposable {
           existing.webview.postMessage({ type: "navigate", view, tab })
         }
         existing.reveal(vscode.ViewColumn.One)
-        console.log(`[dogcode] ${PANEL_TITLES[view]} 面板已存在，聚焦`)
+        console.log(`[labrastro] ${PANEL_TITLES[view]} 面板已存在，聚焦`)
         return
       } catch {
         // 面板已被 dispose 但 onDidDispose 回调未清理 Map — 清除无效引用
-        console.log(`[dogcode] ${PANEL_TITLES[view]} 面板已失效，重新创建`)
+        console.log(`[labrastro] ${PANEL_TITLES[view]} 面板已失效，重新创建`)
         this.panels.delete(view)
       }
     }
 
-    console.log(`[dogcode] 创建 ${PANEL_TITLES[view]} 面板 (当前 Map 大小: ${this.panels.size})`)
+    console.log(`[labrastro] 创建 ${PANEL_TITLES[view]} 面板 (当前 Map 大小: ${this.panels.size})`)
 
     // 创建新面板
     const panel = vscode.window.createWebviewPanel(
-      `dogcode.${view}Panel`,   // viewType — Serializer 用此标识恢复
+      `labrastro.${view}Panel`,   // viewType — Serializer 用此标识恢复
       PANEL_TITLES[view],
       vscode.ViewColumn.One,
       {
@@ -123,8 +123,8 @@ export class SettingsPanelProvider implements vscode.Disposable {
   private wirePanel(panel: vscode.WebviewPanel, view: PanelView): void {
     // 设置面板图标
     panel.iconPath = {
-      light: vscode.Uri.joinPath(this.extensionUri, "assets", "icons", "dogcode-light.svg"),
-      dark: vscode.Uri.joinPath(this.extensionUri, "assets", "icons", "dogcode-dark.svg"),
+      light: vscode.Uri.joinPath(this.extensionUri, "assets", "icons", "labrastro-light.svg"),
+      dark: vscode.Uri.joinPath(this.extensionUri, "assets", "icons", "labrastro-dark.svg"),
     }
 
     // 先启用脚本与本地资源访问，再写入 HTML，确保首轮加载可执行前端 bundle。
@@ -144,7 +144,7 @@ export class SettingsPanelProvider implements vscode.Disposable {
         return
       }
     }
-    const webviewPostDisposable = this.dogcode.registerWebviewPost(postToWebview)
+    const webviewPostDisposable = this.labrastro.registerWebviewPost(postToWebview)
 
     // ① closePanel：面板内返回按钮关闭面板
     const closePanelDisposable = panel.webview.onDidReceiveMessage((msg) => {
@@ -160,7 +160,7 @@ export class SettingsPanelProvider implements vscode.Disposable {
         setTimeout(() => {
           void (async () => {
             if (disposed) return
-            await this.dogcode.postInitialState(postToWebview, {
+            await this.labrastro.postInitialState(postToWebview, {
               initializeSession: false,
             })
             postToWebview({
@@ -170,7 +170,7 @@ export class SettingsPanelProvider implements vscode.Disposable {
             })
           })().catch((error) => {
             if (!disposed) {
-              console.warn("[dogcode] postInitialState failed", error)
+              console.warn("[labrastro] postInitialState failed", error)
             }
           })
         }, 50)
@@ -194,9 +194,9 @@ export class SettingsPanelProvider implements vscode.Disposable {
         vscode.env.openExternal(vscode.Uri.parse(msg.url))
         return
       }
-      await this.dogcode.handleMessage(msg, postToWebview)
+      await this.labrastro.handleMessage(msg, postToWebview)
       if (msg.type === "connection.save") {
-        vscode.window.showInformationMessage("dogcode 连接配置已保存")
+        vscode.window.showInformationMessage("Labrastro 连接配置已保存")
       }
     })
 
@@ -206,7 +206,7 @@ export class SettingsPanelProvider implements vscode.Disposable {
     // 面板关闭时清理
     panel.onDidDispose(() => {
       disposed = true
-      console.log(`[dogcode] ${PANEL_TITLES[view]} 面板已关闭`)
+      console.log(`[labrastro] ${PANEL_TITLES[view]} 面板已关闭`)
       closePanelDisposable.dispose()
       readyDisposable.dispose()
       tabDisposable.dispose()
@@ -234,7 +234,7 @@ export class SettingsPanelProvider implements vscode.Disposable {
     return buildWebviewHtml(webview, {
       scriptUri,
       styleUri,
-      title: "dogcode",
+      title: "Labrastro",
     })
   }
 
