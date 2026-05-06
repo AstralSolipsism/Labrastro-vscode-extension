@@ -30,8 +30,8 @@ export const settingsMessages = {
     port.postMessage({ type: "environment.refreshManifest" })
   },
 
-  runEnvironmentInChat(port: SettingsMessagePort, mode: "check" | "configure", entryIds: string[]): void {
-    port.postMessage({ type: "environment.chatRun", mode, entryIds })
+  runEnvironment(port: SettingsMessagePort, mode: "check" | "configure", entryIds: string[], agentId?: string): void {
+    port.postMessage({ type: "environment.run", mode, entryIds, agentId })
   },
 
   cancelEnvironment(port: SettingsMessagePort): void {

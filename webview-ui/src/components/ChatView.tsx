@@ -831,7 +831,6 @@ const ChatView: Component<ChatViewProps> = (props) => {
 
   const startEnvironmentQueueItem = (item: EnvironmentQueueItem) => {
     const sessionId = trace.currentSessionId()
-    const remoteSessionId = sessionId && !isLocalDraftSessionId(sessionId) ? sessionId : undefined
 
     if (!sessionId) {
       trace.startDraftTask(item.text)
@@ -858,10 +857,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
     trace.patchStats({ taskText: item.text, runStatus: "running" })
     startTimer()
     vscode.postMessage({
-      type: "environment.chatRun",
+      type: "environment.run",
       mode: item.mode,
       entryIds: item.entryIds,
-      ...(remoteSessionId ? { sessionId: remoteSessionId } : {}),
     })
   }
 
@@ -1035,10 +1033,18 @@ const ChatView: Component<ChatViewProps> = (props) => {
       if (msg.type === "chat.done") {
         finishChatRun(chatStatus() === "cancelled" ? "cancelled" : "done", { startNextEnvironment: true })
       }
+      if (msg.type === "environment.run.completed" && isWorking()) {
+        finishChatRun(chatStatus() === "cancelled" ? "cancelled" : "done", { startNextEnvironment: true })
+      }
       if (msg.type === "chat.cancelled") {
         setChatStatus("stopping")
         setWorkingText("正在停止")
         trace.patchStats({ runStatus: "stopping" })
+      }
+      if (msg.type === "environment.run.error" && isWorking()) {
+        appendTextPart(`环境任务失败：${typeof msg.message === "string" ? msg.message : "unknown error"}`, "error")
+        setEnvironmentRunQueue([])
+        finishChatRun("error")
       }
       if (msg.type === "chat.error") {
         appendTextPart(`连接错误：${typeof msg.message === "string" ? msg.message : "unknown error"}`, "error")

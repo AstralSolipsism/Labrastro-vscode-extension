@@ -66,6 +66,8 @@ interface EnvironmentSnapshot {
   status: "idle" | "running" | "completed" | "error" | "canceled"
   summary: string
   chatId?: string
+  taskId?: string
+  agentId?: string
   sessionId?: string
   startedAt?: string
   completedAt?: string
@@ -80,10 +82,10 @@ interface EnvironmentSnapshot {
 }
 
 interface ActiveEnvironmentRun {
-  chatId: string
+  taskId: string
+  agentId?: string
   mode: EnvironmentRunMode
   cancelled: boolean
-  currentToolMatches: Map<string, { entryId?: string; phase: "check" | "install" | "diagnostic" }>
 }
 
 interface SessionMetadataState {
@@ -364,19 +366,8 @@ export class LabrastroController implements vscode.Disposable {
             post,
             Array.isArray(message.entryIds)
               ? message.entryIds.map((item) => String(item)).filter(Boolean)
-              : undefined
-          )
-        }
-        return true
-      case "environment.chatRun":
-        if (message.mode === "check" || message.mode === "configure") {
-          void this.startEnvironmentChatRun(
-            message.mode,
-            post,
-            Array.isArray(message.entryIds)
-              ? message.entryIds.map((item) => String(item)).filter(Boolean)
               : undefined,
-            stringValue(message.sessionId)
+            stringValue(message.agentId) || stringValue(message.agent_id)
           )
         }
         return true
@@ -535,7 +526,6 @@ export class LabrastroController implements vscode.Disposable {
           const chatId =
             stringValue(message.chatId) ||
             this.activeChatId ||
-            this.activeEnvironmentRun?.chatId ||
             ""
           try {
             await this.client.approvalReply({
@@ -546,11 +536,7 @@ export class LabrastroController implements vscode.Disposable {
             })
           } catch (error) {
             const resolvedError = errorMessage(error)
-            if (chatId && chatId === this.activeEnvironmentRun?.chatId) {
-              post({ type: "environment.run.error", message: resolvedError })
-            } else {
-              post({ type: "chat.error", message: resolvedError })
-            }
+            post({ type: "chat.error", message: resolvedError })
           }
         }
         return true
@@ -1065,7 +1051,8 @@ export class LabrastroController implements vscode.Disposable {
   private async startEnvironmentRun(
     mode: EnvironmentRunMode,
     post: PostMessage,
-    entryIds?: string[]
+    entryIds?: string[],
+    agentId?: string
   ): Promise<void> {
     if (this.activeEnvironmentRun) {
       post({
@@ -1075,7 +1062,7 @@ export class LabrastroController implements vscode.Disposable {
       return
     }
 
-    let chatId = ""
+    let taskId = ""
     try {
       const manifest = await this.ensureEnvironmentManifest(post)
       const runManifest = filterEnvironmentManifest(manifest, entryIds)
@@ -1099,18 +1086,25 @@ export class LabrastroController implements vscode.Disposable {
         return
       }
 
-      const prompt = buildEnvironmentRunPrompt(runManifest, mode)
-      const start = await this.client.startChat(prompt)
-      chatId = String(start.chat_id || "")
-      if (!chatId) {
-        throw new Error("environment_chat_id_missing")
+      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || ""
+      const start = await this.client.environmentRun({
+        mode,
+        entry_ids: entryIds || [],
+        workspace_root: workspaceRoot,
+        agent_id: agentId || undefined,
+      })
+      const task = objectValue(start.task)
+      taskId = stringValue(task.id) || stringValue(start.task_id) || ""
+      if (!taskId) {
+        throw new Error("environment_task_id_missing")
       }
+      const selectedAgentId = stringValue(start.agent_id) || agentId
 
       this.activeEnvironmentRun = {
-        chatId,
+        taskId,
+        agentId: selectedAgentId,
         mode,
         cancelled: false,
-        currentToolMatches: new Map(),
       }
       const history = environmentRunHistory(this.environmentSnapshot)
       this.environmentSnapshot = {
@@ -1118,7 +1112,8 @@ export class LabrastroController implements vscode.Disposable {
         running: true,
         status: "running",
         summary: mode === "check" ? "正在检查当前环境..." : "正在配置当前环境...",
-        chatId,
+        taskId,
+        agentId: selectedAgentId,
         startedAt: new Date().toISOString(),
         completedAt: undefined,
         lastManifestAt:
@@ -1129,54 +1124,17 @@ export class LabrastroController implements vscode.Disposable {
         logs: [],
         ...history,
       }
-      post({ type: "environment.run.started", payload: { mode, chatId } })
+      post({ type: "environment.run.started", payload: { mode, taskId, agentId: selectedAgentId } })
       post({ type: "environment.snapshot", payload: this.environmentSnapshot })
-
-      let cursor = 0
-      while (!this.disposed && this.activeEnvironmentRun?.chatId === chatId) {
-        const stream = await this.client.streamChat(chatId, cursor, 2)
-        const events = Array.isArray(stream.events) ? stream.events : []
-        const nextCursor = Number(stream.next_cursor ?? cursor)
-        if (events.length) {
-          for (const event of events) {
-            if (!event || typeof event !== "object") continue
-            const normalized = event as Record<string, unknown>
-            if (normalized.type === "approval_request") {
-              await this.approvalDocuments.store(
-                objectValue(normalized.payload)
-              )
-            }
-            this.applyEnvironmentEvent(normalized, post)
-          }
-          post({ type: "environment.snapshot", payload: this.environmentSnapshot })
-        }
-        cursor = nextCursor
-        if (this.activeEnvironmentRun?.cancelled) {
-          this.finalizeEnvironmentRun(true, post)
-          post({
-            type: "environment.run.completed",
-            payload: this.environmentSnapshot,
-          })
-          break
-        }
-        if (stream.done) {
-          this.finalizeEnvironmentRun(false, post)
-          post({
-            type: "environment.run.completed",
-            payload: this.environmentSnapshot,
-          })
-          await this.refreshEnvironmentSessionList(post)
-          break
-        }
-      }
+      await this.pollEnvironmentRuntimeRun(taskId, post)
     } catch (error) {
       if (
         this.activeEnvironmentRun?.cancelled ||
         this.environmentSnapshot.status === "canceled" ||
-        (chatId &&
-          this.environmentSnapshot.chatId &&
-          this.environmentSnapshot.chatId !== chatId &&
-          this.activeEnvironmentRun?.chatId !== chatId)
+        (taskId &&
+          this.environmentSnapshot.taskId &&
+          this.environmentSnapshot.taskId !== taskId &&
+          this.activeEnvironmentRun?.taskId !== taskId)
       ) {
         return
       }
@@ -1195,190 +1153,36 @@ export class LabrastroController implements vscode.Disposable {
       this.activeEnvironmentRun = undefined
       post({ type: "environment.snapshot", payload: this.environmentSnapshot })
       post({ type: "environment.run.error", message: errorMessage(error) })
-      await this.refreshEnvironmentSessionList(post)
     }
   }
 
-  private async startEnvironmentChatRun(
-    mode: EnvironmentRunMode,
-    post: PostMessage,
-    entryIds?: string[],
-    requestedSessionId?: string
+  private async pollEnvironmentRuntimeRun(
+    taskId: string,
+    post: PostMessage
   ): Promise<void> {
-    if (this.activeEnvironmentRun) {
-      post({
-        type: "environment.run.error",
-        message: "已有环境任务正在运行，请先停止当前任务。",
+    let afterSeq = 0
+    while (!this.disposed && this.activeEnvironmentRun?.taskId === taskId) {
+      const payload = await this.client.runtimeEvents({
+        task_id: taskId,
+        after_seq: afterSeq,
       })
-      post({ type: "chat.error", message: "已有环境任务正在运行，请先停止当前任务。" })
-      return
-    }
-
-    let chatId = ""
-    let sessionId = requestedSessionId
-    try {
-      const manifest = await this.ensureEnvironmentManifest(post)
-      const runManifest = filterEnvironmentManifest(manifest, entryIds)
-      const entries = buildEnvironmentEntries(runManifest)
-      if (entries.length === 0) {
-        const message = "当前服务器没有配置任何环境条目。"
-        const history = environmentRunHistory(this.environmentSnapshot)
-        this.environmentSnapshot = {
-          ...createEmptyEnvironmentSnapshot(),
-          status: "error",
-          summary: message,
-          error: "environment_manifest_empty",
-          lastManifestAt:
-            stringValue(manifest.loadedAt) || this.environmentSnapshot.lastManifestAt,
-          ...history,
+      const events = Array.isArray(payload.events) ? payload.events : []
+      if (events.length) {
+        for (const event of events) {
+          if (!event || typeof event !== "object") continue
+          const normalized = event as Record<string, unknown>
+          const seq = numberValue(normalized.seq)
+          if (typeof seq === "number" && seq > afterSeq) {
+            afterSeq = seq
+          }
+          this.applyEnvironmentEvent(normalized, post)
         }
         post({ type: "environment.snapshot", payload: this.environmentSnapshot })
-        post({ type: "environment.run.error", message })
-        post({ type: "chat.error", message })
-        return
       }
-
-      const prompt = buildEnvironmentRunPrompt(runManifest, mode)
-      const start = await this.client.startChat(prompt, sessionId)
-      chatId = String(start.chat_id || "")
-      if (!chatId) {
-        throw new Error("environment_chat_id_missing")
+      if (!this.activeEnvironmentRun || this.environmentSnapshot.status !== "running") {
+        break
       }
-      this.activeChatId = chatId
-      post({ type: "chat.session", chatId, sessionId })
-
-      this.activeEnvironmentRun = {
-        chatId,
-        mode,
-        cancelled: false,
-        currentToolMatches: new Map(),
-      }
-      const history = environmentRunHistory(this.environmentSnapshot)
-      this.environmentSnapshot = {
-        mode,
-        running: true,
-        status: "running",
-        summary: mode === "check" ? "正在检查当前环境..." : "正在配置当前环境...",
-        chatId,
-        sessionId,
-        startedAt: new Date().toISOString(),
-        completedAt: undefined,
-        lastManifestAt:
-          stringValue(runManifest.loadedAt) || this.environmentSnapshot.lastManifestAt,
-        error: undefined,
-        entries,
-        approvals: [],
-        logs: [],
-        ...history,
-      }
-      post({ type: "environment.run.started", payload: { mode, chatId } })
-      post({ type: "environment.snapshot", payload: this.environmentSnapshot })
-
-      let cursor = 0
-      while (!this.disposed && this.activeEnvironmentRun?.chatId === chatId) {
-        const stream = await this.client.streamChat(chatId, cursor, 2)
-        const events = Array.isArray(stream.events) ? stream.events : []
-        const nextCursor = Number(stream.next_cursor ?? cursor)
-        if (events.length) {
-          for (const event of events) {
-            if (
-              event &&
-              event.type === "remote_peer_ready" &&
-              typeof event.payload === "object" &&
-              event.payload
-            ) {
-              const remoteSessionId = stringValue(
-                (event.payload as Record<string, unknown>).session_id
-              )
-              if (remoteSessionId && sessionId && remoteSessionId !== sessionId) {
-                post({
-                  type: "chat.error",
-                  message: `会话绑定异常：当前会话 ${sessionId}，远端返回 ${remoteSessionId}。`,
-                })
-                return
-              }
-              if (remoteSessionId && remoteSessionId !== this.currentSessionId) {
-                post({ type: "session.adopted", sessionId: remoteSessionId })
-              }
-              sessionId = remoteSessionId || sessionId
-              this.currentSessionId = sessionId
-              if (this.currentSessionId) {
-                await this.context.workspaceState.update(
-                  "labrastro.currentSessionId",
-                  this.currentSessionId
-                )
-              }
-            }
-          }
-          for (const event of events) {
-            if (!event || typeof event !== "object") continue
-            const normalized = event as Record<string, unknown>
-            if (normalized.type === "approval_request") {
-              await this.approvalDocuments.store(
-                objectValue(normalized.payload)
-              )
-            }
-            this.applyEnvironmentEvent(normalized, post)
-          }
-          post({ type: "chat.events", chatId, events })
-          post({ type: "environment.snapshot", payload: this.environmentSnapshot })
-        }
-        cursor = nextCursor
-        if (this.activeEnvironmentRun?.cancelled) {
-          this.finalizeEnvironmentRun(true, post)
-          post({
-            type: "environment.run.completed",
-            payload: this.environmentSnapshot,
-          })
-          post({ type: "chat.done", chatId })
-          if (this.activeChatId === chatId) {
-            this.activeChatId = undefined
-          }
-          break
-        }
-        if (stream.done) {
-          this.finalizeEnvironmentRun(false, post)
-          post({
-            type: "environment.run.completed",
-            payload: this.environmentSnapshot,
-          })
-          try {
-            await this.refreshSessions()
-            post({
-              type: "session.list",
-              sessions: this.sessions,
-              fingerprint: this.sessionFingerprint,
-            })
-          } catch {
-            // Environment completion should not fail because history refresh failed.
-          }
-          post({ type: "chat.done", chatId })
-          if (this.activeChatId === chatId) {
-            this.activeChatId = undefined
-          }
-          break
-        }
-      }
-    } catch (error) {
-      const completedAt = new Date().toISOString()
-      this.environmentSnapshot = {
-        ...this.environmentSnapshot,
-        running: false,
-        status: "error",
-        summary: "环境任务执行失败",
-        error: errorMessage(error),
-        completedAt,
-        lastRunSummary: "环境任务执行失败",
-        lastRunCompletedAt: completedAt,
-        lastRunStatus: "error",
-      }
-      this.activeEnvironmentRun = undefined
-      if (this.activeChatId === chatId) {
-        this.activeChatId = undefined
-      }
-      post({ type: "environment.snapshot", payload: this.environmentSnapshot })
-      post({ type: "environment.run.error", message: errorMessage(error) })
-      post({ type: "chat.error", message: errorMessage(error) })
+      await delay(1200)
     }
   }
 
@@ -1566,11 +1370,15 @@ export class LabrastroController implements vscode.Disposable {
     post({ type: "environment.snapshot", payload: this.environmentSnapshot })
     post({ type: "environment.run.completed", payload: this.environmentSnapshot })
     try {
-      await this.client.cancelChat(run.chatId, "user_cancelled")
+      if (run.taskId) {
+        await this.client.runtimeCancel({
+          task_id: run.taskId,
+          reason: "user_cancelled",
+        })
+      }
     } catch {
       // The UI state is already cancelled; backend cancellation may race with completion.
     }
-    await this.refreshEnvironmentSessionList(post)
   }
 
   private applyEnvironmentEvent(
@@ -1581,258 +1389,181 @@ export class LabrastroController implements vscode.Disposable {
     if (!run) return
     const type = String(event.type || "")
     const payload = objectValue(event.payload)
-    if (type === "remote_peer_ready") {
-      const sessionId = stringValue(payload.session_id) || ""
-      if (sessionId) {
-        this.environmentSnapshot = {
-          ...this.environmentSnapshot,
-          sessionId,
-        }
-        this.appendEnvironmentLog("info", `环境 Agent 会话已绑定：${sessionId}`)
-      }
-      return
-    }
-    if (type === "chat_cancelled") {
-      run.cancelled = true
-      this.appendEnvironmentLog("warning", "环境 Agent 会话已停止。")
-      return
-    }
-    if (type === "output") {
-      this.appendEnvironmentLog("info", truncateText(stringValue(payload.content) || "", 1200))
+    const data = objectValue(payload.data)
+    const entryId = stringValue(payload.entry_id) || ""
+    const phase = stringValue(payload.phase) || ""
+    const command = stringValue(payload.command) || ""
+    if (type === "text" || type === "log") {
+      const text = stringValue(payload.text) || stringValue(data.text)
+      if (text) this.appendEnvironmentLog("info", truncateText(text, 1200))
       return
     }
     if (type === "error") {
-      this.appendEnvironmentLog(
-        "error",
-        truncateText(stringValue(payload.message) || "unknown error", 1200)
-      )
+      const message =
+        stringValue(payload.text) ||
+        stringValue(data.message) ||
+        stringValue(payload.message) ||
+        "unknown error"
+      this.appendEnvironmentLog("error", truncateText(message, 1200))
       return
     }
-    if (type === "approval_request") {
-      const command = extractToolCommand(payload.tool_args)
-      const match = findEnvironmentEntryForCommand(
-        this.environmentSnapshot.entries,
-        command
-      )
-      const approval: EnvironmentApprovalState = {
-        approvalId: stringValue(payload.approval_id) || "",
-        toolName: stringValue(payload.tool_name) || "tool",
-        toolSource: stringValue(payload.tool_source),
-        command,
-        entryId: match?.entry.id,
-        reason: stringValue(payload.reason),
-        content: stringValue(payload.content),
-        toolArgs: objectValue(payload.tool_args),
-        sections: Array.isArray(payload.sections)
-          ? payload.sections.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
-          : [],
-        previewUnavailable: payload.preview_unavailable === true,
-        previewError: stringValue(payload.preview_error),
-        rawPayload: payload,
+    if (type === "status") {
+      const status = stringValue(data.status) || stringValue(payload.status)
+      if (status === "running") this.appendEnvironmentLog("info", "环境任务已开始。")
+      if (status === "blocked") {
+        this.finalizeEnvironmentRuntimeRun("error", "环境任务被策略阻止。", post)
       }
-      if (run.mode === "check" && match?.phase === "install") {
-        if (match?.entry.id) {
-          this.updateEnvironmentEntry(match.entry.id, {
-            status: "missing",
-            lastAction: "检查模式阻止安装",
-            detail: command || approval.reason,
-            lastUpdated: new Date().toISOString(),
-          })
-        }
-        this.appendEnvironmentLog(
-          "warning",
-          `检查模式已阻止安装请求${command ? `: ${command}` : ""}`,
-          match?.entry.id
-        )
-        if (approval.approvalId) {
-          void this.client
-            .approvalReply({
-              chat_id: run.chatId,
-              approval_id: approval.approvalId,
-              decision: "deny_once",
-              reason: "check_only_run",
-            })
-            .catch((error) => {
-              this.appendEnvironmentLog(
-                "error",
-                `自动拒绝安装请求失败：${errorMessage(error)}`,
-                match?.entry.id
-              )
-              post({ type: "environment.snapshot", payload: this.environmentSnapshot })
-            })
-        }
-        return
-      }
-      this.environmentSnapshot = {
-        ...this.environmentSnapshot,
-        approvals: upsertApproval(this.environmentSnapshot.approvals, approval),
-      }
-      if (match?.entry.id) {
-        this.updateEnvironmentEntry(match.entry.id, {
+      return
+    }
+    if (type === "environment.install_requested") {
+      if (entryId) {
+        this.updateEnvironmentEntry(entryId, {
           status: "awaiting_approval",
-          lastAction: "等待批准",
-          detail: command || approval.reason,
+          lastAction: "请求安装",
+          detail: command,
           lastUpdated: new Date().toISOString(),
+          installAttempted: true,
         })
       }
-      post({ type: "environment.approval.request", payload: approval })
+      this.appendEnvironmentLog("warning", command ? `请求安装：${command}` : "请求安装", entryId)
       return
     }
-    if (type === "approval_resolved") {
-      const approvalId = stringValue(payload.approval_id) || ""
-      const decision = stringValue(payload.decision) || "deny_once"
-      const approval = this.environmentSnapshot.approvals.find(
-        (item) => item.approvalId === approvalId
-      )
-      this.environmentSnapshot = {
-        ...this.environmentSnapshot,
-        approvals: this.environmentSnapshot.approvals.filter(
-          (item) => item.approvalId !== approvalId
-        ),
-      }
-      if (approval?.entryId && decision !== "allow_once") {
-        this.updateEnvironmentEntry(approval.entryId, {
-          status: "failed",
-          lastAction: "安装已拒绝",
-          detail: approval.reason || stringValue(payload.reason) || approval.command,
+    if (type === "environment.entry_started") {
+      if (entryId) {
+        this.updateEnvironmentEntry(entryId, {
+          status: phase === "install" ? "installing" : "checking",
+          lastAction: phase === "install" ? "安装中" : "检查中",
+          detail: command,
           lastUpdated: new Date().toISOString(),
+          installAttempted: phase === "install" ? true : undefined,
         })
       }
+      this.appendEnvironmentLog("info", command || `${entryId} started`, entryId)
       return
     }
-    if (type === "tool_call_start") {
-      const toolName = stringValue(payload.tool_name) || "tool"
-      const command = extractToolCommand(payload.tool_args)
-      const match = findEnvironmentEntryForCommand(
-        this.environmentSnapshot.entries,
-        command
-      )
-      if (match) {
-        if (run.mode === "check" && match.phase === "install") {
-          this.updateEnvironmentEntry(match.entry.id, {
-            status: "failed",
-            lastAction: "检查模式拦截安装命令",
-            detail: command || match.entry.detail,
-            lastUpdated: new Date().toISOString(),
-          })
-          this.appendEnvironmentLog(
-            "warning",
-            `检查模式拦截安装命令${command ? `: ${command}` : ""}`,
-            match.entry.id
-          )
-          return
-        }
-        run.currentToolMatches.set(toolName, {
-          entryId: match.entry.id,
-          phase: match.phase,
-        })
-        this.updateEnvironmentEntry(match.entry.id, {
+    if (type === "environment.entry_checked") {
+      const ok = booleanValue(payload.ok)
+      const detail = environmentEventDetail(payload)
+      if (entryId) {
+        const entry = this.environmentSnapshot.entries.find((item) => item.id === entryId)
+        this.updateEnvironmentEntry(entryId, {
           status:
-            match.phase === "check"
-              ? "checking"
-              : match.phase === "install"
-                ? "downloading"
-                : match.entry.status,
+            ok === true
+              ? entry?.installAttempted
+                ? "configured"
+                : "available"
+              : ok === false
+                ? entry?.installAttempted
+                  ? "failed"
+                  : "missing"
+                : "checking",
           lastAction:
-            match.phase === "check"
-              ? "检查中"
-              : match.phase === "install"
-                ? "开始下载安装"
-                : "补充诊断",
-          detail: command || match.entry.detail,
+            ok === true
+              ? entry?.installAttempted
+                ? "复检通过"
+                : "检查通过"
+              : ok === false
+                ? entry?.installAttempted
+                  ? "复检失败"
+                  : "缺失"
+                : "检查完成",
+          detail: detail || command,
           lastUpdated: new Date().toISOString(),
-          installAttempted:
-            match.phase === "install" ? true : match.entry.installAttempted,
         })
       }
-      this.appendEnvironmentLog(
-        "info",
-        `${toolName}${command ? `: ${command}` : ""}`,
-        match?.entry.id
+      if (detail) this.appendEnvironmentLog(ok === false ? "error" : "info", detail, entryId)
+      return
+    }
+    if (type === "environment.entry_verified") {
+      if (entryId) {
+        const entry = this.environmentSnapshot.entries.find((item) => item.id === entryId)
+        this.updateEnvironmentEntry(entryId, {
+          status: entry?.installAttempted ? "configured" : "available",
+          lastAction: entry?.installAttempted ? "复检通过" : "检查通过",
+          detail: environmentEventDetail(payload) || command,
+          lastUpdated: new Date().toISOString(),
+        })
+      }
+      return
+    }
+    if (type === "environment.entry_failed") {
+      const detail = environmentEventDetail(payload) || command || "环境条目失败"
+      if (entryId) {
+        const entry = this.environmentSnapshot.entries.find((item) => item.id === entryId)
+        this.updateEnvironmentEntry(entryId, {
+          status: phase === "check" && !entry?.installAttempted ? "missing" : "failed",
+          lastAction: stringValue(payload.error_code) ? "策略阻止" : "失败",
+          detail,
+          lastUpdated: new Date().toISOString(),
+        })
+      }
+      this.appendEnvironmentLog("error", detail, entryId)
+      return
+    }
+    if (type === "environment.summary") {
+      const output = truncateText(stringValue(payload.output) || "", 2000)
+      if (output) this.appendEnvironmentLog("info", output)
+      return
+    }
+    if (type === "completed") {
+      this.finalizeEnvironmentRuntimeRun(
+        "completed",
+        finalizeEnvironmentSummary(this.environmentSnapshot.entries, run.mode),
+        post
       )
       return
     }
-    if (type === "tool_call_stream") {
-      const toolName = stringValue(payload.tool_name) || "tool"
-      const content = truncateText(stringValue(payload.content) || "", 1200)
-      const current = run.currentToolMatches.get(toolName)
-      if (current?.entryId) {
-        const entry = this.environmentSnapshot.entries.find(
-          (item) => item.id === current.entryId
-        )
-        if (entry && current.phase === "install") {
-          this.updateEnvironmentEntry(current.entryId, {
-            status: shouldShowDownloading(content) ? "downloading" : "installing",
-            lastAction: "安装中",
-            detail: content || entry.detail,
-            lastUpdated: new Date().toISOString(),
-          })
-        }
-      }
-      if (content) {
-        this.appendEnvironmentLog("info", content, current?.entryId)
-      }
+    if (type === "cancelled" || type === "canceled") {
+      run.cancelled = true
+      this.finalizeEnvironmentRuntimeRun("canceled", "环境任务已停止。", post)
       return
     }
-    if (type === "tool_call_end") {
-      const toolName = stringValue(payload.tool_name) || "tool"
-      const current = run.currentToolMatches.get(toolName)
-      run.currentToolMatches.delete(toolName)
-      const success = payload.tool_success !== false
-      const resultText = truncateText(stringValue(payload.tool_result) || "", 1200)
-      if (current?.entryId) {
-        const entry = this.environmentSnapshot.entries.find(
-          (item) => item.id === current.entryId
-        )
-        if (entry) {
-          if (current.phase === "check") {
-            this.updateEnvironmentEntry(current.entryId, {
-              status: success
-                ? entry.installAttempted
-                  ? "configured"
-                  : "available"
-                : entry.installAttempted
-                  ? "failed"
-                  : "missing",
-              lastAction: success
-                ? entry.installAttempted
-                  ? "复检通过"
-                  : "检查通过"
-                : entry.installAttempted
-                  ? "复检失败"
-                  : "缺失",
-              detail: resultText || entry.detail,
-              lastUpdated: new Date().toISOString(),
-            })
-          } else if (current.phase === "install") {
-            this.updateEnvironmentEntry(current.entryId, {
-              status: success ? "installing" : "failed",
-              lastAction: success ? "安装命令完成，等待复检" : "安装失败",
-              detail: resultText || entry.detail,
-              lastUpdated: new Date().toISOString(),
-              installAttempted: true,
-            })
-          } else {
-            this.updateEnvironmentEntry(current.entryId, {
-              detail: resultText || entry.detail,
-              lastUpdated: new Date().toISOString(),
-            })
-          }
+    if (type === "failed" || type === "blocked") {
+      const result = objectValue(payload.result)
+      const error =
+        stringValue(result.error) ||
+        stringValue(payload.error) ||
+        (type === "blocked" ? "environment_policy_blocked" : "environment_task_failed")
+      this.finalizeEnvironmentRuntimeRun("error", "环境任务执行失败", post, error)
+    }
+  }
+
+  private finalizeEnvironmentRuntimeRun(
+    status: EnvironmentSnapshot["status"],
+    summary: string,
+    post: PostMessage,
+    error?: string
+  ): void {
+    const completedAt = new Date().toISOString()
+    const entries = this.environmentSnapshot.entries.map((entry) => {
+      if (entry.status === "checking" || entry.status === "installing" || entry.status === "downloading" || entry.status === "awaiting_approval") {
+        return {
+          ...entry,
+          status: "failed" as const,
+          lastAction: status === "canceled" ? "已停止" : "流程未完成",
         }
       }
-      this.appendEnvironmentLog(
-        success ? "info" : "error",
-        resultText || `${toolName} ${success ? "completed" : "failed"}`,
-        current?.entryId
-      )
-      return
+      return entry
+    })
+    this.environmentSnapshot = {
+      ...this.environmentSnapshot,
+      running: false,
+      status,
+      summary,
+      error,
+      completedAt,
+      entries,
+      approvals: [],
+      lastRunSummary: summary,
+      lastRunCompletedAt: completedAt,
+      lastRunStatus:
+        status === "completed" || status === "error" || status === "canceled"
+          ? status
+          : undefined,
     }
-    if (type === "chat_end") {
-      const response = truncateText(stringValue(payload.response) || "", 2000)
-      if (response) {
-        this.appendEnvironmentLog("info", response)
-      }
-    }
+    this.activeEnvironmentRun = undefined
+    post({ type: "environment.snapshot", payload: this.environmentSnapshot })
+    post({ type: "environment.run.completed", payload: this.environmentSnapshot })
   }
 
   private updateEnvironmentEntry(
@@ -2144,8 +1875,16 @@ function numberValue(value: unknown): number | undefined {
   return undefined
 }
 
+function booleanValue(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined
+}
+
 function objectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {}
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function sanitizeAutoApprovalOptions(value: unknown): Record<AutoApprovalOptionKey, boolean> {
@@ -2418,7 +2157,6 @@ function normalizeEnvironmentManifest(payload: Record<string, unknown>): Record<
     cli_tools: Array.isArray(payload.cli_tools) ? payload.cli_tools : [],
     mcp_servers: Array.isArray(payload.mcp_servers) ? payload.mcp_servers : [],
     skills: Array.isArray(payload.skills) ? payload.skills : [],
-    prompt: stringValue(payload.prompt) || "",
     loadedAt: new Date().toISOString(),
   }
 }
@@ -2478,17 +2216,6 @@ function buildEnvironmentEntries(
   return [...cliEntries, ...mcpEntries, ...skillEntries]
 }
 
-function buildEnvironmentRunPrompt(
-  manifest: Record<string, unknown>,
-  mode: EnvironmentRunMode
-): string {
-  const basePrompt = stringValue(manifest.prompt) || ""
-  if (mode === "check") {
-    return `${basePrompt}\n\nAdditional constraint for this run:\n- This is a check-only run.\n- Never run any install command.\n- If an entry is missing, report it as missing and stop before installation.\n`
-  }
-  return basePrompt
-}
-
 function filterEnvironmentManifest(
   manifest: Record<string, unknown>,
   entryIds: string[] | undefined
@@ -2503,7 +2230,6 @@ function filterEnvironmentManifest(
     cli_tools: cliTools,
     mcp_servers: mcpServers,
     skills,
-    prompt: buildSelectedEnvironmentPrompt(cliTools, mcpServers, skills),
   }
 }
 
@@ -2516,35 +2242,6 @@ function filterManifestItems(
   return value
     .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
     .filter((item) => ids.has(environmentEntryId(kind, stringValue(item.name) || "")))
-}
-
-function buildSelectedEnvironmentPrompt(
-  cliTools: Record<string, unknown>[],
-  mcpServers: Record<string, unknown>[],
-  skills: Record<string, unknown>[]
-): string {
-  const manifest = JSON.stringify(
-    {
-      cli_tools: cliTools,
-      mcp_servers: mcpServers,
-      skills,
-    },
-    null,
-    2
-  )
-  return [
-    "You are the Labrastro lightweight environment sync agent.\n",
-    "The user selected the manifest entries below. Work only from this filtered ",
-    "manifest and do not inspect, install, or configure unrelated tools.\n\n",
-    "Environment manifest:\n",
-    `\`\`\`json\n${manifest}\n\`\`\`\n\n`,
-    "Procedure:\n",
-    "1. Run each configured `check` command exactly as written.\n",
-    "2. Treat successful checks as ready. For failures, report the missing tool and quote the configured `install` command.\n",
-    "3. Before running an install command, use normal approval and ground the plan in `docs`, `evidence`, `credentials`, `risk_level`, `install_prompt`, and `notes`.\n",
-    "4. Do not invent install steps outside the manifest. Report missing base runtimes as blockers.\n",
-    "5. Finish with a compact status table.\n",
-  ].join("")
 }
 
 function buildToolchainIngestPrompt(input: Record<string, unknown>): string {
@@ -2840,6 +2537,16 @@ function finalizeEnvironmentSummary(
   return `环境检查完成：可用 ${counts.available}，已配置 ${counts.configured}，缺失 ${counts.missing}，失败 ${counts.failed}。`
 }
 
+function environmentEventDetail(payload: Record<string, unknown>): string {
+  return (
+    stringValue(payload.error) ||
+    stringValue(payload.output) ||
+    stringValue(payload.detail) ||
+    stringValue(payload.command) ||
+    ""
+  )
+}
+
 function summarizeEnvironmentEntries(entries: EnvironmentEntryState[]): Record<string, number> {
   const summary = {
     available: 0,
@@ -2858,59 +2565,6 @@ function summarizeEnvironmentEntries(entries: EnvironmentEntryState[]): Record<s
 
 function environmentEntryId(kind: EnvironmentEntryKind, name: string): string {
   return `${kind}:${name}`
-}
-
-function extractToolCommand(value: unknown): string {
-  const args = objectValue(value)
-  return (
-    stringValue(args.command) ||
-    stringValue(args.cmd) ||
-    stringValue(args.script) ||
-    stringValue(args.text) ||
-    ""
-  ).trim()
-}
-
-function findEnvironmentEntryForCommand(
-  entries: EnvironmentEntryState[],
-  command: string
-): { entry: EnvironmentEntryState; phase: "check" | "install" | "diagnostic" } | undefined {
-  const normalized = canonicalCommand(command)
-  if (!normalized) return undefined
-  for (const entry of entries) {
-    if (normalized === canonicalCommand(entry.check)) {
-      return { entry, phase: "check" }
-    }
-    if (entry.install && normalized === canonicalCommand(entry.install)) {
-      return { entry, phase: "install" }
-    }
-  }
-  for (const entry of entries) {
-    if (entry.command && normalized.includes(entry.command)) {
-      return { entry, phase: "diagnostic" }
-    }
-  }
-  return undefined
-}
-
-function upsertApproval(
-  approvals: EnvironmentApprovalState[],
-  next: EnvironmentApprovalState
-): EnvironmentApprovalState[] {
-  const index = approvals.findIndex((item) => item.approvalId === next.approvalId)
-  if (index < 0) return [...approvals, next]
-  const updated = [...approvals]
-  updated[index] = next
-  return updated
-}
-
-function shouldShowDownloading(content: string): boolean {
-  const normalized = content.toLowerCase()
-  return /download|fetch|extract|resolving|tarball|zip|package/.test(normalized)
-}
-
-function canonicalCommand(value: string): string {
-  return value.replace(/\s+/g, " ").trim()
 }
 
 function truncateText(value: string, maxChars: number): string {
