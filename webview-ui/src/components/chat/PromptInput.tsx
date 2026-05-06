@@ -1,5 +1,6 @@
 import { Component, For, Show, createSignal } from "solid-js"
 import { IconButton } from "../common/IconButton"
+import { DropdownMenu } from "../common/interaction"
 import { t } from "../../i18n"
 import type { ChatModeOption, ChatModelOption } from "../../chat/chatState"
 
@@ -80,106 +81,107 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       />
       <div class="prompt-input-toolbar">
         <div class="prompt-input-selectors">
-          <div class="prompt-selector-wrap">
-            <button
-              type="button"
-              class="prompt-selector"
-              aria-haspopup="menu"
-              aria-expanded={modeMenuOpen()}
-              disabled={props.disabled}
-              onClick={() => {
-                setModelMenuOpen(false)
-                setModeMenuOpen((open) => !open)
-              }}
-              title="会话模式"
-            >
-              <span class="codicon codicon-code" aria-hidden="true" />
-              <span class="prompt-selector__label">{modeSelectorLabel()}</span>
-              <span class="codicon codicon-chevron-down prompt-selector__chevron" aria-hidden="true" />
-            </button>
-            <Show when={modeMenuOpen()}>
-              <div class="prompt-menu" role="menu">
-                <div class="prompt-menu__section-label">会话模式</div>
-                <For each={props.modeOptions || []}>
-                  {(option) => (
-                    <button
-                      type="button"
-                      class="prompt-menu__item"
-                      classList={{ "prompt-menu__item--selected": option.id === props.selectedMode }}
-                      role="menuitem"
-                      onClick={() => {
-                        props.onModeChange?.(option.id)
-                        setModeMenuOpen(false)
-                      }}
-                    >
-                      <strong>{option.label}</strong>
-                      <Show when={option.description}>
-                        <small>{option.description}</small>
-                      </Show>
-                    </button>
-                  )}
-                </For>
-              </div>
-            </Show>
-          </div>
-          <div class="prompt-selector-wrap">
-            <button
-              type="button"
-              class="prompt-selector prompt-selector--model"
-              classList={{
-                "prompt-selector--switching": props.modelSwitching,
-                "prompt-selector--pending": Boolean(props.modelPendingLabel),
-                "prompt-selector--error": Boolean(props.modelError),
-                "prompt-selector--empty": !hasModelOptions(),
-              }}
-              aria-haspopup="menu"
-              aria-expanded={modelMenuOpen()}
-              disabled={!canOpenModelSelector()}
-              onClick={() => {
+          <DropdownMenu
+            ariaLabel="会话模式"
+            title="会话模式"
+            open={modeMenuOpen()}
+            disabled={props.disabled}
+            triggerClass="prompt-selector"
+            menuClass="prompt-menu"
+            onOpenChange={(open) => {
+              if (open) setModelMenuOpen(false)
+              setModeMenuOpen(open)
+            }}
+            triggerContent={
+              <>
+                <span class="codicon codicon-code" aria-hidden="true" />
+                <span class="prompt-selector__label">{modeSelectorLabel()}</span>
+                <span class="codicon codicon-chevron-down prompt-selector__chevron" aria-hidden="true" />
+              </>
+            }
+          >
+            <div class="prompt-menu__section-label">会话模式</div>
+            <For each={props.modeOptions || []}>
+              {(option) => (
+                <button
+                  type="button"
+                  class="prompt-menu__item"
+                  classList={{ "prompt-menu__item--selected": option.id === props.selectedMode }}
+                  role="menuitemradio"
+                  aria-checked={option.id === props.selectedMode}
+                  onClick={() => {
+                    props.onModeChange?.(option.id)
+                    setModeMenuOpen(false)
+                  }}
+                >
+                  <strong>{option.label}</strong>
+                  <Show when={option.description}>
+                    <small>{option.description}</small>
+                  </Show>
+                </button>
+              )}
+            </For>
+          </DropdownMenu>
+          <DropdownMenu
+            ariaLabel="会话主模型"
+            title={modelSelectorTitle()}
+            open={modelMenuOpen() && canShowModelMenu()}
+            disabled={!canOpenModelSelector()}
+            triggerClass="prompt-selector prompt-selector--model"
+            triggerClassList={{
+              "prompt-selector--switching": props.modelSwitching,
+              "prompt-selector--pending": Boolean(props.modelPendingLabel),
+              "prompt-selector--error": Boolean(props.modelError),
+              "prompt-selector--empty": !hasModelOptions(),
+            }}
+            menuClass="prompt-menu prompt-menu--model"
+            onOpenChange={(open) => {
+              if (open) {
                 setModeMenuOpen(false)
                 if (!hasModelOptions()) {
                   props.onModelUnavailable?.()
+                  setModelMenuOpen(false)
                   return
                 }
-                setModelMenuOpen((open) => !open)
-              }}
-              title={modelSelectorTitle()}
-            >
-              <span
-                class={`codicon codicon-${props.modelSwitching ? "sync prompt-selector__spin" : "symbol-class"}`}
-                aria-hidden="true"
-              />
-              <span class="prompt-selector__label">{modelSelectorLabel()}</span>
-              <Show when={props.modelDescription || props.modelPendingLabel}>
-                <span class="prompt-selector__detail">{props.modelPendingLabel || props.modelDescription}</span>
-              </Show>
-              <span class="codicon codicon-chevron-down prompt-selector__chevron" aria-hidden="true" />
-            </button>
-            <Show when={modelMenuOpen() && canShowModelMenu()}>
-              <div class="prompt-menu prompt-menu--model" role="menu">
-                <div class="prompt-menu__section-label">会话主模型</div>
-                <For each={props.modelOptions || []}>
-                  {(option) => (
-                    <button
-                      type="button"
-                      class="prompt-menu__item"
-                      classList={{ "prompt-menu__item--selected": option.id === props.selectedModel }}
-                      role="menuitem"
-                      onClick={() => {
-                        props.onModelChange?.(option.id)
-                        setModelMenuOpen(false)
-                      }}
-                    >
-                      <strong>{option.label}</strong>
-                      <Show when={option.description}>
-                        <small>{option.description}</small>
-                      </Show>
-                    </button>
-                  )}
-                </For>
-              </div>
-            </Show>
-          </div>
+              }
+              setModelMenuOpen(open)
+            }}
+            triggerContent={
+              <>
+                <span
+                  class={`codicon codicon-${props.modelSwitching ? "sync prompt-selector__spin" : "symbol-class"}`}
+                  aria-hidden="true"
+                />
+                <span class="prompt-selector__label">{modelSelectorLabel()}</span>
+                <Show when={props.modelDescription || props.modelPendingLabel}>
+                  <span class="prompt-selector__detail">{props.modelPendingLabel || props.modelDescription}</span>
+                </Show>
+                <span class="codicon codicon-chevron-down prompt-selector__chevron" aria-hidden="true" />
+              </>
+            }
+          >
+            <div class="prompt-menu__section-label">会话主模型</div>
+            <For each={props.modelOptions || []}>
+              {(option) => (
+                <button
+                  type="button"
+                  class="prompt-menu__item"
+                  classList={{ "prompt-menu__item--selected": option.id === props.selectedModel }}
+                  role="menuitemradio"
+                  aria-checked={option.id === props.selectedModel}
+                  onClick={() => {
+                    props.onModelChange?.(option.id)
+                    setModelMenuOpen(false)
+                  }}
+                >
+                  <strong>{option.label}</strong>
+                  <Show when={option.description}>
+                    <small>{option.description}</small>
+                  </Show>
+                </button>
+              )}
+            </For>
+          </DropdownMenu>
         </div>
         <div class="prompt-input-actions">
           <IconButton

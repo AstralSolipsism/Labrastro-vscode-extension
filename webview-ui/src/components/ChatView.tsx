@@ -14,6 +14,7 @@ import {
   type ApprovalDetails,
 } from "./chat/ApprovalDetailsDialog"
 import { IconButton } from "./common/IconButton"
+import { DialogSurface } from "./common/interaction"
 import { useTrace } from "../context/trace"
 import { useVSCode } from "../context/vscode"
 import { useServer } from "../context/server"
@@ -1163,13 +1164,14 @@ const ChatView: Component<ChatViewProps> = (props) => {
       </footer>
 
       <Show when={props.historyOpen}>
-        <div class="session-history-overlay" onClick={() => props.onHistoryClose?.()}>
-          <section
-            class="session-history-panel"
-            role="dialog"
-            aria-modal="true"
-            aria-label="会话历史"
-            onClick={(event) => event.stopPropagation()}
+        <>
+          <DialogSurface
+            ariaLabel="会话历史"
+            backdropClass="session-history-overlay"
+            surfaceClass="session-history-panel"
+            as="section"
+            onClose={() => props.onHistoryClose?.()}
+            initialFocusSelector=".session-history-search input"
           >
             <header class="session-history-panel__header">
               <button class="session-history-panel__back" type="button" onClick={() => props.onHistoryClose?.()} aria-label="返回聊天">
@@ -1264,12 +1266,18 @@ const ChatView: Component<ChatViewProps> = (props) => {
                 刷新
               </button>
             </footer>
-          </section>
+          </DialogSurface>
           <Show when={deleteSessionId()}>
             {(sessionId) => {
               const session = () => trace.recentSessions().find((item) => item.id === sessionId())
               return (
-                <div class="session-delete-dialog" role="dialog" aria-modal="true" aria-label="删除会话" onClick={(event) => event.stopPropagation()}>
+                <DialogSurface
+                  ariaLabel="删除会话"
+                  backdropClass="session-delete-dialog-backdrop"
+                  surfaceClass="session-delete-dialog"
+                  onClose={() => setDeleteSessionId(undefined)}
+                  initialFocusSelector=".session-delete-dialog__actions button"
+                >
                   <div class="session-delete-dialog__header">
                     <span class="codicon codicon-trash" aria-hidden="true" />
                     <h3>删除会话</h3>
@@ -1280,11 +1288,11 @@ const ChatView: Component<ChatViewProps> = (props) => {
                     <button type="button" onClick={() => setDeleteSessionId(undefined)}>取消</button>
                     <button type="button" class="session-delete-dialog__danger" onClick={confirmDeleteSession}>删除</button>
                   </div>
-                </div>
+                </DialogSurface>
               )
             }}
           </Show>
-        </div>
+        </>
       </Show>
       <Show when={selectedApproval()}>
         {(approval) => (

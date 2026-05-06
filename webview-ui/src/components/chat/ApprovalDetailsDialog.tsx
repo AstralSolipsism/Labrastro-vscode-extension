@@ -1,4 +1,5 @@
 import { Component, For, Show, createMemo } from "solid-js"
+import { DialogSurface } from "../common/interaction"
 
 export type ApprovalDecision = "allow_once" | "deny_once"
 export type AutoApprovalCategory = "readOnly" | "write" | "delete" | "execute" | "mcp" | "unknown"
@@ -167,14 +168,14 @@ export const ApprovalDetailsDialog: Component<ApprovalDetailsDialogProps> = (pro
   const summary = createMemo(() => approvalSummary(props.approval))
 
   return (
-    <div class="approval-dialog-backdrop" role="presentation" onClick={() => props.onClose()}>
-      <section
-        class="approval-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-label="审批详情"
-        onClick={(event) => event.stopPropagation()}
-      >
+    <DialogSurface
+      ariaLabel="审批详情"
+      backdropClass="approval-dialog-backdrop"
+      surfaceClass="approval-dialog"
+      as="section"
+      onClose={props.onClose}
+      initialFocusSelector=".approval-dialog__close"
+    >
         <header class="approval-dialog__header">
           <div class="approval-dialog__title">
             <span class={`codicon codicon-${summary().icon}`} aria-hidden="true" />
@@ -199,8 +200,7 @@ export const ApprovalDetailsDialog: Component<ApprovalDetailsDialogProps> = (pro
             批准一次
           </button>
         </footer>
-      </section>
-    </div>
+    </DialogSurface>
   )
 }
 
