@@ -1256,6 +1256,35 @@ button {
   background: color-mix(in srgb, var(--ez-success) 8%, transparent);
 }
 
+.settings-table {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.settings-table-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--ez-border);
+  border-radius: var(--ez-radius);
+  min-width: 0;
+}
+
+.settings-table-row > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-table-row code {
+  grid-column: 1 / -1;
+  white-space: pre-wrap;
+  font-size: 11px;
+}
+
 .settings-action-result {
   margin-bottom: 12px;
   padding: 8px 10px;
@@ -2826,6 +2855,36 @@ button {
 
 .agent-config-choice--unknown {
   border-color: color-mix(in srgb, var(--ez-warning) 30%, var(--ez-border));
+}
+
+.executor-capability-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--ez-border);
+  border-radius: var(--ez-radius);
+  background: var(--ez-surface-soft);
+}
+
+.executor-capability-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.executor-capability-panel__header span {
+  color: var(--ez-muted);
+  overflow-wrap: anywhere;
+}
+
+.executor-capability-panel small {
+  color: var(--ez-muted);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 .settings-detail-panel .settings-form-grid .field-label--full {

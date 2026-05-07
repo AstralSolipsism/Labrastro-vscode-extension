@@ -2,6 +2,7 @@ import { Component, For, Match, Switch } from "solid-js"
 import { t } from "../i18n"
 import type { SettingsController } from "./useSettingsController"
 import { ExecutorsTab } from "./tabs/ExecutorsTab"
+import { AccountsTab } from "./tabs/AccountsTab"
 import { ProvidersTab } from "./tabs/ProvidersTab"
 import { ToolchainsTab } from "./tabs/ToolchainsTab"
 import { ServerSettingsTab } from "./tabs/ServerSettingsTab"
@@ -48,6 +49,7 @@ export const SettingsShell: Component<SettingsShellProps> = (props) => {
         <main class="settings-tab-content">
           <Switch>
             <Match when={controller.activeTab() === "executors"}><ExecutorsTab controller={controller} /></Match>
+            <Match when={controller.activeTab() === "accounts"}><AccountsTab controller={controller} /></Match>
             <Match when={controller.activeTab() === "providers"}><ProvidersTab controller={controller} /></Match>
             <Match when={controller.activeTab() === "toolchains"}><ToolchainsTab controller={controller} /></Match>
             <Match when={controller.activeTab() === "serverSettings"}><ServerSettingsTab controller={controller} /></Match>

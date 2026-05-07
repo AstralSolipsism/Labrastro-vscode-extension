@@ -22,6 +22,7 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
     deleteProfile,
     currentProfileDraft,
     currentProfileIdLocked,
+    selectedProfileExecutorCapability,
     renameProfile,
     updateProfileField,
     setProfileExecutorSelect,
@@ -53,6 +54,7 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
     parseAgentConfigListText,
     runtimePolling,
     runtimeTerminal,
+    runtimeTaskCanResume,
     selectedRuntimeTaskId,
     runtimePrompt,
     setRuntimePrompt,
@@ -156,6 +158,32 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
                   </select>
                   <small class="field-help">{runtimeOptionDescription(PROFILE_EXECUTOR_OPTIONS, currentProfileDraft()!.executor)}</small>
                 </label>
+                <Show when={selectedProfileExecutorCapability()}>
+                  <div class="executor-capability-panel field-label--full">
+                    <div class="executor-capability-panel__header">
+                      <strong>{t("agentConfig.profile.executorCapability")}</strong>
+                      <span>{currentProfileDraft()!.executor}</span>
+                    </div>
+                    <div class="settings-badge-group">
+                      <StatusBadge tone={selectedProfileExecutorCapability()!.installed ? "success" : "error"}>
+                        {selectedProfileExecutorCapability()!.installed ? t("agentConfig.profile.capability.installed") : t("agentConfig.profile.capability.missing")}
+                      </StatusBadge>
+                      <Show when={selectedProfileExecutorCapability()!.version}>
+                        <StatusBadge>{selectedProfileExecutorCapability()!.version}</StatusBadge>
+                      </Show>
+                      <StatusBadge tone={selectedProfileExecutorCapability()!.streamJson ? "success" : "muted"}>{t("agentConfig.profile.capability.streamJson")}</StatusBadge>
+                      <StatusBadge tone={selectedProfileExecutorCapability()!.sessionDiscovery ? "success" : "muted"}>{t("agentConfig.profile.capability.sessionDiscovery")}</StatusBadge>
+                      <StatusBadge tone={selectedProfileExecutorCapability()!.resumeById ? "success" : "muted"}>{t("agentConfig.profile.capability.resume")}</StatusBadge>
+                      <StatusBadge tone={selectedProfileExecutorCapability()!.mcpConfig ? "success" : "muted"}>{t("agentConfig.profile.capability.mcp")}</StatusBadge>
+                      <Show when={selectedProfileExecutorCapability()!.runtimeHomeIsolation}>
+                        <StatusBadge>{selectedProfileExecutorCapability()!.runtimeHomeIsolation}</StatusBadge>
+                      </Show>
+                    </div>
+                    <Show when={selectedProfileExecutorCapability()!.limitations.length > 0}>
+                      <small>{t("agentConfig.profile.capability.limitations")}: {selectedProfileExecutorCapability()!.limitations.join("; ")}</small>
+                    </Show>
+                  </div>
+                </Show>
                 <label class="field-label"><span>{t("agentConfig.profile.executionLocation")}</span>
                   <select value={currentProfileDraft()!.execution_location} onChange={(e) => updateProfileField("execution_location", e.currentTarget.value)}>
                     <For each={PROFILE_EXECUTION_LOCATION_OPTIONS}>{(option) => <option value={option.value}>{t(option.labelKey)}</option>}</For>
@@ -379,10 +407,20 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
               <span class="codicon codicon-debug-stop" aria-hidden="true" />
               {t("agentConfig.runtimeTest.cancel")}
             </button>
-            <button class="btn btn-secondary" onClick={retryRuntimeAgentTask} disabled={!selectedRuntimeTaskId() || runtimeSubmitting()}>
+            <button class="btn btn-secondary" onClick={() => retryRuntimeAgentTask(false)} disabled={!selectedRuntimeTaskId() || runtimeSubmitting()}>
               <span class="codicon codicon-refresh" aria-hidden="true" />
-              {t("agentConfig.runtimeTest.retry")}
+              {t("agentConfig.runtimeTest.retryFresh")}
             </button>
+            <Show when={runtimeTaskCanResume()} fallback={
+              <Show when={selectedRuntimeTaskId()}>
+                <StatusBadge tone="muted">{t("agentConfig.runtimeTest.freshOnly")}</StatusBadge>
+              </Show>
+            }>
+              <button class="btn btn-secondary" onClick={() => retryRuntimeAgentTask(true)} disabled={runtimeSubmitting()}>
+                <span class="codicon codicon-history" aria-hidden="true" />
+                {t("agentConfig.runtimeTest.retryResume")}
+              </button>
+            </Show>
           </div>
         </div>
         <Show when={runtimeError()}>

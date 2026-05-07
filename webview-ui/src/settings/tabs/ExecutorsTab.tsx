@@ -25,6 +25,7 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
     hostUrlConfigured,
     hostUrlSource,
     connectionMessage,
+    connectionSecurityWarnings,
     connectionSaveMessage,
     hostUrlError,
     hostUrlDraftDiffers,
@@ -39,13 +40,14 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
     connectionSaveResultKey,
     server,
     setDismissedConnectionSaveResultKey,
-    adminSecret,
-    setAdminSecret,
-    bootstrapSecret,
-    setBootstrapSecret,
+    loginUsername,
+    setLoginUsername,
+    loginPassword,
+    setLoginPassword,
     saveLoading,
     saveSuccess,
     saveConnection,
+    logoutConnection,
     EXECUTOR_ENGINES,
     executorLocationLabel,
     stringValue,
@@ -254,17 +256,19 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
                 <StatusBadge tone={hostUrlConfigured() ? "success" : "warning"}>{hostUrlSource()}</StatusBadge>
               </div>
               <div class="executor-config-detail__row">
-                <span class="executor-config-detail__label">Admin secret</span>
-                <StatusBadge tone={server.connectionState().adminSecretSet ? "success" : "warning"}>
-                  {server.connectionState().adminSecretSet ? t("executor.remote.saved") : t("executor.remote.notSaved")}
+                <span class="executor-config-detail__label">登录状态</span>
+                <StatusBadge tone={server.connectionState().authenticated ? "success" : "warning"}>
+                  {server.connectionState().authenticated ? "已登录" : "未登录"}
                 </StatusBadge>
               </div>
-              <div class="executor-config-detail__row">
-                <span class="executor-config-detail__label">Bootstrap secret</span>
-                <StatusBadge tone={server.connectionState().bootstrapSecretSet ? "success" : "warning"}>
-                  {server.connectionState().bootstrapSecretSet ? t("executor.remote.saved") : t("executor.remote.notSaved")}
-                </StatusBadge>
-              </div>
+              <Show when={server.connectionState().authenticated}>
+                <div class="executor-config-detail__row">
+                  <span class="executor-config-detail__label">当前账号</span>
+                  <span class="executor-config-detail__value">
+                    {stringValue(server.connectionState().username, "未知")} / {stringValue(server.connectionState().role, "user")}
+                  </span>
+                </div>
+              </Show>
             </div>
 
             {/* 提示信息区 */}
@@ -278,6 +282,12 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
               <div class="executor-config-notice executor-config-notice--error">
                 <span class="codicon codicon-warning" aria-hidden="true" />
                 <span>{connectionMessage()}</span>
+              </div>
+            </Show>
+            <Show when={connectionSecurityWarnings().length}>
+              <div class="executor-config-notice executor-config-notice--warning">
+                <span class="codicon codicon-warning" aria-hidden="true" />
+                <span>{connectionSecurityWarnings().join(" ")}</span>
               </div>
             </Show>
             <Show when={connectionSaveMessage()}>
@@ -319,33 +329,45 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
                   if (key) setDismissedConnectionSaveResultKey(key)
                 }} />
               </label>
+              <Show when={!server.connectionState().authenticated}>
               <div class="executor-config-form__secrets">
                 <label class="executor-config-field">
                   <span class="executor-config-field__label">
-                    <span class="codicon codicon-key" aria-hidden="true" />
-                    Admin secret
+                    <span class="codicon codicon-account" aria-hidden="true" />
+                    用户名
                   </span>
-                  <input class="executor-config-field__input" value={adminSecret()} type="password" placeholder={t("provider.apiKeyPlaceholder")} onInput={(event) => setAdminSecret(event.currentTarget.value)} />
+                  <input class="executor-config-field__input" value={loginUsername()} placeholder="admin" onInput={(event) => setLoginUsername(event.currentTarget.value)} />
                 </label>
                 <label class="executor-config-field">
                   <span class="executor-config-field__label">
-                    <span class="codicon codicon-shield" aria-hidden="true" />
-                    Bootstrap secret
+                    <span class="codicon codicon-key" aria-hidden="true" />
+                    密码
                   </span>
-                  <input class="executor-config-field__input" value={bootstrapSecret()} type="password" placeholder={t("provider.apiKeyPlaceholder")} onInput={(event) => setBootstrapSecret(event.currentTarget.value)} />
+                  <input class="executor-config-field__input" value={loginPassword()} type="password" placeholder={t("provider.apiKeyPlaceholder")} onInput={(event) => setLoginPassword(event.currentTarget.value)} />
                 </label>
               </div>
+              </Show>
             </div>
 
             <div class="executor-config-panel__footer">
+              <Show
+                when={!server.connectionState().authenticated}
+                fallback={
+                  <button class="btn btn-secondary" onClick={logoutConnection}>
+                    <span class="codicon codicon-sign-out" aria-hidden="true" />
+                    退出登录
+                  </button>
+                }
+              >
               <button
                 class={`btn btn-primary ${saveLoading() ? "btn--loading" : ""} ${saveSuccess() ? "btn--success" : ""}`}
                 onClick={saveConnection}
                 disabled={saveLoading()}
               >
-                <span class={`codicon codicon-${saveLoading() ? "loading" : saveSuccess() ? "check" : "save"}`} aria-hidden="true" />
-                {saveLoading() ? "保存中…" : saveSuccess() ? t("executor.remote.saved") : "保存连接配置"}
+                <span class={`codicon codicon-${saveLoading() ? "loading" : saveSuccess() ? "check" : "sign-in"}`} aria-hidden="true" />
+                {saveLoading() ? "登录中…" : saveSuccess() ? "已登录" : "登录"}
               </button>
+              </Show>
               <button
                 class={`btn btn-secondary ${refreshLoading() ? "btn--loading" : ""}`}
                 onClick={refreshAdmin}

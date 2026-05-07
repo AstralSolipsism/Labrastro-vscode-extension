@@ -28,7 +28,7 @@ import {
 
 type ProviderType = "openai_chat" | "anthropic_messages" | "openai_responses"
 type ProviderCompat = "generic" | "deepseek" | "kimi" | "glm" | "qwen" | "zenmux"
-type SettingsTab = "executors" | "providers" | "toolchains" | "serverSettings" | "agentConfig" | "autoApproval" | "other"
+type SettingsTab = "executors" | "accounts" | "providers" | "toolchains" | "serverSettings" | "agentConfig" | "autoApproval" | "other"
 
 /** 主执行器运行位置 */
 type ExecutorLocation = "local" | "remote"
@@ -207,7 +207,21 @@ interface ToolchainDashboardItem {
   last_updated: string
 }
 
-interface ToolchainEditorState {
+interface ExecutorCapabilityView {
+  installed: boolean
+  version: string
+  streamJson: boolean
+  sessionDiscovery: boolean
+  resumeById: boolean
+  usage: boolean
+  mcpConfig: boolean
+  runtimeHomeIsolation: string
+  modelArg: boolean
+  testedVersion: string
+  limitations: string[]
+}
+
+interface ToolchainEditorState {
   mode: "create" | "edit"
   kind: ToolchainKind
   name: string
@@ -492,6 +506,7 @@ const compats: ProviderCompat[] = ["generic", "deepseek", "kimi", "glm", "qwen",
 
 const settingsTabDefs: Array<{ id: SettingsTab; labelKey: string; icon: string }> = [
   { id: "executors", labelKey: "settings.tab.executors", icon: "radio-tower" },
+  { id: "accounts", labelKey: "settings.tab.accounts", icon: "account" },
   { id: "providers", labelKey: "settings.tab.providers", icon: "server-process" },
   { id: "toolchains", labelKey: "settings.tab.toolchains", icon: "tools" },
   { id: "serverSettings", labelKey: "settings.tab.serverSettings", icon: "server-environment" },
@@ -504,8 +519,10 @@ function normalizeSettingsTab(value: unknown): SettingsTab | undefined {
   switch (value) {
     case "providers":
       return "providers"
-    case "executors":
-      return "executors"
+    case "executors":
+      return "executors"
+    case "accounts":
+      return "accounts"
     case "toolchains":
       return "toolchains"
     case "serverSettings":
@@ -749,6 +766,23 @@ function objectValue(value: unknown): Record<string, unknown> {
 
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : []
+}
+
+function executorCapabilityValue(value: unknown): ExecutorCapabilityView {
+  const capability = objectValue(value)
+  return {
+    installed: capability.installed === true,
+    version: stringValue(capability.version),
+    streamJson: capability.streamJson === true,
+    sessionDiscovery: capability.sessionDiscovery === true,
+    resumeById: capability.resumeById === true,
+    usage: capability.usage === true,
+    mcpConfig: capability.mcpConfig === true,
+    runtimeHomeIsolation: stringValue(capability.runtimeHomeIsolation),
+    modelArg: capability.modelArg === true,
+    testedVersion: stringValue(capability.testedVersion),
+    limitations: stringArray(capability.limitations),
+  }
 }
 
 function stringMapValue(value: unknown): Record<string, string> {
@@ -1333,8 +1367,18 @@ export function createSettingsController(props: SettingsViewProps) {
   const [saveSuccess, setSaveSuccess] = createSignal(false)
 
   const [hostUrl, setHostUrl] = createSignal("")
-  const [adminSecret, setAdminSecret] = createSignal("")
-  const [bootstrapSecret, setBootstrapSecret] = createSignal("")
+  const [loginUsername, setLoginUsername] = createSignal("")
+  const [loginPassword, setLoginPassword] = createSignal("")
+  const [currentPassword, setCurrentPassword] = createSignal("")
+  const [newPassword, setNewPassword] = createSignal("")
+  const [newUserUsername, setNewUserUsername] = createSignal("")
+  const [newUserPassword, setNewUserPassword] = createSignal("")
+  const [newUserRole, setNewUserRole] = createSignal<"user" | "admin" | "superadmin">("user")
+  const [newUserScopes, setNewUserScopes] = createSignal("")
+  const [resetPasswordUserId, setResetPasswordUserId] = createSignal("")
+  const [resetPasswordValue, setResetPasswordValue] = createSignal("")
+  const [auditEventType, setAuditEventType] = createSignal("")
+  const [accountsBootstrapped, setAccountsBootstrapped] = createSignal(false)
   const [hostUrlDirty, setHostUrlDirty] = createSignal(false)
   const [pendingHostSave, setPendingHostSave] = createSignal<string | undefined>()
   const [hostUrlError, setHostUrlError] = createSignal<string | undefined>()
@@ -1454,7 +1498,7 @@ export function createSettingsController(props: SettingsViewProps) {
     }
     return message
   })
-  const connectionStatus = createMemo(() => stringValue(server.connectionState().status, "missing-config"))
+  const connectionStatus = createMemo(() => stringValue(server.connectionState().status, "login-required"))
   const connectionMessage = createMemo(() => stringValue(server.connectionState().message))
   const connectionSaveMessage = createMemo(() => {
     const result = server.connectionSaveResult()
@@ -1463,9 +1507,26 @@ export function createSettingsController(props: SettingsViewProps) {
     return formatConnectionSaveResult(result)
   })
   const currentHostUrl = createMemo(() => stringValue(server.connectionState().hostUrl))
-  const hostUrlSource = createMemo(() => stringValue(server.connectionState().hostUrlSource, "unknown"))
-  const hostUrlConfigured = createMemo(() => server.connectionState().hostUrlConfigured === true)
-  const adminUsable = createMemo(() => server.connectionState().adminReachable === true)
+  const hostUrlSource = createMemo(() => stringValue(server.connectionState().hostUrlSource, "unknown"))
+  const hostUrlConfigured = createMemo(() => server.connectionState().hostUrlConfigured === true)
+  const adminUsable = createMemo(() => server.connectionState().authenticated === true && ["superadmin", "admin"].includes(stringValue(server.connectionState().role)))
+  const connectionScopes = createMemo(() => stringArray(server.connectionState().scopes))
+  const connectionSecurityWarnings = createMemo(() => stringArray(server.connectionState().securityWarnings))
+  const canManageUsers = createMemo(() => connectionScopes().includes("users:manage"))
+  const canReadAudit = createMemo(() => connectionScopes().includes("audit:read"))
+  const canManageDevices = createMemo(() => connectionScopes().includes("devices:read") || connectionScopes().includes("devices:revoke"))
+  const authUsers = createMemo(() => {
+    const items = server.authUsersState()?.users
+    return Array.isArray(items) ? items as Record<string, unknown>[] : []
+  })
+  const authDevices = createMemo(() => {
+    const items = server.authDevicesState()?.devices
+    return Array.isArray(items) ? items as Record<string, unknown>[] : []
+  })
+  const authAuditEvents = createMemo(() => {
+    const items = server.authAuditState()?.events
+    return Array.isArray(items) ? items as Record<string, unknown>[] : []
+  })
   const hostUrlDraftDiffers = createMemo(() => {
     const draft = normalizeHostUrlInput(hostUrl())
     const effective = currentHostUrl()
@@ -1573,6 +1634,16 @@ export function createSettingsController(props: SettingsViewProps) {
     objectValue(serverSettingsPayload().runtime || server.adminState().agent_runtime)
 
   )  /* ── Agent 配置 computed ── */
+  const executorCapabilities = createMemo<Record<string, ExecutorCapabilityView>>(() => {
+    const agentRuntime = objectValue(server.backendCapabilities().agentRuntime)
+    const raw = objectValue(agentRuntime.executorCapabilities)
+    const result: Record<string, ExecutorCapabilityView> = {}
+    for (const [executor, capability] of Object.entries(raw)) {
+      result[executor] = executorCapabilityValue(capability)
+    }
+    return result
+  })
+
   const agentRuntimeProfiles = createMemo<Array<Record<string, unknown> & { id: string }>>(() => {
     const settings = agentRuntimeSettings()
     const profiles = objectValue(settings.runtime_profiles)
@@ -1602,6 +1673,10 @@ export function createSettingsController(props: SettingsViewProps) {
   const profileIdList = createMemo(() => Object.keys(profileDrafts()))
   const currentProfileDraft = createMemo(() => profileDrafts()[selectedProfileId()])
   const currentAgentDraft = createMemo(() => agentDrafts()[selectedAgentId()])
+  const selectedProfileExecutorCapability = createMemo(() => {
+    const executor = currentProfileDraft()?.executor || ""
+    return executor ? executorCapabilities()[executor] : undefined
+  })
   const savedProfileIdSet = createMemo(() => new Set(agentRuntimeProfiles().map((profile) => profile.id)))
   const savedAgentIdSet = createMemo(() => new Set(agentRuntimeAgents().map((agent) => agent.id)))
   const currentProfileIdLocked = createMemo(() => savedProfileIdSet().has(selectedProfileId()))
@@ -1658,6 +1733,12 @@ export function createSettingsController(props: SettingsViewProps) {
   const runtimeTerminal = createMemo(() =>
     runtimeEvents().some((event) => ["completed", "failed", "cancelled", "canceled"].includes(stringValue(event.type)))
   )
+  const runtimeTaskCanResume = createMemo(() => {
+    const task = runtimeTask()
+    const executor = stringValue(task?.executor)
+    const sessionId = stringValue(task?.executor_session_id)
+    return Boolean(executor && sessionId && executorCapabilities()[executor]?.resumeById)
+  })
   const toolchainIngestState = createMemo(() => server.toolchainIngestState())
   const toolchainIngestLogs = createMemo(() => {
     const logs = toolchainIngestState().logs
@@ -2179,7 +2260,7 @@ const switchTab = (tab: SettingsTab) => {
     })
   }
 
-  const retryRuntimeAgentTask = () => {
+  const retryRuntimeAgentTask = (resumeSession = false) => {
     const taskId = selectedRuntimeTaskId()
     if (!taskId) return
     setRuntimeSubmitting(true)
@@ -2190,6 +2271,7 @@ const switchTab = (tab: SettingsTab) => {
       payload: {
         task_id: taskId,
         new_task_id: `${taskId}-retry-${Date.now()}`,
+        resume_session: resumeSession === true,
       },
     })
   }
@@ -2356,21 +2438,62 @@ const refreshAdmin = () => {
     setHostUrlError(undefined)
     setDismissedConnectionSaveResultKey(undefined)
     vscode.postMessage({
-      type: "connection.save",
+      type: "connection.login",
       hostUrl: requestedHostUrl,
-      adminSecret: adminSecret(),
-      bootstrapSecret: bootstrapSecret(),
+      username: loginUsername(),
+      password: loginPassword(),
     })
-    setAdminSecret("")
-    setBootstrapSecret("")
+    setLoginPassword("")
     setTimeout(() => {
       setSaveLoading(false)
       setSaveSuccess(true)
       setTimeout(() => setSaveSuccess(false), 1500)
     }, 800)
-  }
-
-  const resetProviderForm = () => {
+  }
+
+  const logoutConnection = () => {
+    vscode.postMessage({ type: "connection.logout" })
+  }
+
+  const refreshAuthDevices = () => settingsMessages.listAuthDevices(vscode)
+  const refreshAuthUsers = () => {
+    if (canManageUsers()) settingsMessages.listAuthUsers(vscode)
+  }
+  const refreshAuthAudit = () => {
+    if (!canReadAudit()) return
+    settingsMessages.listAuthAudit(vscode, {
+      limit: 100,
+      event_type: auditEventType().trim() || undefined,
+    })
+  }
+  const changePassword = () => {
+    settingsMessages.changeAuthPassword(vscode, currentPassword(), newPassword())
+    setCurrentPassword("")
+    setNewPassword("")
+  }
+  const createAuthUser = () => {
+    const scopes = newUserScopes()
+      .split(/[,\n]/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+    settingsMessages.createAuthUser(vscode, {
+      username: newUserUsername().trim(),
+      password: newUserPassword(),
+      role: newUserRole(),
+      scopes,
+      enabled: true,
+    })
+    setNewUserPassword("")
+  }
+  const disableAuthUser = (userId: string) => settingsMessages.disableAuthUser(vscode, userId)
+  const resetAuthUserPassword = () => {
+    if (!resetPasswordUserId() || !resetPasswordValue()) return
+    settingsMessages.resetAuthUserPassword(vscode, resetPasswordUserId(), resetPasswordValue())
+    setResetPasswordValue("")
+  }
+  const revokeAuthDevice = (deviceId: string) => settingsMessages.revokeAuthDevice(vscode, deviceId)
+
+  const resetProviderForm = () => {
     setProviderId("")
     setProviderType("openai_chat")
     setProviderCompat("generic")
@@ -2548,6 +2671,22 @@ const refreshAdmin = () => {
   })
 
   createEffect(() => {
+    if (activeTab() !== "accounts") return
+    if (server.connectionState().authenticated !== true) return
+    if (accountsBootstrapped()) return
+    setAccountsBootstrapped(true)
+    refreshAuthDevices()
+    refreshAuthUsers()
+    refreshAuthAudit()
+  })
+
+  createEffect(() => {
+    if (server.connectionState().authenticated !== true) {
+      setAccountsBootstrapped(false)
+    }
+  })
+
+  createEffect(() => {
     if (serverSettingsDirty()) return
     const settings = agentRuntimeSettings()
     const maxAgents = numberValue(settings.max_running_agents, 4)
@@ -2682,10 +2821,28 @@ const refreshAdmin = () => {
     setSaveSuccess,
     hostUrl,
     setHostUrl,
-    adminSecret,
-    setAdminSecret,
-    bootstrapSecret,
-    setBootstrapSecret,
+    loginUsername,
+    setLoginUsername,
+    loginPassword,
+    setLoginPassword,
+    currentPassword,
+    setCurrentPassword,
+    newPassword,
+    setNewPassword,
+    newUserUsername,
+    setNewUserUsername,
+    newUserPassword,
+    setNewUserPassword,
+    newUserRole,
+    setNewUserRole,
+    newUserScopes,
+    setNewUserScopes,
+    resetPasswordUserId,
+    setResetPasswordUserId,
+    resetPasswordValue,
+    setResetPasswordValue,
+    auditEventType,
+    setAuditEventType,
     hostUrlDirty,
     setHostUrlDirty,
     pendingHostSave,
@@ -2846,6 +3003,14 @@ const refreshAdmin = () => {
     hostUrlSource,
     hostUrlConfigured,
     adminUsable,
+    connectionScopes,
+    connectionSecurityWarnings,
+    canManageUsers,
+    canReadAudit,
+    canManageDevices,
+    authUsers,
+    authDevices,
+    authAuditEvents,
     hostUrlDraftDiffers,
     isDefaultLocalHost,
     currentDetailHasSavedPreset,
@@ -2868,6 +3033,7 @@ const refreshAdmin = () => {
     serverSettingsPayload,
     agentRuntimeSettings,
     agentRuntimeState,
+    executorCapabilities,
     agentRuntimeProfiles,
     agentRuntimeAgents,
     environmentAgentCandidates,
@@ -2875,6 +3041,7 @@ const refreshAdmin = () => {
     profileIdList,
     currentProfileDraft,
     currentAgentDraft,
+    selectedProfileExecutorCapability,
     savedProfileIdSet,
     savedAgentIdSet,
     currentProfileIdLocked,
@@ -2886,6 +3053,7 @@ const refreshAdmin = () => {
     selectedRuntimeTaskId,
     runtimeLastSeq,
     runtimeTerminal,
+    runtimeTaskCanResume,
     toolchainIngestState,
     toolchainIngestLogs,
     toolchainIngestDuplicates,
@@ -2936,6 +3104,15 @@ const refreshAdmin = () => {
     replyEnvironmentApproval,
     requestProviderModels,
     saveConnection,
+    logoutConnection,
+    refreshAuthDevices,
+    refreshAuthUsers,
+    refreshAuthAudit,
+    changePassword,
+    createAuthUser,
+    disableAuthUser,
+    resetAuthUserPassword,
+    revokeAuthDevice,
     resetProviderForm,
     selectProvider,
     saveProvider,
