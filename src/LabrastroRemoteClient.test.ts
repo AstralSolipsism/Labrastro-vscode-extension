@@ -99,10 +99,18 @@ async function makeTempStorage(): Promise<string> {
 }
 
 function makePeerContext(storagePath: string) {
+  const authSession = JSON.stringify({
+    hostUrl: "http://127.0.0.1:8765",
+    username: "admin",
+    role: "superadmin",
+    deviceId: "dev-1",
+    refreshToken: "refresh-token-1",
+  })
   return {
     secrets: {
-      get: vi.fn(async (key: string) => key === "labrastro.bootstrapSecret" ? "bootstrap-secret" : undefined),
+      get: vi.fn(async (key: string) => key === "labrastro.authSession" ? authSession : undefined),
       store: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
     },
     globalStorageUri: { fsPath: storagePath },
   }
@@ -153,8 +161,24 @@ function mockPeerFetch(artifactContent = Buffer.from("peer-binary"), serverVersi
   const target = peerTarget()
   const fetchMock = vi.fn(async (input: unknown) => {
     const url = String(input)
-    if (url.endsWith("/remote/bootstrap.sh")) {
-      return new Response('TOKEN="${RC_TOKEN:-bootstrap-token}"')
+    if (url.endsWith("/remote/auth/refresh")) {
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          access_token: "access-token-1",
+          access_expires_at: Math.floor(Date.now() / 1000) + 3600,
+          refresh_token: "refresh-token-2",
+          user: { id: "usr-1", username: "admin", role: "superadmin" },
+          device: { id: "dev-1" },
+        }),
+        { headers: { "Content-Type": "application/json" } }
+      )
+    }
+    if (url.endsWith("/remote/auth/bootstrap-token")) {
+      return new Response(
+        JSON.stringify({ ok: true, bootstrap_token: "bootstrap-token" }),
+        { headers: { "Content-Type": "application/json" } }
+      )
     }
     if (url.endsWith("/remote/capabilities")) {
       return new Response(
@@ -217,22 +241,195 @@ describe("LabrastroRemoteClient remote errors", () => {
   })
 })
 
-describe("LabrastroRemoteClient runtime admin API", () => {
-  it("posts Runtime task actions through admin endpoints", async () => {
+describe("LabrastroRemoteClient capabilities", () => {
+  it("normalizes executor capabilities from the backend payload", async () => {
     vscodeMock.labrastroValue = "http://127.0.0.1:8765"
     const context = {
       secrets: {
-        get: vi.fn(async (key: string) => key === "labrastro.adminSecret" ? "admin-secret" : undefined),
+        get: vi.fn(async () => undefined),
+        store: vi.fn(async () => undefined),
+        delete: vi.fn(async () => undefined),
+      },
+    }
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(
+      JSON.stringify({
+        ok: true,
+        api_version: 1,
+        server_version: "0.3.0",
+        capabilities: {
+          sessions: true,
+          chat_stream: true,
+          agent_runtime: {
+            executor_capabilities: {
+              claude: {
+                installed: true,
+                version: "2.0.1",
+                stream_json: true,
+                session_discovery: true,
+                resume_by_id: true,
+                usage: true,
+                mcp_config: true,
+                runtime_home_isolation: "per-agent",
+                model_arg: true,
+                tested_version: "2.0.0+",
+                limitations: ["configured HOME required"],
+              },
+            },
+          },
+        },
+      }),
+      { headers: { "Content-Type": "application/json" } }
+    )))
+
+    const capabilities = await new LabrastroRemoteClient(context as never).capabilities()
+
+    expect(capabilities.agentRuntime.executorCapabilities.claude).toMatchObject({
+      installed: true,
+      version: "2.0.1",
+      streamJson: true,
+      sessionDiscovery: true,
+      resumeById: true,
+      usage: true,
+      mcpConfig: true,
+      runtimeHomeIsolation: "per-agent",
+      modelArg: true,
+      testedVersion: "2.0.0+",
+      limitations: ["configured HOME required"],
+    })
+  })
+})
+
+describe("LabrastroRemoteClient runtime admin API", () => {
+  it("logs in with username/password and stores only the auth session", async () => {
+    vscodeMock.labrastroValue = "http://127.0.0.1:8765"
+    const stored: Array<{ key: string; value: string }> = []
+    const context = {
+      secrets: {
+        get: vi.fn(async (key: string) => {
+          if (key !== "labrastro.authSession" || !stored.length) return undefined
+          return stored[stored.length - 1].value
+        }),
+        store: vi.fn(async (key: string, value: string) => {
+          stored.push({ key, value })
+        }),
+        delete: vi.fn(async () => undefined),
       },
     }
     const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
       const url = new URL(String(input))
+      if (url.pathname === "/remote/auth/login") {
+        expect(JSON.parse(String(init?.body || "{}"))).toMatchObject({
+          username: "admin",
+          password: "passw0rd",
+          device_label: "VS Code",
+        })
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            access_token: "access-token-1",
+            access_expires_at: Math.floor(Date.now() / 1000) + 3600,
+            refresh_token: "refresh-token-1",
+            user: { id: "usr-1", username: "admin", role: "superadmin", scopes: ["users:manage"] },
+            device: { id: "dev-1" },
+          }),
+          { headers: { "Content-Type": "application/json" } }
+        )
+      }
+      if (url.pathname === "/remote/auth/state") {
+        return new Response(JSON.stringify({ ok: true }), {
+          headers: { "Content-Type": "application/json" },
+        })
+      }
+      if (url.pathname === "/remote/auth/me") {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            user: { id: "usr-1", username: "admin", role: "superadmin", scopes: ["users:manage"] },
+            device: { id: "dev-1" },
+          }),
+          { headers: { "Content-Type": "application/json" } }
+        )
+      }
+      return new Response(JSON.stringify({ error: "unexpected_url", path: url.pathname }), { status: 500 })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    const client = new LabrastroRemoteClient(context as never)
+
+    await expect(client.login({ username: "admin", password: "passw0rd" })).resolves.toMatchObject({
+      authenticated: true,
+      username: "admin",
+      role: "superadmin",
+      status: "ready",
+    })
+    expect(stored[0].key).toBe("labrastro.authSession")
+    expect(JSON.parse(stored[0].value)).toEqual({
+      hostUrl: "http://127.0.0.1:8765",
+      username: "admin",
+      role: "superadmin",
+      scopes: ["users:manage"],
+      deviceId: "dev-1",
+      refreshToken: "refresh-token-1",
+    })
+  })
+
+  it("reports HTTPS warnings for non-local HTTP hosts", async () => {
+    vscodeMock.labrastroValue = "http://192.168.50.149:8765"
+    const context = {
+      secrets: {
+        get: vi.fn(async () => undefined),
+        store: vi.fn(async () => undefined),
+        delete: vi.fn(async () => undefined),
+      },
+    }
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ok: true }), {
+      headers: { "Content-Type": "application/json" },
+    })))
+    const client = new LabrastroRemoteClient(context as never)
+
+    await expect(client.connectionState()).resolves.toMatchObject({
+      authenticated: false,
+      status: "login-required",
+      securityWarnings: ["当前 Host 使用非 localhost HTTP，生产环境建议放在 HTTPS 反向代理后。"],
+    })
+  })
+
+  it("posts Runtime task actions through admin endpoints", async () => {
+    vscodeMock.labrastroValue = "http://127.0.0.1:8765"
+    const authSession = JSON.stringify({
+      hostUrl: "http://127.0.0.1:8765",
+      username: "admin",
+      role: "superadmin",
+      deviceId: "dev-1",
+      refreshToken: "refresh-token-1",
+    })
+    const context = {
+      secrets: {
+        get: vi.fn(async (key: string) => key === "labrastro.authSession" ? authSession : undefined),
+        store: vi.fn(async () => undefined),
+        delete: vi.fn(async () => undefined),
+      },
+    }
+    const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
+      const url = new URL(String(input))
+      if (url.pathname === "/remote/auth/refresh") {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            access_token: "access-token-1",
+            access_expires_at: Math.floor(Date.now() / 1000) + 3600,
+            refresh_token: "refresh-token-2",
+            user: { id: "usr-1", username: "admin", role: "superadmin" },
+            device: { id: "dev-1" },
+          }),
+          { headers: { "Content-Type": "application/json" } }
+        )
+      }
       return new Response(
         JSON.stringify({
           ok: true,
           path: url.pathname,
           body: JSON.parse(String(init?.body || "{}")),
-          adminSecret: (init?.headers as Record<string, string>)["X-RC-Admin-Secret"],
+          authorization: (init?.headers as Record<string, string>).Authorization,
         }),
         { headers: { "Content-Type": "application/json" } }
       )
@@ -243,7 +440,7 @@ describe("LabrastroRemoteClient runtime admin API", () => {
     await expect(client.runtimeSubmit({ agent_id: "reviewer" })).resolves.toMatchObject({
       path: "/remote/admin/runtime/submit",
       body: { agent_id: "reviewer" },
-      adminSecret: "admin-secret",
+      authorization: "Bearer access-token-1",
     })
     await expect(client.environmentRun({ mode: "check", agent_id: "environment_configurator" })).resolves.toMatchObject({
       path: "/remote/admin/environment/run",
@@ -258,6 +455,128 @@ describe("LabrastroRemoteClient runtime admin API", () => {
     await expect(client.runtimeRetry({ task_id: "task-1" })).resolves.toMatchObject({
       path: "/remote/admin/runtime/retry",
     })
+  })
+
+  it("posts auth control-plane actions through bearer auth", async () => {
+    vscodeMock.labrastroValue = "http://127.0.0.1:8765"
+    const authSession = JSON.stringify({
+      hostUrl: "http://127.0.0.1:8765",
+      username: "admin",
+      role: "superadmin",
+      scopes: ["users:manage", "audit:read"],
+      deviceId: "dev-1",
+      refreshToken: "refresh-token-1",
+    })
+    const context = {
+      secrets: {
+        get: vi.fn(async (key: string) => key === "labrastro.authSession" ? authSession : undefined),
+        store: vi.fn(async () => undefined),
+        delete: vi.fn(async () => undefined),
+      },
+    }
+    const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
+      const url = new URL(String(input))
+      if (url.pathname === "/remote/auth/refresh") {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            access_token: "access-token-1",
+            access_expires_at: Math.floor(Date.now() / 1000) + 3600,
+            refresh_token: "refresh-token-2",
+            user: { id: "usr-1", username: "admin", role: "superadmin", scopes: ["users:manage", "audit:read"] },
+            device: { id: "dev-1" },
+          }),
+          { headers: { "Content-Type": "application/json" } }
+        )
+      }
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          path: url.pathname,
+          body: JSON.parse(String(init?.body || "{}")),
+          authorization: (init?.headers as Record<string, string>).Authorization,
+        }),
+        { headers: { "Content-Type": "application/json" } }
+      )
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    const client = new LabrastroRemoteClient(context as never)
+
+    await expect(client.authUsersCreate({ username: "viewer", password: "viewer-password", role: "user" })).resolves.toMatchObject({
+      path: "/remote/auth/users/create",
+      authorization: "Bearer access-token-1",
+    })
+    await expect(client.authDevicesRevoke("dev-2")).resolves.toMatchObject({
+      path: "/remote/auth/devices/revoke",
+      body: { device_id: "dev-2" },
+    })
+    await expect(client.authAuditList({ limit: 20 })).resolves.toMatchObject({
+      path: "/remote/auth/audit/list",
+      body: { limit: 20 },
+    })
+    await expect(client.authPasswordChange("old-password", "new-password")).resolves.toMatchObject({
+      path: "/remote/auth/password/change",
+      body: { current_password: "old-password", new_password: "new-password" },
+    })
+  })
+
+  it("refreshes once and retries admin calls after a 401", async () => {
+    vscodeMock.labrastroValue = "http://127.0.0.1:8765"
+    let storedSession = JSON.stringify({
+      hostUrl: "http://127.0.0.1:8765",
+      username: "admin",
+      role: "superadmin",
+      deviceId: "dev-1",
+      refreshToken: "refresh-token-1",
+    })
+    const context = {
+      secrets: {
+        get: vi.fn(async (key: string) => key === "labrastro.authSession" ? storedSession : undefined),
+        store: vi.fn(async (_key: string, value: string) => {
+          storedSession = value
+        }),
+        delete: vi.fn(async () => undefined),
+      },
+    }
+    let refreshCount = 0
+    let adminCount = 0
+    const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
+      const url = new URL(String(input))
+      if (url.pathname === "/remote/auth/refresh") {
+        refreshCount += 1
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            access_token: `access-token-${refreshCount}`,
+            access_expires_at: Math.floor(Date.now() / 1000) + 3600,
+            refresh_token: `refresh-token-${refreshCount + 1}`,
+            user: { id: "usr-1", username: "admin", role: "superadmin" },
+            device: { id: "dev-1" },
+          }),
+          { headers: { "Content-Type": "application/json" } }
+        )
+      }
+      adminCount += 1
+      if (adminCount === 1) {
+        return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 })
+      }
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          authorization: (init?.headers as Record<string, string>).Authorization,
+        }),
+        { headers: { "Content-Type": "application/json" } }
+      )
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    const client = new LabrastroRemoteClient(context as never)
+
+    await expect(client.adminStatus()).resolves.toMatchObject({
+      ok: true,
+      authorization: "Bearer access-token-2",
+    })
+    expect(refreshCount).toBe(2)
+    expect(adminCount).toBe(2)
   })
 })
 
@@ -479,7 +798,7 @@ describe("LabrastroRemoteClient peer startup", () => {
     const client = new LabrastroRemoteClient(context as never)
     await Promise.all([client.environmentManifest(), client.environmentManifest()])
 
-    expect(fetchPathCount(fetchMock, "/remote/bootstrap.sh")).toBe(1)
+    expect(fetchPathCount(fetchMock, "/remote/auth/bootstrap-token")).toBe(1)
     expect(fetchPathCount(fetchMock, "/remote/capabilities")).toBe(1)
     expect(fetchPathCount(fetchMock, `/remote/artifacts/${peerTarget().os}/${peerTarget().arch}/rcoder-peer`)).toBe(1)
     expect(fetchPathCount(fetchMock, "/remote/environment/manifest")).toBe(2)
@@ -541,6 +860,7 @@ describe("LabrastroRemoteClient host config saves", () => {
     secrets: {
       get: vi.fn(async () => undefined),
       store: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
     },
     globalStorageUri: { fsPath: "G:/AboutDEV/Labrastro/.tmp" },
   }
@@ -550,7 +870,8 @@ describe("LabrastroRemoteClient host config saves", () => {
     vscodeMock.labrastroValue = "http://127.0.0.1:8765"
     const client = new LabrastroRemoteClient(context as never)
 
-    const state = await client.saveConnection({ hostUrl: "https://labrastro.outlune.com" })
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ok: true }), { headers: { "Content-Type": "application/json" } })))
+    const state = await client.saveHostUrl("https://labrastro.outlune.com")
 
     expect(vscodeMock.updates[0]).toMatchObject({
       section: "labrastro",
@@ -572,7 +893,8 @@ describe("LabrastroRemoteClient host config saves", () => {
     vscodeMock.ignoreUpdates = true
     const client = new LabrastroRemoteClient(context as never)
 
-    const state = await client.saveConnection({ hostUrl: "https://labrastro.outlune.com" })
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ok: true }), { headers: { "Content-Type": "application/json" } })))
+    const state = await client.saveHostUrl("https://labrastro.outlune.com")
 
     expect(state).toMatchObject({
       hostUrl: "http://127.0.0.1:8765",
@@ -587,7 +909,8 @@ describe("LabrastroRemoteClient host config saves", () => {
     vscodeMock.labrastroValue = "http://127.0.0.1:8765"
     const client = new LabrastroRemoteClient(context as never)
 
-    const state = await client.saveConnection({ hostUrl: "https://labrastro.outlune.com" })
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ok: true }), { headers: { "Content-Type": "application/json" } })))
+    const state = await client.saveHostUrl("https://labrastro.outlune.com")
 
     expect(vscodeMock.updates[0]).toMatchObject({
       section: "labrastro",

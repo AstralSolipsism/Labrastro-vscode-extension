@@ -184,13 +184,13 @@ export function resolveHostTargetSummary(
   const hostUrl = stringValue(connectionState.hostUrl) || "未配置"
   const source = stringValue(connectionState.hostUrlSource) || "unknown"
   const status = stringValue(connectionState.status)
-  const adminReachable = connectionState.adminReachable === true
+  const authenticated = connectionState.authenticated === true
   const label = `${engine} · ${location}`
   const detail = executorType.location === "local" ? "本地执行" : hostUrl
   const tone =
     status === "error"
       ? "error"
-      : adminReachable || status === "ready"
+      : authenticated || status === "ready"
         ? "ready"
         : hostUrl === "未配置"
           ? "warning"

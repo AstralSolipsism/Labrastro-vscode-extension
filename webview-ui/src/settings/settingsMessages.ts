@@ -74,16 +74,56 @@ export const settingsMessages = {
     port.postMessage({ type: "provider.models", payload: { provider_id: providerId } })
   },
 
-  saveConnection(
+  loginConnection(
     port: SettingsMessagePort,
-    input: { hostUrl: string; adminSecret: string; bootstrapSecret: string },
+    input: { hostUrl: string; username: string; password: string },
   ): void {
     port.postMessage({
-      type: "connection.save",
+      type: "connection.login",
       hostUrl: input.hostUrl,
-      adminSecret: input.adminSecret,
-      bootstrapSecret: input.bootstrapSecret,
+      username: input.username,
+      password: input.password,
     })
+  },
+
+  logoutConnection(port: SettingsMessagePort): void {
+    port.postMessage({ type: "connection.logout" })
+  },
+
+  changeAuthPassword(port: SettingsMessagePort, currentPassword: string, newPassword: string): void {
+    port.postMessage({ type: "auth.password.change", currentPassword, newPassword })
+  },
+
+  listAuthUsers(port: SettingsMessagePort): void {
+    port.postMessage({ type: "auth.users.list" })
+  },
+
+  createAuthUser(port: SettingsMessagePort, payload: Record<string, unknown>): void {
+    port.postMessage({ type: "auth.users.create", payload })
+  },
+
+  updateAuthUser(port: SettingsMessagePort, payload: Record<string, unknown>): void {
+    port.postMessage({ type: "auth.users.update", payload })
+  },
+
+  disableAuthUser(port: SettingsMessagePort, userId: string): void {
+    port.postMessage({ type: "auth.users.disable", userId })
+  },
+
+  resetAuthUserPassword(port: SettingsMessagePort, userId: string, password: string): void {
+    port.postMessage({ type: "auth.users.resetPassword", userId, password })
+  },
+
+  listAuthDevices(port: SettingsMessagePort, userId?: string): void {
+    port.postMessage({ type: "auth.devices.list", userId })
+  },
+
+  revokeAuthDevice(port: SettingsMessagePort, deviceId: string): void {
+    port.postMessage({ type: "auth.devices.revoke", deviceId })
+  },
+
+  listAuthAudit(port: SettingsMessagePort, payload: Record<string, unknown>): void {
+    port.postMessage({ type: "auth.audit.list", payload })
   },
 
   recordProvider(port: SettingsMessagePort, payload: Record<string, unknown>): void {

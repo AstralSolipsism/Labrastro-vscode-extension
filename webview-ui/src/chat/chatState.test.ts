@@ -126,7 +126,7 @@ describe("chat state", () => {
         hostUrl: "http://127.0.0.1:8765",
         hostUrlSource: "workspace",
         status: "ready",
-        adminReachable: true,
+        authenticated: true,
       },
       { engine: "labrastro", location: "remote" },
     )).toMatchObject({

@@ -195,8 +195,8 @@ export class SettingsPanelProvider implements vscode.Disposable {
         return
       }
       await this.labrastro.handleMessage(msg, postToWebview)
-      if (msg.type === "connection.save") {
-        vscode.window.showInformationMessage("Labrastro 连接配置已保存")
+      if (msg.type === "connection.login") {
+        vscode.window.showInformationMessage("Labrastro 已登录")
       }
     })
 

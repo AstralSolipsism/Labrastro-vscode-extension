@@ -14,9 +14,8 @@ describe("startup connection state", () => {
       hostUrl: "http://192.168.50.149:8765",
       hostUrlConfigured: true,
       hostUrlSource: "global",
-      adminSecretSet: false,
-      bootstrapSecretSet: false,
-      adminReachable: false,
+      authReachable: false,
+      authenticated: false,
       peerConnected: false,
       status: "checking",
     })

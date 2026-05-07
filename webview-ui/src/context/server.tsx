@@ -34,6 +34,11 @@ interface ServerContextValue {
   serverSettingsState: () => Record<string, unknown> | undefined
   serverSettingsError: () => string | undefined
   backendCapabilities: () => Record<string, unknown>
+  authUsersState: () => Record<string, unknown> | undefined
+  authDevicesState: () => Record<string, unknown> | undefined
+  authAuditState: () => Record<string, unknown> | undefined
+  authActionResult: () => Record<string, unknown> | undefined
+  authError: () => string | undefined
   toolchainState: () => Record<string, unknown> | undefined
   toolchainActionResult: () => Record<string, unknown> | undefined
   toolchainError: () => string | undefined
@@ -72,6 +77,11 @@ export const ServerProvider: ParentComponent = (props) => {
   const [serverSettingsState, setServerSettingsState] = createSignal<Record<string, unknown> | undefined>()
   const [serverSettingsError, setServerSettingsError] = createSignal<string | undefined>()
   const [backendCapabilities, setBackendCapabilities] = createSignal<Record<string, unknown>>({})
+  const [authUsersState, setAuthUsersState] = createSignal<Record<string, unknown> | undefined>()
+  const [authDevicesState, setAuthDevicesState] = createSignal<Record<string, unknown> | undefined>()
+  const [authAuditState, setAuthAuditState] = createSignal<Record<string, unknown> | undefined>()
+  const [authActionResult, setAuthActionResult] = createSignal<Record<string, unknown> | undefined>()
+  const [authError, setAuthError] = createSignal<string | undefined>()
   const [toolchainState, setToolchainState] = createSignal<Record<string, unknown> | undefined>()
   const [toolchainActionResult, setToolchainActionResult] = createSignal<Record<string, unknown> | undefined>()
   const [toolchainError, setToolchainError] = createSignal<string | undefined>()
@@ -104,7 +114,7 @@ export const ServerProvider: ParentComponent = (props) => {
       if (msg.type === "connection.state" && typeof msg.payload === "object" && msg.payload) {
         setConnectionState(msg.payload as Record<string, unknown>)
       }
-      if (msg.type === "connection.saveResult" && typeof msg.payload === "object" && msg.payload) {
+      if (msg.type === "connection.result" && typeof msg.payload === "object" && msg.payload) {
         setConnectionSaveResult(msg.payload as Record<string, unknown>)
       }
       if (msg.type === "admin.state" && typeof msg.payload === "object" && msg.payload) {
@@ -129,6 +139,25 @@ export const ServerProvider: ParentComponent = (props) => {
       }
       if (msg.type === "backend.capabilities" && typeof msg.payload === "object" && msg.payload) {
         setBackendCapabilities(msg.payload as Record<string, unknown>)
+      }
+      if (msg.type === "auth.users" && typeof msg.payload === "object" && msg.payload) {
+        setAuthUsersState(msg.payload as Record<string, unknown>)
+        setAuthError(undefined)
+      }
+      if (msg.type === "auth.devices" && typeof msg.payload === "object" && msg.payload) {
+        setAuthDevicesState(msg.payload as Record<string, unknown>)
+        setAuthError(undefined)
+      }
+      if (msg.type === "auth.audit" && typeof msg.payload === "object" && msg.payload) {
+        setAuthAuditState(msg.payload as Record<string, unknown>)
+        setAuthError(undefined)
+      }
+      if (msg.type === "auth.actionResult" && typeof msg.payload === "object" && msg.payload) {
+        setAuthActionResult(msg.payload as Record<string, unknown>)
+        setAuthError(undefined)
+      }
+      if (msg.type === "auth.error") {
+        setAuthError(typeof msg.message === "string" ? msg.message : "Auth request failed")
       }
       if (msg.type === "toolchain.state" && typeof msg.payload === "object" && msg.payload) {
         setToolchainState(msg.payload as Record<string, unknown>)
@@ -231,6 +260,11 @@ export const ServerProvider: ParentComponent = (props) => {
     serverSettingsState,
     serverSettingsError,
     backendCapabilities,
+    authUsersState,
+    authDevicesState,
+    authAuditState,
+    authActionResult,
+    authError,
     toolchainState,
     toolchainActionResult,
     toolchainError,

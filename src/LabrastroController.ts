@@ -232,18 +232,113 @@ export class LabrastroController implements vscode.Disposable {
     post: PostMessage
   ): Promise<boolean> {
     switch (message.type) {
-      case "connection.save":
+      case "connection.login":
         {
-          const state = await this.client.saveConnection({
+          const state = await this.client.login({
             hostUrl: stringValue(message.hostUrl),
-            adminSecret: stringValue(message.adminSecret),
-            bootstrapSecret: stringValue(message.bootstrapSecret),
+            username: stringValue(message.username) || "",
+            password: stringValue(message.password) || "",
           })
-          post({ type: "connection.saveResult", payload: state })
+          post({ type: "connection.result", payload: state })
           post({ type: "connection.state", payload: state })
         }
         await this.postAdminState(post)
         await this.refreshBackendCapabilities(post)
+        return true
+      case "connection.logout":
+        {
+          const state = await this.client.logout()
+          post({ type: "connection.result", payload: state })
+          post({ type: "connection.state", payload: state })
+        }
+        await this.postAdminState(post)
+        return true
+      case "connection.host.save":
+        {
+          const state = await this.client.saveHostUrl(stringValue(message.hostUrl) || "")
+          post({ type: "connection.result", payload: state })
+          post({ type: "connection.state", payload: state })
+        }
+        return true
+      case "auth.password.change":
+        try {
+          const payload = await this.client.authPasswordChange(
+            stringValue(message.currentPassword) || stringValue(message.current_password) || "",
+            stringValue(message.newPassword) || stringValue(message.new_password) || ""
+          )
+          post({ type: "auth.actionResult", payload })
+        } catch (error) {
+          post({ type: "auth.error", message: errorMessage(error) })
+        }
+        return true
+      case "auth.users.list":
+        try {
+          post({ type: "auth.users", payload: await this.client.authUsersList() })
+        } catch (error) {
+          post({ type: "auth.error", message: errorMessage(error) })
+        }
+        return true
+      case "auth.users.create":
+        try {
+          const payload = await this.client.authUsersCreate(objectValue(message.payload))
+          post({ type: "auth.actionResult", payload })
+          post({ type: "auth.users", payload: await this.client.authUsersList() })
+        } catch (error) {
+          post({ type: "auth.error", message: errorMessage(error) })
+        }
+        return true
+      case "auth.users.update":
+        try {
+          const payload = await this.client.authUsersUpdate(objectValue(message.payload))
+          post({ type: "auth.actionResult", payload })
+          post({ type: "auth.users", payload: await this.client.authUsersList() })
+        } catch (error) {
+          post({ type: "auth.error", message: errorMessage(error) })
+        }
+        return true
+      case "auth.users.disable":
+        try {
+          const payload = await this.client.authUsersDisable(stringValue(message.userId) || stringValue(message.user_id) || "")
+          post({ type: "auth.actionResult", payload })
+          post({ type: "auth.users", payload: await this.client.authUsersList() })
+        } catch (error) {
+          post({ type: "auth.error", message: errorMessage(error) })
+        }
+        return true
+      case "auth.users.resetPassword":
+        try {
+          const payload = await this.client.authUsersResetPassword(
+            stringValue(message.userId) || stringValue(message.user_id) || "",
+            stringValue(message.password) || ""
+          )
+          post({ type: "auth.actionResult", payload })
+          post({ type: "auth.users", payload: await this.client.authUsersList() })
+        } catch (error) {
+          post({ type: "auth.error", message: errorMessage(error) })
+        }
+        return true
+      case "auth.devices.list":
+        try {
+          post({ type: "auth.devices", payload: await this.client.authDevicesList(stringValue(message.userId) || stringValue(message.user_id)) })
+        } catch (error) {
+          post({ type: "auth.error", message: errorMessage(error) })
+        }
+        return true
+      case "auth.devices.revoke":
+        try {
+          const payload = await this.client.authDevicesRevoke(stringValue(message.deviceId) || stringValue(message.device_id) || "")
+          post({ type: "auth.actionResult", payload })
+          post({ type: "auth.devices", payload: await this.client.authDevicesList() })
+        } catch (error) {
+          post({ type: "auth.error", message: errorMessage(error) })
+        }
+        return true
+      case "auth.audit.list":
+        try {
+          post({ type: "auth.audit", payload: await this.client.authAuditList(objectValue(message.payload)) })
+        } catch (error) {
+          post({ type: "auth.error", message: errorMessage(error) })
+        }
         return true
       case "autoApproval.get":
         post({ type: "autoApproval.state", payload: this.getAutoApprovalState() })

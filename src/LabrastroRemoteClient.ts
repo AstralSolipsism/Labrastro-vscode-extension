@@ -28,21 +28,53 @@ export interface BackendCapabilities {
   issueAssignment: boolean
   freshSessionWithoutSessionHint: boolean
   peerTokenHeartbeatRefresh: boolean
+  agentRuntime: AgentRuntimeCapabilities
+}
+
+export interface AgentRuntimeCapabilities {
+  executorCapabilities: Record<string, ExecutorCapability>
+}
+
+export interface ExecutorCapability {
+  installed: boolean
+  version: string
+  streamJson: boolean
+  sessionDiscovery: boolean
+  resumeById: boolean
+  usage: boolean
+  mcpConfig: boolean
+  runtimeHomeIsolation: string
+  modelArg: boolean
+  testedVersion?: string
+  limitations: string[]
 }
 
 export interface ConnectionState {
   hostUrl: string
   hostUrlConfigured: boolean
   hostUrlSource: "default" | "global" | "workspace" | "workspace-folder" | "unknown"
-  adminSecretSet: boolean
-  bootstrapSecretSet: boolean
-  adminReachable: boolean
+  authReachable: boolean
+  authenticated: boolean
+  username?: string
+  role?: "superadmin" | "admin" | "user"
+  scopes?: string[]
+  deviceId?: string
+  securityWarnings?: string[]
   peerConnected: boolean
   peerId?: string
-  status: "checking" | "missing-config" | "ready" | "error"
+  status: "checking" | "login-required" | "ready" | "error"
   message?: string
   hostUrlSaveRequested?: string
   hostUrlSaveApplied?: boolean
+}
+
+interface StoredAuthSession {
+  hostUrl: string
+  username: string
+  role: "superadmin" | "admin" | "user"
+  scopes: string[]
+  deviceId: string
+  refreshToken: string
 }
 
 interface PeerInfo {
@@ -93,6 +125,8 @@ export class LabrastroRemoteClient {
   private peerInfo: PeerInfo | undefined
   private peerStartupPromise: Promise<PeerInfo> | undefined
   private peerStartupGeneration = 0
+  private accessToken: string | undefined
+  private accessTokenExpiresAt = 0
 
   constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -112,48 +146,105 @@ export class LabrastroRemoteClient {
   }
 
   async connectionState(): Promise<ConnectionState> {
-    const adminSecret = await this.context.secrets.get("labrastro.adminSecret")
-    const bootstrapSecret = await this.context.secrets.get("labrastro.bootstrapSecret")
     const host = this.hostUrlState()
-    const adminMissing = !host.url || !adminSecret
-    if (!adminMissing) {
-      try {
-        await this.adminStatus()
-      } catch (error) {
-        return {
-          hostUrl: host.url,
-          hostUrlConfigured: host.configured,
-          hostUrlSource: host.source,
-          adminSecretSet: Boolean(adminSecret),
-          bootstrapSecretSet: Boolean(bootstrapSecret),
-          adminReachable: false,
-          peerConnected: this.isPeerRunning(),
-          peerId: this.peerInfo?.peer_id,
-          status: "error",
-          message: `Admin API unreachable at ${host.url}: ${errorMessage(error)}`,
-        }
-      }
+    if (!host.url) {
+      return this.connectionStatePayload(host, {
+        authReachable: false,
+        authenticated: false,
+        status: "login-required",
+        message: "Host URL 需要先配置。",
+      })
     }
-    const missingBootstrap = !bootstrapSecret
-    const missing = adminMissing || missingBootstrap
-    return {
-      hostUrl: host.url,
-      hostUrlConfigured: host.configured,
-      hostUrlSource: host.source,
-      adminSecretSet: Boolean(adminSecret),
-      bootstrapSecretSet: Boolean(bootstrapSecret),
-      adminReachable: !adminMissing,
-      peerConnected: this.isPeerRunning(),
-      peerId: this.peerInfo?.peer_id,
-      status: missing ? "missing-config" : "ready",
-      message: connectionMessage(host, Boolean(adminSecret), Boolean(bootstrapSecret)),
+    try {
+      await this.authState()
+    } catch (error) {
+      return this.connectionStatePayload(host, {
+        authReachable: false,
+        authenticated: false,
+        status: "error",
+        message: `Auth API unreachable at ${host.url}: ${errorMessage(error)}`,
+      })
+    }
+    const session = await this.storedAuthSession()
+    if (!session || session.hostUrl !== host.url) {
+      return this.connectionStatePayload(host, {
+        authReachable: true,
+        authenticated: false,
+        status: "login-required",
+        message: "请登录 Labrastro Host。",
+      })
+    }
+    try {
+      const me = await this.me()
+      const user = objectValue(me.user)
+      return this.connectionStatePayload(host, {
+        authReachable: true,
+        authenticated: true,
+        username: stringValue(user.username) || session.username,
+        role: roleValue(user.role) || session.role,
+        scopes: stringArray(user.scopes).length ? stringArray(user.scopes) : session.scopes,
+        deviceId: stringValue(objectValue(me.device).id) || session.deviceId,
+        status: "ready",
+        message: "Labrastro Host 已登录。",
+      })
+    } catch (error) {
+      if (isRemoteError(error, "unauthorized", 401) || isRemoteError(error, "invalid_refresh_token", 401)) {
+        await this.clearAuthSession()
+        return this.connectionStatePayload(host, {
+          authReachable: true,
+          authenticated: false,
+          status: "login-required",
+          message: "登录已失效，请重新登录。",
+        })
+      }
+      return this.connectionStatePayload(host, {
+        authReachable: true,
+        authenticated: false,
+        status: "error",
+        message: `Auth session check failed: ${errorMessage(error)}`,
+      })
     }
   }
 
-  async saveConnection(options: {
+  async saveHostUrl(hostUrl: string): Promise<ConnectionState> {
+    const requestedHostUrl = normalizeHostUrl(hostUrl)
+    try {
+      await this.updateLabrastroHostUrl(
+        requestedHostUrl,
+        selectLabrastroHostWriteSource(this.labrastroHostInspection())
+      )
+    } catch (error) {
+      const host = this.hostUrlState()
+      return this.connectionStatePayload(host, {
+        authReachable: false,
+        authenticated: false,
+        status: "error",
+        message: `Host URL 保存失败：${errorMessage(error)}`,
+        hostUrlSaveRequested: requestedHostUrl,
+        hostUrlSaveApplied: false,
+      })
+    }
+    const state = await this.connectionState()
+    if (state.hostUrl !== requestedHostUrl) {
+      return {
+        ...state,
+        status: "error",
+        hostUrlSaveRequested: requestedHostUrl,
+        hostUrlSaveApplied: false,
+        message: `Host URL 已请求保存为 ${requestedHostUrl}，但当前 VS Code 生效值仍是 ${state.hostUrl}（来源：${state.hostUrlSource}）。请检查 Workspace/Folder 设置是否覆盖了全局设置。`,
+      }
+    }
+    return {
+      ...state,
+      hostUrlSaveRequested: requestedHostUrl,
+      hostUrlSaveApplied: true,
+    }
+  }
+
+  async login(options: {
     hostUrl?: string
-    adminSecret?: string
-    bootstrapSecret?: string
+    username: string
+    password: string
   }): Promise<ConnectionState> {
     let requestedHostUrl: string | undefined
     if (options.hostUrl !== undefined && options.hostUrl.trim()) {
@@ -165,29 +256,22 @@ export class LabrastroRemoteClient {
         )
       } catch (error) {
         const host = this.hostUrlState()
-        return {
-          hostUrl: host.url,
-          hostUrlConfigured: host.configured,
-          hostUrlSource: host.source,
-          adminSecretSet: Boolean(await this.context.secrets.get("labrastro.adminSecret")),
-          bootstrapSecretSet: Boolean(await this.context.secrets.get("labrastro.bootstrapSecret")),
-          adminReachable: false,
-          peerConnected: this.isPeerRunning(),
-          peerId: this.peerInfo?.peer_id,
+        return this.connectionStatePayload(host, {
+          authReachable: false,
+          authenticated: false,
           status: "error",
           message: `Host URL 保存失败：${errorMessage(error)}`,
           hostUrlSaveRequested: requestedHostUrl,
           hostUrlSaveApplied: false,
-        }
+        })
       }
     }
-    if (options.adminSecret !== undefined && options.adminSecret.trim()) {
-      await this.context.secrets.store("labrastro.adminSecret", options.adminSecret.trim())
-    }
-    if (options.bootstrapSecret !== undefined && options.bootstrapSecret.trim()) {
-      await this.context.secrets.store("labrastro.bootstrapSecret", options.bootstrapSecret.trim())
-      await this.stopPeer()
-    }
+    const response = await this.postJson("/remote/auth/login", {
+      username: options.username,
+      password: options.password,
+      device_label: "VS Code",
+    })
+    await this.storeAuthSession(response)
     const state = await this.connectionState()
     if (requestedHostUrl && state.hostUrl !== requestedHostUrl) {
       return {
@@ -207,36 +291,100 @@ export class LabrastroRemoteClient {
       : state
   }
 
+  async logout(): Promise<ConnectionState> {
+    const session = await this.storedAuthSession()
+    if (session?.refreshToken) {
+      try {
+        await this.postJson("/remote/auth/logout", { refresh_token: session.refreshToken })
+      } catch {
+        // Local cleanup is still the important part when the server is unreachable.
+      }
+    }
+    await this.clearAuthSession()
+    await this.stopPeer()
+    return this.connectionState()
+  }
+
+  async authState(): Promise<JsonObject> {
+    return this.getJson("/remote/auth/state")
+  }
+
+  async me(): Promise<JsonObject> {
+    return this.authenticatedGet("/remote/auth/me")
+  }
+
+  async authPasswordChange(currentPassword: string, newPassword: string): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/auth/password/change", {
+      current_password: currentPassword,
+      new_password: newPassword,
+    })
+  }
+
+  async authUsersList(): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/auth/users/list", {})
+  }
+
+  async authUsersCreate(payload: JsonObject): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/auth/users/create", payload)
+  }
+
+  async authUsersUpdate(payload: JsonObject): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/auth/users/update", payload)
+  }
+
+  async authUsersDisable(userId: string): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/auth/users/disable", { user_id: userId })
+  }
+
+  async authUsersResetPassword(userId: string, password: string): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/auth/users/reset-password", {
+      user_id: userId,
+      password,
+    })
+  }
+
+  async authDevicesList(userId?: string): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/auth/devices/list", userId ? { user_id: userId } : {})
+  }
+
+  async authDevicesRevoke(deviceId: string): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/auth/devices/revoke", { device_id: deviceId })
+  }
+
+  async authAuditList(payload: JsonObject): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/auth/audit/list", payload)
+  }
+
   async adminStatus(): Promise<JsonObject> {
-    return this.adminPost("/remote/admin/status", {})
+    return this.authenticatedPost("/remote/admin/status", {})
   }
 
   async serverSettingsRead(): Promise<JsonObject> {
-    return this.adminPost("/remote/admin/server-settings/read", {})
+    return this.authenticatedPost("/remote/admin/server-settings/read", {})
   }
 
   async serverSettingsUpdate(payload: JsonObject): Promise<JsonObject> {
-    return this.adminPost("/remote/admin/server-settings/update", payload)
+    return this.authenticatedPost("/remote/admin/server-settings/update", payload)
   }
 
   async runtimeSubmit(payload: JsonObject): Promise<JsonObject> {
-    return this.adminPost("/remote/admin/runtime/submit", payload)
+    return this.authenticatedPost("/remote/admin/runtime/submit", payload)
   }
 
   async environmentRun(payload: JsonObject): Promise<JsonObject> {
-    return this.adminPost("/remote/admin/environment/run", payload)
+    return this.authenticatedPost("/remote/admin/environment/run", payload)
   }
 
   async runtimeEvents(payload: JsonObject): Promise<JsonObject> {
-    return this.adminPost("/remote/admin/runtime/events", payload)
+    return this.authenticatedPost("/remote/admin/runtime/events", payload)
   }
 
   async runtimeCancel(payload: JsonObject): Promise<JsonObject> {
-    return this.adminPost("/remote/admin/runtime/cancel", payload)
+    return this.authenticatedPost("/remote/admin/runtime/cancel", payload)
   }
 
   async runtimeRetry(payload: JsonObject): Promise<JsonObject> {
-    return this.adminPost("/remote/admin/runtime/retry", payload)
+    return this.authenticatedPost("/remote/admin/runtime/retry", payload)
   }
 
   async capabilities(): Promise<BackendCapabilities> {
@@ -245,55 +393,55 @@ export class LabrastroRemoteClient {
   }
 
   async providerRecord(payload: JsonObject): Promise<JsonObject> {
-    return this.adminPost("/remote/admin/providers/record", payload)
+    return this.authenticatedPost("/remote/admin/providers/record", payload)
   }
 
   async providerTest(payload: JsonObject): Promise<JsonObject> {
-    return this.adminPost("/remote/admin/providers/test", payload)
+    return this.authenticatedPost("/remote/admin/providers/test", payload)
   }
 
   async providerDelete(payload: JsonObject): Promise<JsonObject> {
-    return this.adminPost("/remote/admin/providers/delete", payload)
+    return this.authenticatedPost("/remote/admin/providers/delete", payload)
   }
 
   async providerCopy(payload: JsonObject): Promise<JsonObject> {
-    return this.adminPost("/remote/admin/providers/copy", payload)
+    return this.authenticatedPost("/remote/admin/providers/copy", payload)
   }
 
   async providerEnable(payload: JsonObject): Promise<JsonObject> {
-    return this.adminPost("/remote/admin/providers/enable", payload)
+    return this.authenticatedPost("/remote/admin/providers/enable", payload)
   }
 
   async providerModels(payload: JsonObject): Promise<JsonObject> {
-    return this.adminPost("/remote/admin/providers/models", payload)
+    return this.authenticatedPost("/remote/admin/providers/models", payload)
   }
 
   async modelProfileRecord(payload: JsonObject): Promise<JsonObject> {
-    return this.adminPost("/remote/admin/models/record", payload)
+    return this.authenticatedPost("/remote/admin/models/record", payload)
   }
 
   async modelProfileActivate(payload: JsonObject): Promise<JsonObject> {
-    return this.adminPost("/remote/admin/models/activate", payload)
+    return this.authenticatedPost("/remote/admin/models/activate", payload)
   }
 
   async toolchainList(): Promise<JsonObject> {
-    return this.adminPost("/remote/admin/toolchains/list", {})
+    return this.authenticatedPost("/remote/admin/toolchains/list", {})
   }
 
   async toolchainDashboard(): Promise<JsonObject> {
-    return this.adminPost("/remote/admin/toolchains/dashboard", {})
+    return this.authenticatedPost("/remote/admin/toolchains/dashboard", {})
   }
 
   async toolchainRecord(kind: string, payload: JsonObject): Promise<JsonObject> {
-    return this.adminPost("/remote/admin/toolchains/record", { kind, payload })
+    return this.authenticatedPost("/remote/admin/toolchains/record", { kind, payload })
   }
 
   async toolchainDelete(kind: string, name: string): Promise<JsonObject> {
-    return this.adminPost("/remote/admin/toolchains/delete", { kind, name })
+    return this.authenticatedPost("/remote/admin/toolchains/delete", { kind, name })
   }
 
   async toolchainEnable(kind: string, name: string, enabled: boolean): Promise<JsonObject> {
-    return this.adminPost("/remote/admin/toolchains/enable", { kind, name, enabled })
+    return this.authenticatedPost("/remote/admin/toolchains/enable", { kind, name, enabled })
   }
 
   async environmentManifest(): Promise<JsonObject> {
@@ -429,12 +577,122 @@ export class LabrastroRemoteClient {
     this.peerInfo = undefined
   }
 
-  private async adminPost(pathname: string, payload: JsonObject): Promise<JsonObject> {
-    const adminSecret = await this.context.secrets.get("labrastro.adminSecret")
-    if (!adminSecret) {
-      throw new Error("Admin secret is not configured.")
+  private async authenticatedPost(pathname: string, payload: JsonObject): Promise<JsonObject> {
+    const token = await this.ensureAccessToken()
+    try {
+      return await this.postJson(pathname, payload, { Authorization: `Bearer ${token}` })
+    } catch (error) {
+      if (!isRemoteError(error, "unauthorized", 401)) {
+        throw error
+      }
+      const retryToken = await this.refreshAccessToken()
+      return this.postJson(pathname, payload, { Authorization: `Bearer ${retryToken}` })
     }
-    return this.postJson(pathname, payload, { "X-RC-Admin-Secret": adminSecret })
+  }
+
+  private async authenticatedGet(pathname: string): Promise<JsonObject> {
+    const token = await this.ensureAccessToken()
+    try {
+      return await this.getJson(pathname, { Authorization: `Bearer ${token}` })
+    } catch (error) {
+      if (!isRemoteError(error, "unauthorized", 401)) {
+        throw error
+      }
+      const retryToken = await this.refreshAccessToken()
+      return this.getJson(pathname, { Authorization: `Bearer ${retryToken}` })
+    }
+  }
+
+  private async ensureAccessToken(): Promise<string> {
+    if (this.accessToken && this.accessTokenExpiresAt - Date.now() / 1000 > 30) {
+      return this.accessToken
+    }
+    return this.refreshAccessToken()
+  }
+
+  private async refreshAccessToken(): Promise<string> {
+    const session = await this.storedAuthSession()
+    if (!session?.refreshToken) {
+      throw new RemoteError(401, "unauthorized", "Login required", {})
+    }
+    try {
+      const response = await this.postJson("/remote/auth/refresh", {
+        refresh_token: session.refreshToken,
+      })
+      await this.storeAuthSession(response)
+      if (!this.accessToken) {
+        throw new RemoteError(401, "unauthorized", "Login refresh failed", response)
+      }
+      return this.accessToken
+    } catch (error) {
+      await this.clearAuthSession()
+      throw error
+    }
+  }
+
+  private async storedAuthSession(): Promise<StoredAuthSession | undefined> {
+    const raw = await this.context.secrets.get("labrastro.authSession")
+    if (!raw) return undefined
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>
+      const role = roleValue(parsed.role)
+      const session: StoredAuthSession = {
+        hostUrl: stringValue(parsed.hostUrl),
+        username: stringValue(parsed.username),
+        role: role || "user",
+        scopes: stringArray(parsed.scopes),
+        deviceId: stringValue(parsed.deviceId),
+        refreshToken: stringValue(parsed.refreshToken),
+      }
+      return session.hostUrl && session.refreshToken ? session : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  private async storeAuthSession(response: JsonObject): Promise<void> {
+    const user = objectValue(response.user)
+    const device = objectValue(response.device)
+    const role = roleValue(user.role) || "user"
+    const session: StoredAuthSession = {
+      hostUrl: this.hostUrl,
+      username: stringValue(user.username),
+      role,
+      scopes: stringArray(user.scopes),
+      deviceId: stringValue(device.id),
+      refreshToken: stringValue(response.refresh_token),
+    }
+    const accessToken = stringValue(response.access_token)
+    if (!accessToken || !session.refreshToken || !session.username) {
+      throw new Error("Invalid auth response from Labrastro Host.")
+    }
+    this.accessToken = accessToken
+    this.accessTokenExpiresAt = numberValue(response.access_expires_at) || 0
+    await this.context.secrets.store("labrastro.authSession", JSON.stringify(session))
+  }
+
+  private async clearAuthSession(): Promise<void> {
+    this.accessToken = undefined
+    this.accessTokenExpiresAt = 0
+    await this.context.secrets.delete("labrastro.authSession")
+  }
+
+  private connectionStatePayload(
+    host: HostUrlState,
+    patch: Omit<Partial<ConnectionState>, "hostUrl" | "hostUrlConfigured" | "hostUrlSource" | "peerConnected" | "peerId">
+  ): ConnectionState {
+    return {
+      hostUrl: host.url,
+      hostUrlConfigured: host.configured,
+      hostUrlSource: host.source,
+      securityWarnings: hostSecurityWarnings(host.url),
+      authReachable: false,
+      authenticated: false,
+      peerConnected: this.isPeerRunning(),
+      peerId: this.peerInfo?.peer_id,
+      status: "login-required",
+      ...patch,
+    }
   }
 
   private async postPeerJson(
@@ -472,16 +730,12 @@ export class LabrastroRemoteClient {
   }
 
   private async startPeer(generation: number): Promise<PeerInfo> {
-    const bootstrapSecret = await this.context.secrets.get("labrastro.bootstrapSecret")
-    if (!bootstrapSecret) {
-      throw new Error("Bootstrap secret is not configured.")
-    }
-
     await fs.mkdir(this.context.globalStorageUri.fsPath, { recursive: true })
-    const script = await this.requestText("/remote/bootstrap.sh", {
-      "X-RC-Bootstrap-Secret": bootstrapSecret,
-    })
-    const token = parseBootstrapToken(script)
+    const bootstrap = await this.authenticatedPost("/remote/auth/bootstrap-token", {})
+    const token = stringValue(bootstrap.bootstrap_token)
+    if (!token) {
+      throw new Error("Unable to obtain bootstrap token from host.")
+    }
     if (this.peerStartupGeneration !== generation) {
       throw new Error("Peer startup was cancelled.")
     }
@@ -662,14 +916,6 @@ export class LabrastroRemoteClient {
     return parseJsonResponse(response)
   }
 
-  private async requestText(pathname: string, headers: Record<string, string> = {}): Promise<string> {
-    const response = await fetch(this.hostUrl + pathname, { headers })
-    if (!response.ok) {
-      throw new Error(`${response.status} ${await response.text()}`)
-    }
-    return response.text()
-  }
-
   private async requestBuffer(pathname: string): Promise<Buffer> {
     const response = await fetch(this.hostUrl + pathname)
     if (!response.ok) {
@@ -712,6 +958,34 @@ function normalizeBackendCapabilities(payload: JsonObject): BackendCapabilities 
     issueAssignment: capabilities.issue_assignment === true,
     freshSessionWithoutSessionHint: capabilities.fresh_session_without_session_hint === true,
     peerTokenHeartbeatRefresh: capabilities.peer_token_heartbeat_refresh === true,
+    agentRuntime: normalizeAgentRuntimeCapabilities(capabilities.agent_runtime),
+  }
+}
+
+function normalizeAgentRuntimeCapabilities(value: unknown): AgentRuntimeCapabilities {
+  const runtime = objectValue(value)
+  const executorCapabilities: Record<string, ExecutorCapability> = {}
+  for (const [executor, capability] of Object.entries(objectValue(runtime.executor_capabilities))) {
+    executorCapabilities[executor] = normalizeExecutorCapability(capability)
+  }
+  return { executorCapabilities }
+}
+
+function normalizeExecutorCapability(value: unknown): ExecutorCapability {
+  const capability = objectValue(value)
+  const testedVersion = stringValue(capability.tested_version)
+  return {
+    installed: capability.installed === true,
+    version: stringValue(capability.version),
+    streamJson: capability.stream_json === true,
+    sessionDiscovery: capability.session_discovery === true,
+    resumeById: capability.resume_by_id === true,
+    usage: capability.usage === true,
+    mcpConfig: capability.mcp_config === true,
+    runtimeHomeIsolation: stringValue(capability.runtime_home_isolation),
+    modelArg: capability.model_arg === true,
+    ...(testedVersion ? { testedVersion } : {}),
+    limitations: stringArray(capability.limitations),
   }
 }
 
@@ -719,14 +993,38 @@ function numberValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined
 }
 
-function parseBootstrapToken(script: string): string {
-  const match =
-    script.match(/^TOKEN="\$\{RC_TOKEN:-([^}]+)\}"/m) ||
-    script.match(/^TOKEN="([^"]+)"/m)
-  if (!match) {
-    throw new Error("Unable to parse bootstrap token from host script.")
+function objectValue(value: unknown): JsonObject {
+  return value && typeof value === "object" ? (value as JsonObject) : {}
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : ""
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => String(item)).filter((item) => item.trim())
+    : []
+}
+
+function roleValue(value: unknown): StoredAuthSession["role"] | undefined {
+  return value === "superadmin" || value === "admin" || value === "user"
+    ? value
+    : undefined
+}
+
+function hostSecurityWarnings(hostUrl: string): string[] {
+  try {
+    const url = new URL(hostUrl)
+    const hostname = url.hostname.toLowerCase()
+    const local = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1"
+    if (url.protocol === "http:" && !local) {
+      return ["当前 Host 使用非 localhost HTTP，生产环境建议放在 HTTPS 反向代理后。"]
+    }
+  } catch {
+    return []
   }
-  return match[1]
+  return []
 }
 
 function peerPlatform(): { os: string; arch: string } {
@@ -790,22 +1088,6 @@ async function removeEmptyFile(filePath: string): Promise<void> {
   }
 }
 
-function connectionMessage(
-  host: { url: string; configured: boolean },
-  adminSecretSet: boolean,
-  bootstrapSecretSet: boolean
-): string | undefined {
-  if (!host.url || !adminSecretSet) {
-    return "Host URL 和 admin secret 需要先配置完整。"
-  }
-  if (!bootstrapSecretSet) {
-    return "Admin API 已可用；bootstrap secret 未配置时只能管理 Provider/Profile，不能启动 peer chat。"
-  }
-  if (!host.configured && (host.url === "http://127.0.0.1:8765" || host.url === "http://localhost:8765")) {
-    return "当前使用插件默认 Host URL；中心化部署请保存服务器 Host URL。"
-  }
-  return undefined
-}
 
 async function waitForPeerInfo(peerInfoPath: string): Promise<PeerInfo> {
   const deadline = Date.now() + 15000
