@@ -50,10 +50,11 @@ flowchart LR
 ## 当前能力
 
 - VS Code Activity Bar 入口与侧边栏聊天主界面。
-- Labrastro Host URL、Admin Secret、Bootstrap Secret 配置。
+- Labrastro Host URL、账号密码登录、refresh token 续期、账号与设备管理。
 - 远程会话创建、加载、保存快照与历史恢复。
 - Provider、模型 Profile、主/副模型目标管理。
 - CLI / MCP / Skills 工具链清单管理。
+- Agent Runtime 执行器能力展示：installed、stream-json、session discovery、resume、MCP 和隔离状态；重试入口区分 fresh run 与继续同一 CLI 会话。
 - 当前工作区环境检查与配置流程。
 - 命令审批、自动批准规则与审批详情查看。
 - Trace Preview 原型入口，用于后续恢复更完整的 agent 过程深查。
@@ -76,9 +77,13 @@ cp .env.example .env
 RCODER_MODEL=gpt-4.1
 RCODER_BASE_URL=https://api.openai.com/v1
 RCODER_API_KEY=your-api-key-here
-RCODER_BOOTSTRAP_ACCESS_SECRET=replace-with-a-long-random-secret
-RCODER_ADMIN_ACCESS_SECRET=replace-with-a-different-long-random-secret
+LABRASTRO_AUTH_TOKEN_SECRET=replace-with-a-long-random-secret
+LABRASTRO_SUPERADMIN_USERNAME=admin
+LABRASTRO_SUPERADMIN_PASSWORD_HASH=pbkdf2_sha256$260000$replace-with-generated-hash
+LABRASTRO_DATABASE_URL=
 ```
+
+`LABRASTRO_SUPERADMIN_PASSWORD_HASH` 可在后端仓库中运行 `uv run rcoder auth hash-password` 生成。
 
 然后从源码构建并启动容器：
 
@@ -88,6 +93,14 @@ docker compose logs -f labrastro-host
 ```
 
 默认服务会监听容器内 `0.0.0.0:8765`，并映射到宿主机 `8765` 端口。
+
+生产环境预期通过 Nginx、Caddy、Traefik 或 Cloudflare 等反向代理把 HTTPS Host URL 转发到容器 HTTP 端口，例如：
+
+```text
+https://labrastro.example.com -> Nginx/Caddy -> labrastro-host:8765
+```
+
+插件只需要填写对用户可访问的 Host URL。Labrastro 应用内负责账号登录、token 刷新、peer 启动和权限控制；TLS 证书、公网暴露、防火墙、IP allowlist 和反向代理日志属于部署层治理。
 
 ### 2. 启动 VS Code 插件
 
@@ -109,8 +122,8 @@ npm run compile
 进入 Labrastro 设置页后，依次配置：
 
 1. **Host URL**：本机容器通常是 `http://127.0.0.1:8765`，远程服务器填写服务器地址。
-2. **Admin Secret**：填写 `.env` 中的 `RCODER_ADMIN_ACCESS_SECRET`。
-3. **Bootstrap Secret**：填写 `.env` 中的 `RCODER_BOOTSTRAP_ACCESS_SECRET`。
+2. **用户名 / 密码**：填写后端配置的超级管理员账号和对应密码。
+3. **账号与设备**：登录后可修改非配置态账号密码、撤销设备、管理用户和查看审计日志。
 4. **Provider 与模型 Profile**：确认服务端模型配置可用，按需添加更多服务商和模型预设。
 5. **工具链清单与当前环境检查**：让后端给出权威清单，再在当前电脑上检查或配置缺失工具。
 
