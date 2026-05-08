@@ -233,7 +233,7 @@ function remoteContractFixtures(): Array<{
     __dirname,
     "..",
     "..",
-    "ReuleauxCoder",
+    "ezcode",
     "labrastro_server",
     "interfaces",
     "http",
