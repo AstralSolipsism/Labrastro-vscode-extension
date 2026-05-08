@@ -1,7 +1,7 @@
 import * as vscode from "vscode"
 import * as fs from "fs"
 import * as path from "path"
-import { BackendCapabilities, LabrastroRemoteClient, isRemoteError } from "./LabrastroRemoteClient"
+import { BackendCapabilities, LabrastroRemoteClient, isRemoteError, type ConnectionState } from "./LabrastroRemoteClient"
 import {
   SessionSnapshotOutbox,
   isLocalDraftSessionId,
@@ -169,6 +169,27 @@ export class LabrastroController implements vscode.Disposable {
     }
   }
 
+  private connectionErrorState(
+    message: string,
+    options: { hostUrlSaveRequested?: string } = {}
+  ): ConnectionState {
+    const state = this.client.startupConnectionState()
+    const requested = options.hostUrlSaveRequested
+    return {
+      ...state,
+      authReachable: false,
+      authenticated: false,
+      status: "error",
+      message,
+      ...(requested
+        ? {
+            hostUrlSaveRequested: requested,
+            hostUrlSaveApplied: state.hostUrl === requested,
+          }
+        : {}),
+    }
+  }
+
   async postInitialState(
     post: PostMessage,
     options: { initializeSession?: boolean } = {}
@@ -251,7 +272,7 @@ export class LabrastroController implements vscode.Disposable {
   ): Promise<boolean> {
     switch (message.type) {
       case "connection.login":
-        {
+        try {
           const state = await this.client.login({
             hostUrl: stringValue(message.hostUrl),
             username: stringValue(message.username) || "",
@@ -259,9 +280,18 @@ export class LabrastroController implements vscode.Disposable {
           })
           post({ type: "connection.result", payload: state })
           post({ type: "connection.state", payload: state })
+          await this.postAdminState(post)
+          await this.refreshBackendCapabilities(post)
+        } catch (error) {
+          const failureMessage = isRemoteError(error)
+            ? `登录失败：${errorMessage(error)}`
+            : `登录失败：无法连接 Labrastro Host ${this.client.hostUrl}：${errorMessage(error)}`
+          const state = this.connectionErrorState(failureMessage, {
+            hostUrlSaveRequested: stringValue(message.hostUrl) || undefined,
+          })
+          post({ type: "connection.result", payload: state })
+          post({ type: "connection.state", payload: state })
         }
-        await this.postAdminState(post)
-        await this.refreshBackendCapabilities(post)
         return true
       case "connection.logout":
         {
@@ -286,14 +316,14 @@ export class LabrastroController implements vscode.Disposable {
           )
           post({ type: "auth.actionResult", payload })
         } catch (error) {
-          post({ type: "auth.error", message: errorMessage(error) })
+          postAuthError(post, error)
         }
         return true
       case "auth.users.list":
         try {
           post({ type: "auth.users", payload: await this.client.authUsersList() })
         } catch (error) {
-          post({ type: "auth.error", message: errorMessage(error) })
+          postAuthError(post, error)
         }
         return true
       case "auth.users.create":
@@ -302,7 +332,7 @@ export class LabrastroController implements vscode.Disposable {
           post({ type: "auth.actionResult", payload })
           post({ type: "auth.users", payload: await this.client.authUsersList() })
         } catch (error) {
-          post({ type: "auth.error", message: errorMessage(error) })
+          postAuthError(post, error)
         }
         return true
       case "auth.users.update":
@@ -311,7 +341,7 @@ export class LabrastroController implements vscode.Disposable {
           post({ type: "auth.actionResult", payload })
           post({ type: "auth.users", payload: await this.client.authUsersList() })
         } catch (error) {
-          post({ type: "auth.error", message: errorMessage(error) })
+          postAuthError(post, error)
         }
         return true
       case "auth.users.disable":
@@ -320,7 +350,7 @@ export class LabrastroController implements vscode.Disposable {
           post({ type: "auth.actionResult", payload })
           post({ type: "auth.users", payload: await this.client.authUsersList() })
         } catch (error) {
-          post({ type: "auth.error", message: errorMessage(error) })
+          postAuthError(post, error)
         }
         return true
       case "auth.users.resetPassword":
@@ -332,14 +362,14 @@ export class LabrastroController implements vscode.Disposable {
           post({ type: "auth.actionResult", payload })
           post({ type: "auth.users", payload: await this.client.authUsersList() })
         } catch (error) {
-          post({ type: "auth.error", message: errorMessage(error) })
+          postAuthError(post, error)
         }
         return true
       case "auth.devices.list":
         try {
           post({ type: "auth.devices", payload: await this.client.authDevicesList(stringValue(message.userId) || stringValue(message.user_id)) })
         } catch (error) {
-          post({ type: "auth.error", message: errorMessage(error) })
+          postAuthError(post, error)
         }
         return true
       case "auth.devices.revoke":
@@ -348,14 +378,14 @@ export class LabrastroController implements vscode.Disposable {
           post({ type: "auth.actionResult", payload })
           post({ type: "auth.devices", payload: await this.client.authDevicesList() })
         } catch (error) {
-          post({ type: "auth.error", message: errorMessage(error) })
+          postAuthError(post, error)
         }
         return true
       case "auth.audit.list":
         try {
           post({ type: "auth.audit", payload: await this.client.authAuditList(objectValue(message.payload)) })
         } catch (error) {
-          post({ type: "auth.error", message: errorMessage(error) })
+          postAuthError(post, error)
         }
         return true
       case "autoApproval.get":
@@ -631,6 +661,9 @@ export class LabrastroController implements vscode.Disposable {
             mode: stringValue(message.mode),
             workflowMode: stringValue(message.workflowMode) || stringValue(message.workflow_mode),
             draftSessionId: stringValue(message.draftSessionId) || stringValue(message.draft_session_id),
+            providerId: stringValue(message.providerId) || stringValue(message.provider_id),
+            modelId: stringValue(message.modelId) || stringValue(message.model_id),
+            parameters: objectValue(message.parameters),
           })
         }
         return true
@@ -783,10 +816,13 @@ export class LabrastroController implements vscode.Disposable {
     this.broadcastWebviewMessage(message)
   }
 
-  private async mergeLocalSessions(): Promise<void> {
+  private async mergeLocalSessions(
+    options: { includeSyncedLocalOnly?: boolean } = {}
+  ): Promise<void> {
     this.sessions = await this.sessionOutbox.mergeMetadata(
       this.client.hostUrl,
-      this.sessions as SessionSnapshotMetadata[]
+      this.sessions as SessionSnapshotMetadata[],
+      options
     )
   }
 
@@ -1045,24 +1081,35 @@ export class LabrastroController implements vscode.Disposable {
       return { fingerprint: this.sessionFingerprint }
     }
     try {
-      const payload = await this.client.listSessions(limit, this.sessionListEtag)
+      let payload = await this.client.listSessions(limit, this.sessionListEtag)
       this.sessionApiAvailable = true
+      const previousFingerprint = this.sessionFingerprint
+      const nextFingerprint = stringValue(payload.fingerprint) || this.sessionFingerprint
+      const fingerprintChanged = Boolean(
+        previousFingerprint &&
+        nextFingerprint &&
+        previousFingerprint !== nextFingerprint
+      )
+      if (fingerprintChanged && payload.sessions_unchanged === true) {
+        this.sessionListEtag = undefined
+        payload = await this.client.listSessions(limit)
+      }
       this.sessionFingerprint = stringValue(payload.fingerprint) || this.sessionFingerprint
       this.sessionListEtag = stringValue(payload.list_etag) || this.sessionListEtag
       if (payload.sessions_unchanged !== true) {
         this.sessions = normalizeSessionMetadataList(payload.sessions)
       }
-      await this.mergeLocalSessions()
+      await this.mergeLocalSessions({ includeSyncedLocalOnly: false })
     } catch (error) {
       if (isSessionApiUnavailable(error)) {
         this.sessionApiAvailable = false
         this.sessionFingerprint = undefined
         this.sessionListEtag = undefined
         this.sessions = []
-        await this.mergeLocalSessions()
+        await this.mergeLocalSessions({ includeSyncedLocalOnly: true })
         return {}
       }
-      await this.mergeLocalSessions()
+      await this.mergeLocalSessions({ includeSyncedLocalOnly: true })
       return { fingerprint: this.sessionFingerprint }
     }
     return { fingerprint: this.sessionFingerprint }
@@ -1205,20 +1252,13 @@ export class LabrastroController implements vscode.Disposable {
       return
     }
     await this.sessionOutbox.delete(this.client.hostUrl, sessionId)
-    if (this.sessionApiAvailable === false) {
+
+    const postDeleted = async (deletedCurrent: boolean, loadNext = true) => {
       this.sessions = this.sessions.filter((session) => session.id !== sessionId)
-      post({ type: "session.deleted", sessionId, sessions: this.sessions })
-      await this.postSessionSyncStatus(post)
-      return
-    }
-    try {
-      await this.client.deleteSession(sessionId)
-      const deletedCurrent = this.currentSessionId === sessionId
       if (deletedCurrent) {
         this.currentSessionId = undefined
         await this.context.workspaceState.update("labrastro.currentSessionId", undefined)
       }
-      await this.refreshSessions()
       await this.postSessionSyncStatus(post)
       post({
         type: "session.deleted",
@@ -1228,7 +1268,7 @@ export class LabrastroController implements vscode.Disposable {
       })
       if (deletedCurrent) {
         const nextSessionId = this.sessions[0]?.id
-        if (nextSessionId) {
+        if (loadNext && nextSessionId) {
           await this.loadSession(nextSessionId, post, { suppressListRefresh: true })
         } else {
           post({
@@ -1238,7 +1278,27 @@ export class LabrastroController implements vscode.Disposable {
           })
         }
       }
+    }
+
+    if (isLocalDraftSessionId(sessionId) || this.sessionApiAvailable === false) {
+      await postDeleted(this.currentSessionId === sessionId, false)
+      return
+    }
+    try {
+      await this.client.deleteSession(sessionId)
+      const deletedCurrent = this.currentSessionId === sessionId
+      await this.refreshSessions()
+      await postDeleted(deletedCurrent)
     } catch (error) {
+      if (
+        isRemoteError(error, "session_not_found", 404) ||
+        isRemoteError(error, "session_fingerprint_mismatch", 403)
+      ) {
+        const deletedCurrent = this.currentSessionId === sessionId
+        await this.refreshSessions()
+        await postDeleted(deletedCurrent)
+        return
+      }
       post({ type: "session.error", message: errorMessage(error) })
     }
   }
@@ -1289,6 +1349,10 @@ export class LabrastroController implements vscode.Disposable {
   ): Promise<void> {
     if (!providerId || !modelId) {
       post({ type: "session.model.error", message: "缺少服务商或模型 ID。", requestId })
+      return
+    }
+    if (!sessionId || isLocalDraftSessionId(sessionId)) {
+      post({ type: "session.model.error", message: "模型切换需要先绑定真实远端会话。", requestId })
       return
     }
     if (this.sessionApiAvailable === false) {
@@ -1986,20 +2050,34 @@ export class LabrastroController implements vscode.Disposable {
     text: string,
     requestedSessionId: string | undefined,
     post: PostMessage,
-    options: { mode?: string; workflowMode?: string; draftSessionId?: string } = {}
+    options: {
+      mode?: string
+      workflowMode?: string
+      draftSessionId?: string
+      providerId?: string
+      modelId?: string
+      parameters?: Record<string, unknown>
+    } = {}
   ): Promise<void> {
     try {
       this.activeDraftSessionId = options.draftSessionId
-      if (!requestedSessionId && this.sessionInitialization) {
+      const requestedRemoteSessionId = requestedSessionId && !isLocalDraftSessionId(requestedSessionId)
+        ? requestedSessionId
+        : undefined
+      if (!requestedRemoteSessionId && this.sessionInitialization) {
         this.sessionInitializationToken += 1
       }
-      let sessionId = requestedSessionId
+      let sessionId = requestedRemoteSessionId
+      const startupProviderId = stringValue(options.providerId) || ""
+      const startupModelId = stringValue(options.modelId) || ""
+      const startupParameters = objectValue(options.parameters)
+      const hasStartupModelOverride = Boolean(startupProviderId && startupModelId)
       const capabilities = await this.ensureBackendCapabilities()
       const supportsFreshSessionWithoutHint =
         capabilities?.freshSessionWithoutSessionHint === true
       if (
         !sessionId &&
-        !supportsFreshSessionWithoutHint &&
+        (hasStartupModelOverride || !supportsFreshSessionWithoutHint) &&
         this.sessionApiAvailable !== false
       ) {
         try {
@@ -2028,6 +2106,47 @@ export class LabrastroController implements vscode.Disposable {
           this.currentSessionId = undefined
           await this.context.workspaceState.update("labrastro.currentSessionId", undefined)
         }
+      }
+      if (hasStartupModelOverride && (!sessionId || this.sessionApiAvailable === false)) {
+        post({ type: "chat.error", message: "当前后端不支持会话模型切换。" })
+        this.activeDraftSessionId = undefined
+        return
+      }
+      if (hasStartupModelOverride && sessionId) {
+        const modelPayload = await this.client.switchSessionMainModel(
+          sessionId,
+          startupProviderId,
+          startupModelId,
+          startupParameters
+        )
+        this.sessionApiAvailable = true
+        const metadata = normalizeSessionMetadata(modelPayload.metadata)
+        if (metadata.id) {
+          sessionId = metadata.id
+          this.currentSessionId = metadata.id
+          await this.context.workspaceState.update("labrastro.currentSessionId", metadata.id)
+        }
+        await this.refreshSessions()
+        if (metadata.id) {
+          post({
+            type: "session.state",
+            sessionId: metadata.id,
+            metadata,
+            bundle: buildSessionBundle(modelPayload, metadata),
+            runtimeState: objectValue(modelPayload.runtime_state),
+            sessions: this.sessions,
+            fingerprint: this.sessionFingerprint || stringValue(modelPayload.fingerprint),
+          })
+        }
+        post({
+          type: "session.model.state",
+          sessionId: metadata.id || sessionId,
+          payload: modelPayload,
+          runtimeState: objectValue(modelPayload.runtime_state),
+          providerId: startupProviderId,
+          modelId: startupModelId,
+          requestId: "",
+        })
       }
       if (
         !sessionId &&
@@ -2279,6 +2398,17 @@ function resolveWorkspacePath(pathValue: string): string | undefined {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function postAuthError(post: (message: Record<string, unknown>) => void, error: unknown): void {
+  const message = errorMessage(error)
+  const payload: Record<string, unknown> = { message }
+  if (isRemoteError(error)) {
+    payload.status = error.status
+    payload.code = error.code
+    payload.body = error.body
+  }
+  post({ type: "auth.error", message, payload })
 }
 
 function isSessionApiUnavailable(error: unknown): boolean {
