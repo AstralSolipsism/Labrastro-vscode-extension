@@ -20,6 +20,22 @@ const zhCN: Record<string, string> = {
   "settings.tab.autoApproval": "自动批准",
   "settings.tab.other": "其他",
 
+  // ── Auth ──
+  "auth.error.generic": "认证请求失败。",
+  "auth.error.genericWithMessage": "认证请求失败：{message}",
+  "auth.error.password_policy_failed": "密码至少 6 位，最多 256 位。",
+  "auth.error.configured_user_immutable": "配置型 superadmin 由服务器配置维护，请在 Host 配置中修改密码。普通 admin 用户可在前端改密码。",
+  "auth.error.invalid_credentials": "用户名或密码不正确。",
+  "auth.error.username_required": "请输入用户名。",
+  "auth.error.username_exists": "该用户名已存在。",
+  "auth.error.invalid_role": "用户角色无效。",
+  "auth.error.invalid_scope": "权限 scope 无效。",
+  "auth.error.user_not_found": "用户不存在。",
+  "auth.error.user_disabled": "该用户已被禁用。",
+  "auth.error.forbidden": "当前账号没有执行此操作的权限。",
+  "auth.error.unauthorized": "登录已失效，请重新登录。",
+  "auth.error.rate_limited": "登录失败次数过多，请稍后再试。",
+
   // ── SettingsView — 执行器管理 ──
   "executor.title": "执行器连接",
   "executor.description": "管理主执行器连接、登录状态、运行位置和引擎。",
@@ -65,6 +81,7 @@ const zhCN: Record<string, string> = {
   "executor.remote.saving": "保存中…",
   "executor.remote.saved2": "已保存",
   "executor.remote.testConnection": "测试连接",
+  "executor.remote.passwordPlaceholder": "密码",
   "executor.local.title": "本地 Labrastro 执行器",
   "executor.local.desc": "本地模式将在本机启动 Labrastro 服务，无需连接远端。该功能正在建设中。",
 
@@ -91,7 +108,6 @@ const zhCN: Record<string, string> = {
   "provider.compat": "兼容模式",
   "provider.baseUrl": "Base URL",
   "provider.apiKey": "API Key",
-  "provider.apiKeyPlaceholder": "留空则保留已保存值",
   "provider.copyTo": "复制目标 ID",
   "provider.enabled": "已启用",
   "provider.disabled": "已停用",

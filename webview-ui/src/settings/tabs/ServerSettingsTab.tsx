@@ -29,7 +29,6 @@ export const ServerSettingsTab: Component<TabProps> = (props) => {
         <div class="settings-page-header">
           <div>
             <h2>{t("serverSettings.title")}</h2>
-            <p>管理所有 Agent 类型共享的服务端运行并发和 shell 执行并发。</p>
           </div>
           <div class="settings-actions settings-actions--right">
             <RefreshButton class="btn-secondary" onClick={refreshServerSettings}>

@@ -12,15 +12,14 @@ export const OtherTab: Component<TabProps> = (props) => {
     server,
   } = props.controller
 
-  return (
-    <div class="settings-page settings-page--narrow">
-      <div class="settings-page-header">
-        <div>
-          <h2>{t("other.title")}</h2>
-          <p>{t("other.desc")}</p>
-        </div>
+  return (
+    <div class="settings-page settings-page--narrow">
+      <div class="settings-page-header">
+        <div>
+          <h2>{t("other.title")}</h2>
+        </div>
         <RefreshButton class="btn-secondary" onClick={refreshAdmin}>
-          刷新
+          刷新
         </RefreshButton>
       </div>
 
@@ -29,7 +28,6 @@ export const OtherTab: Component<TabProps> = (props) => {
           <span class="codicon codicon-globe" aria-hidden="true" />
           <span>{t("other.language")}</span>
         </div>
-        <p class="settings-empty-note">{t("other.languageDesc")}</p>
         <div class="language-picker">
           <For each={LOCALES as unknown as { id: string; label: string; nativeLabel: string }[]}>
             {(loc) => (
@@ -49,32 +47,33 @@ export const OtherTab: Component<TabProps> = (props) => {
         </div>
       </section>
 
-      <Show when={server.adminError()}>
-        <div class="settings-error">{server.adminError()}</div>
-      </Show>
-      <details class="settings-details">
-        <summary>
-          <span class="codicon codicon-output" aria-hidden="true" />
-          {t("other.lastAction")}
-        </summary>
-        <pre class="settings-result">{JSON.stringify(server.actionResult() || {}, null, 2)}</pre>
-      </details>
-      <details class="settings-details">
-        <summary>
-          <span class="codicon codicon-radio-tower" aria-hidden="true" />
-          {t("other.connectionState")}
-        </summary>
-        <pre class="settings-result">{JSON.stringify(server.connectionState(), null, 2)}</pre>
-      </details>
-      <details class="settings-details">
-        <summary>
-          <span class="codicon codicon-server-process" aria-hidden="true" />
-          {t("other.adminState")}
-        </summary>
-        <pre class="settings-result">{JSON.stringify(server.adminState(), null, 2)}</pre>
-      </details>
-    </div>
-  )
-
+      <Show when={server.adminError()}>
+        <div class="settings-error">{server.adminError()}</div>
+      </Show>
 
+      <details class="settings-details">
+        <summary>
+          <span class="codicon codicon-output" aria-hidden="true" />
+          {t("other.lastAction")}
+        </summary>
+        <pre class="settings-result">{JSON.stringify(server.actionResult() || {}, null, 2)}</pre>
+      </details>
+
+      <details class="settings-details">
+        <summary>
+          <span class="codicon codicon-radio-tower" aria-hidden="true" />
+          {t("other.connectionState")}
+        </summary>
+        <pre class="settings-result">{JSON.stringify(server.connectionState(), null, 2)}</pre>
+      </details>
+
+      <details class="settings-details">
+        <summary>
+          <span class="codicon codicon-server-process" aria-hidden="true" />
+          {t("other.adminState")}
+        </summary>
+        <pre class="settings-result">{JSON.stringify(server.adminState(), null, 2)}</pre>
+      </details>
+    </div>
+  )
 }

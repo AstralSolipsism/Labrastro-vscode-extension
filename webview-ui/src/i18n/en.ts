@@ -20,6 +20,22 @@ const en: Record<string, string> = {
   "settings.tab.autoApproval": "Auto Approval",
   "settings.tab.other": "Other",
 
+  // ── Auth ──
+  "auth.error.generic": "Authentication request failed.",
+  "auth.error.genericWithMessage": "Authentication request failed: {message}",
+  "auth.error.password_policy_failed": "Password must be 6-256 characters.",
+  "auth.error.configured_user_immutable": "Configured superadmin users are managed in the Host config. Change this password on the server, or use a regular admin account for in-app password changes.",
+  "auth.error.invalid_credentials": "Username or password is incorrect.",
+  "auth.error.username_required": "Enter a username.",
+  "auth.error.username_exists": "That username already exists.",
+  "auth.error.invalid_role": "User role is invalid.",
+  "auth.error.invalid_scope": "Permission scope is invalid.",
+  "auth.error.user_not_found": "User not found.",
+  "auth.error.user_disabled": "This user has been disabled.",
+  "auth.error.forbidden": "The current account does not have permission for this action.",
+  "auth.error.unauthorized": "Your login has expired. Please sign in again.",
+  "auth.error.rate_limited": "Too many failed login attempts. Please try again later.",
+
   // ── SettingsView — Executor ──
   "executor.title": "Executor Connection",
   "executor.description": "Manage the primary executor connection, login state, location, and engine.",
@@ -65,6 +81,7 @@ const en: Record<string, string> = {
   "executor.remote.saving": "Saving…",
   "executor.remote.saved2": "Saved",
   "executor.remote.testConnection": "Test Connection",
+  "executor.remote.passwordPlaceholder": "Password",
   "executor.local.title": "Local Labrastro Executor",
   "executor.local.desc": "Local mode will start Labrastro service on this machine. This feature is under development.",
 
@@ -91,7 +108,6 @@ const en: Record<string, string> = {
   "provider.compat": "Compatibility",
   "provider.baseUrl": "Base URL",
   "provider.apiKey": "API Key",
-  "provider.apiKeyPlaceholder": "Leave blank to keep saved value",
   "provider.copyTo": "Target ID",
   "provider.enabled": "Enabled",
   "provider.disabled": "Disabled",

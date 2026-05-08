@@ -1,11 +1,23 @@
 import { Component, For, Show, createMemo, createSignal } from "solid-js"
 import { RefreshButton } from "../../components/common/RefreshButton"
+import { DialogSurface } from "../../components/common/interaction"
 import { StatusBadge } from "../components/StatusBadge"
 import type { SettingsController } from "../useSettingsController"
 
 interface TabProps { controller: SettingsController & Record<string, any> }
 
 type AccountSection = "overview" | "users" | "devices" | "audit"
+const AUTH_PASSWORD_MIN_LENGTH = 6
+
+const scopeOptions = [
+  { id: "admin:read", label: "查看服务配置" },
+  { id: "admin:write", label: "修改服务配置" },
+  { id: "users:manage", label: "管理用户" },
+  { id: "audit:read", label: "查看审计" },
+  { id: "devices:read", label: "查看设备" },
+  { id: "devices:revoke", label: "撤销设备" },
+  { id: "peer:bootstrap", label: "连接远端执行器" },
+]
 
 const accountSections: Array<{ id: AccountSection; label: string; icon: string }> = [
   { id: "overview", label: "概览", icon: "account" },
@@ -29,6 +41,9 @@ function roleTone(role: string): "success" | "warning" | "muted" {
 export const AccountsTab: Component<TabProps> = (props) => {
   const c = props.controller
   const [section, setSection] = createSignal<AccountSection>("overview")
+  const [permissionUser, setPermissionUser] = createSignal<Record<string, unknown> | undefined>()
+  const [permissionDraftScopes, setPermissionDraftScopes] = createSignal<string[]>([])
+  const [resetPasswordUser, setResetPasswordUser] = createSignal<Record<string, unknown> | undefined>()
 
   const role = createMemo(() => c.stringValue(c.server.connectionState().role, "user"))
   const username = createMemo(() => c.stringValue(c.server.connectionState().username, "unknown"))
@@ -36,6 +51,47 @@ export const AccountsTab: Component<TabProps> = (props) => {
   const scopesText = createMemo(() => c.connectionScopes().join(", ") || "未下发 scopes")
   const activeDevices = createMemo(() => c.authDevices().filter((device: Record<string, unknown>) => !device.revoked_at))
   const enabledUsers = createMemo(() => c.authUsers().filter((user: Record<string, unknown>) => user.enabled !== false))
+  const selectedScopes = createMemo(() => new Set<string>(permissionDraftScopes()))
+
+  const extraScopes = (user: Record<string, unknown>): string[] =>
+    Array.isArray(user.scopes) ? user.scopes.map(String).filter(Boolean) : []
+  const extraScopeCount = (user: Record<string, unknown>): number => extraScopes(user).length
+  const togglePermissionScope = (scope: string) => {
+    setPermissionDraftScopes((current) =>
+      current.includes(scope)
+        ? current.filter((item) => item !== scope)
+        : [...current, scope]
+    )
+  }
+  const openPermissions = (user: Record<string, unknown>) => {
+    setPermissionDraftScopes(extraScopes(user))
+    setPermissionUser(user)
+  }
+  const closePermissions = () => {
+    setPermissionUser(undefined)
+    setPermissionDraftScopes([])
+  }
+  const confirmPermissions = () => {
+    const user = permissionUser()
+    const userId = c.stringValue(user?.id)
+    if (!userId) return
+    c.updateAuthUserScopes(userId, permissionDraftScopes())
+    closePermissions()
+  }
+  const openResetPassword = (user: Record<string, unknown>) => {
+    c.setResetPasswordUserId(c.stringValue(user.id))
+    c.setResetPasswordValue("")
+    setResetPasswordUser(user)
+  }
+  const closeResetPassword = () => {
+    c.setResetPasswordUserId("")
+    c.setResetPasswordValue("")
+    setResetPasswordUser(undefined)
+  }
+  const confirmResetPassword = () => {
+    c.resetAuthUserPassword()
+    setResetPasswordUser(undefined)
+  }
 
   return (
     <div class="settings-page settings-page--wide account-admin-page">
@@ -44,7 +100,6 @@ export const AccountsTab: Component<TabProps> = (props) => {
           <span class="codicon codicon-lock" aria-hidden="true" />
           <div>
             <strong>需要管理员账号</strong>
-            <p>登录 admin 或 superadmin 后才能查看账号、设备和审计数据。</p>
           </div>
         </section>
       }>
@@ -53,7 +108,6 @@ export const AccountsTab: Component<TabProps> = (props) => {
             <span class="account-identity__icon codicon codicon-shield" aria-hidden="true" />
             <div>
               <h2>账号控制台</h2>
-              <p>只向 admin 和 superadmin 开放。管理用户、设备撤销和认证审计。</p>
             </div>
           </div>
           <div class="account-hero__actions">
@@ -124,7 +178,6 @@ export const AccountsTab: Component<TabProps> = (props) => {
               <div class="account-panel__header">
                 <div>
                   <strong>认证范围</strong>
-                  <small>当前 token 下发的服务端权限。</small>
                 </div>
               </div>
               <div class="account-scope-line">{scopesText()}</div>
@@ -134,7 +187,6 @@ export const AccountsTab: Component<TabProps> = (props) => {
               <div class="account-panel__header">
                 <div>
                   <strong>修改当前密码</strong>
-                  <small>仅更新当前登录账号。</small>
                 </div>
               </div>
               <div class="account-form-grid">
@@ -156,11 +208,12 @@ export const AccountsTab: Component<TabProps> = (props) => {
                     name="new-password"
                     autocomplete="new-password"
                     type="password"
+                    minLength={AUTH_PASSWORD_MIN_LENGTH}
                     value={c.newPassword()}
                     onInput={(e) => c.setNewPassword(e.currentTarget.value)}
                   />
                 </label>
-                <button class="btn btn-secondary" type="button" onClick={c.changePassword} disabled={!c.currentPassword() || !c.newPassword()}>
+                <button class="btn btn-secondary" type="button" onClick={c.changePassword} disabled={!c.currentPassword() || c.newPassword().length < AUTH_PASSWORD_MIN_LENGTH}>
                   <span class="codicon codicon-key" aria-hidden="true" />
                   修改密码
                 </button>
@@ -174,14 +227,13 @@ export const AccountsTab: Component<TabProps> = (props) => {
             <div class="account-panel__header">
               <div>
                 <strong>用户管理</strong>
-                <small>配置态 superadmin 由后端配置维护，前端不能降级、禁用或重置密码。</small>
               </div>
               <StatusBadge tone={c.canManageUsers() ? "success" : "muted"}>
                 {c.canManageUsers() ? "可管理" : "只读"}
               </StatusBadge>
             </div>
 
-            <Show when={c.canManageUsers()} fallback={<EmptyBlock icon="lock" title="缺少用户管理权限" text="当前账号没有 users:manage scope。" />}>
+            <Show when={c.canManageUsers()} fallback={<EmptyBlock icon="lock" title="缺少用户管理权限" />}>
               <div class="account-form-grid account-form-grid--user-create">
                 <label class="executor-config-field">
                   <span class="executor-config-field__label">用户名</span>
@@ -201,6 +253,7 @@ export const AccountsTab: Component<TabProps> = (props) => {
                     name="new-user-password"
                     autocomplete="new-password"
                     type="password"
+                    minLength={AUTH_PASSWORD_MIN_LENGTH}
                     value={c.newUserPassword()}
                     onInput={(e) => c.setNewUserPassword(e.currentTarget.value)}
                   />
@@ -213,51 +266,13 @@ export const AccountsTab: Component<TabProps> = (props) => {
                     <option value="superadmin">superadmin</option>
                   </select>
                 </label>
-                <label class="executor-config-field">
-                  <span class="executor-config-field__label">额外 scopes</span>
-                  <input
-                    class="executor-config-field__input"
-                    name="new-user-scopes"
-                    autocomplete="off"
-                    spellcheck={false}
-                    placeholder="users:manage, audit:read…"
-                    value={c.newUserScopes()}
-                    onInput={(e) => c.setNewUserScopes(e.currentTarget.value)}
-                  />
-                </label>
-                <button class="btn btn-primary" type="button" onClick={c.createAuthUser} disabled={!c.newUserUsername() || !c.newUserPassword()}>
+                <button class="btn btn-primary" type="button" onClick={c.createAuthUser} disabled={!c.newUserUsername() || c.newUserPassword().length < AUTH_PASSWORD_MIN_LENGTH}>
                   <span class="codicon codicon-add" aria-hidden="true" />
                   新增用户
                 </button>
               </div>
 
-              <div class="account-form-grid account-form-grid--reset">
-                <label class="executor-config-field">
-                  <span class="executor-config-field__label">重置密码用户</span>
-                  <select class="executor-config-field__input" name="reset-password-user" value={c.resetPasswordUserId()} onChange={(e) => c.setResetPasswordUserId(e.currentTarget.value)}>
-                    <option value="">选择用户</option>
-                    <For each={c.authUsers()}>
-                      {(user: Record<string, unknown>) => <option value={c.stringValue(user.id)}>{c.stringValue(user.username)}</option>}
-                    </For>
-                  </select>
-                </label>
-                <label class="executor-config-field">
-                  <span class="executor-config-field__label">新密码</span>
-                  <input
-                    class="executor-config-field__input"
-                    name="reset-password-value"
-                    autocomplete="new-password"
-                    type="password"
-                    value={c.resetPasswordValue()}
-                    onInput={(e) => c.setResetPasswordValue(e.currentTarget.value)}
-                  />
-                </label>
-                <button class="btn btn-secondary" type="button" onClick={c.resetAuthUserPassword} disabled={!c.resetPasswordUserId() || !c.resetPasswordValue()}>
-                  重置密码
-                </button>
-              </div>
-
-              <Show when={c.authUsers().length} fallback={<EmptyBlock icon="organization" title="暂无用户数据" text="点击刷新读取服务端用户列表。" />}>
+              <Show when={c.authUsers().length} fallback={<EmptyBlock icon="organization" title="暂无用户数据" />}>
                 <div class="account-list account-list--users">
                   <For each={c.authUsers()}>
                     {(user: Record<string, unknown>) => (
@@ -272,6 +287,12 @@ export const AccountsTab: Component<TabProps> = (props) => {
                           <StatusBadge tone={user.configured ? "warning" : "muted"}>{user.configured ? "配置态" : "可管理"}</StatusBadge>
                         </div>
                         <div class="account-row__actions">
+                          <button class="btn btn-secondary btn--compact" type="button" disabled={Boolean(user.configured)} onClick={() => openPermissions(user)}>
+                            {extraScopeCount(user) ? `权限 ${extraScopeCount(user)}` : "权限"}
+                          </button>
+                          <button class="btn btn-secondary btn--compact" type="button" disabled={Boolean(user.configured)} onClick={() => openResetPassword(user)}>
+                            重置密码
+                          </button>
                           <button class="btn btn-secondary btn--compact" type="button" disabled={Boolean(user.configured) || user.enabled === false} onClick={() => c.disableAuthUser(c.stringValue(user.id))}>
                             禁用
                           </button>
@@ -290,16 +311,15 @@ export const AccountsTab: Component<TabProps> = (props) => {
             <div class="account-panel__header">
               <div>
                 <strong>设备</strong>
-                <small>撤销不再使用的登录设备，减少长期 refresh token 暴露面。</small>
               </div>
               <StatusBadge tone={c.canManageDevices() ? "success" : "muted"}>
                 {c.canManageDevices() ? "可撤销" : "只读"}
               </StatusBadge>
             </div>
-            <Show when={c.canManageDevices()} fallback={<EmptyBlock icon="lock" title="缺少设备权限" text="当前账号没有 devices:read 或 devices:revoke scope。" />}>
-              <Show when={c.authDevices().length} fallback={<EmptyBlock icon="devices" title="暂无设备数据" text="点击刷新读取登录设备。" />}>
+            <Show when={c.canManageDevices()} fallback={<EmptyBlock icon="lock" title="缺少设备权限" />}>
+              <Show when={activeDevices().length} fallback={<EmptyBlock icon="devices" title="暂无当前登录设备" />}>
                 <div class="account-list">
-                  <For each={c.authDevices()}>
+                  <For each={activeDevices()}>
                     {(device: Record<string, unknown>) => (
                       <div class="account-row">
                         <div class="account-row__main">
@@ -308,10 +328,10 @@ export const AccountsTab: Component<TabProps> = (props) => {
                         </div>
                         <div class="account-row__meta">
                           <span class="account-row__time">{fmtTime(device.last_seen_at) || fmtTime(device.created_at) || "未记录"}</span>
-                          <StatusBadge tone={device.revoked_at ? "muted" : "success"}>{device.revoked_at ? "已撤销" : "有效"}</StatusBadge>
+                          <StatusBadge tone="success">已登录</StatusBadge>
                         </div>
                         <div class="account-row__actions">
-                          <button class="btn btn-secondary btn--compact" type="button" disabled={Boolean(device.revoked_at)} onClick={() => c.revokeAuthDevice(c.stringValue(device.id))}>
+                          <button class="btn btn-secondary btn--compact" type="button" onClick={() => c.revokeAuthDevice(c.stringValue(device.id))}>
                             撤销
                           </button>
                         </div>
@@ -329,13 +349,12 @@ export const AccountsTab: Component<TabProps> = (props) => {
             <div class="account-panel__header">
               <div>
                 <strong>审计日志</strong>
-                <small>不记录密码、access token、refresh token 和 provider key。</small>
               </div>
               <StatusBadge tone={c.canReadAudit() ? "success" : "muted"}>
                 {c.canReadAudit() ? "可查询" : "只读"}
               </StatusBadge>
             </div>
-            <Show when={c.canReadAudit()} fallback={<EmptyBlock icon="lock" title="缺少审计权限" text="当前账号没有 audit:read scope。" />}>
+            <Show when={c.canReadAudit()} fallback={<EmptyBlock icon="lock" title="缺少审计权限" />}>
               <div class="account-form-grid account-form-grid--audit">
                 <label class="executor-config-field">
                   <span class="executor-config-field__label">事件类型过滤</span>
@@ -353,7 +372,7 @@ export const AccountsTab: Component<TabProps> = (props) => {
                   查询
                 </RefreshButton>
               </div>
-              <Show when={c.authAuditEvents().length} fallback={<EmptyBlock icon="history" title="暂无审计事件" text="调整过滤条件或点击查询。" />}>
+              <Show when={c.authAuditEvents().length} fallback={<EmptyBlock icon="history" title="暂无审计事件" />}>
                 <div class="account-list account-list--audit">
                   <For each={c.authAuditEvents()}>
                     {(event: Record<string, unknown>) => (
@@ -375,16 +394,98 @@ export const AccountsTab: Component<TabProps> = (props) => {
           </section>
         </Show>
       </Show>
+      <Show when={permissionUser()}>
+        <DialogSurface
+          ariaLabel="选择额外权限"
+          backdropClass="settings-overlay settings-overlay--center"
+          surfaceClass="settings-modal account-dialog"
+          initialFocusSelector=".account-scope-option input"
+          onClose={closePermissions}
+        >
+          <div class="settings-modal__header">
+            <div>
+              <h3>额外权限</h3>
+              <p>{c.stringValue(permissionUser()?.username)}</p>
+            </div>
+            <button class="btn btn-secondary btn--compact" type="button" onClick={closePermissions}>
+              关闭
+            </button>
+          </div>
+          <div class="account-scope-picker">
+            <For each={scopeOptions}>
+              {(item) => (
+                <label class="account-scope-option">
+                  <input
+                    type="checkbox"
+                    checked={selectedScopes().has(item.id)}
+                    onChange={() => togglePermissionScope(item.id)}
+                  />
+                  <span>
+                    <strong>{item.label}</strong>
+                    <small>{item.id}</small>
+                  </span>
+                </label>
+              )}
+            </For>
+          </div>
+          <div class="account-dialog__actions">
+            <button class="btn btn-secondary" type="button" onClick={() => setPermissionDraftScopes([])}>
+              清空
+            </button>
+            <button class="btn btn-primary" type="button" onClick={confirmPermissions}>
+              保存权限
+            </button>
+          </div>
+        </DialogSurface>
+      </Show>
+      <Show when={resetPasswordUser()}>
+        <DialogSurface
+          ariaLabel="重置用户密码"
+          backdropClass="settings-overlay settings-overlay--center"
+          surfaceClass="settings-modal account-dialog"
+          initialFocusSelector="input[name='reset-password-value']"
+          onClose={closeResetPassword}
+        >
+          <div class="settings-modal__header">
+            <div>
+              <h3>重置密码</h3>
+              <p>{c.stringValue(resetPasswordUser()?.username)}</p>
+            </div>
+          </div>
+          <label class="executor-config-field">
+            <span class="executor-config-field__label">新密码</span>
+            <input
+              class="executor-config-field__input"
+              name="reset-password-value"
+              autocomplete="new-password"
+              type="password"
+              minLength={AUTH_PASSWORD_MIN_LENGTH}
+              value={c.resetPasswordValue()}
+              onInput={(e) => c.setResetPasswordValue(e.currentTarget.value)}
+            />
+          </label>
+          <div class="account-dialog__actions">
+            <button class="btn btn-secondary" type="button" onClick={closeResetPassword}>
+              取消
+            </button>
+            <button class="btn btn-primary" type="button" onClick={confirmResetPassword} disabled={c.resetPasswordValue().length < AUTH_PASSWORD_MIN_LENGTH}>
+              确认重置
+            </button>
+          </div>
+        </DialogSurface>
+      </Show>
     </div>
   )
 }
 
-const EmptyBlock: Component<{ icon: string; title: string; text: string }> = (props) => (
+const EmptyBlock: Component<{ icon: string; title: string; text?: string }> = (props) => (
   <div class="account-empty-state">
     <span class={`codicon codicon-${props.icon}`} aria-hidden="true" />
     <div>
       <strong>{props.title}</strong>
-      <p>{props.text}</p>
+      <Show when={props.text}>
+        <p>{props.text}</p>
+      </Show>
     </div>
   </div>
 )

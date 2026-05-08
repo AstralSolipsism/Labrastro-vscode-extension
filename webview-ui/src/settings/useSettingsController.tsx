@@ -1333,6 +1333,10 @@ function formatConnectionSaveResult(result: Record<string, unknown> | undefined)
   const requested = stringValue(result.hostUrlSaveRequested)
   const effective = stringValue(result.hostUrl)
   const source = stringValue(result.hostUrlSource, "unknown")
+  const status = stringValue(result.status)
+  if (status === "error") {
+    return undefined
+  }
   if (requested && (result.hostUrlSaveApplied !== true || effective !== requested)) {
     return `保存未生效：请求保存 ${requested}，当前实际请求 Host 仍是 ${effective || "未配置"}（来源：${source}）。`
   }
@@ -1376,7 +1380,6 @@ export function createSettingsController(props: SettingsViewProps) {
   const [newUserUsername, setNewUserUsername] = createSignal("")
   const [newUserPassword, setNewUserPassword] = createSignal("")
   const [newUserRole, setNewUserRole] = createSignal<"user" | "admin" | "superadmin">("user")
-  const [newUserScopes, setNewUserScopes] = createSignal("")
   const [resetPasswordUserId, setResetPasswordUserId] = createSignal("")
   const [resetPasswordValue, setResetPasswordValue] = createSignal("")
   const [auditEventType, setAuditEventType] = createSignal("")
@@ -2464,6 +2467,7 @@ const refreshAdmin = () => {
       return
     }
     setSaveLoading(true)
+    setSaveSuccess(false)
     const requestedHostUrl = validation.value
     setHostUrl(requestedHostUrl)
     setPendingHostSave(requestedHostUrl)
@@ -2476,11 +2480,6 @@ const refreshAdmin = () => {
       password: loginPassword(),
     })
     setLoginPassword("")
-    setTimeout(() => {
-      setSaveLoading(false)
-      setSaveSuccess(true)
-      setTimeout(() => setSaveSuccess(false), 1500)
-    }, 800)
   }
 
   const logoutConnection = () => {
@@ -2510,19 +2509,17 @@ const refreshAdmin = () => {
     setNewPassword("")
   }
   const createAuthUser = () => {
-    const scopes = newUserScopes()
-      .split(/[,\n]/)
-      .map((item) => item.trim())
-      .filter(Boolean)
     settingsMessages.createAuthUser(vscode, {
       username: newUserUsername().trim(),
       password: newUserPassword(),
       role: newUserRole(),
-      scopes,
+      scopes: [],
       enabled: true,
     })
     setNewUserPassword("")
   }
+  const updateAuthUserScopes = (userId: string, scopes: string[]) =>
+    settingsMessages.updateAuthUser(vscode, { user_id: userId, scopes })
   const disableAuthUser = (userId: string) => settingsMessages.disableAuthUser(vscode, userId)
   const resetAuthUserPassword = () => {
     if (!resetPasswordUserId() || !resetPasswordValue()) return
@@ -2764,6 +2761,12 @@ const refreshAdmin = () => {
     setHostUrlDirty(resolved.dirty)
     setHostUrlError(resolved.error)
     setHostUrlSyncLock(resolved.syncLock)
+    setSaveLoading(false)
+    const loginSucceeded = stringValue(result.status) === "ready" && result.authenticated === true
+    setSaveSuccess(loginSucceeded)
+    if (loginSucceeded) {
+      setTimeout(() => setSaveSuccess(false), 1500)
+    }
     setPendingHostSave(undefined)
   })
 
@@ -2878,8 +2881,6 @@ const refreshAdmin = () => {
     setNewUserPassword,
     newUserRole,
     setNewUserRole,
-    newUserScopes,
-    setNewUserScopes,
     resetPasswordUserId,
     setResetPasswordUserId,
     resetPasswordValue,
@@ -3156,6 +3157,7 @@ const refreshAdmin = () => {
     refreshAuthAudit,
     changePassword,
     createAuthUser,
+    updateAuthUserScopes,
     disableAuthUser,
     resetAuthUserPassword,
     revokeAuthDevice,

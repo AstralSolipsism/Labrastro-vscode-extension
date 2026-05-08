@@ -59,7 +59,6 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
       <div class="settings-page-header">
         <div>
           <h2>{t("executor.title")}</h2>
-          <p>{t("executor.description")}</p>
         </div>
         <RefreshButton class="btn-secondary" onClick={refreshAdmin} loading={refreshLoading()} loadingLabel={t("executor.refreshing")}>
           {t("executor.refreshStatus")}
@@ -120,7 +119,6 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
             <div class="settings-modal__header">
               <div>
                 <h3>{t("executor.picker.title")}</h3>
-                <p>{t("executor.picker.subtitle")}</p>
               </div>
               <button class="ez-icon-button" type="button" title="关闭" onClick={closeExecutorPicker}>
                 <span class="codicon codicon-close" aria-hidden="true" />
@@ -142,7 +140,6 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
                   <span class="codicon codicon-device-desktop" aria-hidden="true" />
                   <div>
                     <strong>本地</strong>
-                    <small>在本机运行执行器</small>
                   </div>
                 </button>
                 <button
@@ -153,7 +150,6 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
                   <span class="codicon codicon-cloud" aria-hidden="true" />
                   <div>
                     <strong>远端</strong>
-                    <small>连接远程服务</small>
                   </div>
                 </button>
               </div>
@@ -217,7 +213,6 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
             <span class="codicon codicon-tools" aria-hidden="true" />
             <div>
               <strong>{executorEngineOption().label} 执行器正在建设中</strong>
-              <p>该执行器引擎尚未实现，敬请期待。当前可使用 Labrastro 执行器。</p>
             </div>
           </section>
         }
@@ -229,7 +224,6 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
               <span class="codicon codicon-radio-tower" aria-hidden="true" />
               <div>
                 <strong>{t("executor.remote.title")}</strong>
-                <small>{t("executor.remote.desc")}</small>
               </div>
             </div>
 
@@ -331,7 +325,7 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
                     <span class="codicon codicon-key" aria-hidden="true" />
                     密码
                   </span>
-                  <input class="executor-config-field__input" value={loginPassword()} type="password" placeholder={t("provider.apiKeyPlaceholder")} onInput={(event) => setLoginPassword(event.currentTarget.value)} />
+                  <input class="executor-config-field__input" value={loginPassword()} type="password" placeholder={t("executor.remote.passwordPlaceholder")} onInput={(event) => setLoginPassword(event.currentTarget.value)} />
                 </label>
               </div>
               </Show>
@@ -369,7 +363,6 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
             <span class="codicon codicon-device-desktop" aria-hidden="true" />
             <div>
               <strong>{t("executor.local.title")}</strong>
-              <p>{t("executor.local.desc")}</p>
             </div>
           </section>
         </Show>

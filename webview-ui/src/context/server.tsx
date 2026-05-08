@@ -12,7 +12,7 @@
 
 import { createContext, useContext, createSignal, onMount, onCleanup, ParentComponent } from "solid-js"
 import { useVSCode, type ExtensionMessage } from "./vscode"
-import { setLocale, resolveLocale } from "../i18n"
+import { setLocale, resolveLocale, t } from "../i18n"
 
 // ─────────────────────────────────────────────────────────────
 // 类型定义
@@ -58,6 +58,37 @@ function ingestLogs(value: unknown): Record<string, unknown>[] {
     : []
 }
 
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {}
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : ""
+}
+
+function authErrorCode(payload: Record<string, unknown>): string {
+  const direct = stringValue(payload.code) || stringValue(payload.error)
+  if (direct) return direct
+  const body = objectValue(payload.body)
+  const nested = stringValue(body.error) || stringValue(body.code)
+  if (nested) return nested
+  const message = stringValue(payload.message)
+  const match = message.match(/^\d{3}\s+([a-z0-9_:-]+)/i)
+  return match?.[1] || ""
+}
+
+function authErrorMessage(payload: Record<string, unknown>): string | undefined {
+  const code = authErrorCode(payload)
+  if (code) {
+    const key = `auth.error.${code}`
+    const localized = t(key)
+    if (localized !== key) return localized
+  }
+  const raw = stringValue(payload.message)
+  if (!raw) return t("auth.error.generic")
+  return t("auth.error.genericWithMessage", { message: raw })
+}
+
 // ─────────────────────────────────────────────────────────────
 // Provider 实现
 // ─────────────────────────────────────────────────────────────
@@ -81,7 +112,7 @@ export const ServerProvider: ParentComponent = (props) => {
   const [authDevicesState, setAuthDevicesState] = createSignal<Record<string, unknown> | undefined>()
   const [authAuditState, setAuthAuditState] = createSignal<Record<string, unknown> | undefined>()
   const [authActionResult, setAuthActionResult] = createSignal<Record<string, unknown> | undefined>()
-  const [authError, setAuthError] = createSignal<string | undefined>()
+  const [authErrorPayload, setAuthErrorPayload] = createSignal<Record<string, unknown> | undefined>()
   const [toolchainState, setToolchainState] = createSignal<Record<string, unknown> | undefined>()
   const [toolchainActionResult, setToolchainActionResult] = createSignal<Record<string, unknown> | undefined>()
   const [toolchainError, setToolchainError] = createSignal<string | undefined>()
@@ -142,22 +173,23 @@ export const ServerProvider: ParentComponent = (props) => {
       }
       if (msg.type === "auth.users" && typeof msg.payload === "object" && msg.payload) {
         setAuthUsersState(msg.payload as Record<string, unknown>)
-        setAuthError(undefined)
+        setAuthErrorPayload(undefined)
       }
       if (msg.type === "auth.devices" && typeof msg.payload === "object" && msg.payload) {
         setAuthDevicesState(msg.payload as Record<string, unknown>)
-        setAuthError(undefined)
+        setAuthErrorPayload(undefined)
       }
       if (msg.type === "auth.audit" && typeof msg.payload === "object" && msg.payload) {
         setAuthAuditState(msg.payload as Record<string, unknown>)
-        setAuthError(undefined)
+        setAuthErrorPayload(undefined)
       }
       if (msg.type === "auth.actionResult" && typeof msg.payload === "object" && msg.payload) {
         setAuthActionResult(msg.payload as Record<string, unknown>)
-        setAuthError(undefined)
+        setAuthErrorPayload(undefined)
       }
       if (msg.type === "auth.error") {
-        setAuthError(typeof msg.message === "string" ? msg.message : "Auth request failed")
+        const payload = objectValue(msg.payload)
+        setAuthErrorPayload(Object.keys(payload).length > 0 ? payload : { message: stringValue(msg.message) })
       }
       if (msg.type === "toolchain.state" && typeof msg.payload === "object" && msg.payload) {
         setToolchainState(msg.payload as Record<string, unknown>)
@@ -264,7 +296,10 @@ export const ServerProvider: ParentComponent = (props) => {
     authDevicesState,
     authAuditState,
     authActionResult,
-    authError,
+    authError: () => {
+      const payload = authErrorPayload()
+      return payload ? authErrorMessage(payload) : undefined
+    },
     toolchainState,
     toolchainActionResult,
     toolchainError,

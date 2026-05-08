@@ -24,7 +24,6 @@ export const SettingsShell: Component<SettingsShellProps> = (props) => {
             <span class="codicon codicon-settings-gear" aria-hidden="true" />
             {t("settings.title")}
           </h1>
-          <p>{t("settings.subtitle")}</p>
         </div>
         <span class="settings-version">v{controller.server.extensionVersion() || "0.0.0"}</span>
       </div>

@@ -80,7 +80,6 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
       <div class="settings-page-header">
         <div>
           <h2>{t("agentConfig.title")}</h2>
-          <p>{t("agentConfig.desc")}</p>
         </div>
         <div class="settings-actions settings-actions--right">
           <RefreshButton class="btn-secondary" onClick={refreshServerSettings}>
@@ -109,7 +108,6 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
           <span>{t("agentConfig.profiles")}</span>
           <StatusBadge tone="muted">{String(Object.keys(profileDrafts()).length)}</StatusBadge>
         </div>
-        <p class="settings-empty-note">{t("agentConfig.profiles.desc")}</p>
         <div class="settings-master-detail">
           <div class="settings-master-list">
             <div class="settings-master-actions">
@@ -259,7 +257,6 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
           <span>{t("agentConfig.agents")}</span>
           <StatusBadge tone="muted">{String(Object.keys(agentDrafts()).length)}</StatusBadge>
         </div>
-        <p class="settings-empty-note">{t("agentConfig.agents.desc")}</p>
         <div class="settings-master-detail">
           <div class="settings-master-list">
             <div class="settings-master-actions">
@@ -393,7 +390,6 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
             {selectedRuntimeTaskId() || t("agentConfig.runtimeTest.idle")}
           </StatusBadge>
         </div>
-        <p class="settings-empty-note">{t("agentConfig.runtimeTest.desc")}</p>
         <div class="settings-form-grid">
           <label class="field-label field-label--full"><span>{t("agentConfig.runtimeTest.prompt")}</span>
             <textarea rows={4} value={runtimePrompt()} onInput={(e) => setRuntimePrompt(e.currentTarget.value)} />

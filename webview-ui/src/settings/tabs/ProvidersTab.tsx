@@ -90,6 +90,8 @@ export const ProvidersTab: Component<TabProps> = (props) => {
   const [kindSearch, setKindSearch] = createSignal("")
   const [customModelInlineOpen, setCustomModelInlineOpen] = createSignal(false)
   const [copiedModelId, setCopiedModelId] = createSignal("")
+  const [apiKeyDisplay, setApiKeyDisplay] = createSignal("")
+  const [apiKeyDisplaySource, setApiKeyDisplaySource] = createSignal("")
   let kindSelectorRef: HTMLDivElement | undefined
   let kindSearchRef: HTMLInputElement | undefined
   let customModelInputRef: HTMLInputElement | undefined
@@ -104,12 +106,10 @@ export const ProvidersTab: Component<TabProps> = (props) => {
     if (!provider) return ""
     return stringValue(provider.api_key_hint) || stringValue(provider.apiKeyHint)
   })
-  const showSavedApiKeyMask = createMemo(() => Boolean(savedApiKeyHint()) && !providerApiKey())
-  const apiKeyHelpText = createMemo(() =>
-    savedApiKeyHint()
-      ? "已保存 API Key。只有输入新值并保存时才会替换。"
-      : "保存到 host 配置；前端不回显明文。"
-  )
+  const selectedProviderKey = createMemo(() => {
+    const provider = selectedProvider()
+    return provider ? `${stringValue(provider.id)}\n${savedApiKeyHint()}` : ""
+  })
   const modelRefreshing = createMemo(() => modelFetchMessage().startsWith("正在"))
   const filteredProviderKinds = createMemo(() => {
     const query = kindSearch().trim().toLowerCase()
@@ -223,6 +223,14 @@ export const ProvidersTab: Component<TabProps> = (props) => {
     copyResetTimer = window.setTimeout(() => setCopiedModelId(""), 1800)
   }
 
+  const setApiKeyDraft = (value: string) => {
+    setApiKeyDisplay(value)
+    setProviderApiKey(value === savedApiKeyHint() ? "" : value)
+  }
+
+  const shouldReplaceSavedApiKeyHint = () =>
+    Boolean(savedApiKeyHint() && apiKeyDisplay() === savedApiKeyHint() && !providerApiKey())
+
   const handleDocumentPointerDown = (event: MouseEvent) => {
     if (!kindMenuOpen() || !kindSelectorRef) return
     if (!kindSelectorRef.contains(event.target as Node)) setKindMenuOpen(false)
@@ -239,6 +247,15 @@ export const ProvidersTab: Component<TabProps> = (props) => {
   createEffect(() => {
     if (draftProviderActive() && providerId() && savedProviderIds().has(providerId())) {
       setDraftProviderActive(false)
+    }
+  })
+
+  createEffect(() => {
+    const source = selectedProviderKey()
+    if (source !== apiKeyDisplaySource()) {
+      setApiKeyDisplaySource(source)
+      setApiKeyDisplay(savedApiKeyHint())
+      setProviderApiKey("")
     }
   })
 
@@ -273,7 +290,6 @@ export const ProvidersTab: Component<TabProps> = (props) => {
       <div class="settings-page-header">
         <div>
           <h2>{t("provider.title")}</h2>
-          <p>服务商只负责连接、凭据和模型目录；具体 Agent 使用哪个模型在 Agent 配置页选择。</p>
           <p class="setting-description">
             实际请求 Host：{stringValue(server.connectionState().hostUrl, "未配置")} · Admin：
             {adminUsable() ? "可用" : t("executor.status.unavailable")} · 最近刷新：{server.adminStateUpdatedAt() || "尚未刷新"}
@@ -300,7 +316,6 @@ export const ProvidersTab: Component<TabProps> = (props) => {
         <div class="settings-action-result">
           <div>
             <strong>服务商管理请求会发送到当前执行器</strong>
-            <small>当前仍是默认本机地址；中心化 host 在服务器时需要先到“执行器管理”页保存服务器 Host URL。</small>
           </div>
         </div>
       </Show>
@@ -319,7 +334,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
             <StatusBadge>{String(providerListCount())}</StatusBadge>
           </div>
           <div class="provider-list">
-            <Show when={providerListCount()} fallback={<p class="settings-empty-note">暂无服务商，点击“新增服务商”开始配置。</p>}>
+            <Show when={providerListCount()} fallback={<p class="settings-empty-note">暂无服务商</p>}>
               <Show when={draftProviderVisible()}>
                 <button
                   type="button"
@@ -374,11 +389,6 @@ export const ProvidersTab: Component<TabProps> = (props) => {
           <div class="settings-editor-header">
             <div>
               <h3>{providerId() || "新服务商"}</h3>
-              <p>
-                {draftProviderVisible()
-                  ? "草稿已出现在左侧；保存后可刷新和维护模型目录。"
-                  : providerBaseUrl() || "选择服务商类型，填写 API Base URL 后保存。"}
-              </p>
             </div>
             <div class="settings-actions settings-actions--right">
               <Show when={selectedProvider()} fallback={<StatusBadge tone="success">保存后默认启用</StatusBadge>}>
@@ -460,33 +470,48 @@ export const ProvidersTab: Component<TabProps> = (props) => {
               <label class="field-label">
                 <span>服务商名称</span>
                 <input class="setting-input" value={providerId()} placeholder="deepseek" onInput={(event) => updateProviderId(event.currentTarget.value)} />
-                <small>用于区分不同服务商，建议使用英文或拼音。</small>
               </label>
               <label class="field-label">
                 <span>API Base URL</span>
                 <input class="setting-input" value={providerBaseUrl()} placeholder="https://api.example.com/v1" onInput={(event) => updateProviderBaseUrl(event.currentTarget.value)} />
-                <small>服务商或网关的 HTTP 地址；协议由上方服务商类型映射。</small>
               </label>
               <label class="field-label">
                 <span>API Key</span>
-                <span class={`provider-secret-input ${showSavedApiKeyMask() ? "provider-secret-input--masked" : ""}`}>
-                  <input
-                    class="setting-input"
-                    value={providerApiKey()}
-                    type="password"
-                    autocomplete="new-password"
-                    placeholder={savedApiKeyHint() ? "输入新 API Key 以替换" : "填写 API Key"}
-                    aria-describedby="provider-api-key-help"
-                    onInput={(event) => setProviderApiKey(event.currentTarget.value)}
-                  />
-                  <Show when={showSavedApiKeyMask()}>
-                    <span class="provider-secret-mask" aria-hidden="true">
-                      <span class="codicon codicon-lock" aria-hidden="true" />
-                      <span>•••••••••••• {savedApiKeyHint()}</span>
-                    </span>
-                  </Show>
-                </span>
-                <small id="provider-api-key-help">{apiKeyHelpText()}</small>
+                <input
+                  class="setting-input"
+                  value={apiKeyDisplay()}
+                  type="text"
+                  autocomplete="off"
+                  spellcheck={false}
+                  placeholder="API Key"
+                  onFocus={(event) => {
+                    if (savedApiKeyHint() && apiKeyDisplay() === savedApiKeyHint()) {
+                      setTimeout(() => event.currentTarget.select(), 0)
+                    }
+                  }}
+                  onKeyDown={(event) => {
+                    if (!shouldReplaceSavedApiKeyHint()) return
+                    if (event.metaKey || event.ctrlKey || event.altKey) return
+                    if (event.key === "Backspace" || event.key === "Delete") {
+                      event.preventDefault()
+                      setApiKeyDraft("")
+                      return
+                    }
+                    if (event.key.length === 1) {
+                      event.preventDefault()
+                      setApiKeyDraft(event.key)
+                    }
+                  }}
+                  onPaste={(event) => {
+                    if (!shouldReplaceSavedApiKeyHint()) return
+                    const text = event.clipboardData?.getData("text") || ""
+                    event.preventDefault()
+                    setApiKeyDraft(text)
+                  }}
+                  onInput={(event) => {
+                    setApiKeyDraft(event.currentTarget.value)
+                  }}
+                />
               </label>
             </div>
             <details class="settings-details provider-advanced-protocol">
@@ -587,7 +612,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
               </div>
             </Show>
             <Show when={!selectedProvider()}>
-              <p class="settings-empty-note">新增服务商保存后，模型目录操作会自动可用。</p>
+              <p class="settings-empty-note">保存服务商后可刷新模型目录</p>
             </Show>
             <div class="settings-inline-form">
               <input class="setting-input" value={modelSearch()} placeholder="搜索模型" onInput={(event) => setModelSearch(event.currentTarget.value)} />
@@ -604,8 +629,8 @@ export const ProvidersTab: Component<TabProps> = (props) => {
                 <strong>{modelEmptyTitle()}</strong>
                 <small>
                   {selectedProvider() && showCustomModelFallback()
-                    ? "当前服务商无法给出模型清单时，可手动添加模型名并测试连接。"
-                    : "换个关键词搜索，或清空搜索后重试。"}
+                    ? "可手动添加模型名"
+                    : "无匹配模型"}
                 </small>
                 <div class="settings-actions">
                   <Show when={modelSearch().trim()}>
@@ -660,12 +685,10 @@ export const ProvidersTab: Component<TabProps> = (props) => {
                 复制服务商
               </button>
             </div>
-            <p class="settings-empty-note">复制用于基于当前连接配置创建另一个 provider id。</p>
           </details>
 
           <div class="settings-section settings-section--flat danger-zone">
             <div class="settings-section-heading">危险区</div>
-            <p class="settings-empty-note">删除服务商前，后端会检查引用关系。</p>
             <button class="btn btn-danger" type="button" onClick={deleteProvider} disabled={!selectedProvider() || !adminUsable()}>
               <span class="codicon codicon-trash" aria-hidden="true" />
               删除服务商
