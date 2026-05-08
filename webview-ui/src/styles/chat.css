@@ -1574,7 +1574,7 @@
 .approval-strip__item {
   min-width: 0;
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr) max-content max-content max-content;
+  grid-template-columns: 16px minmax(0, 1fr);
   align-items: start;
   gap: 6px;
   padding: 6px 7px;
@@ -1584,6 +1584,7 @@
 }
 
 .approval-strip__item .codicon {
+  margin-top: 1px;
   color: var(--ez-warning);
 }
 
@@ -1616,6 +1617,14 @@
 .approval-strip__body small {
   color: var(--ez-muted);
   font-size: 10px;
+}
+
+.approval-strip__actions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
 }
 
 .approval-strip__item button {
@@ -2009,7 +2018,6 @@
   }
 
   .approval-strip__item button {
-    grid-column: 2;
     width: fit-content;
   }
 

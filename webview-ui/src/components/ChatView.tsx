@@ -34,7 +34,11 @@ import {
   resolveModeSelection,
   shouldAcceptModelSwitchResponse,
 } from "../chat/chatState"
-import { evaluateCommandDecision, updateCommandRuleLists } from "../utils/command-auto-approval"
+import {
+  defaultCommandRuleCandidateRules,
+  evaluateCommandDecision,
+  updateCommandRuleLists,
+} from "../utils/command-auto-approval"
 import {
   appendShellOutputChunk,
   buildShellOutputText,
@@ -42,7 +46,7 @@ import {
   reconcileShellFinalOutput,
   shellChunksFromText,
 } from "../utils/shell-tool-output"
-import { isLocalDraftSessionId } from "../utils/session-history"
+import { isLocalDraftSessionId, remoteSessionIdForMutation } from "../utils/session-history"
 import type { MockMessage, MockPart } from "./chat/mock-data"
 
 interface PendingApproval extends ApprovalDetails {
@@ -86,6 +90,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const [workingText, setWorkingText] = createSignal("正在处理")
   const [workingElapsed, setWorkingElapsed] = createSignal("0:00")
   const [activeChatId, setActiveChatId] = createSignal<string | undefined>()
+  const [activeRunSessionId, setActiveRunSessionId] = createSignal("")
   const [chatStatus, setChatStatus] = createSignal<"idle" | "running" | "stopping" | "cancelled" | "done" | "error">("idle")
   const [pendingCancel, setPendingCancel] = createSignal(false)
   const [environmentRunQueue, setEnvironmentRunQueue] = createSignal<EnvironmentQueueItem[]>([])
@@ -111,6 +116,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const [rememberingApprovalId, setRememberingApprovalId] = createSignal("")
   const [selectedMode, setSelectedMode] = createSignal("")
   const [selectedModelProfile, setSelectedModelProfile] = createSignal("")
+  const [localModelOverrideProfile, setLocalModelOverrideProfile] = createSignal("")
   const [sessionRuntimeState, setSessionRuntimeState] = createSignal<Record<string, unknown>>({})
   const [modelSwitching, setModelSwitching] = createSignal(false)
   const [modelSwitchError, setModelSwitchError] = createSignal("")
@@ -257,13 +263,29 @@ const ChatView: Component<ChatViewProps> = (props) => {
     const option = modelOptions().find((item) => item.id === nextProfile)
     if (!option) return false
     const sessionId = trace.currentSessionId()
-    const remoteSessionId = sessionId && !isLocalDraftSessionId(sessionId) ? sessionId : undefined
+    const remoteSessionId = remoteSessionIdForMutation(sessionId)
     const requestId = `model-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    setModelRollbackProfile((current) => current || selectedModelProfile())
+    const previousProfile = selectedModelProfile()
     setSelectedModelProfile(nextProfile)
+    setModelSwitchError("")
+    if (!remoteSessionId) {
+      clearModelSwitchTimer()
+      setLocalModelOverrideProfile(nextProfile)
+      setModelSwitching(false)
+      setModelSwitchRequestId("")
+      setModelRollbackProfile("")
+      setPendingModelProfile("")
+      trace.patchStats({
+        model: option.modelId || trace.stats().model,
+      })
+      if (environmentRunQueue().length) window.setTimeout(startNextEnvironmentQueueItem, 0)
+      return true
+    }
+
+    setLocalModelOverrideProfile("")
+    setModelRollbackProfile((current) => current || previousProfile)
     setModelSwitching(true)
     setModelSwitchRequestId(requestId)
-    setModelSwitchError("")
     startModelSwitchTimer(requestId)
     chatMessages.switchSessionMainModel(vscode, {
       sessionId: remoteSessionId,
@@ -286,9 +308,13 @@ const ChatView: Component<ChatViewProps> = (props) => {
     options: { startNextEnvironment?: boolean } = {},
   ) => {
     setIsWorking(false)
+    setActiveRunSessionId("")
     setChatStatus(nextStatus)
     setActiveChatId(undefined)
     setPendingCancel(false)
+    setPendingApprovals([])
+    setSelectedApproval(undefined)
+    setRememberingApprovalId("")
     trace.patchStats({ runStatus: nextStatus })
     stopTimer()
     const queuedSwitchStarted = applyQueuedModelSwitch()
@@ -296,6 +322,26 @@ const ChatView: Component<ChatViewProps> = (props) => {
       window.setTimeout(startNextEnvironmentQueueItem, 0)
     }
   }
+
+  const currentRunSessionMatches = () => {
+    const sessionId = trace.currentSessionId()
+    const runSessionId = activeRunSessionId()
+    return Boolean(sessionId && runSessionId && sessionId === runSessionId)
+  }
+
+  const visibleIsWorking = () => isWorking() && currentRunSessionMatches()
+  const visiblePendingApprovals = () => (currentRunSessionMatches() ? pendingApprovals() : [])
+
+  const clearCurrentSession = () => {
+    trace.clearSession()
+    setSelectedApproval(undefined)
+  }
+
+  createEffect(() => {
+    if (selectedApproval() && !currentRunSessionMatches()) {
+      setSelectedApproval(undefined)
+    }
+  })
 
   const currentAssistantMessages = (): MockMessage[] => {
     const turns = trace.turns()
@@ -525,12 +571,23 @@ const ChatView: Component<ChatViewProps> = (props) => {
       const currentSessionId = trace.currentSessionId()
       if (
         remoteSessionId &&
+        activeRunSessionId() &&
+        isLocalDraftSessionId(activeRunSessionId()) &&
+        currentSessionId === remoteSessionId
+      ) {
+        setActiveRunSessionId(remoteSessionId)
+      }
+      if (
+        remoteSessionId &&
         currentSessionId &&
         remoteSessionId !== currentSessionId &&
         !isLocalDraftSessionId(currentSessionId)
       ) {
         appendTextPart(`会话绑定异常：远端返回 ${remoteSessionId}，当前会话是 ${currentSessionId}`, "error")
         setIsWorking(false)
+        setActiveRunSessionId("")
+        setPendingApprovals([])
+        setSelectedApproval(undefined)
         stopTimer()
         return
       }
@@ -757,6 +814,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   }
 
   const selectSession = (sessionId: string) => {
+    setSelectedApproval(undefined)
     trace.loadSession(sessionId)
     props.onHistoryClose?.()
   }
@@ -792,8 +850,11 @@ const ChatView: Component<ChatViewProps> = (props) => {
       trace.startDraftTask(text)
       sessionId = trace.currentSessionId()
     }
-    const remoteSessionId = sessionId && !isLocalDraftSessionId(sessionId) ? sessionId : undefined
+    const remoteSessionId = remoteSessionIdForMutation(sessionId)
     const draftSessionId = sessionId && isLocalDraftSessionId(sessionId) ? sessionId : undefined
+    const startupModelOverride = !remoteSessionId
+      ? modelOptions().find((item) => item.id === localModelOverrideProfile())
+      : undefined
 
     trace.appendTurn({
       userMessage: {
@@ -807,6 +868,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     })
 
     setIsWorking(true)
+    setActiveRunSessionId(sessionId || "")
     setPendingCancel(false)
     setActiveChatId(undefined)
     setChatStatus("running")
@@ -819,6 +881,13 @@ const ChatView: Component<ChatViewProps> = (props) => {
       text,
       sessionId: remoteSessionId,
       draftSessionId,
+      ...(startupModelOverride
+        ? {
+            providerId: startupModelOverride.providerId,
+            modelId: startupModelOverride.modelId,
+            parameters: startupModelOverride.parameters,
+          }
+        : {}),
       ...route,
     })
   }
@@ -852,10 +921,11 @@ const ChatView: Component<ChatViewProps> = (props) => {
   }
 
   const startEnvironmentQueueItem = (item: EnvironmentQueueItem) => {
-    const sessionId = trace.currentSessionId()
+    let sessionId = trace.currentSessionId()
 
     if (!sessionId) {
       trace.startDraftTask(item.text)
+      sessionId = trace.currentSessionId()
     }
 
     trace.appendTurn({
@@ -870,6 +940,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     })
 
     setIsWorking(true)
+    setActiveRunSessionId(sessionId || "")
     setPendingCancel(false)
     setActiveChatId(undefined)
     setChatStatus("running")
@@ -991,6 +1062,12 @@ const ChatView: Component<ChatViewProps> = (props) => {
     window.setTimeout(() => setRememberingApprovalId(""), 0)
   }
 
+  const quickRememberApprovalDecision = (approval: PendingApproval, decision: ApprovalDecision) => {
+    const rules = defaultCommandRuleCandidateRules(extractApprovalCommand(approval))
+    if (!rules.length) return
+    rememberApprovalDecision(approval, decision, rules)
+  }
+
   const openApprovalDetails = (approval: PendingApproval) => {
     setSelectedApproval(approval)
   }
@@ -1018,9 +1095,21 @@ const ChatView: Component<ChatViewProps> = (props) => {
         (msg.type === "session.loaded" || msg.type === "session.created" || msg.type === "session.state") &&
         typeof msg.sessionId === "string"
       ) {
+        if (remoteSessionIdForMutation(msg.sessionId)) {
+          setLocalModelOverrideProfile("")
+        }
         const runtime = objectValue(msg.runtimeState || msg.runtime_state)
         if (Object.keys(runtime).length) {
           setSessionRuntimeState(runtime)
+        }
+      }
+      if (msg.type === "session.adopted" && typeof msg.sessionId === "string") {
+        const previousSessionId = typeof msg.previousSessionId === "string" ? msg.previousSessionId : ""
+        if (
+          activeRunSessionId() === previousSessionId ||
+          (activeRunSessionId() && isLocalDraftSessionId(activeRunSessionId()))
+        ) {
+          setActiveRunSessionId(msg.sessionId)
         }
       }
       if (msg.type === "session.model.state") {
@@ -1040,6 +1129,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         const activeProfile = providerId && modelId ? modelOptionId(providerId, modelId) : ""
         if (Object.keys(runtime).length) setSessionRuntimeState(runtime)
         if (activeProfile) setSelectedModelProfile(activeProfile)
+        setLocalModelOverrideProfile("")
         trace.patchStats({
           model: modelId || stringValue(runtime.model) || trace.stats().model,
           contextWindow: numberValue(activeModel.max_context_tokens) ?? trace.stats().contextWindow,
@@ -1089,9 +1179,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
         finishChatRun(chatStatus() === "cancelled" ? "cancelled" : "done", { startNextEnvironment: true })
       }
       if (msg.type === "chat.cancelled") {
-        setChatStatus("stopping")
-        setWorkingText("正在停止")
-        trace.patchStats({ runStatus: "stopping" })
+        markActiveToolsCancelled()
+        finishChatRun("cancelled")
       }
       if (msg.type === "environment.run.error" && isWorking()) {
         appendTextPart(`环境任务失败：${typeof msg.message === "string" ? msg.message : "unknown error"}`, "error")
@@ -1132,9 +1221,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
         activeTraceNodeId={trace.activeTraceNodeId()}
         selectedTraceNodeId={trace.selectedTraceNodeId()}
         traceLocale="zh-CN"
-        isWorking={isWorking()}
+        isWorking={visibleIsWorking()}
         onCompact={() => handleSessionCommand("/compact")}
-        onClose={() => trace.clearSession()}
+        onClose={clearCurrentSession}
         onStop={handleStop}
         onTraceNodeClick={focusTraceNode}
       />
@@ -1143,11 +1232,11 @@ const ChatView: Component<ChatViewProps> = (props) => {
         <MessageList
           turns={trace.turns()}
           recentSessions={trace.recentSessions()}
-          isWorking={isWorking()}
+          isWorking={visibleIsWorking()}
           workingText={workingText()}
           workingElapsed={workingElapsed()}
           selectedTraceNodeId={trace.selectedTraceNodeId()}
-          onSelectSession={trace.loadSession}
+          onSelectSession={selectSession}
           onTraceNodeSelect={focusTraceNode}
         />
       </main>
@@ -1158,11 +1247,14 @@ const ChatView: Component<ChatViewProps> = (props) => {
           allowedCommands={autoApprovalAllowedCommands()}
           onToggleOption={handleToggleApproveOption}
         />
-        <Show when={pendingApprovals().length > 0}>
+        <Show when={visiblePendingApprovals().length > 0}>
           <div class="approval-strip">
-            <For each={pendingApprovals()}>
+            <For each={visiblePendingApprovals()}>
               {(approval) => {
                 const summary = () => approvalSummary(approval)
+                const quickRememberRules = () => defaultCommandRuleCandidateRules(extractApprovalCommand(approval))
+                const canQuickRemember = () => summary().category === "execute" && quickRememberRules().length > 0
+                const remembering = () => rememberingApprovalId() === approval.approvalId
                 return (
                   <div class="approval-strip__item">
                     <span class={`codicon codicon-${summary().icon}`} aria-hidden="true" />
@@ -1171,9 +1263,29 @@ const ChatView: Component<ChatViewProps> = (props) => {
                       <span>{summary().primary}</span>
                       <small>{summary().secondary}</small>
                     </span>
-                    <button type="button" onClick={() => openApprovalDetails(approval)}>查看详情</button>
-                    <button type="button" onClick={() => replyApproval(approval, "allow_once")}>批准一次</button>
-                    <button type="button" onClick={() => replyApproval(approval, "deny_once")}>拒绝</button>
+                    <div class="approval-strip__actions">
+                      <button type="button" onClick={() => openApprovalDetails(approval)}>查看详情</button>
+                      <Show when={canQuickRemember()}>
+                        <button
+                          type="button"
+                          disabled={remembering()}
+                          onClick={() => quickRememberApprovalDecision(approval, "allow_once")}
+                        >
+                          {remembering() ? "写入中..." : "批准并记住"}
+                        </button>
+                      </Show>
+                      <button type="button" onClick={() => replyApproval(approval, "allow_once")}>批准一次</button>
+                      <Show when={canQuickRemember()}>
+                        <button
+                          type="button"
+                          disabled={remembering()}
+                          onClick={() => quickRememberApprovalDecision(approval, "deny_once")}
+                        >
+                          {remembering() ? "写入中..." : "拒绝并记住"}
+                        </button>
+                      </Show>
+                      <button type="button" onClick={() => replyApproval(approval, "deny_once")}>拒绝</button>
+                    </div>
                   </div>
                 )
               }}
