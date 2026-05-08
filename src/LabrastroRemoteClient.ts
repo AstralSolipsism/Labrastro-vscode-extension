@@ -17,12 +17,15 @@ import {
 export type JsonObject = Record<string, unknown>
 
 export const CHAT_STREAM_TIMEOUT_SEC = 10
+const LEGACY_AUTH_SESSION_KEY = "labrastro.authSession"
 
 export interface BackendCapabilities {
   ok: boolean
   apiVersion: number
   serverVersion: string
   sessions: boolean
+  sessionAutoSave: boolean
+  sessionHistoryWritable: boolean
   chatStream: boolean
   taskflow: boolean
   issueAssignment: boolean
@@ -127,6 +130,7 @@ export class LabrastroRemoteClient {
   private peerStartupGeneration = 0
   private accessToken: string | undefined
   private accessTokenExpiresAt = 0
+  private refreshAccessTokenPromise: Promise<string> | undefined
 
   constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -610,7 +614,21 @@ export class LabrastroRemoteClient {
     return this.refreshAccessToken()
   }
 
-  private async refreshAccessToken(): Promise<string> {
+  private refreshAccessToken(): Promise<string> {
+    if (this.refreshAccessTokenPromise) {
+      return this.refreshAccessTokenPromise
+    }
+    const refresh = this.refreshAccessTokenOnce()
+    const sharedRefresh = refresh.finally(() => {
+      if (this.refreshAccessTokenPromise === sharedRefresh) {
+        this.refreshAccessTokenPromise = undefined
+      }
+    })
+    this.refreshAccessTokenPromise = sharedRefresh
+    return sharedRefresh
+  }
+
+  private async refreshAccessTokenOnce(): Promise<string> {
     const session = await this.storedAuthSession()
     if (!session?.refreshToken) {
       throw new RemoteError(401, "unauthorized", "Login required", {})
@@ -621,17 +639,39 @@ export class LabrastroRemoteClient {
       })
       await this.storeAuthSession(response)
       if (!this.accessToken) {
-        throw new RemoteError(401, "unauthorized", "Login refresh failed", response)
+        throw new Error("Invalid auth response from Labrastro Host.")
       }
       return this.accessToken
     } catch (error) {
       await this.clearAuthSession()
+      if (
+        isRemoteError(error, "invalid_refresh_token", 401) ||
+        isRemoteError(error, "unauthorized", 401)
+      ) {
+        throw new RemoteError(401, "unauthorized", "登录已失效，请重新登录。", error.body)
+      }
       throw error
     }
   }
 
   private async storedAuthSession(): Promise<StoredAuthSession | undefined> {
-    const raw = await this.context.secrets.get("labrastro.authSession")
+    const key = this.authSessionKey()
+    const raw = await this.context.secrets.get(key)
+    const session = this.parseStoredAuthSession(raw)
+    if (session?.hostUrl === this.hostUrl) {
+      return session
+    }
+    if (raw) {
+      await this.context.secrets.delete(key)
+    }
+    const legacyRaw = await this.context.secrets.get(LEGACY_AUTH_SESSION_KEY)
+    if (legacyRaw) {
+      await this.context.secrets.delete(LEGACY_AUTH_SESSION_KEY)
+    }
+    return undefined
+  }
+
+  private parseStoredAuthSession(raw: string | undefined): StoredAuthSession | undefined {
     if (!raw) return undefined
     try {
       const parsed = JSON.parse(raw) as Record<string, unknown>
@@ -668,13 +708,19 @@ export class LabrastroRemoteClient {
     }
     this.accessToken = accessToken
     this.accessTokenExpiresAt = numberValue(response.access_expires_at) || 0
-    await this.context.secrets.store("labrastro.authSession", JSON.stringify(session))
+    await this.context.secrets.store(this.authSessionKey(), JSON.stringify(session))
+    await this.context.secrets.delete(LEGACY_AUTH_SESSION_KEY)
   }
 
   private async clearAuthSession(): Promise<void> {
     this.accessToken = undefined
     this.accessTokenExpiresAt = 0
-    await this.context.secrets.delete("labrastro.authSession")
+    await this.context.secrets.delete(this.authSessionKey())
+    await this.context.secrets.delete(LEGACY_AUTH_SESSION_KEY)
+  }
+
+  private authSessionKey(hostUrl = this.hostUrl): string {
+    return `labrastro.authSession.${Buffer.from(hostUrl).toString("base64url")}`
   }
 
   private connectionStatePayload(
@@ -953,6 +999,11 @@ function normalizeBackendCapabilities(payload: JsonObject): BackendCapabilities 
     apiVersion: numberValue(payload.api_version) ?? 0,
     serverVersion: typeof payload.server_version === "string" ? payload.server_version : "",
     sessions: capabilities.sessions === true,
+    sessionAutoSave: capabilities.session_auto_save !== false,
+    sessionHistoryWritable:
+      capabilities.session_history_writable === false
+        ? false
+        : capabilities.sessions === true,
     chatStream: capabilities.chat_stream === true,
     taskflow: capabilities.taskflow === true,
     issueAssignment: capabilities.issue_assignment === true,

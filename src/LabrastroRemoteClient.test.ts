@@ -83,6 +83,13 @@ beforeEach(() => {
 })
 
 const tempDirs: string[] = []
+const DEFAULT_TEST_HOST_URL = "http://127.0.0.1:8765"
+const LEGACY_AUTH_SESSION_KEY = "labrastro.authSession"
+const DEFAULT_AUTH_SESSION_KEY = authSessionKey(DEFAULT_TEST_HOST_URL)
+
+function authSessionKey(hostUrl: string): string {
+  return `labrastro.authSession.${Buffer.from(hostUrl).toString("base64url")}`
+}
 
 afterEach(async () => {
   vi.restoreAllMocks()
@@ -100,7 +107,7 @@ async function makeTempStorage(): Promise<string> {
 
 function makePeerContext(storagePath: string) {
   const authSession = JSON.stringify({
-    hostUrl: "http://127.0.0.1:8765",
+    hostUrl: DEFAULT_TEST_HOST_URL,
     username: "admin",
     role: "superadmin",
     deviceId: "dev-1",
@@ -108,7 +115,7 @@ function makePeerContext(storagePath: string) {
   })
   return {
     secrets: {
-      get: vi.fn(async (key: string) => key === "labrastro.authSession" ? authSession : undefined),
+      get: vi.fn(async (key: string) => key === DEFAULT_AUTH_SESSION_KEY ? authSession : undefined),
       store: vi.fn(async () => undefined),
       delete: vi.fn(async () => undefined),
     },
@@ -301,12 +308,12 @@ describe("LabrastroRemoteClient capabilities", () => {
 
 describe("LabrastroRemoteClient runtime admin API", () => {
   it("logs in with username/password and stores only the auth session", async () => {
-    vscodeMock.labrastroValue = "http://127.0.0.1:8765"
+    vscodeMock.labrastroValue = DEFAULT_TEST_HOST_URL
     const stored: Array<{ key: string; value: string }> = []
     const context = {
       secrets: {
         get: vi.fn(async (key: string) => {
-          if (key !== "labrastro.authSession" || !stored.length) return undefined
+          if (key !== DEFAULT_AUTH_SESSION_KEY || !stored.length) return undefined
           return stored[stored.length - 1].value
         }),
         store: vi.fn(async (key: string, value: string) => {
@@ -361,9 +368,9 @@ describe("LabrastroRemoteClient runtime admin API", () => {
       role: "superadmin",
       status: "ready",
     })
-    expect(stored[0].key).toBe("labrastro.authSession")
+    expect(stored[0].key).toBe(DEFAULT_AUTH_SESSION_KEY)
     expect(JSON.parse(stored[0].value)).toEqual({
-      hostUrl: "http://127.0.0.1:8765",
+      hostUrl: DEFAULT_TEST_HOST_URL,
       username: "admin",
       role: "superadmin",
       scopes: ["users:manage"],
@@ -394,9 +401,9 @@ describe("LabrastroRemoteClient runtime admin API", () => {
   })
 
   it("posts Runtime task actions through admin endpoints", async () => {
-    vscodeMock.labrastroValue = "http://127.0.0.1:8765"
+    vscodeMock.labrastroValue = DEFAULT_TEST_HOST_URL
     const authSession = JSON.stringify({
-      hostUrl: "http://127.0.0.1:8765",
+      hostUrl: DEFAULT_TEST_HOST_URL,
       username: "admin",
       role: "superadmin",
       deviceId: "dev-1",
@@ -404,7 +411,7 @@ describe("LabrastroRemoteClient runtime admin API", () => {
     })
     const context = {
       secrets: {
-        get: vi.fn(async (key: string) => key === "labrastro.authSession" ? authSession : undefined),
+        get: vi.fn(async (key: string) => key === DEFAULT_AUTH_SESSION_KEY ? authSession : undefined),
         store: vi.fn(async () => undefined),
         delete: vi.fn(async () => undefined),
       },
@@ -458,9 +465,9 @@ describe("LabrastroRemoteClient runtime admin API", () => {
   })
 
   it("posts auth control-plane actions through bearer auth", async () => {
-    vscodeMock.labrastroValue = "http://127.0.0.1:8765"
+    vscodeMock.labrastroValue = DEFAULT_TEST_HOST_URL
     const authSession = JSON.stringify({
-      hostUrl: "http://127.0.0.1:8765",
+      hostUrl: DEFAULT_TEST_HOST_URL,
       username: "admin",
       role: "superadmin",
       scopes: ["users:manage", "audit:read"],
@@ -469,7 +476,7 @@ describe("LabrastroRemoteClient runtime admin API", () => {
     })
     const context = {
       secrets: {
-        get: vi.fn(async (key: string) => key === "labrastro.authSession" ? authSession : undefined),
+        get: vi.fn(async (key: string) => key === DEFAULT_AUTH_SESSION_KEY ? authSession : undefined),
         store: vi.fn(async () => undefined),
         delete: vi.fn(async () => undefined),
       },
@@ -521,9 +528,9 @@ describe("LabrastroRemoteClient runtime admin API", () => {
   })
 
   it("refreshes once and retries admin calls after a 401", async () => {
-    vscodeMock.labrastroValue = "http://127.0.0.1:8765"
+    vscodeMock.labrastroValue = DEFAULT_TEST_HOST_URL
     let storedSession = JSON.stringify({
-      hostUrl: "http://127.0.0.1:8765",
+      hostUrl: DEFAULT_TEST_HOST_URL,
       username: "admin",
       role: "superadmin",
       deviceId: "dev-1",
@@ -531,7 +538,7 @@ describe("LabrastroRemoteClient runtime admin API", () => {
     })
     const context = {
       secrets: {
-        get: vi.fn(async (key: string) => key === "labrastro.authSession" ? storedSession : undefined),
+        get: vi.fn(async (key: string) => key === DEFAULT_AUTH_SESSION_KEY ? storedSession : undefined),
         store: vi.fn(async (_key: string, value: string) => {
           storedSession = value
         }),
@@ -577,6 +584,124 @@ describe("LabrastroRemoteClient runtime admin API", () => {
     })
     expect(refreshCount).toBe(2)
     expect(adminCount).toBe(2)
+  })
+
+  it("shares one in-flight refresh across concurrent authenticated calls", async () => {
+    vscodeMock.labrastroValue = DEFAULT_TEST_HOST_URL
+    let storedSession = JSON.stringify({
+      hostUrl: DEFAULT_TEST_HOST_URL,
+      username: "admin",
+      role: "superadmin",
+      deviceId: "dev-1",
+      refreshToken: "refresh-token-1",
+    })
+    const context = {
+      secrets: {
+        get: vi.fn(async (key: string) => key === DEFAULT_AUTH_SESSION_KEY ? storedSession : undefined),
+        store: vi.fn(async (_key: string, value: string) => {
+          storedSession = value
+        }),
+        delete: vi.fn(async () => undefined),
+      },
+    }
+    let refreshCount = 0
+    const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
+      const url = new URL(String(input))
+      if (url.pathname === "/remote/auth/refresh") {
+        refreshCount += 1
+        await new Promise((resolve) => setTimeout(resolve, 5))
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            access_token: "access-token-1",
+            access_expires_at: Math.floor(Date.now() / 1000) + 3600,
+            refresh_token: "refresh-token-2",
+            user: { id: "usr-1", username: "admin", role: "superadmin" },
+            device: { id: "dev-1" },
+          }),
+          { headers: { "Content-Type": "application/json" } }
+        )
+      }
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          path: url.pathname,
+          authorization: (init?.headers as Record<string, string>).Authorization,
+        }),
+        { headers: { "Content-Type": "application/json" } }
+      )
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    const client = new LabrastroRemoteClient(context as never)
+
+    await expect(Promise.all([client.adminStatus(), client.serverSettingsRead()])).resolves.toEqual([
+      { ok: true, path: "/remote/admin/status", authorization: "Bearer access-token-1" },
+      { ok: true, path: "/remote/admin/server-settings/read", authorization: "Bearer access-token-1" },
+    ])
+    expect(refreshCount).toBe(1)
+  })
+
+  it("ignores and clears legacy unscoped auth sessions", async () => {
+    vscodeMock.labrastroValue = DEFAULT_TEST_HOST_URL
+    const legacySession = JSON.stringify({
+      hostUrl: DEFAULT_TEST_HOST_URL,
+      username: "admin",
+      role: "superadmin",
+      deviceId: "dev-1",
+      refreshToken: "refresh-token-1",
+    })
+    const deleted: string[] = []
+    const context = {
+      secrets: {
+        get: vi.fn(async (key: string) => key === LEGACY_AUTH_SESSION_KEY ? legacySession : undefined),
+        store: vi.fn(async () => undefined),
+        delete: vi.fn(async (key: string) => {
+          deleted.push(key)
+        }),
+      },
+    }
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), {
+      headers: { "Content-Type": "application/json" },
+    }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = new LabrastroRemoteClient(context as never)
+
+    await expect(client.connectionState()).resolves.toMatchObject({
+      authenticated: false,
+      status: "login-required",
+    })
+    expect(deleted).toContain(LEGACY_AUTH_SESSION_KEY)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("clears host-scoped auth session when refresh token is invalid", async () => {
+    vscodeMock.labrastroValue = DEFAULT_TEST_HOST_URL
+    const authSession = JSON.stringify({
+      hostUrl: DEFAULT_TEST_HOST_URL,
+      username: "admin",
+      role: "superadmin",
+      deviceId: "dev-1",
+      refreshToken: "refresh-token-1",
+    })
+    const deleted: string[] = []
+    const context = {
+      secrets: {
+        get: vi.fn(async (key: string) => key === DEFAULT_AUTH_SESSION_KEY ? authSession : undefined),
+        store: vi.fn(async () => undefined),
+        delete: vi.fn(async (key: string) => {
+          deleted.push(key)
+        }),
+      },
+    }
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(
+      JSON.stringify({ error: "invalid_refresh_token", message: "invalid_refresh_token" }),
+      { status: 401, headers: { "Content-Type": "application/json" } }
+    )))
+    const client = new LabrastroRemoteClient(context as never)
+
+    await expect(client.adminStatus()).rejects.toThrow("登录已失效，请重新登录。")
+    expect(deleted).toContain(DEFAULT_AUTH_SESSION_KEY)
+    expect(deleted).toContain(LEGACY_AUTH_SESSION_KEY)
   })
 })
 
