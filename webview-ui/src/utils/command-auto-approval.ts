@@ -3,12 +3,25 @@ import { parse } from "shell-quote"
 type ShellToken = string | { op: string } | { command: string }
 
 export type CommandDecision = "auto_approve" | "auto_deny" | "ask_user"
+export type CommandRuleLevel = "exact" | "base" | "firstArg" | "secondArg"
+
+export interface CommandRuleCandidate {
+  level: CommandRuleLevel
+  label: string
+  description: string
+  rules: string[]
+}
 
 export interface CommandDecisionResult {
   decision: CommandDecision
   reason: string
   matchedRule?: string
   subCommands: string[]
+}
+
+export interface CommandRuleListUpdate {
+  allowedCommands: string[]
+  deniedCommands: string[]
 }
 
 const NEWLINE_PLACEHOLDER = "__labrastro_NL__"
@@ -98,6 +111,80 @@ export function parseCommand(command: string): string[] {
     .map(restoreNewlinesFromPlaceholders)
     .map((item) => item.trim())
     .filter(Boolean)
+}
+
+export function buildCommandRuleCandidates(command: string): CommandRuleCandidate[] {
+  const subCommands = parseCommand(command)
+  if (!subCommands.length) return []
+
+  const candidates: CommandRuleCandidate[] = []
+  const addCandidate = (candidate: CommandRuleCandidate) => {
+    const rules = uniqueCommandRules(candidate.rules)
+    if (!rules.length) return
+    const key = rules.map(ruleKey).join("\n")
+    if (candidates.some((item) => item.rules.map(ruleKey).join("\n") === key)) return
+    candidates.push({ ...candidate, rules })
+  }
+
+  addCandidate({
+    level: "exact",
+    label: "精确子命令",
+    description: "只记住当前完整命令片段。",
+    rules: subCommands,
+  })
+
+  for (const level of ["base", "firstArg", "secondArg"] as const) {
+    addCandidate({
+      level,
+      label: commandRuleLevelLabel(level),
+      description: commandRuleLevelDescription(level),
+      rules: subCommands
+        .map((subCommand) => commandRulePrefixes(subCommand)[level])
+        .filter((rule): rule is string => Boolean(rule)),
+    })
+  }
+
+  return candidates
+}
+
+export function updateCommandRuleLists(
+  kind: "allow" | "deny",
+  rules: string[],
+  allowedCommands: string[],
+  deniedCommands: string[],
+): CommandRuleListUpdate {
+  const nextRules = uniqueCommandRules(rules)
+  if (!nextRules.length) {
+    return {
+      allowedCommands: uniqueCommandRules(allowedCommands),
+      deniedCommands: uniqueCommandRules(deniedCommands),
+    }
+  }
+
+  const nextRuleKeys = new Set(nextRules.map(ruleKey))
+  if (kind === "allow") {
+    return {
+      allowedCommands: uniqueCommandRules([...allowedCommands, ...nextRules]),
+      deniedCommands: uniqueCommandRules(deniedCommands.filter((rule) => !nextRuleKeys.has(ruleKey(rule)))),
+    }
+  }
+
+  return {
+    allowedCommands: uniqueCommandRules(allowedCommands.filter((rule) => !nextRuleKeys.has(ruleKey(rule)))),
+    deniedCommands: uniqueCommandRules([...deniedCommands, ...nextRules]),
+  }
+}
+
+export function uniqueCommandRules(values: string[]): string[] {
+  const seen = new Set<string>()
+  const rules: string[] = []
+  for (const value of values) {
+    const rule = normalizeRule(value)
+    if (!rule || seen.has(rule.toLowerCase())) continue
+    seen.add(rule.toLowerCase())
+    rules.push(rule)
+  }
+  return rules
 }
 
 export function containsDangerousSubstitution(source: string, platform = currentPlatform()): boolean {
@@ -292,6 +379,67 @@ function parseCommandLine(command: string): string[] {
   )
 }
 
+function commandRulePrefixes(command: string): Partial<Record<Exclude<CommandRuleLevel, "exact">, string>> {
+  const tokens = commandRuleTokens(command)
+  if (!tokens.length) return {}
+
+  const result: Partial<Record<Exclude<CommandRuleLevel, "exact">, string>> = {
+    base: tokens[0],
+  }
+  const acceptedArgs: string[] = []
+  for (const arg of tokens.slice(1, 3)) {
+    if (shouldStopCommandRulePrefix(arg)) break
+    acceptedArgs.push(arg)
+    if (acceptedArgs.length === 1) {
+      result.firstArg = [tokens[0], ...acceptedArgs].join(" ")
+    }
+    if (acceptedArgs.length === 2) {
+      result.secondArg = [tokens[0], ...acceptedArgs].join(" ")
+    }
+  }
+  return result
+}
+
+function commandRuleTokens(command: string): string[] {
+  try {
+    const parsed = parse(command)
+    const tokens: string[] = []
+    for (const token of parsed) {
+      if (typeof token === "object" && "op" in token) break
+      if (typeof token === "string") tokens.push(token)
+    }
+    return tokens.filter(Boolean)
+  } catch {
+    return command.trim().split(/\s+/).filter(Boolean)
+  }
+}
+
+function shouldStopCommandRulePrefix(arg: string): boolean {
+  return /^-/.test(arg) || /[\\/:.~]/.test(arg)
+}
+
+function commandRuleLevelLabel(level: Exclude<CommandRuleLevel, "exact">): string {
+  switch (level) {
+    case "base":
+      return "基础命令"
+    case "firstArg":
+      return "一级子命令"
+    case "secondArg":
+      return "二级子命令"
+  }
+}
+
+function commandRuleLevelDescription(level: Exclude<CommandRuleLevel, "exact">): string {
+  switch (level) {
+    case "base":
+      return "记住命令入口，例如 git、npm。"
+    case "firstArg":
+      return "记住命令与第一层动作，例如 git push。"
+    case "secondArg":
+      return "记住到第二层参数，例如 git push origin。"
+  }
+}
+
 function protectNewlinesInQuotes(command: string): string {
   let result = ""
   let quote: "'" | "\"" | undefined
@@ -360,6 +508,10 @@ function normalizeCommand(command: string): string {
 
 function normalizeRule(rule: string): string {
   return rule.trim().replace(/\s+/g, " ").toLowerCase()
+}
+
+function ruleKey(rule: string): string {
+  return normalizeRule(rule).toLowerCase()
 }
 
 function ruleLength(rule: string): number {

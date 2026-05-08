@@ -1,4 +1,9 @@
-import { Component, For, Show, createMemo } from "solid-js"
+import { Component, For, Show, createEffect, createMemo, createSignal } from "solid-js"
+import {
+  buildCommandRuleCandidates,
+  type CommandRuleCandidate,
+  type CommandRuleLevel,
+} from "../../utils/command-auto-approval"
 import { DialogSurface } from "../common/interaction"
 
 export type ApprovalDecision = "allow_once" | "deny_once"
@@ -33,8 +38,11 @@ export interface ApprovalDetails {
 
 interface ApprovalDetailsDialogProps {
   approval: ApprovalDetails
+  autoApprovalCandidates?: CommandRuleCandidate[]
+  autoApprovalPending?: boolean
   onClose: () => void
   onDecision: (decision: ApprovalDecision) => void
+  onRememberDecision?: (decision: ApprovalDecision, rules: string[]) => void
 }
 
 export const DEFAULT_AUTO_APPROVE_OPTIONS: Record<AutoApprovalCategory, boolean> = {
@@ -61,7 +69,7 @@ export function approvalFromPayload(
     toolSource: stringValue(payload.tool_source) || fallback.toolSource,
     reason: stringValue(payload.reason) || fallback.reason,
     content: stringValue(payload.content) || fallback.content,
-    command: extractApprovalCommandFromArgs(toolArgs) || fallback.command,
+    command: stringValue(payload.command) || extractApprovalCommandFromArgs(toolArgs) || fallback.command,
     autoApprovalReason: fallback.autoApprovalReason,
     toolArgs: Object.keys(toolArgs).length ? toolArgs : fallback.toolArgs || {},
     sections,
@@ -166,6 +174,34 @@ export function extractApprovalCommand(approval: ApprovalDetails): string {
 
 export const ApprovalDetailsDialog: Component<ApprovalDetailsDialogProps> = (props) => {
   const summary = createMemo(() => approvalSummary(props.approval))
+  const command = createMemo(() => extractApprovalCommand(props.approval))
+  const commandRuleCandidates = createMemo(() =>
+    props.autoApprovalCandidates || buildCommandRuleCandidates(command())
+  )
+  const [selectedRuleLevel, setSelectedRuleLevel] = createSignal<CommandRuleLevel>("exact")
+  const selectedRuleCandidate = createMemo(() =>
+    commandRuleCandidates().find((candidate) => candidate.level === selectedRuleLevel()) ||
+    commandRuleCandidates()[0]
+  )
+  const canRememberCommand = createMemo(() =>
+    summary().category === "execute" &&
+    Boolean(props.onRememberDecision) &&
+    commandRuleCandidates().length > 0
+  )
+
+  createEffect(() => {
+    const candidates = commandRuleCandidates()
+    if (!candidates.length) return
+    if (!candidates.some((candidate) => candidate.level === selectedRuleLevel())) {
+      setSelectedRuleLevel(candidates[0]!.level)
+    }
+  })
+
+  const rememberDecision = (decision: ApprovalDecision) => {
+    const candidate = selectedRuleCandidate()
+    if (!candidate || props.autoApprovalPending) return
+    props.onRememberDecision?.(decision, candidate.rules)
+  }
 
   return (
     <DialogSurface
@@ -189,18 +225,108 @@ export const ApprovalDetailsDialog: Component<ApprovalDetailsDialogProps> = (pro
           </button>
         </header>
         <ApprovalDetailsBody approval={props.approval} />
+        <Show when={canRememberCommand()}>
+          <ApprovalRulePanel
+            candidates={commandRuleCandidates()}
+            selectedLevel={selectedRuleCandidate()?.level}
+            pending={props.autoApprovalPending}
+            onSelect={setSelectedRuleLevel}
+          />
+        </Show>
         <footer class="approval-dialog__footer">
           <button class="approval-dialog__button approval-dialog__button--secondary" type="button" onClick={() => props.onClose()}>
             关闭
           </button>
-          <button class="approval-dialog__button approval-dialog__button--secondary" type="button" onClick={() => props.onDecision("deny_once")}>
+          <button
+            class="approval-dialog__button approval-dialog__button--secondary"
+            type="button"
+            disabled={props.autoApprovalPending}
+            onClick={() => props.onDecision("deny_once")}
+          >
             拒绝
           </button>
-          <button class="approval-dialog__button approval-dialog__button--primary" type="button" onClick={() => props.onDecision("allow_once")}>
+          <Show when={canRememberCommand()}>
+            <button
+              class="approval-dialog__button approval-dialog__button--danger"
+              type="button"
+              disabled={props.autoApprovalPending}
+              onClick={() => rememberDecision("deny_once")}
+            >
+              {props.autoApprovalPending ? "写入中..." : "拒绝并记住"}
+            </button>
+            <button
+              class="approval-dialog__button approval-dialog__button--primary"
+              type="button"
+              disabled={props.autoApprovalPending}
+              onClick={() => rememberDecision("allow_once")}
+            >
+              {props.autoApprovalPending ? "写入中..." : "批准并记住"}
+            </button>
+          </Show>
+          <button
+            class={`approval-dialog__button ${canRememberCommand() ? "approval-dialog__button--secondary" : "approval-dialog__button--primary"}`}
+            type="button"
+            disabled={props.autoApprovalPending}
+            onClick={() => props.onDecision("allow_once")}
+          >
             批准一次
           </button>
         </footer>
     </DialogSurface>
+  )
+}
+
+const ApprovalRulePanel: Component<{
+  candidates: CommandRuleCandidate[]
+  selectedLevel?: CommandRuleLevel
+  pending?: boolean
+  onSelect: (level: CommandRuleLevel) => void
+}> = (props) => {
+  const selectedCandidate = createMemo(() =>
+    props.candidates.find((candidate) => candidate.level === props.selectedLevel) || props.candidates[0]
+  )
+  const activeLevel = createMemo(() => selectedCandidate()?.level)
+
+  return (
+    <section class="approval-remember">
+      <div class="approval-remember__header">
+        <span class="codicon codicon-shield" aria-hidden="true" />
+        <div>
+          <strong>自动批准规则</strong>
+          <small>选择这条命令以后自动处理的匹配范围。</small>
+        </div>
+      </div>
+      <div class="approval-rule-levels" role="radiogroup" aria-label="自动批准规则等级">
+        <For each={props.candidates}>
+          {(candidate) => (
+            <button
+              type="button"
+              role="radio"
+              aria-checked={candidate.level === activeLevel()}
+              class="approval-rule-level"
+              classList={{ "approval-rule-level--active": candidate.level === activeLevel() }}
+              disabled={props.pending}
+              onClick={() => props.onSelect(candidate.level)}
+            >
+              <strong>{candidate.label}</strong>
+              <span>{candidate.description}</span>
+            </button>
+          )}
+        </For>
+      </div>
+      <Show when={selectedCandidate()}>
+        {(candidate) => (
+          <div class="approval-rule-preview">
+            <span>将写入规则</span>
+            <div>
+              <For each={candidate().rules}>
+                {(rule) => <code>{rule}</code>}
+              </For>
+            </div>
+          </div>
+        )}
+      </Show>
+    </section>
   )
 }
 

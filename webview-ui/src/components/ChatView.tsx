@@ -14,6 +14,7 @@ import {
   type ApprovalDetails,
 } from "./chat/ApprovalDetailsDialog"
 import { IconButton } from "./common/IconButton"
+import { RefreshButton } from "./common/RefreshButton"
 import { DialogSurface } from "./common/interaction"
 import { useTrace } from "../context/trace"
 import { useVSCode } from "../context/vscode"
@@ -33,7 +34,7 @@ import {
   resolveModeSelection,
   shouldAcceptModelSwitchResponse,
 } from "../chat/chatState"
-import { evaluateCommandDecision } from "../utils/command-auto-approval"
+import { evaluateCommandDecision, updateCommandRuleLists } from "../utils/command-auto-approval"
 import {
   appendShellOutputChunk,
   buildShellOutputText,
@@ -95,6 +96,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const [historySort, setHistorySort] = createSignal<"newest" | "oldest">("newest")
   const [deleteSessionId, setDeleteSessionId] = createSignal<string | undefined>()
   const [sessionOperationError, setSessionOperationError] = createSignal("")
+  const [sessionSyncStatus, setSessionSyncStatus] = createSignal<Record<string, unknown>>({})
   const initialWebviewState = vscode.getState<ChatWebviewState>() || {}
   const [autoApproveOptions, setAutoApproveOptions] = createSignal<Record<string, boolean>>(
     sanitizeAutoApproveOptions(initialWebviewState.autoApproveOptions)
@@ -106,6 +108,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     sanitizeStringArray(initialWebviewState.autoApprovalDeniedCommands)
   )
   const [autoApprovalPlatform, setAutoApprovalPlatform] = createSignal(initialWebviewState.autoApprovalPlatform || "browser")
+  const [rememberingApprovalId, setRememberingApprovalId] = createSignal("")
   const [selectedMode, setSelectedMode] = createSignal("")
   const [selectedModelProfile, setSelectedModelProfile] = createSignal("")
   const [sessionRuntimeState, setSessionRuntimeState] = createSignal<Record<string, unknown>>({})
@@ -150,6 +153,21 @@ const ChatView: Component<ChatViewProps> = (props) => {
       return historySort() === "newest" ? diff : -diff
     })
   })
+  const sessionSyncNotice = createMemo(() => {
+    const status = sessionSyncStatus()
+    const pending = typeof status.pendingCount === "number" ? status.pendingCount : 0
+    const failed = typeof status.failedCount === "number" ? status.failedCount : 0
+    if (typeof status.message === "string" && status.message) return status.message
+    if (failed > 0) return `${failed} 个会话快照同步失败，正在后台重试。`
+    if (pending > 0) return `${pending} 个会话快照待同步。`
+    return ""
+  })
+  const sessionSyncLabel = (status: string | undefined) => {
+    if (status === "pending") return "待同步"
+    if (status === "failed") return "同步失败"
+    if (status === "synced") return "已同步"
+    return ""
+  }
 
   createEffect(() => {
     const state = vscode.getState<ChatWebviewState>() || {}
@@ -766,14 +784,16 @@ const ChatView: Component<ChatViewProps> = (props) => {
     text: string,
     options: { modeOverride?: string | null; forceDirect?: boolean } = {},
   ) => {
-    const sessionId = trace.currentSessionId()
-    const remoteSessionId = sessionId && !isLocalDraftSessionId(sessionId) ? sessionId : undefined
+    let sessionId = trace.currentSessionId()
     const mode = options.modeOverride === undefined ? selectedMode() : options.modeOverride || ""
     const route = routeSelectedChatMode(mode, { forceDirect: options.forceDirect })
 
     if (!sessionId) {
       trace.startDraftTask(text)
+      sessionId = trace.currentSessionId()
     }
+    const remoteSessionId = sessionId && !isLocalDraftSessionId(sessionId) ? sessionId : undefined
+    const draftSessionId = sessionId && isLocalDraftSessionId(sessionId) ? sessionId : undefined
 
     trace.appendTurn({
       userMessage: {
@@ -798,6 +818,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     chatMessages.send(vscode, {
       text,
       sessionId: remoteSessionId,
+      draftSessionId,
       ...route,
     })
   }
@@ -943,6 +964,33 @@ const ChatView: Component<ChatViewProps> = (props) => {
     sendApprovalDecision(approval, decision)
   }
 
+  const rememberApprovalDecision = (
+    approval: PendingApproval,
+    decision: ApprovalDecision,
+    rules: string[],
+  ) => {
+    if (rememberingApprovalId()) return
+    const nextRules = updateCommandRuleLists(
+      decision === "allow_once" ? "allow" : "deny",
+      rules,
+      autoApprovalAllowedCommands(),
+      autoApprovalDeniedCommands(),
+    )
+    const nextOptions = { ...autoApproveOptions(), execute: true }
+    setRememberingApprovalId(approval.approvalId)
+    setAutoApproveOptions(nextOptions)
+    setAutoApprovalAllowedCommands(nextRules.allowedCommands)
+    setAutoApprovalDeniedCommands(nextRules.deniedCommands)
+    vscode.postMessage({
+      type: "autoApproval.update",
+      options: nextOptions,
+      allowedCommands: nextRules.allowedCommands,
+      deniedCommands: nextRules.deniedCommands,
+    })
+    replyApproval(approval, decision)
+    window.setTimeout(() => setRememberingApprovalId(""), 0)
+  }
+
   const openApprovalDetails = (approval: PendingApproval) => {
     setSelectedApproval(approval)
   }
@@ -1016,6 +1064,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
       }
       if (msg.type === "session.error") {
         setSessionOperationError(typeof msg.message === "string" ? msg.message : "会话操作失败")
+      }
+      if (msg.type === "session.syncStatus" && typeof msg.payload === "object" && msg.payload) {
+        setSessionSyncStatus(msg.payload as Record<string, unknown>)
       }
       if (msg.type === "chat.session" && typeof msg.chatId === "string") {
         setActiveChatId(msg.chatId)
@@ -1218,6 +1269,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
               <Show when={sessionOperationError()}>
                 <div class="session-history-error" role="alert">{sessionOperationError()}</div>
               </Show>
+              <Show when={sessionSyncNotice()}>
+                <div class="session-history-sync" role="status">{sessionSyncNotice()}</div>
+              </Show>
               <Show
                 when={filteredHistorySessions().length > 0}
                 fallback={<p class="session-history-panel__empty">{historyQuery() ? "没有匹配的会话。" : "当前没有可恢复的历史会话。"}</p>}
@@ -1243,6 +1297,19 @@ const ChatView: Component<ChatViewProps> = (props) => {
                       </span>
                       <span class="session-history-item__side">
                         <span class="session-history-item__meta">{formatSessionDate(session.updatedAt)}</span>
+                        <Show when={sessionSyncLabel(session.syncStatus)}>
+                          <span
+                            class="session-history-item__sync"
+                            classList={{
+                              "session-history-item__sync--pending": session.syncStatus === "pending",
+                              "session-history-item__sync--failed": session.syncStatus === "failed",
+                              "session-history-item__sync--synced": session.syncStatus === "synced",
+                            }}
+                            title={session.syncError || sessionSyncLabel(session.syncStatus)}
+                          >
+                            {sessionSyncLabel(session.syncStatus)}
+                          </span>
+                        </Show>
                         <span class="session-history-item__actions" onClick={(event) => event.stopPropagation()}>
                           <button
                             type="button"
@@ -1261,10 +1328,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
             </div>
             <footer class="session-history-footer">
               <span>{filteredHistorySessions().length} / {trace.recentSessions().length}</span>
-              <button type="button" onClick={() => vscode.postMessage({ type: "session.list" })}>
-                <span class="codicon codicon-refresh" aria-hidden="true" />
+              <RefreshButton class="btn-secondary" onClick={() => vscode.postMessage({ type: "session.list" })}>
                 刷新
-              </button>
+              </RefreshButton>
             </footer>
           </DialogSurface>
           <Show when={deleteSessionId()}>
@@ -1298,8 +1364,10 @@ const ChatView: Component<ChatViewProps> = (props) => {
         {(approval) => (
           <ApprovalDetailsDialog
             approval={approval()}
+            autoApprovalPending={rememberingApprovalId() === approval().approvalId}
             onClose={() => setSelectedApproval(undefined)}
             onDecision={(decision) => replyApproval(approval(), decision)}
+            onRememberDecision={(decision, rules) => rememberApprovalDecision(approval(), decision, rules)}
           />
         )}
       </Show>
