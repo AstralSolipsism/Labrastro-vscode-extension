@@ -1,6 +1,7 @@
 import { Component, For, Show } from "solid-js"
 import { t } from "../../i18n"
 import { ApprovalDetailsDialog, approvalSummary, type ApprovalDecision } from "../../components/chat/ApprovalDetailsDialog"
+import { RefreshButton } from "../../components/common/RefreshButton"
 import { DialogSurface } from "../../components/common/interaction"
 import { StatusBadge } from "../components/StatusBadge"
 import { settingsMessages } from "../settingsMessages"
@@ -52,6 +53,7 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
     selectedEnvironmentApproval,
     setSelectedEnvironmentApproval,
     replyEnvironmentApproval,
+    rememberEnvironmentApprovalDecision,
     toolchainSummary,
     toolchainStatusFilter,
     setToolchainStatusFilter,
@@ -452,10 +454,9 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
           </p>
         </div>
         <div class="settings-actions settings-actions--right">
-          <button class="btn btn-secondary" onClick={refreshToolchains} disabled={environmentSnapshot().running}>
-            <span class="codicon codicon-refresh" aria-hidden="true" />
+          <RefreshButton class="btn-secondary" onClick={refreshToolchains} disabled={environmentSnapshot().running}>
             刷新清单
-          </button>
+          </RefreshButton>
           <button class="btn btn-secondary" onClick={() => openCreateToolchain("cli")}>
             新增 CLI 能力
           </button>
@@ -523,10 +524,9 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
             <span>服务器能力 Manifest</span>
             <small>这里维护服务器权威清单、文档信息和安装/验证指导；保存不会直接安装。</small>
           </div>
-          <button class="btn btn-secondary" onClick={() => settingsMessages.refreshToolchains(vscode)}>
-            <span class="codicon codicon-refresh" aria-hidden="true" />
+          <RefreshButton class="btn-secondary" onClick={() => settingsMessages.refreshToolchains(vscode)}>
             刷新管理列表
-          </button>
+          </RefreshButton>
         </div>
       </section>
       {renderToolchainGroup("cli", "CLI", "命令行工具、可执行程序和本地二进制依赖。", toolchainGroups().cli)}
@@ -644,13 +644,15 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
       </section>
       <Show when={selectedEnvironmentApproval()}>
         {(approval) => (
-          <ApprovalDetailsDialog
-            approval={approval()}
-            onClose={() => setSelectedEnvironmentApproval(undefined)}
-            onDecision={(decision) => replyEnvironmentApproval(approval(), decision)}
-          />
-        )}
-      </Show>
+          <ApprovalDetailsDialog
+            approval={approval()}
+            autoApprovalPending={false}
+            onClose={() => setSelectedEnvironmentApproval(undefined)}
+            onDecision={(decision) => replyEnvironmentApproval(approval(), decision)}
+            onRememberDecision={(decision, rules) => rememberEnvironmentApprovalDecision(approval(), decision, rules)}
+          />
+        )}
+      </Show>
       {renderToolchainEditor()}
     </div>
   )
@@ -682,10 +684,9 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
                 </For>
               </select>
             </label>
-            <button class="btn btn-secondary" onClick={refreshToolchains} disabled={environmentSnapshot().running}>
-              <span class="codicon codicon-refresh" aria-hidden="true" />
+            <RefreshButton class="btn-secondary" onClick={refreshToolchains} disabled={environmentSnapshot().running}>
               刷新
-            </button>
+            </RefreshButton>
             <button class="btn btn-secondary" onClick={() => runEnvironment("check")} disabled={!environmentSnapshot().entries.length || environmentSnapshot().running || !environmentAgentCandidates().length}>
               <span class="codicon codicon-search" aria-hidden="true" />
               检查全部
@@ -998,8 +999,10 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
           {(approval) => (
             <ApprovalDetailsDialog
               approval={approval()}
+              autoApprovalPending={false}
               onClose={() => setSelectedEnvironmentApproval(undefined)}
               onDecision={(decision) => replyEnvironmentApproval(approval(), decision)}
+              onRememberDecision={(decision, rules) => rememberEnvironmentApprovalDecision(approval(), decision, rules)}
             />
           )}
         </Show>

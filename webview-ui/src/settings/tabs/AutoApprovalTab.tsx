@@ -1,5 +1,6 @@
 import { Component, For, Show } from "solid-js"
 import { t } from "../../i18n"
+import { RefreshButton } from "../../components/common/RefreshButton"
 import { StatusBadge } from "../components/StatusBadge"
 import { settingsMessages } from "../settingsMessages"
 import type { SettingsController } from "../useSettingsController"
@@ -73,10 +74,9 @@ export const AutoApprovalTab: Component<TabProps> = (props) => {
           <h2>自动批准</h2>
           <p>管理聊天中的自动批准规则。执行命令仍按白名单、黑名单和危险模式判定。</p>
         </div>
-        <button class="btn btn-secondary" onClick={() => settingsMessages.getAutoApproval(vscode)}>
-          <span class="codicon codicon-refresh" aria-hidden="true" />
+        <RefreshButton class="btn-secondary" onClick={() => settingsMessages.getAutoApproval(vscode)}>
           刷新
-        </button>
+        </RefreshButton>
       </div>
 
       <section class="settings-section settings-section--flat command-approval-section">

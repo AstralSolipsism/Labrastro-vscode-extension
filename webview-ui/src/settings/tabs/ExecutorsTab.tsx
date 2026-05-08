@@ -1,6 +1,7 @@
 import { Component, For, Show } from "solid-js"
 import { t } from "../../i18n"
 import { DialogSurface } from "../../components/common/interaction"
+import { RefreshButton } from "../../components/common/RefreshButton"
 import { StatusBadge } from "../components/StatusBadge"
 import type { SettingsController } from "../useSettingsController"
 
@@ -24,7 +25,7 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
     executorEngine,
     hostUrlConfigured,
     hostUrlSource,
-    connectionMessage,
+    connectionNotice,
     connectionSecurityWarnings,
     connectionSaveMessage,
     hostUrlError,
@@ -60,14 +61,9 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
           <h2>{t("executor.title")}</h2>
           <p>{t("executor.description")}</p>
         </div>
-        <button
-          class={`btn btn-secondary ${refreshLoading() ? "btn--loading" : ""}`}
-          onClick={refreshAdmin}
-          disabled={refreshLoading()}
-        >
-          <span class={`codicon codicon-${refreshLoading() ? "loading" : "refresh"}`} aria-hidden="true" />
-          {refreshLoading() ? "刷新中…" : "刷新状态"}
-        </button>
+        <RefreshButton class="btn-secondary" onClick={refreshAdmin} loading={refreshLoading()} loadingLabel={t("executor.refreshing")}>
+          {t("executor.refreshStatus")}
+        </RefreshButton>
       </div>
 
       {/* ── ① 状态总览 ── */}
@@ -108,15 +104,7 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
       <div class="settings-actions" style="margin:12px 0">
         <button class="btn btn-primary" onClick={openExecutorPicker}>
           <span class="codicon codicon-settings-gear" aria-hidden="true" />
-          切换主执行器
-        </button>
-        <button
-          class={`btn btn-secondary ${refreshLoading() ? "btn--loading" : ""}`}
-          onClick={refreshAdmin}
-          disabled={refreshLoading()}
-        >
-          <span class={`codicon codicon-${refreshLoading() ? "loading" : "refresh"}`} aria-hidden="true" />
-          {refreshLoading() ? "刷新中…" : "刷新"}
+          {t("executor.switchMain")}
         </button>
       </div>
 
@@ -278,10 +266,10 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
                 <span>{hostUrlError()}</span>
               </div>
             </Show>
-            <Show when={connectionMessage()}>
-              <div class="executor-config-notice executor-config-notice--error">
-                <span class="codicon codicon-warning" aria-hidden="true" />
-                <span>{connectionMessage()}</span>
+            <Show when={connectionNotice()}>
+              <div class={`executor-config-notice executor-config-notice--${connectionNotice()?.tone || "info"}`}>
+                <span class={`codicon codicon-${connectionNotice()?.icon || "info"}`} aria-hidden="true" />
+                <span>{connectionNotice()?.message}</span>
               </div>
             </Show>
             <Show when={connectionSecurityWarnings().length}>
@@ -368,14 +356,9 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
                 {saveLoading() ? "登录中…" : saveSuccess() ? "已登录" : "登录"}
               </button>
               </Show>
-              <button
-                class={`btn btn-secondary ${refreshLoading() ? "btn--loading" : ""}`}
-                onClick={refreshAdmin}
-                disabled={refreshLoading()}
-              >
-                <span class={`codicon codicon-${refreshLoading() ? "loading" : "refresh"}`} aria-hidden="true" />
-                {refreshLoading() ? "刷新中…" : "测试连接"}
-              </button>
+              <RefreshButton class="btn-secondary" onClick={refreshAdmin} loading={refreshLoading()} loadingLabel={t("executor.refreshing")}>
+                {t("executor.remote.testConnection")}
+              </RefreshButton>
             </div>
           </section>
         </Show>

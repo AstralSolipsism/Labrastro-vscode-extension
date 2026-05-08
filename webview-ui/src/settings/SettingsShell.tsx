@@ -31,7 +31,7 @@ export const SettingsShell: Component<SettingsShellProps> = (props) => {
 
       <div class="settings-shell">
         <nav class="settings-tab-list" aria-label="Labrastro settings">
-          <For each={controller.settingsTabDefs}>
+          <For each={controller.settingsTabDefs()}>
             {(tab) => (
               <button
                 type="button"

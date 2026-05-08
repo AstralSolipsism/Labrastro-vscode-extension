@@ -3,9 +3,11 @@ import {
   PROVIDER_KIND_REGISTRY,
   agentDefinitionDraftToPayload,
   inferProviderKind,
+  isAccountAdminRole,
   modelProfilePayload,
   normalizeEnvironmentSnapshot,
   providerDraftToPayload,
+  resolveConnectionNotice,
   resolveProviderProtocol,
   runtimeProfileDraftToPayload,
   toolchainEditorToPayload,
@@ -195,5 +197,39 @@ describe("settings utils", () => {
       "git status",
       "npm test",
     ])
+  })
+
+  it("does not render an extra notice for an authenticated ready connection", () => {
+    expect(resolveConnectionNotice({
+      status: "ready",
+      authenticated: true,
+      message: "Labrastro Host 已登录。",
+    })).toBeUndefined()
+  })
+
+  it("maps connection messages to status-appropriate notice tones", () => {
+    expect(resolveConnectionNotice({
+      status: "login-required",
+      authenticated: false,
+      message: "请登录 Labrastro Host。",
+    })).toMatchObject({
+      tone: "warning",
+      icon: "warning",
+    })
+    expect(resolveConnectionNotice({
+      status: "error",
+      authenticated: false,
+      message: "Auth API unreachable",
+    })).toMatchObject({
+      tone: "error",
+      icon: "error",
+    })
+  })
+
+  it("allows the accounts surface only for admin roles", () => {
+    expect(isAccountAdminRole("admin")).toBe(true)
+    expect(isAccountAdminRole("superadmin")).toBe(true)
+    expect(isAccountAdminRole("user")).toBe(false)
+    expect(isAccountAdminRole(undefined)).toBe(false)
   })
 })

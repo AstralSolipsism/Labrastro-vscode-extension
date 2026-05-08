@@ -21,8 +21,8 @@ const en: Record<string, string> = {
   "settings.tab.other": "Other",
 
   // ── SettingsView — Executor ──
-  "executor.title": "Primary Executor",
-  "executor.description": "Configure the primary executor's location and engine. Subagents can be configured independently later.",
+  "executor.title": "Executor Connection",
+  "executor.description": "Manage the primary executor connection, login state, location, and engine.",
   "executor.refreshStatus": "Refresh Status",
   "executor.refreshing": "Refreshing…",
   "executor.refresh": "Refresh",

@@ -21,8 +21,8 @@ const zhCN: Record<string, string> = {
   "settings.tab.other": "其他",
 
   // ── SettingsView — 执行器管理 ──
-  "executor.title": "主执行器配置",
-  "executor.description": "管理主执行器的位置与引擎，后续 subagent 可独立配置。",
+  "executor.title": "执行器连接",
+  "executor.description": "管理主执行器连接、登录状态、运行位置和引擎。",
   "executor.refreshStatus": "刷新状态",
   "executor.refreshing": "刷新中…",
   "executor.refresh": "刷新",

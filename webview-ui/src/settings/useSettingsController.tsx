@@ -18,7 +18,9 @@ import {
   validateAgentConfigId,
 } from "../utils/agent-config"
 import { t } from "../i18n"
+import { updateCommandRuleLists } from "../utils/command-auto-approval"
 import { settingsMessages } from "./settingsMessages"
+import { isAccountAdminRole, resolveConnectionNotice } from "./utils"
 import {
   DEFAULT_AUTO_APPROVE_OPTIONS,
   approvalFromPayload,
@@ -1500,6 +1502,11 @@ export function createSettingsController(props: SettingsViewProps) {
   })
   const connectionStatus = createMemo(() => stringValue(server.connectionState().status, "login-required"))
   const connectionMessage = createMemo(() => stringValue(server.connectionState().message))
+  const connectionNotice = createMemo(() => resolveConnectionNotice({
+    status: connectionStatus(),
+    message: connectionMessage(),
+    authenticated: server.connectionState().authenticated === true,
+  }))
   const connectionSaveMessage = createMemo(() => {
     const result = server.connectionSaveResult()
     const key = connectionSaveResultKey(result)
@@ -1509,7 +1516,8 @@ export function createSettingsController(props: SettingsViewProps) {
   const currentHostUrl = createMemo(() => stringValue(server.connectionState().hostUrl))
   const hostUrlSource = createMemo(() => stringValue(server.connectionState().hostUrlSource, "unknown"))
   const hostUrlConfigured = createMemo(() => server.connectionState().hostUrlConfigured === true)
-  const adminUsable = createMemo(() => server.connectionState().authenticated === true && ["superadmin", "admin"].includes(stringValue(server.connectionState().role)))
+  const adminUsable = createMemo(() => server.connectionState().authenticated === true && isAccountAdminRole(server.connectionState().role))
+  const settingsTabDefsVisible = createMemo(() => settingsTabDefs.filter((tab) => tab.id !== "accounts" || adminUsable()))
   const connectionScopes = createMemo(() => stringArray(server.connectionState().scopes))
   const connectionSecurityWarnings = createMemo(() => stringArray(server.connectionState().securityWarnings))
   const canManageUsers = createMemo(() => connectionScopes().includes("users:manage"))
@@ -1950,9 +1958,10 @@ export function createSettingsController(props: SettingsViewProps) {
   })
 
 const switchTab = (tab: SettingsTab) => {
-    setActiveTab(tab)
+    if (tab === "accounts" && !adminUsable()) return
+    setActiveTab(tab)
     settingsMessages.settingsTabChanged(vscode, tab)
-  }
+  }
 
     /* ── Agent 配置 CRUD ── */
   const markAgentConfigDirty = () => {
@@ -2411,6 +2420,29 @@ const refreshAdmin = () => {
     })
   }
 
+  const rememberEnvironmentApprovalDecision = (
+    approval: EnvironmentApprovalState,
+    decision: ApprovalDecision,
+    rules: string[],
+  ) => {
+    const nextRules = updateCommandRuleLists(
+      decision === "allow_once" ? "allow" : "deny",
+      rules,
+      allowedCommands(),
+      deniedCommands(),
+    )
+    const nextOptions = { ...autoApprovalOptions(), execute: true }
+    setAutoApprovalOptions(nextOptions)
+    setAllowedCommands(nextRules.allowedCommands)
+    setDeniedCommands(nextRules.deniedCommands)
+    updateAutoApproval({
+      options: nextOptions,
+      allowedCommands: nextRules.allowedCommands,
+      deniedCommands: nextRules.deniedCommands,
+    })
+    replyEnvironmentApproval(approval, decision)
+  }
+
   const requestProviderModels = (message = "正在获取模型列表...") => {
     const id = providerId()
     if (!id || !selectedProvider() || !adminUsable()) return
@@ -2465,6 +2497,12 @@ const refreshAdmin = () => {
       limit: 100,
       event_type: auditEventType().trim() || undefined,
     })
+  }
+  const refreshAccounts = () => {
+    if (!adminUsable()) return
+    if (canManageDevices()) refreshAuthDevices()
+    refreshAuthUsers()
+    refreshAuthAudit()
   }
   const changePassword = () => {
     settingsMessages.changeAuthPassword(vscode, currentPassword(), newPassword())
@@ -2651,6 +2689,13 @@ const refreshAdmin = () => {
   })
 
   createEffect(() => {
+    if (activeTab() === "accounts" && !adminUsable() && connectionStatus() !== "checking") {
+      setActiveTab("executors")
+      settingsMessages.settingsTabChanged(vscode, "executors")
+    }
+  })
+
+  createEffect(() => {
     if (activeTab() !== "toolchains") return
     if (!toolchainBootstrapped()) {
       setToolchainBootstrapped(true)
@@ -2672,16 +2717,14 @@ const refreshAdmin = () => {
 
   createEffect(() => {
     if (activeTab() !== "accounts") return
-    if (server.connectionState().authenticated !== true) return
+    if (!adminUsable()) return
     if (accountsBootstrapped()) return
     setAccountsBootstrapped(true)
-    refreshAuthDevices()
-    refreshAuthUsers()
-    refreshAuthAudit()
+    refreshAccounts()
   })
 
   createEffect(() => {
-    if (server.connectionState().authenticated !== true) {
+    if (!adminUsable()) {
       setAccountsBootstrapped(false)
     }
   })
@@ -2797,7 +2840,7 @@ const refreshAdmin = () => {
     activeTab,
     setActiveTab,
     switchTab,
-    settingsTabDefs,
+    settingsTabDefs: settingsTabDefsVisible,
     EXECUTOR_ENGINES,
     PROFILE_EXECUTOR_OPTIONS,
     PROFILE_EXECUTION_LOCATION_OPTIONS,
@@ -2998,6 +3041,7 @@ const refreshAdmin = () => {
     providerErrorMessage,
     connectionStatus,
     connectionMessage,
+    connectionNotice,
     connectionSaveMessage,
     currentHostUrl,
     hostUrlSource,
@@ -3005,6 +3049,7 @@ const refreshAdmin = () => {
     adminUsable,
     connectionScopes,
     connectionSecurityWarnings,
+    refreshAccounts,
     canManageUsers,
     canReadAudit,
     canManageDevices,
@@ -3102,6 +3147,7 @@ const refreshAdmin = () => {
     addCommandRule,
     removeCommandRule,
     replyEnvironmentApproval,
+    rememberEnvironmentApprovalDecision,
     requestProviderModels,
     saveConnection,
     logoutConnection,

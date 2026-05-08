@@ -1,5 +1,6 @@
 import { Component, For, Show } from "solid-js"
 import { t, locale, setLocale, LOCALES, type Locale } from "../../i18n"
+import { RefreshButton } from "../../components/common/RefreshButton"
 import type { SettingsController } from "../useSettingsController"
 
 interface TabProps { controller: SettingsController & Record<string, any> }
@@ -18,10 +19,9 @@ export const OtherTab: Component<TabProps> = (props) => {
           <h2>{t("other.title")}</h2>
           <p>{t("other.desc")}</p>
         </div>
-        <button class="btn btn-secondary" onClick={refreshAdmin}>
-          <span class="codicon codicon-refresh" aria-hidden="true" />
+        <RefreshButton class="btn-secondary" onClick={refreshAdmin}>
           刷新
-        </button>
+        </RefreshButton>
       </div>
 
       <section class="settings-section settings-section--flat language-section">

@@ -1,5 +1,6 @@
 import { Component, For, Show } from "solid-js"
 import { t } from "../../i18n"
+import { RefreshButton } from "../../components/common/RefreshButton"
 import { SelectableList } from "../../components/common/interaction"
 import { StatusBadge } from "../components/StatusBadge"
 import type { SettingsController } from "../useSettingsController"
@@ -82,10 +83,9 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
           <p>{t("agentConfig.desc")}</p>
         </div>
         <div class="settings-actions settings-actions--right">
-          <button class="btn btn-secondary" onClick={refreshServerSettings}>
-            <span class="codicon codicon-refresh" aria-hidden="true" />
+          <RefreshButton class="btn-secondary" onClick={refreshServerSettings}>
             刷新
-          </button>
+          </RefreshButton>
           <button class="btn btn-primary" onClick={saveAgentConfig} disabled={!agentConfigDirty() || agentConfigSavePending()}>
             <span class="codicon codicon-save" aria-hidden="true" />
             {agentConfigSavePending() ? t("agentConfig.saving") : t("agentConfig.save")}
@@ -407,10 +407,15 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
               <span class="codicon codicon-debug-stop" aria-hidden="true" />
               {t("agentConfig.runtimeTest.cancel")}
             </button>
-            <button class="btn btn-secondary" onClick={() => retryRuntimeAgentTask(false)} disabled={!selectedRuntimeTaskId() || runtimeSubmitting()}>
-              <span class="codicon codicon-refresh" aria-hidden="true" />
+            <RefreshButton
+              class="btn-secondary"
+              onClick={() => retryRuntimeAgentTask(false)}
+              disabled={!selectedRuntimeTaskId()}
+              loading={runtimeSubmitting()}
+              loadingLabel={t("agentConfig.runtimeTest.submitting")}
+            >
               {t("agentConfig.runtimeTest.retryFresh")}
-            </button>
+            </RefreshButton>
             <Show when={runtimeTaskCanResume()} fallback={
               <Show when={selectedRuntimeTaskId()}>
                 <StatusBadge tone="muted">{t("agentConfig.runtimeTest.freshOnly")}</StatusBadge>

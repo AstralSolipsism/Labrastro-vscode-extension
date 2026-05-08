@@ -1,5 +1,6 @@
 import { Component, For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { t } from "../../i18n"
+import { RefreshButton } from "../../components/common/RefreshButton"
 import { StatusBadge } from "../components/StatusBadge"
 import type { SettingsController } from "../useSettingsController"
 import {
@@ -98,6 +99,18 @@ export const ProvidersTab: Component<TabProps> = (props) => {
   const draftProviderVisible = createMemo(() => draftProviderActive() && (!providerId() || !savedProviderIds().has(providerId())))
   const providerListCount = createMemo(() => providers().length + (draftProviderVisible() ? 1 : 0))
   const selectedProviderKind = createMemo(() => PROVIDER_KIND_REGISTRY.find((item) => item.id === providerKind()))
+  const savedApiKeyHint = createMemo(() => {
+    const provider = selectedProvider()
+    if (!provider) return ""
+    return stringValue(provider.api_key_hint) || stringValue(provider.apiKeyHint)
+  })
+  const showSavedApiKeyMask = createMemo(() => Boolean(savedApiKeyHint()) && !providerApiKey())
+  const apiKeyHelpText = createMemo(() =>
+    savedApiKeyHint()
+      ? "已保存 API Key。只有输入新值并保存时才会替换。"
+      : "保存到 host 配置；前端不回显明文。"
+  )
+  const modelRefreshing = createMemo(() => modelFetchMessage().startsWith("正在"))
   const filteredProviderKinds = createMemo(() => {
     const query = kindSearch().trim().toLowerCase()
     if (!query) return PROVIDER_KIND_REGISTRY
@@ -271,10 +284,9 @@ export const ProvidersTab: Component<TabProps> = (props) => {
             <span class="codicon codicon-add" aria-hidden="true" />
             新增服务商
           </button>
-          <button class="btn btn-secondary" type="button" onClick={refreshAdmin}>
-            <span class="codicon codicon-refresh" aria-hidden="true" />
+          <RefreshButton class="btn-secondary" onClick={refreshAdmin}>
             刷新
-          </button>
+          </RefreshButton>
         </div>
       </div>
 
@@ -457,8 +469,24 @@ export const ProvidersTab: Component<TabProps> = (props) => {
               </label>
               <label class="field-label">
                 <span>API Key</span>
-                <input class="setting-input" value={providerApiKey()} type="password" placeholder="留空保留旧值" onInput={(event) => setProviderApiKey(event.currentTarget.value)} />
-                <small>保存到 host 配置；保存成功后会清空输入框。</small>
+                <span class={`provider-secret-input ${showSavedApiKeyMask() ? "provider-secret-input--masked" : ""}`}>
+                  <input
+                    class="setting-input"
+                    value={providerApiKey()}
+                    type="password"
+                    autocomplete="new-password"
+                    placeholder={savedApiKeyHint() ? "输入新 API Key 以替换" : "填写 API Key"}
+                    aria-describedby="provider-api-key-help"
+                    onInput={(event) => setProviderApiKey(event.currentTarget.value)}
+                  />
+                  <Show when={showSavedApiKeyMask()}>
+                    <span class="provider-secret-mask" aria-hidden="true">
+                      <span class="codicon codicon-lock" aria-hidden="true" />
+                      <span>•••••••••••• {savedApiKeyHint()}</span>
+                    </span>
+                  </Show>
+                </span>
+                <small id="provider-api-key-help">{apiKeyHelpText()}</small>
               </label>
             </div>
             <details class="settings-details provider-advanced-protocol">
@@ -521,10 +549,15 @@ export const ProvidersTab: Component<TabProps> = (props) => {
                   <span class="codicon codicon-add" aria-hidden="true" />
                   添加自定义模型
                 </button>
-                <button class="btn btn-secondary" type="button" onClick={() => requestProviderModels()} disabled={!selectedProvider() || !adminUsable()}>
-                  <span class="codicon codicon-cloud-download" aria-hidden="true" />
+                <RefreshButton
+                  class="btn-secondary"
+                  icon="cloud-download"
+                  onClick={() => requestProviderModels()}
+                  disabled={!selectedProvider() || !adminUsable()}
+                  loading={modelRefreshing()}
+                >
                   刷新模型列表
-                </button>
+                </RefreshButton>
               </div>
             </div>
             <Show when={customModelInlineOpen()}>

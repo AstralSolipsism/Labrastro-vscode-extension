@@ -1,5 +1,6 @@
 import { Component, Show } from "solid-js"
 import { t } from "../../i18n"
+import { RefreshButton } from "../../components/common/RefreshButton"
 import { StatusBadge } from "../components/StatusBadge"
 import type { SettingsController } from "../useSettingsController"
 
@@ -31,10 +32,9 @@ export const ServerSettingsTab: Component<TabProps> = (props) => {
             <p>管理所有 Agent 类型共享的服务端运行并发和 shell 执行并发。</p>
           </div>
           <div class="settings-actions settings-actions--right">
-            <button class="btn btn-secondary" onClick={refreshServerSettings}>
-              <span class="codicon codicon-refresh" aria-hidden="true" />
+            <RefreshButton class="btn-secondary" onClick={refreshServerSettings}>
               刷新
-            </button>
+            </RefreshButton>
             <button class="btn btn-primary" onClick={saveServerSettings} disabled={!serverSettingsDirty()}>
               <span class="codicon codicon-save" aria-hidden="true" />
               保存

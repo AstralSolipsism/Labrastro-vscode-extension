@@ -12,6 +12,13 @@ export type ProviderKind =
   | "custom"
 export type EnvironmentEntryKind = "cli" | "mcp" | "skill"
 export type EnvironmentSnapshotStatus = "idle" | "running" | "completed" | "error" | "canceled"
+export type ConnectionNoticeTone = "success" | "warning" | "error" | "info"
+
+export interface ConnectionNotice {
+  tone: ConnectionNoticeTone
+  icon: string
+  message: string
+}
 
 export interface ProviderKindOption {
   id: ProviderKind
@@ -241,6 +248,26 @@ export function uniqueCommandRules(values: string[]): string[] {
     rules.push(rule)
   }
   return rules
+}
+
+export function resolveConnectionNotice(input: {
+  status?: unknown
+  message?: unknown
+  authenticated?: unknown
+}): ConnectionNotice | undefined {
+  const message = stringValue(input.message).trim()
+  if (!message) return undefined
+
+  const status = stringValue(input.status)
+  if (status === "ready" && input.authenticated === true) return undefined
+  if (status === "error") return { tone: "error", icon: "error", message }
+  if (status === "login-required") return { tone: "warning", icon: "warning", message }
+  if (status === "checking") return { tone: "info", icon: "info", message }
+  return { tone: "info", icon: "info", message }
+}
+
+export function isAccountAdminRole(role: unknown): boolean {
+  return role === "admin" || role === "superadmin"
 }
 
 export function runtimeProfileDraftToPayload(draft: RuntimeProfileDraft): Record<string, unknown> {

@@ -507,6 +507,7 @@ button {
 }
 
 .btn {
+  position: relative;
   min-height: 30px;
   display: inline-flex;
   align-items: center;
@@ -518,6 +519,7 @@ button {
   color: var(--ez-fg);
   background: transparent;
   cursor: pointer;
+  overflow: hidden;
   transition: background 0.15s, border-color 0.15s, transform 0.1s, box-shadow 0.15s, opacity 0.15s;
   user-select: none;
 }
@@ -568,16 +570,52 @@ button {
 /* ── 按钮 loading 状态 ── */
 .btn--loading {
   pointer-events: none;
-  opacity: 0.72;
+  opacity: 0.82;
+  border-color: color-mix(in srgb, var(--ez-focus) 42%, var(--ez-border));
+  background: color-mix(in srgb, var(--ez-focus) 9%, transparent);
 }
 
 .btn--loading .codicon {
   animation: btn-spin 0.7s linear infinite;
 }
 
+.btn--loading::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--ez-focus) 18%, transparent), transparent);
+  transform: translateX(-110%);
+  animation: btn-refresh-sweep 1.05s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+
+.btn > span {
+  position: relative;
+  z-index: 1;
+}
+
 @keyframes btn-spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+
+@keyframes btn-refresh-sweep {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(110%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn,
+  .ez-icon-button {
+    transition-duration: 0.01ms;
+  }
+
+  .btn--loading .codicon,
+  .btn--loading::after,
+  .ez-icon-button.btn--loading .codicon,
+  .ez-icon-button.btn--error {
+    animation: none;
+  }
 }
 
 /* ── 按钮成功闪现 ── */
@@ -857,6 +895,67 @@ button {
   color: var(--ez-muted);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.provider-secret-input {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+
+.provider-secret-input input {
+  position: relative;
+  z-index: 0;
+}
+
+.provider-secret-input--masked input {
+  color: transparent;
+  caret-color: var(--vscode-input-foreground, var(--ez-fg));
+}
+
+.provider-secret-input--masked input::placeholder {
+  color: transparent;
+}
+
+.provider-secret-input--masked:focus-within input {
+  color: var(--vscode-input-foreground, var(--ez-fg));
+}
+
+.provider-secret-input--masked:focus-within input::placeholder {
+  color: var(--vscode-input-placeholderForeground, var(--ez-muted));
+}
+
+.provider-secret-mask {
+  position: absolute;
+  inset: 1px;
+  z-index: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 7px;
+  border-radius: 3px;
+  color: var(--vscode-input-foreground, var(--ez-fg));
+  background: var(--ez-input);
+  pointer-events: none;
+  transition: opacity var(--ez-duration-base) ease, transform var(--ez-duration-fast) ease;
+}
+
+.provider-secret-mask .codicon {
+  color: var(--ez-success);
+}
+
+.provider-secret-mask span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--vscode-editor-font-family, monospace);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-secret-input--masked:focus-within .provider-secret-mask {
+  opacity: 0;
+  transform: translateY(-1px);
 }
 
 .provider-protocol-grid {
@@ -2574,6 +2673,362 @@ button {
 
 .executor-config-field__input::placeholder {
   color: var(--vscode-input-placeholderForeground, var(--ez-muted));
+}
+
+/* ── 账号控制台 ── */
+.account-admin-page {
+  display: grid;
+  gap: 14px;
+}
+
+.account-hero,
+.account-summary,
+.account-panel,
+.account-access-denied {
+  border: 1px solid var(--ez-border);
+  border-radius: var(--ez-radius);
+  background: color-mix(in srgb, var(--ez-surface) 82%, var(--ez-surface-soft));
+}
+
+.account-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px;
+}
+
+.account-identity {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.account-identity__icon,
+.account-summary__primary > .codicon,
+.account-access-denied > .codicon {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: var(--ez-radius);
+  color: var(--ez-link);
+  background: color-mix(in srgb, var(--ez-link) 10%, transparent);
+}
+
+.account-identity h2 {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.3;
+  text-wrap: balance;
+}
+
+.account-identity p,
+.account-panel__header small,
+.account-summary__primary small,
+.account-row__main span,
+.account-empty-state p,
+.account-access-denied p {
+  margin: 4px 0 0;
+  color: var(--ez-muted);
+  line-height: 1.45;
+}
+
+.account-hero__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.account-summary {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.2fr) minmax(320px, 2fr);
+  gap: 1px;
+  overflow: hidden;
+  background: var(--ez-border);
+}
+
+.account-summary__primary,
+.account-metrics {
+  background: var(--ez-surface-soft);
+}
+
+.account-summary__primary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+}
+
+.account-summary__primary span {
+  color: var(--ez-muted);
+  font-size: 12px;
+}
+
+.account-summary__primary strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.account-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+}
+
+.account-metrics div {
+  display: grid;
+  gap: 4px;
+  padding: 14px;
+}
+
+.account-metrics dt {
+  color: var(--ez-muted);
+  font-size: 11px;
+}
+
+.account-metrics dd {
+  margin: 0;
+  color: var(--ez-fg);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.account-sections {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid var(--ez-border);
+  border-radius: var(--ez-radius);
+  background: color-mix(in srgb, var(--ez-surface-soft) 80%, transparent);
+}
+
+.account-section-button {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--ez-muted);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.16s, background 0.16s, color 0.16s, transform 0.16s;
+}
+
+.account-section-button:hover {
+  color: var(--ez-fg);
+  background: var(--ez-hover);
+}
+
+.account-section-button:active {
+  transform: scale(0.98);
+}
+
+.account-section-button:focus-visible {
+  outline: 1px solid var(--ez-focus);
+  outline-offset: 1px;
+}
+
+.account-section-button--active {
+  color: var(--ez-fg);
+  border-color: color-mix(in srgb, var(--ez-link) 35%, var(--ez-border));
+  background: color-mix(in srgb, var(--ez-link) 9%, transparent);
+}
+
+.account-panel-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.account-panel-grid--overview {
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.4fr);
+}
+
+.account-panel {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.account-panel__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.account-panel__header strong,
+.account-empty-state strong,
+.account-access-denied strong {
+  font-size: 14px;
+}
+
+.account-scope-line {
+  padding: 10px 12px;
+  border-radius: var(--ez-radius);
+  color: var(--ez-fg);
+  background: var(--ez-input);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.account-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.account-form-grid--user-create {
+  grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+}
+
+.account-form-grid--reset,
+.account-form-grid--audit {
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto;
+}
+
+.account-list {
+  display: grid;
+  gap: 6px;
+}
+
+.account-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.2fr) minmax(220px, 1.5fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--ez-border) 75%, transparent);
+  border-radius: var(--ez-radius);
+  background: color-mix(in srgb, var(--ez-surface-soft) 68%, transparent);
+  transition: border-color 0.16s, background 0.16s;
+}
+
+.account-row:hover {
+  border-color: color-mix(in srgb, var(--ez-link) 25%, var(--ez-border));
+  background: color-mix(in srgb, var(--ez-surface-soft) 92%, transparent);
+}
+
+.account-row__main,
+.account-row__meta,
+.account-row__actions {
+  min-width: 0;
+}
+
+.account-row__main {
+  display: grid;
+  gap: 2px;
+}
+
+.account-row__main strong {
+  overflow-wrap: anywhere;
+}
+
+.account-row__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.account-row__time {
+  color: var(--ez-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.account-row__actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.account-row--audit {
+  grid-template-columns: minmax(180px, 0.9fr) minmax(140px, 0.6fr) minmax(260px, 1.5fr);
+  align-items: flex-start;
+}
+
+.account-audit-payload {
+  min-width: 0;
+  padding: 7px 8px;
+  border-radius: 5px;
+  color: var(--ez-muted);
+  background: var(--ez-input);
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.account-empty-state,
+.account-access-denied {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px;
+}
+
+.account-empty-state {
+  border: 1px dashed color-mix(in srgb, var(--ez-border) 80%, transparent);
+  border-radius: var(--ez-radius);
+  background: color-mix(in srgb, var(--ez-surface-soft) 55%, transparent);
+}
+
+.account-empty-state > .codicon {
+  min-width: 22px;
+  color: var(--ez-muted);
+  font-size: 20px;
+}
+
+.account-empty-state p,
+.account-access-denied p {
+  font-size: 12px;
+}
+
+@media (max-width: 760px) {
+  .account-hero,
+  .account-panel__header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .account-hero__actions {
+    justify-content: flex-start;
+  }
+
+  .account-summary,
+  .account-panel-grid--overview,
+  .account-form-grid,
+  .account-form-grid--user-create,
+  .account-form-grid--reset,
+  .account-form-grid--audit,
+  .account-row,
+  .account-row--audit {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .account-metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .account-row__actions {
+    justify-content: flex-start;
+  }
 }
 
 /* ── 语言选择器 ── */
