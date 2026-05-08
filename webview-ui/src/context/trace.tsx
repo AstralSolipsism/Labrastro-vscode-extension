@@ -144,7 +144,26 @@ function normalizeSession(value: unknown): MockSession | undefined {
       : typeof payload.preview === "string"
         ? payload.preview
         : "",
+    syncStatus: normalizeSyncStatus(payload.syncStatus) || normalizeSyncStatus(payload.sync_status),
+    syncError: typeof payload.syncError === "string"
+      ? payload.syncError
+      : typeof payload.sync_error === "string"
+        ? payload.sync_error
+        : undefined,
+    source: normalizeSessionSource(payload.source),
   }
+}
+
+function normalizeSyncStatus(value: unknown): MockSession["syncStatus"] | undefined {
+  return value === "synced" || value === "pending" || value === "failed"
+    ? value
+    : undefined
+}
+
+function normalizeSessionSource(value: unknown): MockSession["source"] | undefined {
+  return value === "server" || value === "local" || value === "merged"
+    ? value
+    : undefined
 }
 
 function normalizeSessionList(value: unknown): MockSession[] {
@@ -333,7 +352,6 @@ export const TraceProvider: ParentComponent = (props) => {
     pendingSnapshot = undefined
     clearSnapshotTimers()
     postSessionSnapshot(snapshot.sessionId, snapshot.bundle, snapshot.digest)
-    lastSnapshotDigests.set(snapshot.sessionId, snapshot.digest)
   }
   const scheduleSessionSnapshot = (sessionId: string, bundle: MockSessionBundle) => {
     const digest = snapshotDigest(buildSessionSnapshotDigestPayload(sessionId, bundle))
@@ -414,7 +432,11 @@ export const TraceProvider: ParentComponent = (props) => {
     }
   }
 
-  const updateSessionMeta = (sessionId: string, updater: (session: MockSession) => MockSession) => {
+  const updateSessionMeta = (
+    sessionId: string,
+    updater: (session: MockSession) => MockSession,
+    options: { skipSnapshot?: boolean } = {}
+  ) => {
     const bundle = getSessionBundle(sessionId)
     if (!bundle) return
 
@@ -422,7 +444,11 @@ export const TraceProvider: ParentComponent = (props) => {
     writeSessionBundle(sessionId, {
       ...bundle,
       session: nextSession,
-    }, { applyToCurrent: sessionId === currentSessionId(), preserveIntent: true })
+    }, {
+      applyToCurrent: sessionId === currentSessionId(),
+      preserveIntent: true,
+      skipSnapshot: options.skipSnapshot,
+    })
   }
 
   const updateCurrentBundle = (
@@ -450,6 +476,10 @@ export const TraceProvider: ParentComponent = (props) => {
   }
 
   const removeSessionBundle = (sessionId: string) => {
+    if (pendingSnapshot?.sessionId === sessionId) {
+      pendingSnapshot = undefined
+      clearSnapshotTimers()
+    }
     lastSnapshotDigests.delete(sessionId)
     setSessionBundles((prev) => {
       const next = { ...prev }
@@ -993,7 +1023,6 @@ export const TraceProvider: ParentComponent = (props) => {
     pendingSnapshot = undefined
     const digest = snapshotDigest(buildSessionSnapshotDigestPayload(sessionId, bundle))
     postSessionSnapshot(sessionId, bundle, digest)
-    lastSnapshotDigests.set(sessionId, digest)
   }
 
   onMount(() => {
@@ -1010,24 +1039,51 @@ export const TraceProvider: ParentComponent = (props) => {
         }
       }
 
+      if (msg.type === "session.snapshotStored" && typeof msg.sessionId === "string") {
+        const digest = typeof msg.snapshotDigest === "string"
+          ? msg.snapshotDigest
+          : typeof msg.snapshot_digest === "string"
+            ? msg.snapshot_digest
+            : ""
+        if (digest) {
+          lastSnapshotDigests.set(msg.sessionId, digest)
+        }
+        const syncStatus = normalizeSyncStatus(msg.status)
+        if (syncStatus) {
+          updateSessionMeta(msg.sessionId, (session) => ({
+            ...session,
+            syncStatus,
+            syncError: typeof msg.message === "string" ? msg.message : undefined,
+          }), { skipSnapshot: true })
+        }
+      }
+
       if (msg.type === "session.adopted" && typeof msg.sessionId === "string") {
-        const draftSessionId = currentSessionId()
+        const draftSessionId =
+          typeof msg.previousSessionId === "string"
+            ? msg.previousSessionId
+            : currentSessionId()
         const draftBundle =
           draftSessionId && draftSessionId !== msg.sessionId && isLocalDraftSessionId(draftSessionId)
             ? getSessionBundle(draftSessionId)
             : undefined
         if (draftBundle) {
+          if (pendingSnapshot?.sessionId === draftSessionId) {
+            pendingSnapshot = undefined
+            clearSnapshotTimers()
+          }
           writeSessionBundle(msg.sessionId, {
             ...draftBundle,
             session: {
               ...draftBundle.session,
               id: msg.sessionId,
               updatedAt: new Date().toISOString(),
+              syncStatus: "pending",
+              source: "local",
             },
           }, {
             applyToCurrent: true,
             preserveIntent: true,
-            skipSnapshot: true,
           })
           removeSessionBundle(draftSessionId!)
         }

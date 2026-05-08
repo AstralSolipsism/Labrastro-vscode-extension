@@ -2,6 +2,13 @@ import * as vscode from "vscode"
 import * as fs from "fs"
 import * as path from "path"
 import { BackendCapabilities, LabrastroRemoteClient, isRemoteError } from "./LabrastroRemoteClient"
+import {
+  SessionSnapshotOutbox,
+  isLocalDraftSessionId,
+  type SessionSnapshotMetadata,
+  type SessionSnapshotOutboxRecord,
+  type SessionSnapshotSyncStatus,
+} from "./SessionSnapshotOutbox"
 import { canStartSessionlessChat, LEGACY_BACKEND_UPGRADE_MESSAGE } from "./session-start"
 
 type PostMessage = (message: Record<string, unknown>) => Thenable<boolean> | void
@@ -94,6 +101,9 @@ interface SessionMetadataState {
   savedAt: string
   preview: string
   fingerprint: string
+  syncStatus?: SessionSnapshotSyncStatus
+  syncError?: string
+  source?: "server" | "local" | "merged"
 }
 
 interface AutoApprovalState {
@@ -104,6 +114,7 @@ interface AutoApprovalState {
 }
 
 const AUTO_APPROVAL_STATE_KEY = "labrastro.autoApproval"
+const SNAPSHOT_RETRY_DELAYS_MS = [10_000, 30_000, 120_000, 300_000]
 const DEFAULT_AUTO_APPROVAL_OPTIONS: Record<AutoApprovalOptionKey, boolean> = {
   readOnly: false,
   write: false,
@@ -116,8 +127,10 @@ const DEFAULT_AUTO_APPROVAL_OPTIONS: Record<AutoApprovalOptionKey, boolean> = {
 export class LabrastroController implements vscode.Disposable {
   private readonly client: LabrastroRemoteClient
   private readonly approvalDocuments: ApprovalDocumentProvider
+  private readonly sessionOutbox: SessionSnapshotOutbox
   private activeChatId: string | undefined
   private currentSessionId: string | undefined
+  private activeDraftSessionId: string | undefined
   private backendCapabilities: BackendCapabilities | null | undefined
   private sessionApiAvailable: boolean | undefined
   private sessionFingerprint: string | undefined
@@ -125,6 +138,8 @@ export class LabrastroController implements vscode.Disposable {
   private sessionInitialization: Promise<void> | undefined
   private sessionInitializationToken = 0
   private sessions: SessionMetadataState[] = []
+  private readonly snapshotSyncTimers = new Map<string, NodeJS.Timeout>()
+  private readonly snapshotSyncInFlight = new Set<string>()
   private toolchainState: Record<string, unknown> | undefined
   private environmentManifest: Record<string, unknown> | undefined
   private environmentSnapshot: EnvironmentSnapshot = createEmptyEnvironmentSnapshot()
@@ -136,6 +151,7 @@ export class LabrastroController implements vscode.Disposable {
   constructor(private readonly context: vscode.ExtensionContext) {
     this.client = new LabrastroRemoteClient(context)
     this.approvalDocuments = new ApprovalDocumentProvider()
+    this.sessionOutbox = new SessionSnapshotOutbox(context)
     this.context.subscriptions.push(
       vscode.workspace.registerTextDocumentContentProvider(
         ApprovalDocumentProvider.scheme,
@@ -169,6 +185,7 @@ export class LabrastroController implements vscode.Disposable {
     post({ type: "environment.snapshot", payload: this.environmentSnapshot })
     post({ type: "executorType.state", payload: this.getExecutorType() })
     post({ type: "locale.state", locale: this.context.workspaceState.get<string>("labrastro.locale") || vscode.env.language })
+    await this.postSessionSyncStatus(post)
     post({
       type: "startup.metric",
       payload: { name: "initial-state-ready", elapsedMs: Date.now() - startedAt },
@@ -212,6 +229,7 @@ export class LabrastroController implements vscode.Disposable {
       run("connection-state", () => this.postConnectionState(post)),
       run("admin-state", () => this.postAdminState(post)),
       run("backend-capabilities", () => this.refreshBackendCapabilities(post)),
+      run("session-sync", () => this.syncDueSessionSnapshots(post)),
     ]
     if (options.initializeSession) {
       tasks.push(run("session-initialize", () => this.initializeSessionState(post)))
@@ -612,6 +630,7 @@ export class LabrastroController implements vscode.Disposable {
           void this.startChat(message.text, stringValue(message.sessionId), post, {
             mode: stringValue(message.mode),
             workflowMode: stringValue(message.workflowMode) || stringValue(message.workflow_mode),
+            draftSessionId: stringValue(message.draftSessionId) || stringValue(message.draft_session_id),
           })
         }
         return true
@@ -737,6 +756,165 @@ export class LabrastroController implements vscode.Disposable {
     }
   }
 
+  private broadcastWebviewMessage(payload: Record<string, unknown>): void {
+    for (const post of this.webviewPosts) {
+      this.postWebviewMessage(post, payload)
+    }
+  }
+
+  private sessionHistoryDisabledMessage(): string | undefined {
+    if (this.backendCapabilities?.sessionHistoryWritable === false) {
+      return "服务端会话保存已关闭，当前对话会先保存在本地并等待同步。"
+    }
+    return undefined
+  }
+
+  private async postSessionSyncStatus(post?: PostMessage): Promise<void> {
+    const disabled = this.backendCapabilities?.sessionHistoryWritable === false
+    const payload = await this.sessionOutbox.summary(this.client.hostUrl, {
+      disabled,
+      message: disabled ? this.sessionHistoryDisabledMessage() : undefined,
+    })
+    const message = { type: "session.syncStatus", payload }
+    if (post) {
+      this.postWebviewMessage(post, message)
+      return
+    }
+    this.broadcastWebviewMessage(message)
+  }
+
+  private async mergeLocalSessions(): Promise<void> {
+    this.sessions = await this.sessionOutbox.mergeMetadata(
+      this.client.hostUrl,
+      this.sessions as SessionSnapshotMetadata[]
+    )
+  }
+
+  private snapshotTimerKey(hostUrl: string, sessionId: string): string {
+    return `${hostUrl}\n${sessionId}`
+  }
+
+  private scheduleSnapshotSync(hostUrl: string, record: SessionSnapshotOutboxRecord): void {
+    const key = this.snapshotTimerKey(hostUrl, record.sessionId)
+    const existing = this.snapshotSyncTimers.get(key)
+    if (existing) {
+      clearTimeout(existing)
+      this.snapshotSyncTimers.delete(key)
+    }
+    if (record.status === "synced" || isLocalDraftSessionId(record.sessionId)) return
+    if (this.backendCapabilities?.sessionHistoryWritable === false) return
+    const delayMs = Math.max(0, (record.nextAttemptAt || Date.now()) - Date.now())
+    const timer = setTimeout(() => {
+      this.snapshotSyncTimers.delete(key)
+      void this.syncSnapshotRecord(hostUrl, record.sessionId)
+    }, delayMs)
+    this.snapshotSyncTimers.set(key, timer)
+  }
+
+  private retryDelayMs(record: SessionSnapshotOutboxRecord): number {
+    return SNAPSHOT_RETRY_DELAYS_MS[
+      Math.min(record.retryCount, SNAPSHOT_RETRY_DELAYS_MS.length - 1)
+    ]
+  }
+
+  private async syncDueSessionSnapshots(post?: PostMessage): Promise<void> {
+    if (this.backendCapabilities === undefined) {
+      await this.refreshBackendCapabilities(post)
+    }
+    if (this.backendCapabilities?.sessionHistoryWritable === false) {
+      await this.postSessionSyncStatus(post)
+      return
+    }
+    const hostUrl = this.client.hostUrl
+    const due = await this.sessionOutbox.due(hostUrl)
+    for (const record of due) {
+      await this.syncSnapshotRecord(hostUrl, record.sessionId, post)
+    }
+    await this.postSessionSyncStatus(post)
+  }
+
+  private async syncSnapshotRecord(
+    hostUrl: string,
+    sessionId: string,
+    post?: PostMessage
+  ): Promise<void> {
+    const key = this.snapshotTimerKey(hostUrl, sessionId)
+    if (this.snapshotSyncInFlight.has(key)) return
+    const record = await this.sessionOutbox.read(hostUrl, sessionId)
+    if (!record || record.status === "synced" || isLocalDraftSessionId(sessionId)) return
+    if (this.activeChatId) {
+      this.scheduleSnapshotSync(hostUrl, {
+        ...record,
+        nextAttemptAt: Date.now() + 1_000,
+      })
+      return
+    }
+    if (this.sessionApiAvailable === false || this.backendCapabilities?.sessionHistoryWritable === false) {
+      const pending = await this.sessionOutbox.markPending(
+        hostUrl,
+        sessionId,
+        this.sessionHistoryDisabledMessage()
+      )
+      if (pending) {
+        this.postSnapshotStored(pending, post)
+      }
+      await this.postSessionSyncStatus(post)
+      return
+    }
+    this.snapshotSyncInFlight.add(key)
+    try {
+      const payload = await this.client.saveSessionSnapshot(
+        sessionId,
+        record.snapshot,
+        record.snapshotDigest
+      )
+      this.sessionApiAvailable = true
+      const synced = await this.sessionOutbox.markSynced(
+        hostUrl,
+        sessionId,
+        stringValue(payload.snapshot_digest) || record.snapshotDigest
+      )
+      if (synced) {
+        this.postSnapshotStored(synced, post)
+      }
+    } catch (error) {
+      if (isSessionApiUnavailable(error)) {
+        this.sessionApiAvailable = false
+      }
+      const failed = await this.sessionOutbox.markFailed(
+        hostUrl,
+        sessionId,
+        errorMessage(error),
+        this.retryDelayMs(record)
+      )
+      if (failed) {
+        this.postSnapshotStored(failed, post)
+        this.scheduleSnapshotSync(hostUrl, failed)
+      }
+    } finally {
+      this.snapshotSyncInFlight.delete(key)
+      await this.postSessionSyncStatus(post)
+    }
+  }
+
+  private postSnapshotStored(
+    record: SessionSnapshotOutboxRecord,
+    post?: PostMessage
+  ): void {
+    const payload = {
+      type: "session.snapshotStored",
+      sessionId: record.sessionId,
+      snapshotDigest: record.snapshotDigest,
+      status: record.status,
+      message: record.message,
+    }
+    if (post) {
+      this.postWebviewMessage(post, payload)
+      return
+    }
+    this.broadcastWebviewMessage(payload)
+  }
+
   async postConnectionState(post: PostMessage): Promise<void> {
     try {
       post({ type: "connection.state", payload: await this.client.connectionState() })
@@ -760,6 +938,7 @@ export class LabrastroController implements vscode.Disposable {
     try {
       this.backendCapabilities = await this.client.capabilities()
       post?.({ type: "backend.capabilities", payload: this.backendCapabilities })
+      await this.postSessionSyncStatus(post)
     } catch {
       this.backendCapabilities = null
     }
@@ -862,6 +1041,7 @@ export class LabrastroController implements vscode.Disposable {
 
   private async refreshSessions(limit = 20): Promise<{ fingerprint?: string }> {
     if (this.sessionApiAvailable === false) {
+      await this.mergeLocalSessions()
       return { fingerprint: this.sessionFingerprint }
     }
     try {
@@ -872,21 +1052,25 @@ export class LabrastroController implements vscode.Disposable {
       if (payload.sessions_unchanged !== true) {
         this.sessions = normalizeSessionMetadataList(payload.sessions)
       }
+      await this.mergeLocalSessions()
     } catch (error) {
       if (isSessionApiUnavailable(error)) {
         this.sessionApiAvailable = false
         this.sessionFingerprint = undefined
         this.sessionListEtag = undefined
         this.sessions = []
+        await this.mergeLocalSessions()
         return {}
       }
-      throw error
+      await this.mergeLocalSessions()
+      return { fingerprint: this.sessionFingerprint }
     }
     return { fingerprint: this.sessionFingerprint }
   }
 
   private async postSessionList(post: PostMessage): Promise<void> {
     try {
+      await this.syncDueSessionSnapshots(post)
       await this.refreshSessions(50)
       post({
         type: "session.list",
@@ -934,6 +1118,30 @@ export class LabrastroController implements vscode.Disposable {
         fingerprint: this.sessionFingerprint,
       })
     } catch (error) {
+      const localPayload = await this.sessionOutbox.payload(this.client.hostUrl, sessionId)
+      if (localPayload) {
+        if (options.isStale?.()) {
+          return
+        }
+        const metadata = normalizeSessionMetadata(localPayload.metadata)
+        const bundle = buildSessionBundle(localPayload, metadata)
+        this.currentSessionId = metadata.id
+        await this.context.workspaceState.update("labrastro.currentSessionId", metadata.id)
+        if (!options.suppressListRefresh) {
+          await this.refreshSessions()
+        }
+        post({
+          type: "session.loaded",
+          sessionId: metadata.id,
+          reason: options.reason,
+          metadata,
+          bundle,
+          runtimeState: objectValue(localPayload.runtime_state),
+          sessions: this.sessions,
+          fingerprint: this.sessionFingerprint,
+        })
+        return
+      }
       post({ type: "session.error", message: errorMessage(error) })
     }
   }
@@ -945,6 +1153,7 @@ export class LabrastroController implements vscode.Disposable {
     if (this.sessionApiAvailable === false) {
       this.currentSessionId = undefined
       await this.context.workspaceState.update("labrastro.currentSessionId", undefined)
+      await this.mergeLocalSessions()
       post({
         type: "session.list",
         sessions: this.sessions,
@@ -995,9 +1204,11 @@ export class LabrastroController implements vscode.Disposable {
       post({ type: "session.error", message: "Missing session id." })
       return
     }
+    await this.sessionOutbox.delete(this.client.hostUrl, sessionId)
     if (this.sessionApiAvailable === false) {
       this.sessions = this.sessions.filter((session) => session.id !== sessionId)
       post({ type: "session.deleted", sessionId, sessions: this.sessions })
+      await this.postSessionSyncStatus(post)
       return
     }
     try {
@@ -1008,6 +1219,7 @@ export class LabrastroController implements vscode.Disposable {
         await this.context.workspaceState.update("labrastro.currentSessionId", undefined)
       }
       await this.refreshSessions()
+      await this.postSessionSyncStatus(post)
       post({
         type: "session.deleted",
         sessionId,
@@ -1038,16 +1250,33 @@ export class LabrastroController implements vscode.Disposable {
     post: PostMessage
   ): Promise<void> {
     if (!sessionId || !Object.keys(snapshot).length) return
-    if (this.sessionApiAvailable === false) return
-    try {
-      await this.client.saveSessionSnapshot(sessionId, snapshot, snapshotDigest)
-    } catch (error) {
-      if (isSessionApiUnavailable(error)) {
-        this.sessionApiAvailable = false
-        return
-      }
-      post({ type: "session.error", message: `会话视图保存失败：${errorMessage(error)}` })
+    const hostUrl = this.client.hostUrl
+    const localDraft = isLocalDraftSessionId(sessionId)
+    const canUpload =
+      !localDraft &&
+      this.sessionApiAvailable !== false &&
+      this.backendCapabilities?.sessionHistoryWritable !== false
+    const record = await this.sessionOutbox.upsert(
+      hostUrl,
+      sessionId,
+      snapshot,
+      snapshotDigest,
+      "pending",
+      canUpload ? undefined : this.sessionHistoryDisabledMessage()
+    )
+    this.postSnapshotStored(record, post)
+    await this.postSessionSyncStatus(post)
+    if (!canUpload) {
+      return
     }
+    if (this.activeChatId) {
+      this.scheduleSnapshotSync(hostUrl, {
+        ...record,
+        nextAttemptAt: Date.now() + 1_000,
+      })
+      return
+    }
+    await this.syncSnapshotRecord(hostUrl, sessionId, post)
   }
 
   private async switchSessionMainModel(
@@ -1741,6 +1970,7 @@ export class LabrastroController implements vscode.Disposable {
 
   private async refreshEnvironmentSessionList(post: PostMessage): Promise<void> {
     try {
+      await this.syncDueSessionSnapshots(post)
       await this.refreshSessions()
       post({
         type: "session.list",
@@ -1756,9 +1986,10 @@ export class LabrastroController implements vscode.Disposable {
     text: string,
     requestedSessionId: string | undefined,
     post: PostMessage,
-    options: { mode?: string; workflowMode?: string } = {}
+    options: { mode?: string; workflowMode?: string; draftSessionId?: string } = {}
   ): Promise<void> {
     try {
+      this.activeDraftSessionId = options.draftSessionId
       if (!requestedSessionId && this.sessionInitialization) {
         this.sessionInitializationToken += 1
       }
@@ -1807,6 +2038,7 @@ export class LabrastroController implements vscode.Disposable {
         )
       ) {
         post({ type: "chat.error", message: LEGACY_BACKEND_UPGRADE_MESSAGE })
+        this.activeDraftSessionId = undefined
         return
       }
       post({ type: "chat.started", text })
@@ -1835,12 +2067,25 @@ export class LabrastroController implements vscode.Disposable {
                   type: "chat.error",
                   message: `会话绑定异常：当前会话 ${sessionId}，远端返回 ${remoteSessionId}。`,
                 })
+                this.activeDraftSessionId = undefined
                 return
               }
               if (remoteSessionId && remoteSessionId !== this.currentSessionId) {
+                const draftSessionId = this.activeDraftSessionId
+                if (draftSessionId) {
+                  const adopted = await this.sessionOutbox.adoptDraft(
+                    this.client.hostUrl,
+                    draftSessionId,
+                    remoteSessionId
+                  )
+                  if (adopted) {
+                    this.postSnapshotStored(adopted, post)
+                  }
+                }
                 post({
                   type: "session.adopted",
                   sessionId: remoteSessionId,
+                  previousSessionId: draftSessionId,
                 })
               }
               this.currentSessionId = remoteSessionId || sessionId
@@ -1862,6 +2107,7 @@ export class LabrastroController implements vscode.Disposable {
         cursor = nextCursor
         if (stream.done) {
           try {
+            await this.syncDueSessionSnapshots(post)
             await this.refreshSessions()
             post({
               type: "session.list",
@@ -1875,12 +2121,14 @@ export class LabrastroController implements vscode.Disposable {
           if (this.activeChatId === chatId) {
             this.activeChatId = undefined
           }
+          this.activeDraftSessionId = undefined
           break
         }
       }
     } catch (error) {
       post({ type: "chat.error", message: errorMessage(error) })
       this.activeChatId = undefined
+      this.activeDraftSessionId = undefined
     }
   }
 
@@ -1952,6 +2200,10 @@ export class LabrastroController implements vscode.Disposable {
 
   dispose(): void {
     this.disposed = true
+    for (const timer of this.snapshotSyncTimers.values()) {
+      clearTimeout(timer)
+    }
+    this.snapshotSyncTimers.clear()
     void this.client.stopPeer()
   }
 }
@@ -2041,6 +2293,9 @@ function normalizeSessionMetadata(value: unknown): SessionMetadataState {
     savedAt: stringValue(payload.savedAt) || stringValue(payload.saved_at) || "",
     preview: stringValue(payload.preview) || "",
     fingerprint: stringValue(payload.fingerprint) || "",
+    syncStatus: normalizeSyncStatus(payload.syncStatus) || normalizeSyncStatus(payload.sync_status),
+    syncError: stringValue(payload.syncError) || stringValue(payload.sync_error) || undefined,
+    source: normalizeSessionSource(payload.source),
   }
 }
 
@@ -2049,6 +2304,18 @@ function normalizeSessionMetadataList(value: unknown): SessionMetadataState[] {
   return value
     .map((item) => normalizeSessionMetadata(item))
     .filter((item) => item.id)
+}
+
+function normalizeSyncStatus(value: unknown): SessionSnapshotSyncStatus | undefined {
+  return value === "synced" || value === "pending" || value === "failed"
+    ? value
+    : undefined
+}
+
+function normalizeSessionSource(value: unknown): "server" | "local" | "merged" | undefined {
+  return value === "server" || value === "local" || value === "merged"
+    ? value
+    : undefined
 }
 
 function buildSessionBundle(
@@ -2073,6 +2340,9 @@ function buildSessionBundle(
     kind: stringValue(snapshotSession.kind) || "main",
     state: stringValue(snapshotSession.state) || "active",
     summary: stringValue(snapshotSession.summary) || metadata.preview,
+    syncStatus: metadata.syncStatus,
+    syncError: metadata.syncError,
+    source: metadata.source,
   }
   const fallback = buildBundleFromMessages(metadata, arrayValue(payload.messages))
   const fallbackStats = objectValue(fallback.stats)

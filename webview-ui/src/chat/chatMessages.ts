@@ -7,6 +7,7 @@ export type ChatWorkflowMode = "chat" | "taskflow"
 export interface ChatSendInput {
   text: string
   sessionId?: string
+  draftSessionId?: string
   mode?: string
   workflowMode?: ChatWorkflowMode
 }
@@ -39,6 +40,7 @@ export function buildChatSendMessage(input: ChatSendInput): Record<string, unkno
     type: "chat.send",
     text,
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+    ...(input.draftSessionId ? { draftSessionId: input.draftSessionId } : {}),
     ...(mode ? { mode } : {}),
     ...(workflowMode ? { workflowMode } : {}),
   }

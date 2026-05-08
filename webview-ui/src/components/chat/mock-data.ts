@@ -92,6 +92,9 @@ export interface MockSession {
   updatedAt: string
   kind?: MockSessionKind
   state?: MockSessionState
+  syncStatus?: "synced" | "pending" | "failed"
+  syncError?: string
+  source?: "server" | "local" | "merged"
   parentSessionId?: string
   sourceSessionId?: string
   sourceNodeId?: string
