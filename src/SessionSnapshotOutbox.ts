@@ -227,7 +227,8 @@ export class SessionSnapshotOutbox {
 
   async mergeMetadata(
     hostUrl: string,
-    serverSessions: SessionSnapshotMetadata[]
+    serverSessions: SessionSnapshotMetadata[],
+    options: { includeSyncedLocalOnly?: boolean } = {}
   ): Promise<SessionSnapshotMetadata[]> {
     const records = await this.list(hostUrl)
     const byId = new Map(serverSessions.map((session) => [session.id, session]))
@@ -241,7 +242,7 @@ export class SessionSnapshotOutbox {
           syncError: local.syncError,
           source: local.syncStatus === "synced" ? "server" : "merged",
         })
-      } else {
+      } else if (shouldMergeLocalOnlyRecord(record, options)) {
         byId.set(local.id, local)
       }
     }
@@ -296,6 +297,16 @@ export class SessionSnapshotOutbox {
       hostKey(hostUrl)
     )
   }
+}
+
+function shouldMergeLocalOnlyRecord(
+  record: SessionSnapshotOutboxRecord,
+  options: { includeSyncedLocalOnly?: boolean }
+): boolean {
+  if (isLocalDraftSessionId(record.sessionId)) return true
+  if ((record.message || "").includes("session_fingerprint_mismatch")) return false
+  if (record.status === "synced") return options.includeSyncedLocalOnly === true
+  return true
 }
 
 export function metadataFromRecord(

@@ -94,4 +94,31 @@ describe("SessionSnapshotOutbox", () => {
       status: "pending",
     })
   })
+
+  it("hides stale synced cache entries when server history is available", async () => {
+    const outbox = new SessionSnapshotOutbox(context())
+    await outbox.upsert(hostUrl, "session_server", snapshot("session_server", "server"), "d1")
+    await outbox.markSynced(hostUrl, "session_server", "d1")
+    await outbox.upsert(hostUrl, "session_stale", snapshot("session_stale", "stale"), "d2")
+    await outbox.markSynced(hostUrl, "session_stale", "d2")
+    await outbox.upsert(hostUrl, "session-draft", snapshot("session-draft", "draft"), "d3")
+
+    const merged = await outbox.mergeMetadata(
+      hostUrl,
+      [{
+        id: "session_server",
+        model: "m1",
+        savedAt: "2026-05-08T00:00:00.000Z",
+        preview: "server",
+        fingerprint: "remote:host:workspace",
+        source: "server",
+      }],
+      { includeSyncedLocalOnly: false }
+    )
+
+    expect(merged.map((session) => session.id)).toEqual([
+      "session_server",
+      "session-draft",
+    ])
+  })
 })
