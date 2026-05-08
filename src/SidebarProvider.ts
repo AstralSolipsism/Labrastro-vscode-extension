@@ -95,60 +95,64 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     this.disposables.push(this.labrastro.registerWebviewPost(postToWebview))
     webview.onDidReceiveMessage(
       async (message: Record<string, unknown>) => {
-        const type = message.type as string
+        try {
+          const type = message.type as string
 
-        switch (type) {
-          case "webviewReady":
-            // Webview 前端初始化完成，推送初始状态
-            this.isWebviewReady = true
-            await this.labrastro.postInitialState(postToWebview)
-            break
+          switch (type) {
+            case "webviewReady":
+              // Webview 前端初始化完成，推送初始状态
+              this.isWebviewReady = true
+              await this.labrastro.postInitialState(postToWebview)
+              break
 
-          case "sendMessage":
-            // 用户发送消息 — 在此处理业务逻辑
-            await this.handleUserMessage(message)
-            break
+            case "sendMessage":
+              // 用户发送消息 — 在此处理业务逻辑
+              await this.handleUserMessage(message)
+              break
 
-          case "openExternal":
-            // 打开外部链接（webview 无法直接打开 URL）
-            if (typeof message.url === "string") {
-              vscode.env.openExternal(vscode.Uri.parse(message.url))
-            }
-            break
+            case "openExternal":
+              // 打开外部链接（webview 无法直接打开 URL）
+              if (typeof message.url === "string") {
+                vscode.env.openExternal(vscode.Uri.parse(message.url))
+              }
+              break
 
-          case "openSettings":
-            // 侧边栏中点击设置 → 触发命令打开独立 Settings 面板
-            vscode.commands.executeCommand(
-              "labrastro.openSettings",
-              typeof message.tab === "string" ? message.tab : undefined
-            )
-            break
+            case "openSettings":
+              // 侧边栏中点击设置 → 触发命令打开独立 Settings 面板
+              vscode.commands.executeCommand(
+                "labrastro.openSettings",
+                typeof message.tab === "string" ? message.tab : undefined
+              )
+              break
 
-          case "openAbout":
-            // 侧边栏中点击关于 → 触发命令打开独立 About 面板
-            vscode.commands.executeCommand("labrastro.openAbout")
-            break
+            case "openAbout":
+              // 侧边栏中点击关于 → 触发命令打开独立 About 面板
+              vscode.commands.executeCommand("labrastro.openAbout")
+              break
 
-          case "openAgentManager":
-            vscode.commands.executeCommand("labrastro.openAgentManager", {
-              nodeId: typeof message.nodeId === "string" ? message.nodeId : undefined,
-              branchId: typeof message.branchId === "string" ? message.branchId : undefined,
-              sessionId: typeof message.sessionId === "string" ? message.sessionId : undefined,
-              intent: typeof message.intent === "string" ? message.intent : undefined,
-            })
-            break
+            case "openAgentManager":
+              vscode.commands.executeCommand("labrastro.openAgentManager", {
+                nodeId: typeof message.nodeId === "string" ? message.nodeId : undefined,
+                branchId: typeof message.branchId === "string" ? message.branchId : undefined,
+                sessionId: typeof message.sessionId === "string" ? message.sessionId : undefined,
+                intent: typeof message.intent === "string" ? message.intent : undefined,
+              })
+              break
 
-          case "showInfo":
-            // 显示信息通知
-            if (typeof message.text === "string") {
-              vscode.window.showInformationMessage(message.text)
-            }
-            break
+            case "showInfo":
+              // 显示信息通知
+              if (typeof message.text === "string") {
+                vscode.window.showInformationMessage(message.text)
+              }
+              break
 
-          default:
-            if (!(await this.labrastro.handleMessage(message, postToWebview))) {
-              console.log(`[labrastro] 未知消息类型: ${type}`, message)
-            }
+            default:
+              if (!(await this.labrastro.handleMessage(message, postToWebview))) {
+                console.log(`[labrastro] 未知消息类型: ${type}`, message)
+              }
+          }
+        } catch (error) {
+          console.warn("[labrastro] sidebar webview message failed", error)
         }
       },
       undefined,

@@ -186,17 +186,18 @@ export class SettingsPanelProvider implements vscode.Disposable {
 
     // ④ 通用消息转发（showInfo、openExternal 等）
     const genericDisposable = panel.webview.onDidReceiveMessage(async (msg) => {
-      if (msg.type === "showInfo" && typeof msg.text === "string") {
-        vscode.window.showInformationMessage(msg.text)
-        return
-      }
-      if (msg.type === "openExternal" && typeof msg.url === "string") {
-        vscode.env.openExternal(vscode.Uri.parse(msg.url))
-        return
-      }
-      await this.labrastro.handleMessage(msg, postToWebview)
-      if (msg.type === "connection.login") {
-        vscode.window.showInformationMessage("Labrastro 已登录")
+      try {
+        if (msg.type === "showInfo" && typeof msg.text === "string") {
+          vscode.window.showInformationMessage(msg.text)
+          return
+        }
+        if (msg.type === "openExternal" && typeof msg.url === "string") {
+          vscode.env.openExternal(vscode.Uri.parse(msg.url))
+          return
+        }
+        await this.labrastro.handleMessage(msg, postToWebview)
+      } catch (error) {
+        console.warn("[labrastro] settings webview message failed", error)
       }
     })
 
