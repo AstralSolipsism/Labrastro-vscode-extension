@@ -224,6 +224,26 @@ function fetchPathCount(fetchMock: ReturnType<typeof vi.fn>, pathname: string): 
   return fetchMock.mock.calls.filter(([input]) => String(input).endsWith(pathname)).length
 }
 
+function remoteContractFixtures(): Array<{
+  name: string
+  request: unknown
+  response: unknown
+}> {
+  const contractPath = path.resolve(
+    __dirname,
+    "..",
+    "..",
+    "ReuleauxCoder",
+    "labrastro_server",
+    "interfaces",
+    "http",
+    "remote",
+    "protocol",
+    "contracts.json"
+  )
+  return JSON.parse(fsSync.readFileSync(contractPath, "utf-8")).fixtures
+}
+
 describe("LabrastroRemoteClient remote errors", () => {
   it("keeps HTTP status and backend error code", async () => {
     const response = new Response(
@@ -235,6 +255,35 @@ describe("LabrastroRemoteClient remote errors", () => {
       status: 401,
       code: "invalid_peer_token",
       message: "401 invalid_peer_token",
+    })
+  })
+
+  it("parses shared remote contract success and error samples", async () => {
+    const fixtures = Object.fromEntries(
+      remoteContractFixtures().map((fixture) => [fixture.name, fixture])
+    ) as Record<string, { response: unknown }>
+
+    await expect(
+      parseJsonResponse(new Response(JSON.stringify(fixtures["auth.login"].response)))
+    ).resolves.toMatchObject({
+      ok: true,
+      access_token: "at_contract",
+      user: { username: "admin" },
+    })
+
+    await expect(
+      parseJsonResponse(new Response(
+        JSON.stringify(fixtures["error.invalid_json"].response),
+        { status: 400 }
+      ))
+    ).rejects.toMatchObject({
+      status: 400,
+      code: "invalid_json",
+      body: {
+        ok: false,
+        error: "invalid_json",
+        request_id: "req_contract",
+      },
     })
   })
 
