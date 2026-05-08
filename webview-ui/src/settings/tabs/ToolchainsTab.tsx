@@ -1,8 +1,14 @@
 import { Component, For, Show } from "solid-js"
 import { t } from "../../i18n"
-import { ApprovalDetailsDialog, approvalSummary, type ApprovalDecision } from "../../components/chat/ApprovalDetailsDialog"
+import {
+  ApprovalDetailsDialog,
+  approvalSummary,
+  extractApprovalCommand,
+  type ApprovalDecision,
+} from "../../components/chat/ApprovalDetailsDialog"
 import { RefreshButton } from "../../components/common/RefreshButton"
 import { DialogSurface } from "../../components/common/interaction"
+import { defaultCommandRuleCandidateRules } from "../../utils/command-auto-approval"
 import { StatusBadge } from "../components/StatusBadge"
 import { settingsMessages } from "../settingsMessages"
 import type { SettingsController } from "../useSettingsController"
@@ -92,10 +98,18 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
     toolchainIngestLogs,
   } = props.controller
 
-  const renderEnvironmentSection = (
+  const quickRememberEnvironmentApprovalDecision = (
+    approval: Parameters<typeof rememberEnvironmentApprovalDecision>[0],
+    decision: ApprovalDecision,
+  ) => {
+    const rules = defaultCommandRuleCandidateRules(extractApprovalCommand(approval))
+    if (!rules.length) return
+    rememberEnvironmentApprovalDecision(approval, decision, rules)
+  }
+
+  const renderEnvironmentSection = (
     kind: EnvironmentEntryKind,
     title: string,
-    description: string,
   ) => {
     const entries = () => environmentEntriesByKind()[kind]
     return (
@@ -103,7 +117,6 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
         <div class="settings-section-heading">
           <div>
             <span>{title}</span>
-            <small class="setting-description">{description}</small>
           </div>
           <StatusBadge>{String(entries().length)}</StatusBadge>
         </div>
@@ -218,14 +231,12 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
   const renderToolchainGroup = (
     kind: ToolchainKind,
     title: string,
-    description: string,
     items: ToolchainRecord[],
   ) => (
     <section class="settings-section settings-section--flat">
       <div class="settings-section-heading">
         <div>
           <span>{title}</span>
-          <small>{description}</small>
         </div>
         <StatusBadge>{String(items.length)}</StatusBadge>
       </div>
@@ -283,7 +294,6 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
           <div class="settings-modal__header">
             <div>
               <h3>{title}</h3>
-              <p>保存只更新服务器 manifest；实际安装仍由“配置环境”智能体执行。</p>
             </div>
             <button class="ez-icon-button" onClick={() => setToolchainEditor(undefined)} aria-label="关闭">
               <span class="codicon codicon-close" aria-hidden="true" />
@@ -448,7 +458,6 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
       <div class="settings-page-header">
         <div>
           <h2>{t("toolchain.title")}</h2>
-          <p>按服务器给出的权威清单检查和配置本地能力，执行结果直接留在当前页面。</p>
           <p class="setting-description">
             当前状态：{environmentRunStatusLabel(environmentSnapshot().status)} · 最近清单刷新：{formatTimestamp(environmentSnapshot().lastManifestAt)}
           </p>
@@ -522,16 +531,15 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
         <div class="settings-section-heading">
           <div>
             <span>服务器能力 Manifest</span>
-            <small>这里维护服务器权威清单、文档信息和安装/验证指导；保存不会直接安装。</small>
           </div>
           <RefreshButton class="btn-secondary" onClick={() => settingsMessages.refreshToolchains(vscode)}>
             刷新管理列表
           </RefreshButton>
         </div>
       </section>
-      {renderToolchainGroup("cli", "CLI", "命令行工具、可执行程序和本地二进制依赖。", toolchainGroups().cli)}
-      {renderToolchainGroup("mcp", "MCP", "需要注册到本地或项目环境中的 MCP 服务。", toolchainGroups().mcp)}
-      {renderToolchainGroup("skill", "Skills", "服务器要求可用的技能包和协作能力。", toolchainGroups().skill)}
+      {renderToolchainGroup("cli", "CLI", toolchainGroups().cli)}
+      {renderToolchainGroup("mcp", "MCP", toolchainGroups().mcp)}
+      {renderToolchainGroup("skill", "Skills", toolchainGroups().skill)}
 
       <section class="settings-section settings-section--flat environment-banner">
         <div class="settings-status-line">
@@ -576,7 +584,9 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
           <div class="environment-approval-list">
             <For each={environmentSnapshot().approvals}>
               {(approval) => {
-                const summary = () => approvalSummary(approval)
+                const summary = () => approvalSummary(approval)
+                const quickRememberRules = () => defaultCommandRuleCandidateRules(extractApprovalCommand(approval))
+                const canQuickRemember = () => summary().category === "execute" && quickRememberRules().length > 0
                 return (
                   <div class="environment-approval-card">
                     <div class="environment-approval-card__body">
@@ -589,12 +599,22 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
                         <span class="codicon codicon-file-diff" aria-hidden="true" />
                         查看详情
                       </button>
-                      <button class="btn btn-primary" onClick={() => replyEnvironmentApproval(approval, "allow_once")}>
-                        批准一次
-                      </button>
-                      <button class="btn btn-secondary" onClick={() => replyEnvironmentApproval(approval, "deny_once")}>
-                        拒绝
-                      </button>
+                      <Show when={canQuickRemember()}>
+                        <button class="btn btn-primary" onClick={() => quickRememberEnvironmentApprovalDecision(approval, "allow_once")}>
+                          批准并记住
+                        </button>
+                      </Show>
+                      <button class="btn btn-primary" onClick={() => replyEnvironmentApproval(approval, "allow_once")}>
+                        批准一次
+                      </button>
+                      <Show when={canQuickRemember()}>
+                        <button class="btn btn-secondary" onClick={() => quickRememberEnvironmentApprovalDecision(approval, "deny_once")}>
+                          拒绝并记住
+                        </button>
+                      </Show>
+                      <button class="btn btn-secondary" onClick={() => replyEnvironmentApproval(approval, "deny_once")}>
+                        拒绝
+                      </button>
                     </div>
                   </div>
                 )
@@ -610,13 +630,12 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
           <div class="settings-empty-state">
             <span class="codicon codicon-tools" aria-hidden="true" />
           <strong>环境清单尚未加载。</strong>
-          <small>进入本页后会尝试读取服务器环境清单，也可以手动刷新。</small>
           </div>
         }
       >
-        {renderEnvironmentSection("cli", "CLI", "命令行工具、可执行程序和本地二进制依赖。")}
-        {renderEnvironmentSection("mcp", "MCP", "需要注册到本地或项目环境中的 MCP 服务。")}
-        {renderEnvironmentSection("skill", "Skills", "服务器要求可用的技能包和协作能力。")}
+        {renderEnvironmentSection("cli", "CLI")}
+        {renderEnvironmentSection("mcp", "MCP")}
+        {renderEnvironmentSection("skill", "Skills")}
       </Show>
 
       <section class="settings-section settings-section--flat">
@@ -662,7 +681,6 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
         <div class="settings-page-header">
           <div>
             <h2>{t("toolchain.title")}</h2>
-            <p>按 CLI / MCP / Skill 管理能力清单；部署属性、安装位置和运行结果在条目内展示。</p>
             <p class="setting-description">
               当前状态：{environmentRunStatusLabel(environmentSnapshot().status)} · 最近清单刷新：{formatTimestamp(environmentSnapshot().lastManifestAt)}
             </p>
@@ -734,7 +752,6 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
           <div class="settings-section-heading">
             <div>
               <span>新增能力</span>
-              <small>通过 fetch_Capabilities 读取文档资料并自动发现官方仓库，识别 CLI / MCP / Skill、部署属性和安装信息。</small>
             </div>
             <StatusBadge tone={toolchainIngestState().running === true ? "warning" : toolchainIngestState().persisted === true ? "success" : "muted"}>
               {toolchainIngestState().running === true ? "运行中" : toolchainIngestState().persisted === true ? "已写入" : "待命"}

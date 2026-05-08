@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   buildCommandRuleCandidates,
+  defaultCommandRuleCandidateRules,
   evaluateCommandDecision,
   getCommandDecision,
   updateCommandRuleLists,
@@ -60,6 +61,10 @@ describe("command auto approval", () => {
     expect(candidates.find((candidate) => candidate.level === "base")?.rules).toEqual(["git"])
     expect(candidates.find((candidate) => candidate.level === "firstArg")?.rules).toEqual(["git push"])
     expect(candidates.find((candidate) => candidate.level === "secondArg")?.rules).toEqual(["git push origin"])
+  })
+
+  it("uses the exact command candidate as the quick remembered approval rule", () => {
+    expect(defaultCommandRuleCandidateRules("git push origin main")).toEqual(["git push origin main"])
   })
 
   it("builds candidates for every subcommand in a command chain", () => {

@@ -147,6 +147,10 @@ export function buildCommandRuleCandidates(command: string): CommandRuleCandidat
   return candidates
 }
 
+export function defaultCommandRuleCandidateRules(command: string): string[] {
+  return buildCommandRuleCandidates(command)[0]?.rules || []
+}
+
 export function updateCommandRuleLists(
   kind: "allow" | "deny",
   rules: string[],
