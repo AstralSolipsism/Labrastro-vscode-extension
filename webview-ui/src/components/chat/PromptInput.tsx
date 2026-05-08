@@ -54,8 +54,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const modelSelectorTitle = () => {
     if (props.modelError) return props.modelError
     if (props.modelPendingLabel) return props.modelPendingLabel
-    if (!hasModelOptions()) return "没有可用模型，点击刷新服务商模型列表"
-    return props.modelDescription || "会话主模型"
+    if (!hasModelOptions()) return "没有可用模型"
+    return props.modelDescription || modelSelectorLabel()
   }
 
   return (

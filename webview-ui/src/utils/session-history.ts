@@ -4,6 +4,12 @@ export function isLocalDraftSessionId(sessionId: string | null | undefined): boo
   return Boolean(sessionId?.startsWith("session-"))
 }
 
+export function remoteSessionIdForMutation(sessionId: string | null | undefined): string | undefined {
+  const clean = sessionId?.trim()
+  if (!clean || isLocalDraftSessionId(clean)) return undefined
+  return clean
+}
+
 export function shouldIgnoreInitialSessionLoad(
   currentSessionId: string | null | undefined,
   incomingSessionId: string | null | undefined,

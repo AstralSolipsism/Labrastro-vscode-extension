@@ -38,6 +38,23 @@ describe("chat messages", () => {
     })
   })
 
+  it("builds chat.send payloads with optional startup model override", () => {
+    expect(buildChatSendMessage({
+      text: "hello",
+      draftSessionId: "session-local",
+      providerId: " deepseek ",
+      modelId: " V4PRO ",
+      parameters: { max_tokens: 4096 },
+    })).toEqual({
+      type: "chat.send",
+      text: "hello",
+      draftSessionId: "session-local",
+      providerId: "deepseek",
+      modelId: "V4PRO",
+      parameters: { max_tokens: 4096 },
+    })
+  })
+
   it("maps the frontend mode selector to the backend chat route", () => {
     expect(routeSelectedChatMode("coder")).toEqual({ mode: "coder" })
     expect(routeSelectedChatMode("planner")).toEqual({ mode: "planner" })
@@ -155,18 +172,18 @@ describe("chat state", () => {
         id: "deepseek::V4FLASH",
         providerId: "deepseek",
         modelId: "V4FLASH",
-        label: "V4FLASH",
-        description: "deepseek · V4FLASH",
+        label: "deepseek：V4FLASH",
+        description: "",
       },
       {
         id: "deepseek::V4PRO",
         providerId: "deepseek",
         modelId: "V4PRO",
-        label: "DeepSeek Pro",
+        label: "deepseek：DeepSeek Pro",
       },
     ])
-    expect(modelLabel("deepseek::V4PRO", options)).toBe("DeepSeek Pro")
-    expect(modelDescription("deepseek::V4PRO", options)).toBe("deepseek · V4PRO")
+    expect(modelLabel("deepseek::V4PRO", options)).toBe("deepseek：DeepSeek Pro")
+    expect(modelDescription("deepseek::V4PRO", options)).toBe("")
   })
 
   it("normalizes provider model arrays from admin providers", () => {
@@ -187,7 +204,7 @@ describe("chat state", () => {
       "deepseek::V4FLASH",
       "deepseek::V4PRO",
     ])
-    expect(modelLabel("deepseek::V4PRO", options)).toBe("V4 Pro")
+    expect(modelLabel("deepseek::V4PRO", options)).toBe("deepseek：V4 Pro")
   })
 
   it("keeps the active runtime model available when provider catalog is absent", () => {
@@ -201,7 +218,7 @@ describe("chat state", () => {
       id: "deepseek::V4PRO",
       providerId: "deepseek",
       modelId: "V4PRO",
-      label: "V4 Pro",
+      label: "deepseek：V4 Pro",
       activeSession: true,
     }])
     expect(resolveModelSelection("", options, {}, {

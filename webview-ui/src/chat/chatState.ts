@@ -14,6 +14,7 @@ export interface ChatModelOption {
   description: string
   activeDefault: boolean
   activeSession: boolean
+  parameters?: Record<string, unknown>
 }
 
 export interface HostTargetSummary {
@@ -151,7 +152,7 @@ export function modelLabel(profileId: string, options: ChatModelOption[], fallba
 
 export function modelDescription(profileId: string, options: ChatModelOption[], fallbackModel = ""): string {
   const option = options.find((item) => item.id === profileId)
-  if (option?.description) return option.description
+  if (option) return option.description || ""
   return fallbackModel || ""
 }
 
@@ -253,17 +254,19 @@ function modelOptionsFromCatalog(value: unknown): ChatModelOption[] {
     .map((item) => {
       const providerId = stringValue(item.provider_id) || stringValue(item.providerId) || stringValue(item.provider)
       const modelId = stringValue(item.model_id) || stringValue(item.modelId) || stringValue(item.model) || stringValue(item.id)
-      const label = stringValue(item.label) || stringValue(item.display_name) || modelId
+      const modelName = stringValue(item.label) || stringValue(item.display_name) || modelId
+      const parameters = objectValue(item.parameters)
       return {
         id: modelOptionId(providerId, modelId),
         providerId,
         modelId,
-        label,
+        label: modelDisplayLabel(providerId, modelName),
         model: modelId,
         provider: providerId,
-        description: modelDetail(modelId, providerId),
+        description: "",
         activeDefault: item.active_default === true,
         activeSession: item.active_session === true,
+        ...(Object.keys(parameters).length ? { parameters } : {}),
       }
     })
 }
@@ -285,16 +288,21 @@ function modelOptionsFromProviders(value: unknown): ChatModelOption[] {
           : {}
       const modelId = stringValue(modelRecord.model_id) || stringValue(modelRecord.model) || stringValue(modelRecord.id)
       if (!modelId) continue
+      const parameters = objectValue(modelRecord.parameters)
       options.push({
         id: modelOptionId(providerId, modelId),
         providerId,
         modelId,
-        label: stringValue(modelRecord.label) || stringValue(modelRecord.display_name) || modelId,
+        label: modelDisplayLabel(
+          providerId,
+          stringValue(modelRecord.label) || stringValue(modelRecord.display_name) || modelId,
+        ),
         model: modelId,
         provider: providerId,
-        description: modelDetail(modelId, providerId),
+        description: "",
         activeDefault: modelRecord.active_default === true,
         activeSession: modelRecord.active_session === true,
+        ...(Object.keys(parameters).length ? { parameters } : {}),
       })
     }
   }
@@ -315,16 +323,18 @@ function modelOptionsFromRuntime(value: unknown): ChatModelOption[] {
     stringValue(payload.model)
   if (!providerId || !modelId) return []
   const displayName = stringValue(payload.active_model_display_name) || modelId
+  const parameters = objectValue(payload.active_model_parameters)
   return [{
     id: modelOptionId(providerId, modelId),
     providerId,
     modelId,
-    label: displayName,
+    label: modelDisplayLabel(providerId, displayName),
     model: modelId,
     provider: providerId,
-    description: modelDetail(modelId, providerId),
+    description: "",
     activeDefault: false,
     activeSession: true,
+    ...(Object.keys(parameters).length ? { parameters } : {}),
   }]
 }
 
@@ -379,8 +389,8 @@ function builtinModeLabel(id: string): string {
   return id
 }
 
-function modelDetail(model: string, provider: string): string {
-  if (provider && model) return `${provider} · ${model}`
+function modelDisplayLabel(provider: string, model: string): string {
+  if (provider && model) return `${provider}：${model}`
   return model || provider
 }
 

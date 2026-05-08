@@ -10,6 +10,9 @@ export interface ChatSendInput {
   draftSessionId?: string
   mode?: string
   workflowMode?: ChatWorkflowMode
+  providerId?: string
+  modelId?: string
+  parameters?: Record<string, unknown>
 }
 
 export interface SessionModelSwitchInput {
@@ -36,6 +39,8 @@ export function buildChatSendMessage(input: ChatSendInput): Record<string, unkno
   const text = input.text.trim()
   const mode = input.mode?.trim()
   const workflowMode = input.workflowMode === "taskflow" ? "taskflow" : undefined
+  const providerId = input.providerId?.trim()
+  const modelId = input.modelId?.trim()
   return {
     type: "chat.send",
     text,
@@ -43,6 +48,8 @@ export function buildChatSendMessage(input: ChatSendInput): Record<string, unkno
     ...(input.draftSessionId ? { draftSessionId: input.draftSessionId } : {}),
     ...(mode ? { mode } : {}),
     ...(workflowMode ? { workflowMode } : {}),
+    ...(providerId && modelId ? { providerId, modelId } : {}),
+    ...(providerId && modelId && input.parameters && Object.keys(input.parameters).length ? { parameters: input.parameters } : {}),
   }
 }
 

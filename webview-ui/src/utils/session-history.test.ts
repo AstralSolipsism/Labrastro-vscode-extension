@@ -3,6 +3,7 @@ import type { MockSessionBundle } from "../components/chat/mock-data"
 import { mockTraceUI } from "../components/chat/mock-data"
 import {
   isLocalDraftSessionId,
+  remoteSessionIdForMutation,
   sessionBundleHasContent,
   shouldIgnoreInitialSessionLoad,
 } from "./session-history"
@@ -56,6 +57,14 @@ describe("initial session load guard", () => {
     expect(isLocalDraftSessionId("session-local")).toBe(true)
     expect(isLocalDraftSessionId("remote-session")).toBe(false)
     expect(isLocalDraftSessionId(null)).toBe(false)
+  })
+
+  it("only allows real remote session ids for remote mutations", () => {
+    expect(remoteSessionIdForMutation("session-local")).toBeUndefined()
+    expect(remoteSessionIdForMutation("")).toBeUndefined()
+    expect(remoteSessionIdForMutation(null)).toBeUndefined()
+    expect(remoteSessionIdForMutation(" session_remote ")).toBe("session_remote")
+    expect(remoteSessionIdForMutation("remote-session")).toBe("remote-session")
   })
 
   it("ignores stale initial loads when a local draft is active", () => {
