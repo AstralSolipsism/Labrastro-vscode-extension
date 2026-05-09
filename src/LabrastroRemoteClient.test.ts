@@ -68,6 +68,7 @@ import {
   CHAT_STREAM_TIMEOUT_SEC,
   LabrastroRemoteClient,
   RemoteError,
+  classifyRemoteError,
   isInvalidPeerTokenError,
   parseJsonResponse,
   retryInvalidPeerTokenOnce,
@@ -86,6 +87,7 @@ const tempDirs: string[] = []
 const DEFAULT_TEST_HOST_URL = "http://127.0.0.1:8765"
 const LEGACY_AUTH_SESSION_KEY = "labrastro.authSession"
 const DEFAULT_AUTH_SESSION_KEY = authSessionKey(DEFAULT_TEST_HOST_URL)
+type JsonBody = Record<string, unknown>
 
 function authSessionKey(hostUrl: string): string {
   return `labrastro.authSession.${Buffer.from(hostUrl).toString("base64url")}`
@@ -294,6 +296,13 @@ describe("LabrastroRemoteClient remote errors", () => {
       )
     ).toBe(true)
     expect(isInvalidPeerTokenError(new RemoteError(404, "not_found", "404 not_found", {}))).toBe(false)
+  })
+
+  it("classifies transient network, auth, and fatal chat errors", () => {
+    expect(classifyRemoteError(new TypeError("fetch failed"))).toBe("transient_network")
+    expect(classifyRemoteError(new RemoteError(503, "service_unavailable", "503 service_unavailable", {}))).toBe("transient_network")
+    expect(classifyRemoteError(new RemoteError(401, "unauthorized", "401 unauthorized", {}))).toBe("auth_required")
+    expect(classifyRemoteError(new RemoteError(404, "chat_not_found", "404 chat_not_found", {}))).toBe("fatal_chat")
   })
 })
 
@@ -886,6 +895,13 @@ describe("LabrastroRemoteClient chat start", () => {
     await client.listSessions(5, "etag-1")
     await client.saveSessionSnapshot("session-1", { turns: [] }, "digest-1")
     await client.streamChat("chat-1", 7)
+    await client.chatStatus("chat-1", 8)
+    await client.cancelChat("chat-1", "user_stop")
+    await client.approvalReply({
+      chat_id: "chat-1",
+      approval_id: "approval-1",
+      decision: "allow_once",
+    })
 
     expect(posted).toEqual([
       {
@@ -912,6 +928,31 @@ describe("LabrastroRemoteClient chat start", () => {
           chat_id: "chat-1",
           cursor: 7,
           timeout_sec: CHAT_STREAM_TIMEOUT_SEC,
+        },
+      },
+      {
+        pathname: "/remote/chat/status",
+        body: {
+          peer_token: "peer-token-1",
+          chat_id: "chat-1",
+          cursor: 8,
+        },
+      },
+      {
+        pathname: "/remote/chat/cancel",
+        body: {
+          peer_token: "peer-token-1",
+          chat_id: "chat-1",
+          reason: "user_stop",
+        },
+      },
+      {
+        pathname: "/remote/approval/reply",
+        body: {
+          peer_token: "peer-token-1",
+          chat_id: "chat-1",
+          approval_id: "approval-1",
+          decision: "allow_once",
         },
       },
     ])
@@ -959,6 +1000,147 @@ describe("LabrastroRemoteClient peer retry strategy", () => {
 
     expect(attempts).toBe(1)
     expect(recoveries).toBe(0)
+  })
+
+  it("restarts the peer once and keeps the stream cursor after an invalid peer token", async () => {
+    const storagePath = await makeTempStorage()
+    const context = makePeerContext(storagePath)
+    const target = peerTarget()
+    const streamBodies: JsonBody[] = []
+    const disconnectBodies: JsonBody[] = []
+    const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
+      const url = new URL(String(input))
+      const body = init?.body ? JSON.parse(String(init.body)) as JsonBody : {}
+      if (url.pathname === "/remote/auth/refresh") {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            access_token: "access-token-1",
+            access_expires_at: Math.floor(Date.now() / 1000) + 3600,
+            refresh_token: "refresh-token-2",
+            user: { id: "usr-1", username: "admin", role: "superadmin" },
+            device: { id: "dev-1" },
+          }),
+          { headers: { "Content-Type": "application/json" } }
+        )
+      }
+      if (url.pathname === "/remote/auth/bootstrap-token") {
+        return new Response(JSON.stringify({ ok: true, bootstrap_token: "bootstrap-token" }), {
+          headers: { "Content-Type": "application/json" },
+        })
+      }
+      if (url.pathname === "/remote/capabilities") {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            api_version: 1,
+            server_version: "0.2.9",
+            capabilities: {
+              sessions: true,
+              chat_stream: true,
+              fresh_session_without_session_hint: true,
+              peer_token_heartbeat_refresh: true,
+            },
+          }),
+          { headers: { "Content-Type": "application/json" } }
+        )
+      }
+      if (url.pathname === `/remote/artifacts/${target.os}/${target.arch}/rcoder-peer`) {
+        return new Response(new Uint8Array(Buffer.from("peer-binary")), {
+          headers: { "Content-Type": "application/octet-stream" },
+        })
+      }
+      if (url.pathname === "/remote/disconnect") {
+        disconnectBodies.push(body)
+        return new Response(JSON.stringify({ ok: true }), {
+          headers: { "Content-Type": "application/json" },
+        })
+      }
+      if (url.pathname === "/remote/chat/stream") {
+        streamBodies.push(body)
+        if (body.peer_token === "stale-peer-token") {
+          return new Response(JSON.stringify({ error: "invalid_peer_token" }), { status: 401 })
+        }
+        return new Response(
+          JSON.stringify({ events: [], done: false, next_cursor: body.cursor }),
+          { headers: { "Content-Type": "application/json" } }
+        )
+      }
+      return new Response(JSON.stringify({ error: "unexpected_url", path: url.pathname }), { status: 500 })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    childProcessMock.spawn.mockImplementation((_binaryPath: string, args: string[]) => {
+      const peerInfoIndex = args.indexOf("--peer-info-file")
+      const peerInfoPath = String(args[peerInfoIndex + 1])
+      fsSync.writeFileSync(
+        peerInfoPath,
+        JSON.stringify({ peer_id: "peer-fresh", peer_token: "fresh-peer-token" }),
+        "utf-8"
+      )
+      const peerProcess = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter
+        stderr: EventEmitter
+        exitCode: number | null
+        kill: ReturnType<typeof vi.fn>
+      }
+      peerProcess.stdout = new EventEmitter()
+      peerProcess.stderr = new EventEmitter()
+      peerProcess.exitCode = null
+      peerProcess.kill = vi.fn(() => {
+        peerProcess.exitCode = 0
+        peerProcess.emit("exit", 0, null)
+        return true
+      })
+      return peerProcess
+    })
+    const client = new LabrastroRemoteClient(context as never)
+    ;(client as unknown as { peerInfo: { peer_id: string; peer_token: string } }).peerInfo = {
+      peer_id: "peer-stale",
+      peer_token: "stale-peer-token",
+    }
+    const staleProcess = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter
+      stderr: EventEmitter
+      exitCode: number | null
+      kill: ReturnType<typeof vi.fn>
+    }
+    staleProcess.stdout = new EventEmitter()
+    staleProcess.stderr = new EventEmitter()
+    staleProcess.exitCode = null
+    staleProcess.kill = vi.fn(() => {
+      staleProcess.exitCode = 0
+      staleProcess.emit("exit", 0, null)
+      return true
+    })
+    ;(client as unknown as { peerProcess: typeof staleProcess }).peerProcess = staleProcess
+
+    await expect(client.streamChat("chat-1", 7)).resolves.toMatchObject({
+      done: false,
+      next_cursor: 7,
+    })
+
+    expect(streamBodies).toEqual([
+      {
+        peer_token: "stale-peer-token",
+        chat_id: "chat-1",
+        cursor: 7,
+        timeout_sec: CHAT_STREAM_TIMEOUT_SEC,
+      },
+      {
+        peer_token: "fresh-peer-token",
+        chat_id: "chat-1",
+        cursor: 7,
+        timeout_sec: CHAT_STREAM_TIMEOUT_SEC,
+      },
+    ])
+    expect(disconnectBodies).toEqual([
+      {
+        peer_token: "stale-peer-token",
+        reason: "peer_shutdown",
+      },
+    ])
+    expect(staleProcess.kill).toHaveBeenCalledTimes(1)
+    expect(childProcessMock.spawn).toHaveBeenCalledTimes(1)
   })
 })
 

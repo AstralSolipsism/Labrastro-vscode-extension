@@ -17,6 +17,7 @@ import {
 export type JsonObject = Record<string, unknown>
 
 export const CHAT_STREAM_TIMEOUT_SEC = 10
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
 const LEGACY_AUTH_SESSION_KEY = "labrastro.authSession"
 
 export interface BackendCapabilities {
@@ -97,11 +98,52 @@ export class RemoteError extends Error {
   }
 }
 
+export type RemoteErrorCategory = "transient_network" | "auth_required" | "fatal_chat"
+
+export class RemoteTransportError extends Error {
+  constructor(
+    message: string,
+    public readonly category: RemoteErrorCategory,
+    public readonly cause?: unknown
+  ) {
+    super(message)
+    this.name = "RemoteTransportError"
+  }
+}
+
 export function isRemoteError(error: unknown, code?: string, status?: number): error is RemoteError {
   if (!(error instanceof RemoteError)) return false
   if (code !== undefined && error.code !== code) return false
   if (status !== undefined && error.status !== status) return false
   return true
+}
+
+export function classifyRemoteError(error: unknown): RemoteErrorCategory {
+  if (error instanceof RemoteTransportError) return error.category
+  if (isInvalidPeerTokenError(error)) return "transient_network"
+  if (isRemoteError(error, "unauthorized", 401) || isRemoteError(error, "invalid_refresh_token", 401)) {
+    return "auth_required"
+  }
+  if (error instanceof RemoteError) {
+    if ([408, 429, 500, 502, 503, 504].includes(error.status)) {
+      return "transient_network"
+    }
+    return "fatal_chat"
+  }
+  const code = errorCode(error)
+  if (
+    code === "AbortError" ||
+    code === "ETIMEDOUT" ||
+    code === "ECONNRESET" ||
+    code === "ECONNREFUSED" ||
+    code === "EAI_AGAIN" ||
+    code === "ENOTFOUND" ||
+    code === "UND_ERR_CONNECT_TIMEOUT" ||
+    error instanceof TypeError
+  ) {
+    return "transient_network"
+  }
+  return "fatal_chat"
 }
 
 export function isInvalidPeerTokenError(error: unknown): boolean {
@@ -534,30 +576,35 @@ export class LabrastroRemoteClient {
     cursor: number,
     timeoutSec = CHAT_STREAM_TIMEOUT_SEC
   ): Promise<JsonObject> {
-    const peer = await this.ensurePeer()
-    return this.postJson("/remote/chat/stream", {
+    return this.postPeerJson("/remote/chat/stream", (peer) => ({
       peer_token: peer.peer_token,
       chat_id: chatId,
       cursor,
       timeout_sec: timeoutSec,
-    })
+    }), { timeoutMs: Math.max(DEFAULT_REQUEST_TIMEOUT_MS, (timeoutSec + 10) * 1000) })
+  }
+
+  async chatStatus(chatId: string, cursor?: number): Promise<JsonObject> {
+    return this.postPeerJson("/remote/chat/status", (peer) => ({
+      peer_token: peer.peer_token,
+      chat_id: chatId,
+      ...(typeof cursor === "number" ? { cursor } : {}),
+    }))
   }
 
   async cancelChat(chatId: string, reason = "user_cancelled"): Promise<JsonObject> {
-    const peer = await this.ensurePeer()
-    return this.postJson("/remote/chat/cancel", {
+    return this.postPeerJson("/remote/chat/cancel", (peer) => ({
       peer_token: peer.peer_token,
       chat_id: chatId,
       reason,
-    })
+    }))
   }
 
   async approvalReply(payload: JsonObject): Promise<JsonObject> {
-    const peer = await this.ensurePeer()
-    return this.postJson("/remote/approval/reply", {
+    return this.postPeerJson("/remote/approval/reply", (peer) => ({
       ...payload,
       peer_token: peer.peer_token,
-    })
+    }))
   }
 
   async stopPeer(): Promise<void> {
@@ -743,11 +790,12 @@ export class LabrastroRemoteClient {
 
   private async postPeerJson(
     pathname: string,
-    payload: (peer: PeerInfo) => JsonObject
+    payload: (peer: PeerInfo) => JsonObject,
+    options: { timeoutMs?: number } = {}
   ): Promise<JsonObject> {
     let peer = await this.ensurePeer()
     return retryInvalidPeerTokenOnce(
-      () => this.postJson(pathname, payload(peer)),
+      () => this.postJson(pathname, payload(peer), {}, options),
       async () => {
         await this.stopPeer()
         peer = await this.ensurePeer()
@@ -945,29 +993,56 @@ export class LabrastroRemoteClient {
     }
   }
 
-  private async postJson(pathname: string, payload: JsonObject, headers: Record<string, string> = {}): Promise<JsonObject> {
-    const response = await fetch(this.hostUrl + pathname, {
+  private async postJson(
+    pathname: string,
+    payload: JsonObject,
+    headers: Record<string, string> = {},
+    options: { timeoutMs?: number } = {}
+  ): Promise<JsonObject> {
+    const response = await fetchWithTimeout(this.hostUrl + pathname, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         ...headers,
       },
       body: JSON.stringify(payload),
-    })
+    }, options.timeoutMs)
     return parseJsonResponse(response)
   }
 
   private async getJson(pathname: string, headers: Record<string, string> = {}): Promise<JsonObject> {
-    const response = await fetch(this.hostUrl + pathname, { headers })
+    const response = await fetchWithTimeout(this.hostUrl + pathname, { headers })
     return parseJsonResponse(response)
   }
 
   private async requestBuffer(pathname: string): Promise<Buffer> {
-    const response = await fetch(this.hostUrl + pathname)
+    const response = await fetchWithTimeout(this.hostUrl + pathname)
     if (!response.ok) {
       throw new Error(`${response.status} ${await response.text()}`)
     }
     return Buffer.from(await response.arrayBuffer())
+  }
+}
+
+async function fetchWithTimeout(
+  input: string,
+  init: RequestInit = {},
+  timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS
+): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), Math.max(1, timeoutMs))
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    })
+  } catch (error) {
+    if (classifyRemoteError(error) === "transient_network") {
+      throw new RemoteTransportError(errorMessage(error), "transient_network", error)
+    }
+    throw error
+  } finally {
+    clearTimeout(timer)
   }
 }
 
