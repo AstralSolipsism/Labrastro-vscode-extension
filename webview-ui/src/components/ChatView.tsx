@@ -566,7 +566,11 @@ const ChatView: Component<ChatViewProps> = (props) => {
         setPendingCancel(false)
       }
     }
-    if (type === "remote_peer_ready") {
+    if (type === "events_lost") {
+      appendTextPart("连接恢复后发现部分流式事件已过期，正在刷新会话状态。", "events-lost")
+      const sessionId = remoteSessionIdForMutation(trace.currentSessionId())
+      if (sessionId) trace.loadSession(sessionId)
+    } else if (type === "remote_peer_ready") {
       const remoteSessionId = String(payload.session_id || "")
       const currentSessionId = trace.currentSessionId()
       if (
@@ -1158,12 +1162,54 @@ const ChatView: Component<ChatViewProps> = (props) => {
       if (msg.type === "session.syncStatus" && typeof msg.payload === "object" && msg.payload) {
         setSessionSyncStatus(msg.payload as Record<string, unknown>)
       }
+      if (msg.type === "chat.resume" && typeof msg.payload === "object" && msg.payload) {
+        const payload = objectValue(msg.payload)
+        const chatId = stringValue(payload.chatId) || stringValue(payload.chat_id)
+        const sessionId =
+          stringValue(payload.sessionId) ||
+          stringValue(payload.session_id) ||
+          stringValue(payload.draftSessionId) ||
+          stringValue(payload.draft_session_id)
+        if (chatId) setActiveChatId(chatId)
+        if (sessionId) {
+          setActiveRunSessionId(sessionId)
+          if (remoteSessionIdForMutation(sessionId) && trace.currentSessionId() !== sessionId) {
+            trace.loadSession(sessionId)
+          }
+        }
+        setIsWorking(true)
+        setChatStatus("running")
+        setWorkingText(String(payload.status || "") === "reconnecting" ? "正在重连" : "正在继续处理")
+        trace.patchStats({ runStatus: "running" })
+        if (!timer) startTimer()
+      }
       if (msg.type === "chat.session" && typeof msg.chatId === "string") {
         setActiveChatId(msg.chatId)
         if (pendingCancel()) {
           sendCancel(msg.chatId)
           setPendingCancel(false)
         }
+      }
+      if (msg.type === "chat.reconnecting") {
+        const payload = objectValue(msg.payload)
+        const chatId = stringValue(msg.chatId) || stringValue(payload.chatId) || stringValue(payload.chat_id)
+        const sessionId =
+          stringValue(payload.sessionId) ||
+          stringValue(payload.session_id) ||
+          activeRunSessionId()
+        if (chatId) setActiveChatId(chatId)
+        if (sessionId) setActiveRunSessionId(sessionId)
+        setIsWorking(true)
+        setChatStatus("running")
+        setWorkingText("正在重连")
+        trace.patchStats({ runStatus: "running" })
+        if (!timer) startTimer()
+      }
+      if (msg.type === "chat.reconnected") {
+        setWorkingText("正在继续处理")
+        setIsWorking(true)
+        setChatStatus("running")
+        trace.patchStats({ runStatus: "running" })
       }
       if (msg.type === "chat.events" && Array.isArray(msg.events)) {
         for (const event of msg.events) {
