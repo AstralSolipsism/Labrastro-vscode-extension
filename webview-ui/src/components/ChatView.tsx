@@ -150,7 +150,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const [pendingModelProfile, setPendingModelProfile] = createSignal("")
 
   const hasMessages = () => trace.turns().length > 0
-  const taskflowAvailable = createMemo(() => canUseTaskflow(server.backendCapabilities()))
+  const taskflowAvailable = createMemo(() => canUseTaskflow(server.backendFeatures()))
   const modeOptions = createMemo(() => {
     const remoteMode = trace.stats().mode?.trim()
     return resolveChatModeOptions(server.adminState(), remoteMode, taskflowAvailable())
@@ -1584,6 +1584,69 @@ const ChatView: Component<ChatViewProps> = (props) => {
     })
   })
 
+  const chatController = {
+    runtime: {
+      visibleIsWorking,
+      workingText,
+      workingElapsed,
+      chatStatus,
+      handleStop,
+      handleSend,
+      handleSessionCommand,
+      clearCurrentSession,
+    },
+    model: {
+      modeOptions,
+      selectedMode,
+      setSelectedMode,
+      selectedModeLabel,
+      modelOptions,
+      selectedModelProfile,
+      selectedModelLabel,
+      selectedModelDescription,
+      pendingModelLabel,
+      modelSwitching,
+      modelSwitchError,
+      handleModelChange,
+      handleModelUnavailable,
+    },
+    approvals: {
+      visiblePendingApprovals,
+      openApprovalDetails,
+      quickRememberApprovalDecision,
+      alwaysAllowApprovalCategory,
+      replyApproval,
+    },
+    compose: {
+      forkCompose,
+      forkComposeNonce,
+      editMessageAndFork,
+      forkFromMessage,
+      forkFromPart,
+    },
+    promptQueue: {
+      queuedPrompts,
+      continueQueuedPrompts,
+      clearQueuedPrompts,
+    },
+    history: {
+      historyQuery,
+      setHistoryQuery,
+      historySort,
+      setHistorySort,
+      showBranchSessions,
+      setShowBranchSessions,
+      filteredHistorySessions,
+      sessionSyncNotice,
+      sessionSyncLabel,
+      selectSession,
+      confirmDeleteSession,
+      deleteSessionId,
+      setDeleteSessionId,
+      sessionOperationError,
+    },
+  }
+
   return (
     <div class="chat-view">
       <TaskHeader
@@ -1597,8 +1660,6 @@ const ChatView: Component<ChatViewProps> = (props) => {
         contextTokens={trace.stats().contextTokens}
         contextWindow={trace.stats().contextWindow}
         maxOutputTokens={trace.stats().maxOutputTokens}
-        model={trace.stats().model}
-        mode={trace.stats().mode}
         runStatus={trace.stats().runStatus || chatStatus()}
         traceNodes={trace.traceNodes()}
         traceEdges={trace.traceEdges()}
@@ -1606,9 +1667,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
         selectedTraceNodeId={trace.selectedTraceNodeId()}
         traceLocale="zh-CN"
         isWorking={visibleIsWorking()}
-        onCompact={() => handleSessionCommand("/compact")}
-        onClose={clearCurrentSession}
-        onStop={handleStop}
+        onCompact={() => chatController.runtime.handleSessionCommand("/compact")}
+        onClose={chatController.runtime.clearCurrentSession}
+        onStop={chatController.runtime.handleStop}
         onTraceNodeClick={focusTraceNode}
       />
 
@@ -1722,7 +1783,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
           modeOptions={modeOptions()}
           selectedMode={selectedMode()}
           modeLabel={selectedModeLabel()}
-          onModeChange={setSelectedMode}
+          onModeChange={chatController.model.setSelectedMode}
           modelOptions={modelOptions()}
           selectedModel={selectedModelProfile()}
           modelLabel={selectedModelLabel()}
@@ -1730,9 +1791,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
           modelPendingLabel={pendingModelLabel()}
           modelSwitching={modelSwitching()}
           modelError={modelSwitchError()}
-          onModelChange={handleModelChange}
-          onModelUnavailable={handleModelUnavailable}
-          onSend={handleSend}
+          onModelChange={chatController.model.handleModelChange}
+          onModelUnavailable={chatController.model.handleModelUnavailable}
+          onSend={chatController.runtime.handleSend}
         />
         <div class="chat-footer-target">
           <button

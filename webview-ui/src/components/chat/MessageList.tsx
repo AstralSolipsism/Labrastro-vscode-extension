@@ -1,10 +1,10 @@
-import { Component, For, Show } from "solid-js"
+import { Component, Index, Show, createEffect, type Accessor } from "solid-js"
 import { t } from "../../i18n"
 import { SessionTurn } from "./SessionTurn"
 import { WelcomeState } from "./WelcomeState"
 import { WorkingIndicator } from "./WorkingIndicator"
 import { IconButton } from "../common/IconButton"
-import { useVirtualMessageList } from "./useVirtualMessageList"
+import { useVirtualMessageList, type UseVirtualMessageListResult, type VirtualTurnItem } from "./useVirtualMessageList"
 import type { MockTurn, MockSession, MockMessage, MockPart } from "./mock-data"
 
 interface MessageListProps {
@@ -51,29 +51,23 @@ export const MessageList: Component<MessageListProps> = (props) => {
               class="message-list__virtual-content"
               style={{ height: `${virtualList.totalHeight()}px` }}
             >
-              <For each={virtualList.visibleItems()}>
+              <Index each={virtualList.visibleItems()}>
                 {(item) => (
-                  <div
-                    ref={virtualList.bindItem(item)}
-                    class="message-list__virtual-item"
-                    data-virtual-turn-id={item.id}
-                    style={{ transform: `translateY(${item.top}px)` }}
-                  >
-                    <SessionTurn
-                      turn={item.turn}
-                      selectedTraceNodeId={props.selectedTraceNodeId}
-                      onSelectSession={props.onSelectSession}
-                      onTraceNodeSelect={props.onTraceNodeSelect}
-                      onCopyMessage={props.onCopyMessage}
-                      onEditForkMessage={props.onEditForkMessage}
-                      onForkMessage={props.onForkMessage}
-                      onCopyToolCommand={props.onCopyToolCommand}
-                      onCopyToolOutput={props.onCopyToolOutput}
-                      onForkPart={props.onForkPart}
-                    />
-                  </div>
+                  <VirtualMessageRow
+                    item={item}
+                    virtualList={virtualList}
+                    selectedTraceNodeId={props.selectedTraceNodeId}
+                    onSelectSession={props.onSelectSession}
+                    onTraceNodeSelect={props.onTraceNodeSelect}
+                    onCopyMessage={props.onCopyMessage}
+                    onEditForkMessage={props.onEditForkMessage}
+                    onForkMessage={props.onForkMessage}
+                    onCopyToolCommand={props.onCopyToolCommand}
+                    onCopyToolOutput={props.onCopyToolOutput}
+                    onForkPart={props.onForkPart}
+                  />
                 )}
-              </For>
+              </Index>
             </div>
           </Show>
 
@@ -90,6 +84,46 @@ export const MessageList: Component<MessageListProps> = (props) => {
           <IconButton icon="chevron-down" title={t("chat.scrollToBottom")} onClick={() => virtualList.scrollToBottom()} />
         </div>
       </Show>
+    </div>
+  )
+}
+
+interface VirtualMessageRowProps extends Omit<MessageListProps, "turns" | "recentSessions" | "isWorking" | "workingText" | "workingElapsed"> {
+  item: Accessor<VirtualTurnItem>
+  virtualList: UseVirtualMessageListResult
+}
+
+const VirtualMessageRow: Component<VirtualMessageRowProps> = (props) => {
+  let rowElement: HTMLDivElement | undefined
+
+  createEffect(() => {
+    const element = rowElement
+    if (!element) return
+    props.virtualList.bindItem(props.item())(element)
+  })
+
+  return (
+    <div
+      ref={(element) => {
+        rowElement = element
+        props.virtualList.bindItem(props.item())(element)
+      }}
+      class="message-list__virtual-item"
+      data-virtual-turn-id={props.item().id}
+      style={{ transform: `translateY(${props.item().top}px)` }}
+    >
+      <SessionTurn
+        turn={props.item().turn}
+        selectedTraceNodeId={props.selectedTraceNodeId}
+        onSelectSession={props.onSelectSession}
+        onTraceNodeSelect={props.onTraceNodeSelect}
+        onCopyMessage={props.onCopyMessage}
+        onEditForkMessage={props.onEditForkMessage}
+        onForkMessage={props.onForkMessage}
+        onCopyToolCommand={props.onCopyToolCommand}
+        onCopyToolOutput={props.onCopyToolOutput}
+        onForkPart={props.onForkPart}
+      />
     </div>
   )
 }

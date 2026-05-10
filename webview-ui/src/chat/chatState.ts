@@ -1,4 +1,4 @@
-export interface ChatModeOption {
+﻿export interface ChatModeOption {
   id: string
   label: string
   description: string
@@ -209,8 +209,8 @@ export function resolveHostTargetSummary(
   }
 }
 
-export function canUseTaskflow(capabilities: Record<string, unknown>): boolean {
-  return capabilities.taskflow === true || capabilities.taskFlow === true
+export function canUseTaskflow(features: Record<string, unknown>): boolean {
+  return features.taskflow === true || features.taskFlow === true
 }
 
 function uniqueModes(items: ChatModeOption[]): ChatModeOption[] {

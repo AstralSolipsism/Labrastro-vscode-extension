@@ -14,6 +14,7 @@ import {
 } from "./message-height"
 import type { MockTurn } from "./mock-data"
 import {
+  bucketWidth,
   getTextMeasureCacheStats,
   readTextMeasureMetrics,
   type TextMeasureMetrics,
@@ -26,6 +27,7 @@ export interface VirtualTurnItem {
   top: number
   height: number
   heightKey: string
+  measureKey: string
   measured: boolean
 }
 
@@ -71,6 +73,7 @@ interface TurnRecord {
   index: number
   height: number
   heightKey: string
+  measureKey: string
   measured: boolean
 }
 
@@ -158,6 +161,28 @@ export function applyMeasuredHeight(
   }
 }
 
+export type HeightChangeScrollAction = "anchor" | "follow" | "detach" | "none"
+
+export function resolveHeightChangeScrollAction(input: {
+  userScrolled: boolean
+  followLiveOutput: boolean
+  isWorking: boolean
+  itemTop: number
+  scrollTop: number
+  delta: number
+}): HeightChangeScrollAction {
+  if (input.userScrolled && input.itemTop < input.scrollTop) return "anchor"
+  if (!input.userScrolled && input.followLiveOutput) return "follow"
+  if (!input.userScrolled && input.isWorking && input.delta > 0) return "detach"
+  if (!input.userScrolled && !input.isWorking) return "follow"
+  return "none"
+}
+
+export function virtualTurnMeasureKey(turn: MockTurn, width: number, index = 0): string {
+  const id = turn.userMessage.id || `turn-${index}`
+  return `${id}:${bucketWidth(width)}`
+}
+
 export function useVirtualMessageList(options: UseVirtualMessageListOptions): UseVirtualMessageListResult {
   const [scrollElement, setScrollElement] = createSignal<HTMLDivElement>()
   const [viewportHeight, setViewportHeight] = createSignal(DEFAULT_VIEWPORT_HEIGHT)
@@ -171,6 +196,8 @@ export function useVirtualMessageList(options: UseVirtualMessageListOptions): Us
   let viewportObserver: ResizeObserver | undefined
   let pendingScrollFrame = 0
   let lastDiagnosticsAt = 0
+  let followLiveOutput = false
+  let observedTurnCount: number | undefined
   const observedItems = new Map<string, { element: HTMLDivElement; observer?: ResizeObserver }>()
 
   const turnRecords = createMemo<TurnRecord[]>(() => {
@@ -180,13 +207,15 @@ export function useVirtualMessageList(options: UseVirtualMessageListOptions): Us
     const estimator = options.estimateHeight || estimateTurnHeight
     return options.turns().map((turn, index) => {
       const heightKey = turnHeightCacheKey(turn, width)
-      const measuredHeight = measured.get(heightKey)
+      const measureKey = virtualTurnMeasureKey(turn, width, index)
+      const measuredHeight = measured.get(measureKey)
       return {
         id: turn.userMessage.id,
         turn,
         index,
         height: measuredHeight ?? estimator(turn, width, currentMetrics),
         heightKey,
+        measureKey,
         measured: measuredHeight !== undefined,
       }
     })
@@ -236,7 +265,7 @@ export function useVirtualMessageList(options: UseVirtualMessageListOptions): Us
     if (typeof ResizeObserver !== "undefined") {
       viewportObserver = new ResizeObserver(() => {
         updateViewport(element)
-        if (!userScrolled()) scheduleScrollToBottom()
+        if (followLiveOutput && !userScrolled()) scheduleScrollToBottom()
       })
       viewportObserver.observe(element)
     }
@@ -244,12 +273,15 @@ export function useVirtualMessageList(options: UseVirtualMessageListOptions): Us
 
   const handleScroll = (event: Event) => {
     const element = event.currentTarget as HTMLDivElement
+    const atBottom = isAtScrollBottom(element.scrollTop, element.scrollHeight, element.clientHeight)
     setScrollTop(element.scrollTop)
     setViewportHeight(Math.max(1, element.clientHeight || DEFAULT_VIEWPORT_HEIGHT))
-    setUserScrolled(!isAtScrollBottom(element.scrollTop, element.scrollHeight, element.clientHeight))
+    setUserScrolled(!atBottom)
+    if (!atBottom) followLiveOutput = false
   }
 
   const scrollToBottom = () => {
+    followLiveOutput = true
     setUserScrolled(false)
     scheduleScrollToBottom()
   }
@@ -274,7 +306,7 @@ export function useVirtualMessageList(options: UseVirtualMessageListOptions): Us
   }
 
   const bindItem = (item: VirtualTurnItem) => (element: HTMLDivElement) => {
-    const current = observedItems.get(item.heightKey)
+    const current = observedItems.get(item.measureKey)
     if (current?.element === element) {
       measureElement(item, element)
       return
@@ -284,20 +316,20 @@ export function useVirtualMessageList(options: UseVirtualMessageListOptions): Us
     measureElement(item, element)
 
     if (typeof ResizeObserver === "undefined") {
-      observedItems.set(item.heightKey, { element })
+      observedItems.set(item.measureKey, { element })
       return
     }
 
     const observer = new ResizeObserver(() => measureElement(item, element))
     observer.observe(element)
-    observedItems.set(item.heightKey, { element, observer })
+    observedItems.set(item.measureKey, { element, observer })
   }
 
   const measureElement = (item: VirtualTurnItem, element: HTMLDivElement) => {
     const height = Math.ceil(element.getBoundingClientRect().height)
     if (!height) return
 
-    const previousHeight = untrack(() => measuredHeights().get(item.heightKey) ?? item.height)
+    const previousHeight = untrack(() => measuredHeights().get(item.measureKey) ?? item.height)
     if (Math.abs(previousHeight - height) < 1) return
 
     const currentScrollTop = untrack(scrollTop)
@@ -305,26 +337,38 @@ export function useVirtualMessageList(options: UseVirtualMessageListOptions): Us
     const delta = height - previousHeight
     setMeasuredHeights((previous) => {
       const next = new Map(previous)
-      next.set(item.heightKey, height)
+      next.set(item.measureKey, height)
       return next
     })
     setMeasuredUpdates((value) => value + 1)
 
     const elementScroll = scrollElement()
     if (!elementScroll) return
-    if (untrack(userScrolled) && itemTop < currentScrollTop) {
+    const action = resolveHeightChangeScrollAction({
+      userScrolled: untrack(userScrolled),
+      followLiveOutput,
+      isWorking: untrack(options.isWorking),
+      itemTop,
+      scrollTop: currentScrollTop,
+      delta,
+    })
+    if (action === "anchor") {
       const nextScrollTop = Math.max(0, elementScroll.scrollTop + delta)
       elementScroll.scrollTop = nextScrollTop
       setScrollTop(nextScrollTop)
       return
     }
-    if (!untrack(userScrolled)) {
+    if (action === "follow") {
       scheduleScrollToBottom()
+      return
+    }
+    if (action === "detach") {
+      setUserScrolled(true)
     }
   }
 
   createEffect(() => {
-    const visibleKeys = new Set(visibleItems().map((item) => item.heightKey))
+    const visibleKeys = new Set(visibleItems().map((item) => item.measureKey))
     for (const [key, entry] of observedItems) {
       if (visibleKeys.has(key)) continue
       entry.observer?.disconnect()
@@ -333,10 +377,11 @@ export function useVirtualMessageList(options: UseVirtualMessageListOptions): Us
   })
 
   createEffect(() => {
-    options.turns().length
+    const turnCount = options.turns().length
     options.isWorking()
-    totalHeight()
-    if (!userScrolled()) {
+    if (observedTurnCount === turnCount) return
+    observedTurnCount = turnCount
+    if (turnCount > 0 && !userScrolled()) {
       scheduleScrollToBottom()
     }
   })

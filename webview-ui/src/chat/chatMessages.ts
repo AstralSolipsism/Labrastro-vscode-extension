@@ -1,5 +1,7 @@
+import type { WebviewToHostMessage } from "../protocol/messages"
+
 export interface ChatMessagePort {
-  postMessage(message: Record<string, unknown>): void
+  postMessage(message: WebviewToHostMessage): void
 }
 
 export type ChatWorkflowMode = "chat" | "taskflow"
@@ -35,7 +37,7 @@ export function routeSelectedChatMode(
   return { mode: selected }
 }
 
-export function buildChatSendMessage(input: ChatSendInput): Record<string, unknown> {
+export function buildChatSendMessage(input: ChatSendInput): WebviewToHostMessage {
   const text = input.text.trim()
   const mode = input.mode?.trim()
   const workflowMode = input.workflowMode === "taskflow" ? "taskflow" : undefined
@@ -53,7 +55,7 @@ export function buildChatSendMessage(input: ChatSendInput): Record<string, unkno
   }
 }
 
-export function buildSessionModelSwitchMessage(input: SessionModelSwitchInput): Record<string, unknown> {
+export function buildSessionModelSwitchMessage(input: SessionModelSwitchInput): WebviewToHostMessage {
   const providerId = input.providerId.trim()
   const modelId = input.modelId.trim()
   return {

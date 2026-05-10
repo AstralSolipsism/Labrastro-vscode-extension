@@ -17,11 +17,6 @@ function formatCost(n: number): string {
   return n.toFixed(4)
 }
 
-function formatPercent(n: number): string {
-  if (n >= 10) return `${Math.round(n)}%`
-  return `${n.toFixed(1)}%`
-}
-
 interface TaskHeaderProps {
   taskText: string
   hasMessages: boolean
@@ -33,8 +28,6 @@ interface TaskHeaderProps {
   contextTokens: number
   contextWindow: number
   maxOutputTokens: number
-  model?: string
-  mode?: string
   runStatus?: "idle" | "running" | "stopping" | "cancelled" | "done" | "error"
   traceNodes?: TraceNode[]
   traceEdges?: TraceEdge[]
@@ -50,10 +43,6 @@ interface TaskHeaderProps {
 
 export const TaskHeader: Component<TaskHeaderProps> = (props) => {
   const [expanded, setExpanded] = createSignal(false)
-  const contextRatio = () =>
-    props.contextWindow > 0
-      ? Math.min(100, Math.round((props.contextTokens / props.contextWindow) * 100))
-      : 0
   const hasContextUsage = () => props.contextWindow > 0
   const remainingContext = () =>
     props.contextWindow > 0
@@ -61,15 +50,6 @@ export const TaskHeader: Component<TaskHeaderProps> = (props) => {
       : 0
   const cacheHitTokens = () =>
     typeof props.cacheReads === "number" && props.cacheReads > 0 ? props.cacheReads : null
-  const cacheWriteTokens = () =>
-    typeof props.cacheWrites === "number" && props.cacheWrites > 0 ? props.cacheWrites : null
-  const cacheHitRate = () => {
-    const hits = cacheHitTokens()
-    if (hits === null) return null
-    const denominator = Math.max(props.tokensIn, hits + (cacheWriteTokens() || 0))
-    if (denominator <= 0) return null
-    return Math.min(100, (hits / denominator) * 100)
-  }
   const hasTokenUsage = () => props.tokensIn > 0 || props.tokensOut > 0
   const statusLabel = () => {
     switch (props.runStatus) {
@@ -189,49 +169,6 @@ export const TaskHeader: Component<TaskHeaderProps> = (props) => {
         <Show when={expanded()}>
           <div class="task-header__expanded">
             <p>{props.taskText}</p>
-            <div class="task-header__grid">
-              <span>{t("task.context")}</span>
-              <strong>
-                <Show when={hasContextUsage()} fallback={t("task.unknown")}>
-                  {formatLargeNumber(props.contextTokens)} / {formatLargeNumber(props.contextWindow)} ({contextRatio()}%)
-                </Show>
-              </strong>
-              <span>{t("task.remainingContextLabel")}</span>
-              <strong>
-                <Show when={hasContextUsage()} fallback={t("task.unknown")}>
-                  {formatLargeNumber(remainingContext())}
-                </Show>
-              </strong>
-              <span>{t("task.cache")}</span>
-              <strong>
-                <Show
-                  when={typeof props.cacheReads === "number" || typeof props.cacheWrites === "number"}
-                  fallback={t("task.unknown")}
-                >
-                  {t("task.cacheHitSlash", { hit: formatLargeNumber(props.cacheReads || 0), write: formatLargeNumber(props.cacheWrites || 0) })}
-                </Show>
-              </strong>
-              <span>{t("task.cacheHitRate")}</span>
-              <strong>
-                <Show when={cacheHitRate() !== null} fallback={t("task.unknown")}>
-                  {formatPercent(cacheHitRate() || 0)}
-                </Show>
-              </strong>
-              <span>{t("task.outputLimit")}</span>
-              <strong>
-                <Show when={props.maxOutputTokens > 0} fallback={t("task.unknown")}>
-                  {formatLargeNumber(props.maxOutputTokens)}
-                </Show>
-              </strong>
-              <Show when={props.model}>
-                <span>{t("task.model")}</span>
-                <strong>{props.model}</strong>
-              </Show>
-              <Show when={props.mode}>
-                <span>{t("task.mode")}</span>
-                <strong>{props.mode}</strong>
-              </Show>
-            </div>
           </div>
         </Show>
       </section>

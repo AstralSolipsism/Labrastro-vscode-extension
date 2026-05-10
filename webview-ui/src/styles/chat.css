@@ -173,20 +173,8 @@
 }
 
 .task-header__expanded p {
-  margin: 0 0 8px;
+  margin: 0;
   line-height: 1.45;
-}
-
-.task-header__grid {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: 4px 10px;
-  color: var(--ez-muted);
-}
-
-.task-header__grid strong {
-  color: var(--ez-fg);
-  font-weight: 500;
 }
 
 .trace-ribbon {

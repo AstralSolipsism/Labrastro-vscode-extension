@@ -148,10 +148,7 @@ interface PartProps {
 
 const ToolPart: Component<PartProps> = (props) => {
   const [open, setOpen] = createSignal(
-    initialCardOpenState(
-      props.part.id,
-      ["pending", "running", "awaiting_approval", "denied", "error", "cancelled"].includes(props.part.status || "")
-    )
+    initialCardOpenState(props.part.id, false)
   )
   createEffect(() => {
     CARD_OPEN_STATE.set(props.part.id, open())
@@ -345,10 +342,7 @@ function omitShellCommandFields(input?: Record<string, unknown>): Record<string,
 
 const ShellToolPart: Component<PartProps> = (props) => {
   const [open, setOpen] = createSignal(
-    initialCardOpenState(
-      props.part.id,
-      ["pending", "running", "awaiting_approval", "approved", "denied", "error", "cancelled"].includes(props.part.status || "")
-    )
+    initialCardOpenState(props.part.id, false)
   )
   const [detailsOpen, setDetailsOpen] = createSignal(initialCardDetailsOpenState(props.part.id, false))
   createEffect(() => {

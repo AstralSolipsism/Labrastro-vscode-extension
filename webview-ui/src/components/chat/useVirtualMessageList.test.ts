@@ -4,7 +4,23 @@ import {
   computeOffsets,
   computeVirtualWindow,
   isAtScrollBottom,
+  resolveHeightChangeScrollAction,
+  virtualTurnMeasureKey,
 } from "./useVirtualMessageList"
+import type { MockTurn } from "./mock-data"
+
+function turn(text: string): MockTurn {
+  return {
+    userMessage: {
+      id: "user-1",
+      role: "user",
+      text,
+      parts: [],
+      timestamp: 0,
+    },
+    assistantMessages: [],
+  }
+}
 
 describe("virtual message list windowing", () => {
   it("returns only the visible range plus overscan turns", () => {
@@ -46,5 +62,49 @@ describe("virtual message list windowing", () => {
   it("identifies bottom anchoring separately from user-up scrolling", () => {
     expect(isAtScrollBottom(480, 1000, 500)).toBe(true)
     expect(isAtScrollBottom(200, 1000, 500)).toBe(false)
+  })
+
+  it("keeps the measurement key stable while streaming content changes", () => {
+    expect(virtualTurnMeasureKey(turn("short"), 360)).toBe(
+      virtualTurnMeasureKey(turn("short plus streamed text"), 363)
+    )
+    expect(virtualTurnMeasureKey(turn("short"), 420)).not.toBe(
+      virtualTurnMeasureKey(turn("short"), 360)
+    )
+  })
+
+  it("does not force-follow streaming height growth unless explicitly requested", () => {
+    expect(resolveHeightChangeScrollAction({
+      userScrolled: false,
+      followLiveOutput: false,
+      isWorking: true,
+      itemTop: 800,
+      scrollTop: 800,
+      delta: 24,
+    })).toBe("detach")
+    expect(resolveHeightChangeScrollAction({
+      userScrolled: false,
+      followLiveOutput: true,
+      isWorking: true,
+      itemTop: 800,
+      scrollTop: 800,
+      delta: 24,
+    })).toBe("follow")
+    expect(resolveHeightChangeScrollAction({
+      userScrolled: true,
+      followLiveOutput: false,
+      isWorking: true,
+      itemTop: 200,
+      scrollTop: 800,
+      delta: 24,
+    })).toBe("anchor")
+    expect(resolveHeightChangeScrollAction({
+      userScrolled: false,
+      followLiveOutput: false,
+      isWorking: false,
+      itemTop: 800,
+      scrollTop: 800,
+      delta: 24,
+    })).toBe("follow")
   })
 })
