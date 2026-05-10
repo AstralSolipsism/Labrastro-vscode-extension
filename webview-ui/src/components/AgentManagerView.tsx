@@ -1,7 +1,8 @@
-import { Component, For, Show } from "solid-js"
+import { Component, createEffect, For, Show } from "solid-js"
 import { useTrace } from "../context/trace"
 import { t } from "../i18n"
 import type { TraceNavigationIntent } from "../types/trace"
+import { agentManagerNavigationPayload } from "./agent-manager-navigation"
 
 interface AgentManagerViewProps {
   branchId?: string
@@ -10,8 +11,12 @@ interface AgentManagerViewProps {
   intent?: TraceNavigationIntent
 }
 
-const AgentManagerView: Component<AgentManagerViewProps> = () => {
+const AgentManagerView: Component<AgentManagerViewProps> = (props) => {
   const trace = useTrace()
+
+  createEffect(() => {
+    trace.applyPanelNavigation(agentManagerNavigationPayload(props))
+  })
 
   return (
     <div class="agent-manager-placeholder">
