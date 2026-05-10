@@ -146,7 +146,9 @@ export const ServerProvider: ParentComponent = (props) => {
         setConnectionState(msg.payload as Record<string, unknown>)
       }
       if (msg.type === "connection.result" && typeof msg.payload === "object" && msg.payload) {
-        setConnectionSaveResult(msg.payload as Record<string, unknown>)
+        const payload = msg.payload as Record<string, unknown>
+        setConnectionSaveResult(payload)
+        setConnectionState(payload)
       }
       if (msg.type === "admin.state" && typeof msg.payload === "object" && msg.payload) {
         setAdminState(msg.payload as Record<string, unknown>)
