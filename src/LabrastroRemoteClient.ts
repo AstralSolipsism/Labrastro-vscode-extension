@@ -529,6 +529,19 @@ export class LabrastroRemoteClient {
     }))
   }
 
+  async forkSession(
+    sourceSessionId: string,
+    keepThroughMessageIndex: number,
+    snapshot: JsonObject = {}
+  ): Promise<JsonObject> {
+    return this.postPeerJson("/remote/sessions/fork", (peer) => ({
+      peer_token: peer.peer_token,
+      source_session_id: sourceSessionId,
+      keep_through_message_index: keepThroughMessageIndex,
+      ...(Object.keys(snapshot).length ? { snapshot } : {}),
+    }))
+  }
+
   async saveSessionSnapshot(
     sessionId: string,
     snapshot: JsonObject,
@@ -678,7 +691,7 @@ export class LabrastroRemoteClient {
   private async refreshAccessTokenOnce(): Promise<string> {
     const session = await this.storedAuthSession()
     if (!session?.refreshToken) {
-      throw new RemoteError(401, "unauthorized", "Login required", {})
+      throw new RemoteError(401, "unauthorized", "登录已失效，请重新登录。", {})
     }
     try {
       const response = await this.postJson("/remote/auth/refresh", {

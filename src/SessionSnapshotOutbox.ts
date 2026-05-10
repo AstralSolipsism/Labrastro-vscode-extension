@@ -28,6 +28,12 @@ export interface SessionSnapshotMetadata {
   savedAt: string
   preview: string
   fingerprint: string
+  kind?: "main" | "fork" | "subagent"
+  parentSessionId?: string
+  sourceSessionId?: string
+  sourceNodeId?: string
+  returnNodeId?: string
+  summary?: string
   syncStatus?: SessionSnapshotSyncStatus
   syncError?: string
   source?: SessionSnapshotSource
@@ -61,18 +67,25 @@ export class SessionSnapshotOutbox {
       existing?.snapshotDigest &&
       snapshotDigest &&
       existing.snapshotDigest === snapshotDigest
+    const nextSnapshot = rewriteSnapshotSessionId(snapshot, sessionId)
+    const preserveExistingSnapshot =
+      Boolean(existing && snapshotHasContent(existing.snapshot) && !snapshotHasContent(nextSnapshot))
     const record: SessionSnapshotOutboxRecord = {
       version: OUTBOX_VERSION,
       hostUrl,
       sessionId,
-      snapshot: rewriteSnapshotSessionId(snapshot, sessionId),
-      snapshotDigest,
-      status,
-      message,
+      snapshot: preserveExistingSnapshot ? rewriteSnapshotSessionId(existing!.snapshot, sessionId) : nextSnapshot,
+      snapshotDigest: preserveExistingSnapshot ? existing!.snapshotDigest : snapshotDigest,
+      status: preserveExistingSnapshot ? existing!.status : status,
+      message: preserveExistingSnapshot ? existing!.message : message,
       savedAt: existing?.savedAt || now,
       updatedAt: now,
       retryCount: sameDigest ? existing?.retryCount || 0 : 0,
-      nextAttemptAt: status === "synced" ? undefined : existing?.nextAttemptAt,
+      nextAttemptAt: preserveExistingSnapshot
+        ? existing!.nextAttemptAt
+        : status === "synced"
+          ? undefined
+          : existing?.nextAttemptAt,
       lastAttemptAt: existing?.lastAttemptAt,
     }
     await this.write(hostUrl, record)
@@ -238,6 +251,12 @@ export class SessionSnapshotOutbox {
       if (existing) {
         byId.set(local.id, {
           ...existing,
+          kind: local.kind || existing.kind,
+          parentSessionId: local.parentSessionId || existing.parentSessionId,
+          sourceSessionId: local.sourceSessionId || existing.sourceSessionId,
+          sourceNodeId: local.sourceNodeId || existing.sourceNodeId,
+          returnNodeId: local.returnNodeId || existing.returnNodeId,
+          summary: local.summary || existing.summary,
           syncStatus: local.syncStatus,
           syncError: local.syncError,
           source: local.syncStatus === "synced" ? "server" : "merged",
@@ -327,6 +346,12 @@ export function metadataFromRecord(
       record.updatedAt,
     preview: stringValue(snapshotSession.summary) || title,
     fingerprint: "",
+    kind: normalizeSessionKind(snapshotSession.kind),
+    parentSessionId: stringValue(snapshotSession.parentSessionId) || undefined,
+    sourceSessionId: stringValue(snapshotSession.sourceSessionId) || undefined,
+    sourceNodeId: stringValue(snapshotSession.sourceNodeId) || undefined,
+    returnNodeId: stringValue(snapshotSession.returnNodeId) || undefined,
+    summary: stringValue(snapshotSession.summary) || undefined,
     syncStatus: record.status,
     syncError: record.message,
     source: "local",
@@ -335,6 +360,22 @@ export function metadataFromRecord(
 
 export function isLocalDraftSessionId(sessionId: string): boolean {
   return sessionId.startsWith("session-")
+}
+
+export function snapshotHasContent(snapshot: JsonObject): boolean {
+  const turns = Array.isArray(snapshot.turns) ? snapshot.turns : []
+  return turns.some((rawTurn) => {
+    const turn = objectValue(rawTurn)
+    const userMessage = objectValue(turn.userMessage)
+    if (stringValue(userMessage.text).trim()) return true
+    if (Array.isArray(userMessage.parts) && userMessage.parts.length > 0) return true
+    const assistantMessages = Array.isArray(turn.assistantMessages) ? turn.assistantMessages : []
+    return assistantMessages.some((rawMessage) => {
+      const message = objectValue(rawMessage)
+      if (stringValue(message.text).trim()) return true
+      return Array.isArray(message.parts) && message.parts.length > 0
+    })
+  })
 }
 
 function hostKey(hostUrl: string): string {
@@ -369,6 +410,14 @@ function normalizeRecord(
 
 function normalizeStatus(value: unknown): SessionSnapshotSyncStatus {
   return value === "synced" || value === "failed" ? value : "pending"
+}
+
+function normalizeSessionKind(
+  value: unknown
+): SessionSnapshotMetadata["kind"] | undefined {
+  return value === "fork" || value === "subagent" || value === "main"
+    ? value
+    : undefined
 }
 
 function rewriteSnapshotSessionId(snapshot: JsonObject, sessionId: string): JsonObject {

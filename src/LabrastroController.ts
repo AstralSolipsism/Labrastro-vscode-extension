@@ -16,6 +16,10 @@ import {
   type SessionSnapshotSyncStatus,
 } from "./SessionSnapshotOutbox"
 import { canStartSessionlessChat, LEGACY_BACKEND_UPGRADE_MESSAGE } from "./session-start"
+import {
+  mergeSessionBundleWithLocalContent,
+  shouldPreserveLocalSessionContent,
+} from "./session-bundle-content"
 
 type PostMessage = (message: Record<string, unknown>) => Thenable<boolean> | void
 type EnvironmentRunMode = "check" | "configure"
@@ -107,6 +111,12 @@ interface SessionMetadataState {
   savedAt: string
   preview: string
   fingerprint: string
+  kind?: "main" | "fork" | "subagent"
+  parentSessionId?: string
+  sourceSessionId?: string
+  sourceNodeId?: string
+  returnNodeId?: string
+  summary?: string
   syncStatus?: SessionSnapshotSyncStatus
   syncError?: string
   source?: "server" | "local" | "merged"
@@ -661,6 +671,24 @@ export class LabrastroController implements vscode.Disposable {
       case "session.new":
         await this.createSession(post)
         return true
+      case "session.fork":
+        await this.forkSession({
+          sourceSessionId: stringValue(message.sourceSessionId) || stringValue(message.source_session_id) || "",
+          keepThroughMessageIndex:
+            numberValue(message.keepThroughMessageIndex) ??
+            numberValue(message.keep_through_message_index) ??
+            -1,
+          snapshot: objectValue(message.snapshot),
+          composeText: stringValue(message.composeText) || stringValue(message.compose_text),
+          composeMode: stringValue(message.composeMode) || stringValue(message.compose_mode),
+          sourceLabel: stringValue(message.sourceLabel) || stringValue(message.source_label),
+          sourceMessageId: stringValue(message.sourceMessageId) || stringValue(message.source_message_id),
+          sourceNodeId: stringValue(message.sourceNodeId) || stringValue(message.source_node_id),
+          sessionTitle: stringValue(message.sessionTitle) || stringValue(message.session_title),
+          sessionSummary: stringValue(message.sessionSummary) || stringValue(message.session_summary),
+          sessionKind: stringValue(message.sessionKind) || stringValue(message.session_kind),
+        }, post)
+        return true
       case "session.delete":
         await this.deleteSession(stringValue(message.sessionId) || "", post)
         return true
@@ -711,8 +739,9 @@ export class LabrastroController implements vscode.Disposable {
               reason: stringValue(message.reason),
             })
           } catch (error) {
-            const resolvedError = errorMessage(error)
+            const resolvedError = chatErrorMessage(error)
             post({ type: "chat.error", message: resolvedError })
+            await this.postConnectionStateIfAuthRequired(error, post)
           }
         }
         return true
@@ -1002,13 +1031,21 @@ export class LabrastroController implements vscode.Disposable {
   }
 
   async postConnectionState(post: PostMessage): Promise<void> {
+    this.postWebviewMessage(post, await this.connectionStateMessage())
+  }
+
+  private async broadcastConnectionState(): Promise<void> {
+    this.broadcastWebviewMessage(await this.connectionStateMessage())
+  }
+
+  private async connectionStateMessage(): Promise<Record<string, unknown>> {
     try {
-      post({ type: "connection.state", payload: await this.client.connectionState() })
+      return { type: "connection.state", payload: await this.client.connectionState() }
     } catch (error) {
-      post({
+      return {
         type: "connection.state",
         payload: { status: "error", message: errorMessage(error) },
-      })
+      }
     }
   }
 
@@ -1027,6 +1064,19 @@ export class LabrastroController implements vscode.Disposable {
       await this.postSessionSyncStatus(post)
     } catch {
       this.backendCapabilities = null
+    }
+  }
+
+  private async postConnectionStateIfAuthRequired(
+    error: unknown,
+    post: PostMessage
+  ): Promise<void> {
+    if (classifyRemoteError(error) === "auth_required") {
+      if (this.webviewPosts.size > 0) {
+        await this.broadcastConnectionState()
+        return
+      }
+      await this.postConnectionState(post)
     }
   }
 
@@ -1198,7 +1248,19 @@ export class LabrastroController implements vscode.Disposable {
         return
       }
       const metadata = normalizeSessionMetadata(payload.metadata)
-      const bundle = buildSessionBundle(payload, metadata)
+      let bundle = buildSessionBundle(payload, metadata)
+      const localPayload = await this.sessionOutbox.payload(this.client.hostUrl, metadata.id || sessionId)
+      if (localPayload) {
+        const localMetadata = normalizeSessionMetadata(localPayload.metadata)
+        const localBundle = buildSessionBundle(localPayload, localMetadata)
+        if (shouldPreserveLocalSessionContent(bundle, localBundle)) {
+          bundle = mergeSessionBundleWithLocalContent(
+            bundle,
+            localBundle,
+            enrichTurnsWithHistoryMapping(arrayValue(localBundle.turns), arrayValue(payload.messages))
+          )
+        }
+      }
       this.currentSessionId = metadata.id
       this.context.workspaceState.update("labrastro.currentSessionId", metadata.id)
       if (!options.suppressListRefresh) {
@@ -1291,6 +1353,71 @@ export class LabrastroController implements vscode.Disposable {
           fingerprint: this.sessionFingerprint,
         })
         return
+      }
+      post({ type: "session.error", message: errorMessage(error) })
+    }
+  }
+
+  private async forkSession(
+    request: {
+      sourceSessionId: string
+      keepThroughMessageIndex: number
+      snapshot: Record<string, unknown>
+      composeText?: string
+      composeMode?: string
+      sourceLabel?: string
+      sourceMessageId?: string
+      sourceNodeId?: string
+      sessionTitle?: string
+      sessionSummary?: string
+      sessionKind?: string
+    },
+    post: PostMessage
+  ): Promise<void> {
+    const sourceSessionId = request.sourceSessionId.trim()
+    if (!sourceSessionId || isLocalDraftSessionId(sourceSessionId)) {
+      post({ type: "session.error", message: "Fork 需要基于真实远端会话。" })
+      return
+    }
+    if (this.sessionApiAvailable === false) {
+      post({ type: "session.error", message: "当前后端不支持会话 Fork。" })
+      return
+    }
+    try {
+      const payload = await this.client.forkSession(
+        sourceSessionId,
+        request.keepThroughMessageIndex,
+        request.snapshot
+      )
+      this.sessionApiAvailable = true
+      const metadata = normalizeSessionMetadata(payload.metadata)
+      if (metadata.id) {
+        this.currentSessionId = metadata.id
+        await this.context.workspaceState.update("labrastro.currentSessionId", metadata.id)
+      }
+      await this.refreshSessions()
+      post({
+        type: "session.forked",
+        sessionId: metadata.id,
+        metadata,
+        bundle: buildSessionBundle(payload, metadata),
+        runtimeState: objectValue(payload.runtime_state),
+        sessions: this.sessions,
+        fingerprint: this.sessionFingerprint || stringValue(payload.fingerprint),
+        sourceSessionId,
+        keepThroughMessageIndex: request.keepThroughMessageIndex,
+        composeText: request.composeText,
+        composeMode: request.composeMode,
+        sourceLabel: request.sourceLabel,
+        sourceMessageId: request.sourceMessageId,
+        sourceNodeId: request.sourceNodeId,
+        sessionTitle: request.sessionTitle,
+        sessionSummary: request.sessionSummary,
+        sessionKind: request.sessionKind,
+      })
+    } catch (error) {
+      if (isSessionApiUnavailable(error)) {
+        this.sessionApiAvailable = false
       }
       post({ type: "session.error", message: errorMessage(error) })
     }
@@ -2350,11 +2477,19 @@ export class LabrastroController implements vscode.Disposable {
           try {
             await this.syncDueSessionSnapshots(post)
             await this.refreshSessions()
-            this.emitChatMessage({
-              type: "session.list",
-              sessions: this.sessions,
-              fingerprint: this.sessionFingerprint,
-            }, post)
+            const currentSessionId = this.currentSessionId
+            if (currentSessionId && !isLocalDraftSessionId(currentSessionId)) {
+              await this.loadSession(currentSessionId, post, {
+                suppressListRefresh: true,
+                reason: "explicit",
+              })
+            } else {
+              this.emitChatMessage({
+                type: "session.list",
+                sessions: this.sessions,
+                fingerprint: this.sessionFingerprint,
+              }, post)
+            }
           } catch {
             // Chat completion should not fail because history refresh failed.
           }
@@ -2367,7 +2502,8 @@ export class LabrastroController implements vscode.Disposable {
         }
       }
     } catch (error) {
-      this.emitChatMessage({ type: "chat.error", message: errorMessage(error) }, post)
+      this.emitChatMessage({ type: "chat.error", message: chatErrorMessage(error) }, post)
+      await this.postConnectionStateIfAuthRequired(error, post)
       this.setActiveChatRun(undefined)
       this.activeDraftSessionId = undefined
     }
@@ -2563,6 +2699,13 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+function chatErrorMessage(error: unknown): string {
+  if (classifyRemoteError(error) === "auth_required") {
+    return "登录已失效，请重新登录。"
+  }
+  return errorMessage(error)
+}
+
 function postAuthError(post: (message: Record<string, unknown>) => void, error: unknown): void {
   const message = errorMessage(error)
   const payload: Record<string, unknown> = { message }
@@ -2586,6 +2729,12 @@ function normalizeSessionMetadata(value: unknown): SessionMetadataState {
     savedAt: stringValue(payload.savedAt) || stringValue(payload.saved_at) || "",
     preview: stringValue(payload.preview) || "",
     fingerprint: stringValue(payload.fingerprint) || "",
+    kind: normalizeSessionKind(payload.kind),
+    parentSessionId: stringValue(payload.parentSessionId) || stringValue(payload.parent_session_id) || undefined,
+    sourceSessionId: stringValue(payload.sourceSessionId) || stringValue(payload.source_session_id) || undefined,
+    sourceNodeId: stringValue(payload.sourceNodeId) || stringValue(payload.source_node_id) || undefined,
+    returnNodeId: stringValue(payload.returnNodeId) || stringValue(payload.return_node_id) || undefined,
+    summary: stringValue(payload.summary) || undefined,
     syncStatus: normalizeSyncStatus(payload.syncStatus) || normalizeSyncStatus(payload.sync_status),
     syncError: stringValue(payload.syncError) || stringValue(payload.sync_error) || undefined,
     source: normalizeSessionSource(payload.source),
@@ -2611,6 +2760,12 @@ function normalizeSessionSource(value: unknown): "server" | "local" | "merged" |
     : undefined
 }
 
+function normalizeSessionKind(value: unknown): SessionMetadataState["kind"] | undefined {
+  return value === "main" || value === "fork" || value === "subagent"
+    ? value
+    : undefined
+}
+
 function buildSessionBundle(
   payload: Record<string, unknown>,
   metadata: SessionMetadataState
@@ -2630,14 +2785,19 @@ function buildSessionBundle(
       stringValue(snapshotSession.updatedAt) ||
       metadata.savedAt ||
       new Date().toISOString(),
-    kind: stringValue(snapshotSession.kind) || "main",
+    kind: normalizeSessionKind(snapshotSession.kind) || metadata.kind || "main",
     state: stringValue(snapshotSession.state) || "active",
-    summary: stringValue(snapshotSession.summary) || metadata.preview,
+    parentSessionId: stringValue(snapshotSession.parentSessionId) || metadata.parentSessionId,
+    sourceSessionId: stringValue(snapshotSession.sourceSessionId) || metadata.sourceSessionId,
+    sourceNodeId: stringValue(snapshotSession.sourceNodeId) || metadata.sourceNodeId,
+    returnNodeId: stringValue(snapshotSession.returnNodeId) || metadata.returnNodeId,
+    summary: stringValue(snapshotSession.summary) || metadata.summary || metadata.preview,
     syncStatus: metadata.syncStatus,
     syncError: metadata.syncError,
     source: metadata.source,
   }
   const fallback = buildBundleFromMessages(metadata, arrayValue(payload.messages))
+  const turns = Array.isArray(snapshot.turns) ? snapshot.turns : arrayValue(fallback.turns)
   const fallbackStats = objectValue(fallback.stats)
   return {
     session,
@@ -2663,7 +2823,7 @@ function buildSessionBundle(
         numberValue(fallbackStats.maxOutputTokens) ||
         0,
     },
-    turns: Array.isArray(snapshot.turns) ? snapshot.turns : fallback.turns,
+    turns: enrichTurnsWithHistoryMapping(turns, arrayValue(payload.messages)),
     traceNodes: Array.isArray(snapshot.traceNodes)
       ? snapshot.traceNodes
       : fallback.traceNodes,
@@ -2688,7 +2848,7 @@ function buildBundleFromMessages(
 ): Record<string, unknown> {
   const turns: Record<string, unknown>[] = []
   let pendingTurn: Record<string, unknown> | undefined
-  let index = 0
+  let displayIndex = 0
   for (const raw of messages) {
     const message = objectValue(raw)
     const role = stringValue(message.role)
@@ -2697,7 +2857,7 @@ function buildBundleFromMessages(
     if (role === "user") {
       pendingTurn = {
         userMessage: {
-          id: `${metadata.id}-user-${index}`,
+          id: `${metadata.id}-user-${displayIndex}`,
           role: "user",
           text: content,
           parts: [],
@@ -2706,12 +2866,12 @@ function buildBundleFromMessages(
         assistantMessages: [],
       }
       turns.push(pendingTurn)
-      index += 1
+      displayIndex += 1
     } else if (role === "assistant") {
       if (!pendingTurn) {
         pendingTurn = {
           userMessage: {
-            id: `${metadata.id}-user-${index}`,
+            id: `${metadata.id}-user-${displayIndex}`,
             role: "user",
             text: "",
             parts: [],
@@ -2723,12 +2883,12 @@ function buildBundleFromMessages(
       }
       const assistantMessages = arrayValue(pendingTurn.assistantMessages)
       assistantMessages.push({
-        id: `${metadata.id}-assistant-${index}`,
+        id: `${metadata.id}-assistant-${displayIndex}`,
         role: "assistant",
         text: content,
         parts: [
           {
-            id: `${metadata.id}-assistant-part-${index}`,
+            id: `${metadata.id}-assistant-part-${displayIndex}`,
             type: "text",
             text: content,
             textFormat: "markdown",
@@ -2737,7 +2897,7 @@ function buildBundleFromMessages(
         timestamp: Date.parse(metadata.savedAt) || Date.now(),
       })
       pendingTurn.assistantMessages = assistantMessages
-      index += 1
+      displayIndex += 1
     }
   }
   return {
@@ -2754,10 +2914,92 @@ function buildBundleFromMessages(
       maxOutputTokens: 0,
       runStatus: "idle",
     },
-    turns,
+    turns: enrichTurnsWithHistoryMapping(turns, messages),
     traceNodes: [],
     traceEdges: [],
   }
+}
+
+function enrichTurnsWithHistoryMapping(
+  turns: unknown[],
+  messages: unknown[]
+): unknown[] {
+  const conversation = cloneArray(turns)
+  if (!conversation.length) return conversation
+
+  const conversationIndexes = messages
+    .map((rawMessage, rawIndex) => ({
+      rawIndex,
+      message: objectValue(rawMessage),
+    }))
+    .filter(({ message }) => isConversationMessage(message))
+
+  const userPositions = conversationIndexes
+    .map((entry, position) => ({ ...entry, position }))
+    .filter((entry) => stringValue(entry.message.role) === "user")
+
+  for (let turnIndex = 0; turnIndex < conversation.length && turnIndex < userPositions.length; turnIndex += 1) {
+    const turn = objectValue(conversation[turnIndex])
+    const userPosition = userPositions[turnIndex]
+    const nextUserPosition = userPositions[turnIndex + 1]?.position ?? conversationIndexes.length
+    const segmentEndEntry = conversationIndexes[Math.max(userPosition.position, nextUserPosition - 1)]
+    const firstResponseEntry = conversationIndexes[userPosition.position + 1]
+    const historyMessageIndex = firstResponseEntry?.rawIndex ?? segmentEndEntry?.rawIndex ?? userPosition.rawIndex
+    const historyCutIndex = segmentEndEntry?.rawIndex ?? userPosition.rawIndex
+    const userMessage = objectValue(turn.userMessage)
+    turn.userMessage = {
+      ...userMessage,
+      historyMessageIndex: userPosition.rawIndex,
+      historyCutIndex: userPosition.rawIndex,
+    }
+    turn.assistantMessages = arrayValue(turn.assistantMessages).map((rawAssistantMessage) => {
+      const assistantMessage = objectValue(rawAssistantMessage)
+      return {
+        ...assistantMessage,
+        historyMessageIndex,
+        historyCutIndex,
+        parts: arrayValue(assistantMessage.parts).map((rawPart) =>
+          enrichPartHistoryCutIndex(rawPart, historyCutIndex)
+        ),
+      }
+    })
+    conversation[turnIndex] = turn
+  }
+
+  return conversation
+}
+
+function enrichPartHistoryCutIndex(rawPart: unknown, historyCutIndex: number): Record<string, unknown> {
+  const part = objectValue(rawPart)
+  const type = stringValue(part.type)
+  if (
+    type !== "tool" &&
+    type !== "terminal" &&
+    type !== "session" &&
+    type !== "parallel_tools" &&
+    type !== "parallel_sessions"
+  ) {
+    return part
+  }
+  return {
+    ...part,
+    historyCutIndex,
+  }
+}
+
+function cloneArray<T>(value: T[]): T[] {
+  return JSON.parse(JSON.stringify(value)) as T[]
+}
+
+function isConversationMessage(message: Record<string, unknown>): boolean {
+  const role = stringValue(message.role)
+  if (role !== "user" && role !== "assistant" && role !== "tool") {
+    return false
+  }
+  if (messageContent(message.content)) return true
+  if (arrayValue(message.parts).length > 0) return true
+  if (arrayValue(message.tool_calls).length > 0) return true
+  return role === "tool"
 }
 
 function messageContent(value: unknown): string {

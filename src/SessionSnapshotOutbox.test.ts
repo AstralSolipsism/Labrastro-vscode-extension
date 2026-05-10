@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import {
   SessionSnapshotOutbox,
   isLocalDraftSessionId,
+  snapshotHasContent,
 } from "./SessionSnapshotOutbox"
 
 const hostUrl = "https://ezcode.example.test"
@@ -24,6 +25,12 @@ function snapshot(sessionId: string, title = "hello") {
       id: sessionId,
       title,
       updatedAt: "2026-05-08T00:00:00.000Z",
+      kind: "fork",
+      parentSessionId: "session_parent",
+      sourceSessionId: "session_parent",
+      sourceNodeId: "trace-1",
+      returnNodeId: "trace-return",
+      summary: `${title} summary`,
     },
     stats: { taskText: title },
     turns: [{ userMessage: { text: title }, assistantMessages: [] }],
@@ -59,6 +66,33 @@ describe("SessionSnapshotOutbox", () => {
     })
   })
 
+  it("does not overwrite a populated snapshot with a later empty shell", async () => {
+    const outbox = new SessionSnapshotOutbox(context())
+    const populated = snapshot("session_1", "list repos")
+    const empty = {
+      version: 1,
+      sessionId: "session_1",
+      session: { id: "session_1", title: "新会话" },
+      stats: { taskText: "" },
+      turns: [],
+      traceNodes: [],
+      traceEdges: [],
+      traceUI: {},
+    }
+
+    expect(snapshotHasContent(populated)).toBe(true)
+    expect(snapshotHasContent(empty)).toBe(false)
+
+    await outbox.upsert(hostUrl, "session_1", populated, "content-digest")
+    await outbox.upsert(hostUrl, "session_1", empty, "empty-digest")
+
+    const record = await outbox.read(hostUrl, "session_1")
+    expect(record?.snapshotDigest).toBe("content-digest")
+    expect((record?.snapshot.stats as any).taskText).toBe("list repos")
+    expect(record?.snapshot.turns).toEqual(populated.turns)
+    expect((record?.snapshot.session as any).parentSessionId).toBe("session_parent")
+  })
+
   it("marks failed records as due after retry and synced records as cached", async () => {
     const outbox = new SessionSnapshotOutbox(context())
     await outbox.upsert(hostUrl, "session_2", snapshot("session_2"), "d1")
@@ -92,6 +126,34 @@ describe("SessionSnapshotOutbox", () => {
     expect(await outbox.read(hostUrl, "session-local")).toBeUndefined()
     expect(await outbox.read(hostUrl, "session_remote")).toMatchObject({
       status: "pending",
+    })
+  })
+
+  it("preserves branch metadata when merging server sessions with local snapshots", async () => {
+    const outbox = new SessionSnapshotOutbox(context())
+    await outbox.upsert(hostUrl, "session_server", snapshot("session_server", "branch"), "d1")
+
+    const merged = await outbox.mergeMetadata(
+      hostUrl,
+      [{
+        id: "session_server",
+        model: "m1",
+        savedAt: "2026-05-08T00:00:00.000Z",
+        preview: "server",
+        fingerprint: "remote:host:workspace",
+        source: "server",
+      }],
+      { includeSyncedLocalOnly: false }
+    )
+
+    expect(merged[0]).toMatchObject({
+      id: "session_server",
+      kind: "fork",
+      parentSessionId: "session_parent",
+      sourceSessionId: "session_parent",
+      sourceNodeId: "trace-1",
+      returnNodeId: "trace-return",
+      summary: "branch summary",
     })
   })
 

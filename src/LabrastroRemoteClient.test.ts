@@ -761,6 +761,25 @@ describe("LabrastroRemoteClient runtime admin API", () => {
     expect(deleted).toContain(DEFAULT_AUTH_SESSION_KEY)
     expect(deleted).toContain(LEGACY_AUTH_SESSION_KEY)
   })
+
+  it("reports missing stored auth session as login expired for authenticated calls", async () => {
+    vscodeMock.labrastroValue = DEFAULT_TEST_HOST_URL
+    const context = {
+      secrets: {
+        get: vi.fn(async () => undefined),
+        store: vi.fn(async () => undefined),
+        delete: vi.fn(async () => undefined),
+      },
+    }
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), {
+      headers: { "Content-Type": "application/json" },
+    }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = new LabrastroRemoteClient(context as never)
+
+    await expect(client.adminStatus()).rejects.toThrow("登录已失效，请重新登录。")
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
 })
 
 describe("LabrastroRemoteClient chat start", () => {
@@ -893,6 +912,7 @@ describe("LabrastroRemoteClient chat start", () => {
     ;(client as unknown as { peerProcess: typeof peerProcess }).peerProcess = peerProcess
 
     await client.listSessions(5, "etag-1")
+    await client.forkSession("session-1", 2, { session: { kind: "fork" } })
     await client.saveSessionSnapshot("session-1", { turns: [] }, "digest-1")
     await client.streamChat("chat-1", 7)
     await client.chatStatus("chat-1", 8)
@@ -910,6 +930,15 @@ describe("LabrastroRemoteClient chat start", () => {
           peer_token: "peer-token-1",
           limit: 5,
           if_list_etag: "etag-1",
+        },
+      },
+      {
+        pathname: "/remote/sessions/fork",
+        body: {
+          peer_token: "peer-token-1",
+          source_session_id: "session-1",
+          keep_through_message_index: 2,
+          snapshot: { session: { kind: "fork" } },
         },
       },
       {
