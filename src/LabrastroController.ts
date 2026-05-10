@@ -1,30 +1,22 @@
-import * as vscode from "vscode"
+﻿import * as vscode from "vscode"
 import * as fs from "fs"
 import * as path from "path"
+import { ApprovalDocumentProvider } from "./ApprovalDocumentProvider"
 import {
-  BackendCapabilities,
+  BackendFeatures,
   LabrastroRemoteClient,
-  classifyRemoteError,
-  isRemoteError,
   type ConnectionState,
 } from "./LabrastroRemoteClient"
-import {
-  SessionSnapshotOutbox,
-  isLocalDraftSessionId,
-  type SessionSnapshotMetadata,
-  type SessionSnapshotOutboxRecord,
-  type SessionSnapshotSyncStatus,
-} from "./SessionSnapshotOutbox"
-import { canStartSessionlessChat, LEGACY_BACKEND_UPGRADE_MESSAGE } from "./session-start"
-import {
-  mergeSessionBundleWithLocalContent,
-  shouldPreserveLocalSessionContent,
-} from "./session-bundle-content"
+import { classifyRemoteError, isRemoteError } from "./remote-errors"
+import { WebviewBus, type PostMessage, type WebviewTarget } from "./WebviewBus"
+import type { WebviewToHostMessage } from "./protocol/messages"
+import { AdminCoordinator } from "./coordinators/AdminCoordinator"
+import { ChatRunCoordinator, type ActiveChatRun } from "./coordinators/ChatRunCoordinator"
+import { EnvironmentCoordinator } from "./coordinators/EnvironmentCoordinator"
+import { SessionCoordinator } from "./coordinators/SessionCoordinator"
 
-type PostMessage = (message: Record<string, unknown>) => Thenable<boolean> | void
 type EnvironmentRunMode = "check" | "configure"
 type EnvironmentEntryKind = "cli" | "mcp" | "skill"
-type AutoApprovalOptionKey = "readOnly" | "write" | "delete" | "execute" | "mcp" | "unknown"
 type EnvironmentEntryStatus =
   | "unchecked"
   | "checking"
@@ -105,87 +97,66 @@ interface ActiveEnvironmentRun {
   cancelled: boolean
 }
 
-interface SessionMetadataState {
-  id: string
-  model: string
-  savedAt: string
-  preview: string
-  fingerprint: string
-  kind?: "main" | "fork" | "subagent"
-  parentSessionId?: string
-  sourceSessionId?: string
-  sourceNodeId?: string
-  returnNodeId?: string
-  summary?: string
-  syncStatus?: SessionSnapshotSyncStatus
-  syncError?: string
-  source?: "server" | "local" | "merged"
-}
-
-interface AutoApprovalState {
-  options: Record<AutoApprovalOptionKey, boolean>
-  allowedCommands: string[]
-  deniedCommands: string[]
-  platform: NodeJS.Platform
-}
-
-interface ActiveChatRun {
-  chatId: string
-  cursor: number
-  sessionId?: string
-  draftSessionId?: string
-  status: "running" | "reconnecting"
-  startedAt: string
-  reconnectAttempts: number
-  reconnectStartedAt?: number
-  lastError?: string
-  lastStreamAt?: string
-  nextRetryAt?: number
-}
-
-const AUTO_APPROVAL_STATE_KEY = "labrastro.autoApproval"
-const ACTIVE_CHAT_RUN_KEY = "labrastro.activeChatRun"
-const SNAPSHOT_RETRY_DELAYS_MS = [10_000, 30_000, 120_000, 300_000]
 const CHAT_STREAM_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 15_000]
 const CHAT_STREAM_RECOVERY_DEADLINE_MS = 5 * 60 * 1000
-const DEFAULT_AUTO_APPROVAL_OPTIONS: Record<AutoApprovalOptionKey, boolean> = {
-  readOnly: false,
-  write: false,
-  delete: false,
-  execute: false,
-  mcp: false,
-  unknown: false,
-}
-
+const CHAT_WEBVIEW_TARGETS: readonly WebviewTarget[] = ["sidebar"]
+const SESSION_WEBVIEW_TARGETS: readonly WebviewTarget[] = ["sidebar", "agentManager"]
 export class LabrastroController implements vscode.Disposable {
   private readonly client: LabrastroRemoteClient
   private readonly approvalDocuments: ApprovalDocumentProvider
-  private readonly sessionOutbox: SessionSnapshotOutbox
-  private activeChatId: string | undefined
-  private activeChatRun: ActiveChatRun | undefined
-  private currentSessionId: string | undefined
-  private activeDraftSessionId: string | undefined
-  private backendCapabilities: BackendCapabilities | null | undefined
-  private sessionApiAvailable: boolean | undefined
-  private sessionFingerprint: string | undefined
-  private sessionListEtag: string | undefined
-  private sessionInitialization: Promise<void> | undefined
-  private sessionInitializationToken = 0
-  private sessions: SessionMetadataState[] = []
-  private readonly snapshotSyncTimers = new Map<string, NodeJS.Timeout>()
-  private readonly snapshotSyncInFlight = new Set<string>()
-  private toolchainState: Record<string, unknown> | undefined
-  private environmentManifest: Record<string, unknown> | undefined
-  private environmentSnapshot: EnvironmentSnapshot = createEmptyEnvironmentSnapshot()
-  private activeEnvironmentRun: ActiveEnvironmentRun | undefined
-  private activeToolchainIngestChatId: string | undefined
-  private readonly webviewPosts = new Set<PostMessage>()
+  private readonly adminCoordinator: AdminCoordinator
+  private readonly chatRunCoordinator: ChatRunCoordinator
+  private readonly environmentCoordinator: EnvironmentCoordinator
+  private readonly sessionCoordinator: SessionCoordinator
+  private backendFeatures: BackendFeatures | null | undefined
+  private readonly webviewBus = new WebviewBus()
   private disposed = false
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.client = new LabrastroRemoteClient(context)
     this.approvalDocuments = new ApprovalDocumentProvider()
-    this.sessionOutbox = new SessionSnapshotOutbox(context)
+    this.adminCoordinator = new AdminCoordinator({
+      client: this.client,
+      context: this.context,
+      connectionErrorState: this.connectionErrorState.bind(this),
+      postConnectionState: this.postConnectionState.bind(this),
+      postAdminState: this.postAdminState.bind(this),
+      refreshBackendFeatures: this.refreshBackendFeatures.bind(this),
+      broadcastState: this.broadcastWebviewMessage.bind(this),
+      runAdminAction: this.runAdminAction.bind(this),
+      openFileTarget: this.openFileTarget.bind(this),
+      getExecutorType: this.getExecutorType.bind(this),
+      broadcastExecutorType: this.broadcastExecutorType.bind(this),
+    })
+    this.environmentCoordinator = new EnvironmentCoordinator({
+      client: this.client,
+      isEnvironmentRunActive: () => this.environmentCoordinator.isEnvironmentRunActive(),
+      runtimeSubmitPayload: this.runtimeSubmitPayload.bind(this),
+      refreshToolchainState: this.refreshToolchainState.bind(this),
+      refreshEnvironmentManifest: this.refreshEnvironmentManifest.bind(this),
+      startToolchainIngest: this.startToolchainIngest.bind(this),
+      cancelToolchainIngest: this.cancelToolchainIngest.bind(this),
+      startEnvironmentRun: this.startEnvironmentRun.bind(this),
+      cancelEnvironmentRun: this.cancelEnvironmentRun.bind(this),
+      runToolchainAction: this.runToolchainAction.bind(this),
+    })
+    this.sessionCoordinator = new SessionCoordinator({
+      client: this.client,
+      context: this.context,
+      emitSessionMessage: this.emitSessionMessage.bind(this),
+      refreshBackendFeatures: this.refreshBackendFeatures.bind(this),
+      ensureBackendFeatures: this.ensureBackendFeatures.bind(this),
+      getBackendFeatures: () => this.backendFeatures,
+      isChatActive: () => this.chatRunCoordinator.isActive(),
+    })
+    this.chatRunCoordinator = new ChatRunCoordinator({
+      client: this.client,
+      context: this.context,
+      approvalDocuments: this.approvalDocuments,
+      startChat: this.startChat.bind(this),
+      cancelChat: this.cancelChat.bind(this),
+      postConnectionStateIfAuthRequired: this.postConnectionStateIfAuthRequired.bind(this),
+    })
     this.context.subscriptions.push(
       vscode.workspace.registerTextDocumentContentProvider(
         ApprovalDocumentProvider.scheme,
@@ -194,13 +165,48 @@ export class LabrastroController implements vscode.Disposable {
     )
   }
 
-  registerWebviewPost(post: PostMessage): vscode.Disposable {
-    this.webviewPosts.add(post)
-    return {
-      dispose: () => {
-        this.webviewPosts.delete(post)
-      },
-    }
+  private get toolchainState(): Record<string, unknown> | undefined {
+    return this.environmentCoordinator.toolchainState
+  }
+
+  private set toolchainState(value: Record<string, unknown> | undefined) {
+    this.environmentCoordinator.toolchainState = value
+  }
+
+  private get environmentManifest(): Record<string, unknown> | undefined {
+    return this.environmentCoordinator.environmentManifest
+  }
+
+  private set environmentManifest(value: Record<string, unknown> | undefined) {
+    this.environmentCoordinator.environmentManifest = value
+  }
+
+  private get environmentSnapshot(): EnvironmentSnapshot {
+    return this.environmentCoordinator.environmentSnapshot as unknown as EnvironmentSnapshot
+  }
+
+  private set environmentSnapshot(value: EnvironmentSnapshot) {
+    this.environmentCoordinator.environmentSnapshot = value as unknown as Record<string, unknown>
+  }
+
+  private get activeEnvironmentRun(): ActiveEnvironmentRun | undefined {
+    return this.environmentCoordinator.activeEnvironmentRun as unknown as ActiveEnvironmentRun | undefined
+  }
+
+  private set activeEnvironmentRun(value: ActiveEnvironmentRun | undefined) {
+    this.environmentCoordinator.activeEnvironmentRun = value as unknown as Record<string, unknown> | undefined
+  }
+
+  private get activeToolchainIngestChatId(): string | undefined {
+    return this.environmentCoordinator.activeToolchainIngestChatId
+  }
+
+  private set activeToolchainIngestChatId(value: string | undefined) {
+    this.environmentCoordinator.activeToolchainIngestChatId = value
+  }
+
+  registerWebviewPost(post: PostMessage, target: WebviewTarget = "sidebar"): vscode.Disposable {
+    return this.webviewBus.register(target, post)
   }
 
   private connectionErrorState(
@@ -229,34 +235,44 @@ export class LabrastroController implements vscode.Disposable {
     options: { initializeSession?: boolean } = {}
   ): Promise<void> {
     const startedAt = Date.now()
+    const target = this.webviewBus.targetOf(post)
+    const includeSession = target !== "settings" && options.initializeSession !== false
+    const includeAdminState = target !== "agentManager"
+    const includeChatResume = target === "sidebar" || !target
     post({
       type: "ready",
       extensionVersion: contextVersion(this.context),
       workspaceDirectory: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
       platform: process.platform,
     })
-    post({ type: "autoApproval.state", payload: this.getAutoApprovalState() })
-    post({ type: "connection.state", payload: this.client.startupConnectionState() })
-    post({ type: "environment.snapshot", payload: this.environmentSnapshot })
-    post({ type: "executorType.state", payload: this.getExecutorType() })
-    post({ type: "locale.state", locale: this.context.workspaceState.get<string>("labrastro.locale") || vscode.env.language })
-    await this.postSessionSyncStatus(post)
-    if (this.activeChatRun) {
-      post({ type: "chat.resume", payload: activeChatRunPayload(this.activeChatRun) })
+    if (includeAdminState) {
+      post({ type: "autoApproval.state", payload: this.adminCoordinator.getAutoApprovalState() })
+      post({ type: "connection.state", payload: this.client.startupConnectionState() })
+      post({ type: "environment.snapshot", payload: this.environmentSnapshot })
+      post({ type: "executorType.state", payload: this.getExecutorType() })
+      post({ type: "locale.state", locale: this.context.workspaceState.get<string>("labrastro.locale") || vscode.env.language })
+    }
+    if (includeSession) {
+      await this.sessionCoordinator.postSessionSyncStatus(post)
+    }
+    const activeRunPayload = this.chatRunCoordinator.activeRunPayload()
+    if (activeRunPayload && includeChatResume) {
+      post({ type: "chat.resume", payload: activeRunPayload })
     }
     post({
       type: "startup.metric",
       payload: { name: "initial-state-ready", elapsedMs: Date.now() - startedAt },
     })
     void this.refreshInitialStateInBackground(post, startedAt, {
-      initializeSession: options.initializeSession !== false,
+      includeAdminState,
+      includeSession,
     })
   }
 
   private async refreshInitialStateInBackground(
     post: PostMessage,
     startedAt: number,
-    options: { initializeSession: boolean }
+    options: { includeAdminState: boolean; includeSession: boolean }
   ): Promise<void> {
     const run = async (name: string, operation: () => Promise<void>) => {
       const stepStartedAt = Date.now()
@@ -283,525 +299,40 @@ export class LabrastroController implements vscode.Disposable {
       }
     }
 
-    const tasks = [
-      run("connection-state", () => this.postConnectionState(post)),
-      run("admin-state", () => this.postAdminState(post)),
-      run("backend-capabilities", () => this.refreshBackendCapabilities(post)),
-      run("session-sync", () => this.syncDueSessionSnapshots(post)),
-    ]
-    if (options.initializeSession) {
-      tasks.push(run("session-initialize", () => this.initializeSessionState(post)))
+    const tasks: Promise<void>[] = []
+    if (options.includeAdminState) {
+      tasks.push(
+        run("connection-state", () => this.postConnectionState(post)),
+        run("admin-state", () => this.postAdminState(post)),
+        run("backend-features", () => this.refreshBackendFeatures(post))
+      )
+    } else if (options.includeSession) {
+      tasks.push(run("backend-features", () => this.refreshBackendFeatures(post)))
+    }
+    if (options.includeSession) {
+      tasks.push(run("session-sync", () => this.sessionCoordinator.syncDueSessionSnapshots(post)))
+      tasks.push(run("session-initialize", () => this.sessionCoordinator.initializeSessionState(post)))
     }
 
     await Promise.allSettled(tasks)
 
-    if (this.toolchainState) {
+    if (options.includeAdminState && this.toolchainState) {
       post({ type: "toolchain.state", payload: this.toolchainState })
     }
-    if (this.environmentManifest) {
+    if (options.includeAdminState && this.environmentManifest) {
       post({ type: "environment.manifest", payload: this.environmentManifest })
     }
   }
 
   async handleMessage(
-    message: Record<string, unknown>,
+    message: WebviewToHostMessage,
     post: PostMessage
   ): Promise<boolean> {
-    switch (message.type) {
-      case "connection.login":
-        try {
-          const state = await this.client.login({
-            hostUrl: stringValue(message.hostUrl),
-            username: stringValue(message.username) || "",
-            password: stringValue(message.password) || "",
-          })
-          post({ type: "connection.result", payload: state })
-          post({ type: "connection.state", payload: state })
-          await this.postAdminState(post)
-          await this.refreshBackendCapabilities(post)
-        } catch (error) {
-          const failureMessage = isRemoteError(error)
-            ? `登录失败：${errorMessage(error)}`
-            : `登录失败：无法连接 Labrastro Host ${this.client.hostUrl}：${errorMessage(error)}`
-          const state = this.connectionErrorState(failureMessage, {
-            hostUrlSaveRequested: stringValue(message.hostUrl) || undefined,
-          })
-          post({ type: "connection.result", payload: state })
-          post({ type: "connection.state", payload: state })
-        }
-        return true
-      case "connection.logout":
-        {
-          const state = await this.client.logout()
-          post({ type: "connection.result", payload: state })
-          post({ type: "connection.state", payload: state })
-        }
-        await this.postAdminState(post)
-        return true
-      case "connection.host.save":
-        {
-          const state = await this.client.saveHostUrl(stringValue(message.hostUrl) || "")
-          post({ type: "connection.result", payload: state })
-          post({ type: "connection.state", payload: state })
-        }
-        return true
-      case "auth.password.change":
-        try {
-          const payload = await this.client.authPasswordChange(
-            stringValue(message.currentPassword) || stringValue(message.current_password) || "",
-            stringValue(message.newPassword) || stringValue(message.new_password) || ""
-          )
-          post({ type: "auth.actionResult", payload })
-        } catch (error) {
-          postAuthError(post, error)
-        }
-        return true
-      case "auth.users.list":
-        try {
-          post({ type: "auth.users", payload: await this.client.authUsersList() })
-        } catch (error) {
-          postAuthError(post, error)
-        }
-        return true
-      case "auth.users.create":
-        try {
-          const payload = await this.client.authUsersCreate(objectValue(message.payload))
-          post({ type: "auth.actionResult", payload })
-          post({ type: "auth.users", payload: await this.client.authUsersList() })
-        } catch (error) {
-          postAuthError(post, error)
-        }
-        return true
-      case "auth.users.update":
-        try {
-          const payload = await this.client.authUsersUpdate(objectValue(message.payload))
-          post({ type: "auth.actionResult", payload })
-          post({ type: "auth.users", payload: await this.client.authUsersList() })
-        } catch (error) {
-          postAuthError(post, error)
-        }
-        return true
-      case "auth.users.disable":
-        try {
-          const payload = await this.client.authUsersDisable(stringValue(message.userId) || stringValue(message.user_id) || "")
-          post({ type: "auth.actionResult", payload })
-          post({ type: "auth.users", payload: await this.client.authUsersList() })
-        } catch (error) {
-          postAuthError(post, error)
-        }
-        return true
-      case "auth.users.resetPassword":
-        try {
-          const payload = await this.client.authUsersResetPassword(
-            stringValue(message.userId) || stringValue(message.user_id) || "",
-            stringValue(message.password) || ""
-          )
-          post({ type: "auth.actionResult", payload })
-          post({ type: "auth.users", payload: await this.client.authUsersList() })
-        } catch (error) {
-          postAuthError(post, error)
-        }
-        return true
-      case "auth.devices.list":
-        try {
-          post({ type: "auth.devices", payload: await this.client.authDevicesList(stringValue(message.userId) || stringValue(message.user_id)) })
-        } catch (error) {
-          postAuthError(post, error)
-        }
-        return true
-      case "auth.devices.revoke":
-        try {
-          const payload = await this.client.authDevicesRevoke(stringValue(message.deviceId) || stringValue(message.device_id) || "")
-          post({ type: "auth.actionResult", payload })
-          post({ type: "auth.devices", payload: await this.client.authDevicesList() })
-        } catch (error) {
-          postAuthError(post, error)
-        }
-        return true
-      case "auth.audit.list":
-        try {
-          post({ type: "auth.audit", payload: await this.client.authAuditList(objectValue(message.payload)) })
-        } catch (error) {
-          postAuthError(post, error)
-        }
-        return true
-      case "autoApproval.get":
-        post({ type: "autoApproval.state", payload: this.getAutoApprovalState() })
-        return true
-      case "autoApproval.update":
-        await this.updateAutoApprovalState(message)
-        this.broadcastAutoApprovalState()
-        return true
-      case "admin.refresh":
-        await this.postConnectionState(post)
-        await this.postAdminState(post)
-        return true
-      case "serverSettings.read":
-        try {
-          post({ type: "serverSettings.state", payload: await this.client.serverSettingsRead() })
-        } catch (error) {
-          post({ type: "serverSettings.error", message: errorMessage(error) })
-        }
-        return true
-      case "serverSettings.update":
-        try {
-          const payload = await this.client.serverSettingsUpdate(objectValue(message.payload))
-          post({ type: "serverSettings.state", payload })
-          post({ type: "admin.actionResult", payload })
-          await this.postAdminState(post)
-        } catch (error) {
-          post({ type: "serverSettings.error", message: errorMessage(error) })
-        }
-        return true
-      case "runtime.submit":
-        try {
-          const payload = this.runtimeSubmitPayload(objectValue(message.payload))
-          post({ type: "runtime.task", payload: await this.client.runtimeSubmit(payload) })
-        } catch (error) {
-          post({ type: "runtime.error", message: errorMessage(error) })
-        }
-        return true
-      case "runtime.events":
-        try {
-          post({ type: "runtime.events", payload: await this.client.runtimeEvents(objectValue(message.payload)) })
-        } catch (error) {
-          post({ type: "runtime.error", message: errorMessage(error) })
-        }
-        return true
-      case "runtime.cancel":
-        try {
-          post({ type: "runtime.cancelled", payload: await this.client.runtimeCancel(objectValue(message.payload)) })
-        } catch (error) {
-          post({ type: "runtime.error", message: errorMessage(error) })
-        }
-        return true
-      case "runtime.retry":
-        try {
-          post({ type: "runtime.task", payload: await this.client.runtimeRetry(objectValue(message.payload)) })
-        } catch (error) {
-          post({ type: "runtime.error", message: errorMessage(error) })
-        }
-        return true
-      case "environment.refreshManifest":
-        await this.refreshEnvironmentManifest(post)
-        return true
-      case "toolchain.refresh":
-        await this.refreshToolchainState(post)
-        return true
-      case "toolchain.record":
-        if (
-          await this.runToolchainAction(post, () =>
-            this.client.toolchainRecord(
-              stringValue(message.kind) || "",
-              objectValue(message.payload)
-            )
-          )
-        ) {
-          await this.refreshToolchainState(post)
-          if (!this.activeEnvironmentRun) {
-            await this.refreshEnvironmentManifest(post)
-          }
-        }
-        return true
-      case "toolchain.delete":
-        if (
-          await this.runToolchainAction(post, () =>
-            this.client.toolchainDelete(
-              stringValue(message.kind) || "",
-              stringValue(message.name) || ""
-            )
-          )
-        ) {
-          await this.refreshToolchainState(post)
-          if (!this.activeEnvironmentRun) {
-            await this.refreshEnvironmentManifest(post)
-          }
-        }
-        return true
-      case "toolchain.enable":
-        if (
-          await this.runToolchainAction(post, () =>
-            this.client.toolchainEnable(
-              stringValue(message.kind) || "",
-              stringValue(message.name) || "",
-              Boolean(message.enabled)
-            )
-          )
-        ) {
-          await this.refreshToolchainState(post)
-          if (!this.activeEnvironmentRun) {
-            await this.refreshEnvironmentManifest(post)
-          }
-        }
-        return true
-      case "toolchain.ingest.run":
-        void this.startToolchainIngest(objectValue(message.payload), post)
-        return true
-      case "toolchain.ingest.cancel":
-        await this.cancelToolchainIngest(post)
-        return true
-      case "environment.run":
-        if (message.mode === "check" || message.mode === "configure") {
-          void this.startEnvironmentRun(
-            message.mode,
-            post,
-            Array.isArray(message.entryIds)
-              ? message.entryIds.map((item) => String(item)).filter(Boolean)
-              : undefined,
-            stringValue(message.agentId) || stringValue(message.agent_id)
-          )
-        }
-        return true
-      case "environment.cancel":
-        await this.cancelEnvironmentRun(post)
-        return true
-      case "openFile":
-        await this.openFileTarget(
-          stringValue(message.path) || "",
-          numberValue(message.line),
-          numberValue(message.column)
-        )
-        return true
-      case "provider.record":
-        if (
-          await this.runAdminAction(post, () =>
-            this.client.providerRecord(objectValue(message.payload))
-          )
-        ) {
-          await this.postAdminState(post)
-        }
-        return true
-      case "provider.test":
-        await this.runAdminAction(post, () =>
-          this.client.providerTest(objectValue(message.payload))
-        )
-        return true
-      case "provider.delete":
-        if (
-          await this.runAdminAction(post, () =>
-            this.client.providerDelete(objectValue(message.payload))
-          )
-        ) {
-          await this.postAdminState(post)
-        }
-        return true
-      case "provider.copy":
-        if (
-          await this.runAdminAction(post, () =>
-            this.client.providerCopy(objectValue(message.payload))
-          )
-        ) {
-          await this.postAdminState(post)
-        }
-        return true
-      case "provider.enable":
-        if (
-          await this.runAdminAction(post, () =>
-            this.client.providerEnable(objectValue(message.payload))
-          )
-        ) {
-          await this.postAdminState(post)
-        }
-        return true
-      case "provider.models":
-        if (
-          await this.runAdminAction(post, () =>
-            this.client.providerModels(objectValue(message.payload))
-          )
-        ) {
-          await this.postAdminState(post)
-        }
-        return true
-      case "modelProfile.save":
-        if (
-          await this.runAdminAction(post, () =>
-            this.client.modelProfileRecord(objectValue(message.payload))
-          )
-        ) {
-          await this.postAdminState(post)
-        }
-        return true
-      case "modelProfile.activate":
-        if (
-          await this.runAdminAction(post, () =>
-            this.client.modelProfileActivate(objectValue(message.payload))
-          )
-        ) {
-          await this.postAdminState(post)
-        }
-        return true
-      case "modelProfile.saveAndActivate":
-        if (
-          await this.runAdminAction(post, async () => {
-            const payload = objectValue(message.payload)
-            const saved = await this.client.modelProfileRecord(payload)
-            const target = stringValue(message.target)
-            if (target) {
-              await this.client.modelProfileActivate({
-                profile_id: stringValue(payload.profile_id) || stringValue(payload.id) || "",
-                target,
-              })
-            }
-            return saved
-          })
-        ) {
-          await this.postAdminState(post)
-        }
-        return true
-      case "session.initialize":
-        await this.initializeSessionState(post)
-        return true
-      case "session.list":
-        await this.postSessionList(post)
-        return true
-      case "session.load":
-        await this.loadSession(stringValue(message.sessionId) || "", post)
-        return true
-      case "session.openInChat":
-        {
-          const sessionId = stringValue(message.sessionId) || ""
-          if (!sessionId) {
-            post({ type: "session.error", message: "缺少会话 ID。" })
-            return true
-          }
-          await this.loadSession(sessionId, post)
-          post({ type: "navigate", view: "chat" })
-        }
-        return true
-      case "session.new":
-        await this.createSession(post)
-        return true
-      case "session.fork":
-        await this.forkSession({
-          sourceSessionId: stringValue(message.sourceSessionId) || stringValue(message.source_session_id) || "",
-          keepThroughMessageIndex:
-            numberValue(message.keepThroughMessageIndex) ??
-            numberValue(message.keep_through_message_index) ??
-            -1,
-          snapshot: objectValue(message.snapshot),
-          composeText: stringValue(message.composeText) || stringValue(message.compose_text),
-          composeMode: stringValue(message.composeMode) || stringValue(message.compose_mode),
-          sourceLabel: stringValue(message.sourceLabel) || stringValue(message.source_label),
-          sourceMessageId: stringValue(message.sourceMessageId) || stringValue(message.source_message_id),
-          sourceNodeId: stringValue(message.sourceNodeId) || stringValue(message.source_node_id),
-          sessionTitle: stringValue(message.sessionTitle) || stringValue(message.session_title),
-          sessionSummary: stringValue(message.sessionSummary) || stringValue(message.session_summary),
-          sessionKind: stringValue(message.sessionKind) || stringValue(message.session_kind),
-        }, post)
-        return true
-      case "session.delete":
-        await this.deleteSession(stringValue(message.sessionId) || "", post)
-        return true
-      case "session.saveSnapshot":
-        await this.saveSessionSnapshot(
-          stringValue(message.sessionId) || "",
-          objectValue(message.snapshot),
-          stringValue(message.snapshotDigest) || stringValue(message.snapshot_digest),
-          post
-        )
-        return true
-      case "session.model.switch":
-        await this.switchSessionMainModel(
-          stringValue(message.sessionId),
-          stringValue(message.providerId) || stringValue(message.provider_id) || "",
-          stringValue(message.modelId) || stringValue(message.model_id) || "",
-          objectValue(message.parameters),
-          stringValue(message.requestId) || stringValue(message.request_id) || "",
-          post
-        )
-        return true
-      case "chat.send":
-        if (typeof message.text === "string") {
-          void this.startChat(message.text, stringValue(message.sessionId), post, {
-            mode: stringValue(message.mode),
-            workflowMode: stringValue(message.workflowMode) || stringValue(message.workflow_mode),
-            draftSessionId: stringValue(message.draftSessionId) || stringValue(message.draft_session_id),
-            providerId: stringValue(message.providerId) || stringValue(message.provider_id),
-            modelId: stringValue(message.modelId) || stringValue(message.model_id),
-            parameters: objectValue(message.parameters),
-          })
-        }
-        return true
-      case "chat.cancel":
-        await this.cancelChat(stringValue(message.chatId), post)
-        return true
-      case "approval.reply":
-        {
-          const chatId =
-            stringValue(message.chatId) ||
-            this.activeChatId ||
-            ""
-          try {
-            await this.client.approvalReply({
-              chat_id: chatId,
-              approval_id: stringValue(message.approvalId) || "",
-              decision: stringValue(message.decision) || "deny_once",
-              reason: stringValue(message.reason),
-            })
-          } catch (error) {
-            const resolvedError = chatErrorMessage(error)
-            post({ type: "chat.error", message: resolvedError })
-            await this.postConnectionStateIfAuthRequired(error, post)
-          }
-        }
-        return true
-      case "approval.openDetails":
-        await this.approvalDocuments.open(stringValue(message.approvalId) || "")
-        return true
-      case "executorType.save":
-        await this.context.workspaceState.update("labrastro.executorType", {
-          location: stringValue(message.location) || "remote",
-          engine: stringValue(message.engine) || "labrastro",
-        })
-        this.broadcastExecutorType()
-        return true
-      case "executorType.get":
-        post({ type: "executorType.state", payload: this.getExecutorType() })
-        return true
-      case "locale.save":
-        await this.context.workspaceState.update("labrastro.locale", stringValue(message.locale) || "")
-        return true
-      default:
-        return false
-    }
-  }
-
-  private getAutoApprovalState(): AutoApprovalState {
-    const stored = objectValue(this.context.workspaceState.get(AUTO_APPROVAL_STATE_KEY))
-    return {
-      options: sanitizeAutoApprovalOptions(stored.options),
-      allowedCommands: sanitizeCommandRules(stored.allowedCommands),
-      deniedCommands: sanitizeCommandRules(stored.deniedCommands),
-      platform: process.platform,
-    }
-  }
-
-  private async updateAutoApprovalState(message: Record<string, unknown>): Promise<void> {
-    const current = this.getAutoApprovalState()
-    const next: AutoApprovalState = {
-      options: Object.prototype.hasOwnProperty.call(message, "options")
-        ? sanitizeAutoApprovalOptions(message.options)
-        : current.options,
-      allowedCommands: Object.prototype.hasOwnProperty.call(message, "allowedCommands")
-        ? sanitizeCommandRules(message.allowedCommands)
-        : current.allowedCommands,
-      deniedCommands: Object.prototype.hasOwnProperty.call(message, "deniedCommands")
-        ? sanitizeCommandRules(message.deniedCommands)
-        : current.deniedCommands,
-      platform: process.platform,
-    }
-    await this.context.workspaceState.update(AUTO_APPROVAL_STATE_KEY, {
-      options: next.options,
-      allowedCommands: next.allowedCommands,
-      deniedCommands: next.deniedCommands,
-    })
-  }
-
-  private broadcastAutoApprovalState(): void {
-    const payload = { type: "autoApproval.state", payload: this.getAutoApprovalState() }
-    for (const post of this.webviewPosts) {
-      this.postWebviewMessage(post, payload)
-    }
+    if (await this.adminCoordinator.handleMessage(message, post)) return true
+    if (await this.environmentCoordinator.handleMessage(message, post)) return true
+    if (await this.sessionCoordinator.handleMessage(message, post)) return true
+    if (await this.chatRunCoordinator.handleMessage(message, post)) return true
+    return false
   }
 
   private getExecutorType(): { location: string; engine: string } {
@@ -814,9 +345,7 @@ export class LabrastroController implements vscode.Disposable {
 
   private broadcastExecutorType(): void {
     const payload = { type: "executorType.state", payload: this.getExecutorType() }
-    for (const post of this.webviewPosts) {
-      this.postWebviewMessage(post, payload)
-    }
+    this.broadcastWebviewMessage(payload)
   }
 
   private runtimeSubmitPayload(payload: Record<string, unknown>): Record<string, unknown> {
@@ -833,201 +362,43 @@ export class LabrastroController implements vscode.Disposable {
   }
 
   private postWebviewMessage(post: PostMessage, payload: Record<string, unknown>): void {
-    try {
-      const sent = post(payload)
-      if (sent && typeof (sent as Thenable<boolean>).then === "function") {
-        void (sent as Thenable<boolean>).then(undefined, () => {
-          this.webviewPosts.delete(post)
-        })
-      }
-    } catch {
-      this.webviewPosts.delete(post)
-    }
+    this.webviewBus.post(post, payload)
   }
 
-  private broadcastWebviewMessage(payload: Record<string, unknown>): void {
-    for (const post of this.webviewPosts) {
-      this.postWebviewMessage(post, payload)
-    }
+  private broadcastWebviewMessage(
+    payload: Record<string, unknown>,
+    targets?: readonly WebviewTarget[]
+  ): void {
+    this.webviewBus.broadcast(payload, targets)
   }
 
-  private emitChatMessage(payload: Record<string, unknown>, fallbackPost?: PostMessage): void {
-    if (this.webviewPosts.size > 0) {
-      this.broadcastWebviewMessage(payload)
+  private emitTargetedMessage(
+    payload: Record<string, unknown>,
+    targets: readonly WebviewTarget[],
+    fallbackPost?: PostMessage
+  ): void {
+    if (this.webviewBus.hasTargets(targets)) {
+      this.broadcastWebviewMessage(payload, targets)
       return
     }
-    if (fallbackPost) {
+    if (!fallbackPost) return
+    const fallbackTarget = this.webviewBus.targetOf(fallbackPost)
+    if (!fallbackTarget || targets.includes(fallbackTarget)) {
       this.postWebviewMessage(fallbackPost, payload)
     }
   }
 
-  private setActiveChatRun(run: ActiveChatRun | undefined): void {
-    this.activeChatRun = run
-    this.activeChatId = run?.chatId
-    void this.context.workspaceState.update(ACTIVE_CHAT_RUN_KEY, run ? activeChatRunPayload(run) : undefined)
+  private emitSessionMessage(payload: Record<string, unknown>, fallbackPost?: PostMessage): void {
+    this.emitTargetedMessage(payload, SESSION_WEBVIEW_TARGETS, fallbackPost)
   }
 
-  private patchActiveChatRun(patch: Partial<ActiveChatRun>): ActiveChatRun | undefined {
-    if (!this.activeChatRun) return undefined
-    const next = { ...this.activeChatRun, ...patch }
-    this.setActiveChatRun(next)
-    return next
-  }
-
-  private sessionHistoryDisabledMessage(): string | undefined {
-    if (this.backendCapabilities?.sessionHistoryWritable === false) {
-      return "服务端会话保存已关闭，当前对话会先保存在本地并等待同步。"
-    }
-    return undefined
-  }
-
-  private async postSessionSyncStatus(post?: PostMessage): Promise<void> {
-    const disabled = this.backendCapabilities?.sessionHistoryWritable === false
-    const payload = await this.sessionOutbox.summary(this.client.hostUrl, {
-      disabled,
-      message: disabled ? this.sessionHistoryDisabledMessage() : undefined,
-    })
-    const message = { type: "session.syncStatus", payload }
-    if (post) {
-      this.postWebviewMessage(post, message)
+  private emitChatMessage(payload: Record<string, unknown>, fallbackPost?: PostMessage): void {
+    const type = typeof payload.type === "string" ? payload.type : ""
+    if (type.startsWith("session.") || type === "traceSnapshot" || type === "traceFocusNode") {
+      this.emitSessionMessage(payload, fallbackPost)
       return
     }
-    this.broadcastWebviewMessage(message)
-  }
-
-  private async mergeLocalSessions(
-    options: { includeSyncedLocalOnly?: boolean } = {}
-  ): Promise<void> {
-    this.sessions = await this.sessionOutbox.mergeMetadata(
-      this.client.hostUrl,
-      this.sessions as SessionSnapshotMetadata[],
-      options
-    )
-  }
-
-  private snapshotTimerKey(hostUrl: string, sessionId: string): string {
-    return `${hostUrl}\n${sessionId}`
-  }
-
-  private scheduleSnapshotSync(hostUrl: string, record: SessionSnapshotOutboxRecord): void {
-    const key = this.snapshotTimerKey(hostUrl, record.sessionId)
-    const existing = this.snapshotSyncTimers.get(key)
-    if (existing) {
-      clearTimeout(existing)
-      this.snapshotSyncTimers.delete(key)
-    }
-    if (record.status === "synced" || isLocalDraftSessionId(record.sessionId)) return
-    if (this.backendCapabilities?.sessionHistoryWritable === false) return
-    const delayMs = Math.max(0, (record.nextAttemptAt || Date.now()) - Date.now())
-    const timer = setTimeout(() => {
-      this.snapshotSyncTimers.delete(key)
-      void this.syncSnapshotRecord(hostUrl, record.sessionId)
-    }, delayMs)
-    this.snapshotSyncTimers.set(key, timer)
-  }
-
-  private retryDelayMs(record: SessionSnapshotOutboxRecord): number {
-    return SNAPSHOT_RETRY_DELAYS_MS[
-      Math.min(record.retryCount, SNAPSHOT_RETRY_DELAYS_MS.length - 1)
-    ]
-  }
-
-  private async syncDueSessionSnapshots(post?: PostMessage): Promise<void> {
-    if (this.backendCapabilities === undefined) {
-      await this.refreshBackendCapabilities(post)
-    }
-    if (this.backendCapabilities?.sessionHistoryWritable === false) {
-      await this.postSessionSyncStatus(post)
-      return
-    }
-    const hostUrl = this.client.hostUrl
-    const due = await this.sessionOutbox.due(hostUrl)
-    for (const record of due) {
-      await this.syncSnapshotRecord(hostUrl, record.sessionId, post)
-    }
-    await this.postSessionSyncStatus(post)
-  }
-
-  private async syncSnapshotRecord(
-    hostUrl: string,
-    sessionId: string,
-    post?: PostMessage
-  ): Promise<void> {
-    const key = this.snapshotTimerKey(hostUrl, sessionId)
-    if (this.snapshotSyncInFlight.has(key)) return
-    const record = await this.sessionOutbox.read(hostUrl, sessionId)
-    if (!record || record.status === "synced" || isLocalDraftSessionId(sessionId)) return
-    if (this.activeChatId) {
-      this.scheduleSnapshotSync(hostUrl, {
-        ...record,
-        nextAttemptAt: Date.now() + 1_000,
-      })
-      return
-    }
-    if (this.sessionApiAvailable === false || this.backendCapabilities?.sessionHistoryWritable === false) {
-      const pending = await this.sessionOutbox.markPending(
-        hostUrl,
-        sessionId,
-        this.sessionHistoryDisabledMessage()
-      )
-      if (pending) {
-        this.postSnapshotStored(pending, post)
-      }
-      await this.postSessionSyncStatus(post)
-      return
-    }
-    this.snapshotSyncInFlight.add(key)
-    try {
-      const payload = await this.client.saveSessionSnapshot(
-        sessionId,
-        record.snapshot,
-        record.snapshotDigest
-      )
-      this.sessionApiAvailable = true
-      const synced = await this.sessionOutbox.markSynced(
-        hostUrl,
-        sessionId,
-        stringValue(payload.snapshot_digest) || record.snapshotDigest
-      )
-      if (synced) {
-        this.postSnapshotStored(synced, post)
-      }
-    } catch (error) {
-      if (isSessionApiUnavailable(error)) {
-        this.sessionApiAvailable = false
-      }
-      const failed = await this.sessionOutbox.markFailed(
-        hostUrl,
-        sessionId,
-        errorMessage(error),
-        this.retryDelayMs(record)
-      )
-      if (failed) {
-        this.postSnapshotStored(failed, post)
-        this.scheduleSnapshotSync(hostUrl, failed)
-      }
-    } finally {
-      this.snapshotSyncInFlight.delete(key)
-      await this.postSessionSyncStatus(post)
-    }
-  }
-
-  private postSnapshotStored(
-    record: SessionSnapshotOutboxRecord,
-    post?: PostMessage
-  ): void {
-    const payload = {
-      type: "session.snapshotStored",
-      sessionId: record.sessionId,
-      snapshotDigest: record.snapshotDigest,
-      status: record.status,
-      message: record.message,
-    }
-    if (post) {
-      this.postWebviewMessage(post, payload)
-      return
-    }
-    this.broadcastWebviewMessage(payload)
+    this.emitTargetedMessage(payload, CHAT_WEBVIEW_TARGETS, fallbackPost)
   }
 
   async postConnectionState(post: PostMessage): Promise<void> {
@@ -1057,13 +428,13 @@ export class LabrastroController implements vscode.Disposable {
     }
   }
 
-  private async refreshBackendCapabilities(post?: PostMessage): Promise<void> {
+  private async refreshBackendFeatures(post?: PostMessage): Promise<void> {
     try {
-      this.backendCapabilities = await this.client.capabilities()
-      post?.({ type: "backend.capabilities", payload: this.backendCapabilities })
-      await this.postSessionSyncStatus(post)
+      this.backendFeatures = await this.client.features()
+      post?.({ type: "backend.features", payload: this.backendFeatures })
+      await this.sessionCoordinator.postSessionSyncStatus(post)
     } catch {
-      this.backendCapabilities = null
+      this.backendFeatures = null
     }
   }
 
@@ -1072,7 +443,7 @@ export class LabrastroController implements vscode.Disposable {
     post: PostMessage
   ): Promise<void> {
     if (classifyRemoteError(error) === "auth_required") {
-      if (this.webviewPosts.size > 0) {
+      if (this.webviewBus.size > 0) {
         await this.broadcastConnectionState()
         return
       }
@@ -1080,12 +451,12 @@ export class LabrastroController implements vscode.Disposable {
     }
   }
 
-  private async ensureBackendCapabilities(): Promise<BackendCapabilities | null> {
-    if (this.backendCapabilities !== undefined) {
-      return this.backendCapabilities
+  private async ensureBackendFeatures(): Promise<BackendFeatures | null> {
+    if (this.backendFeatures !== undefined) {
+      return this.backendFeatures
     }
-    await this.refreshBackendCapabilities()
-    return this.backendCapabilities ?? null
+    await this.refreshBackendFeatures()
+    return this.backendFeatures ?? null
   }
 
   private async refreshToolchainState(post: PostMessage): Promise<void> {
@@ -1114,462 +485,6 @@ export class LabrastroController implements vscode.Disposable {
       post({ type: "toolchain.state", payload: this.toolchainState })
     } catch (error) {
       post({ type: "toolchain.error", message: errorMessage(error) })
-    }
-  }
-
-  private async initializeSessionState(post: PostMessage): Promise<void> {
-    if (this.sessionInitialization) {
-      await this.sessionInitialization
-      if (this.currentSessionId) {
-        await this.loadSession(this.currentSessionId, post)
-      } else {
-        await this.postSessionList(post)
-      }
-      return
-    }
-    const token = ++this.sessionInitializationToken
-    this.sessionInitialization = this.initializeSessionStateCore(post, token)
-    try {
-      await this.sessionInitialization
-    } finally {
-      this.sessionInitialization = undefined
-    }
-  }
-
-  private async initializeSessionStateCore(post: PostMessage, token: number): Promise<void> {
-    try {
-      const listPayload = await this.refreshSessions(10)
-      if (token !== this.sessionInitializationToken) {
-        return
-      }
-      if (this.sessionApiAvailable === false) {
-        post({
-          type: "session.list",
-          sessions: this.sessions,
-          fingerprint: this.sessionFingerprint,
-        })
-        return
-      }
-      const storedSessionId = this.context.workspaceState.get<string>("labrastro.currentSessionId")
-      const storedExists = Boolean(
-        storedSessionId && this.sessions.some((session) => session.id === storedSessionId)
-      )
-      const targetSessionId = storedExists ? storedSessionId : this.sessions[0]?.id
-      if (targetSessionId) {
-        await this.loadSession(targetSessionId, post, {
-          suppressListRefresh: true,
-          reason: "initial",
-          isStale: () => token !== this.sessionInitializationToken,
-        })
-        return
-      }
-      this.currentSessionId = undefined
-      await this.context.workspaceState.update("labrastro.currentSessionId", undefined)
-      post({
-        type: "session.list",
-        sessions: this.sessions,
-        fingerprint: listPayload.fingerprint || this.sessionFingerprint,
-      })
-    } catch (error) {
-      post({ type: "session.error", message: errorMessage(error) })
-    }
-  }
-
-  private async refreshSessions(limit = 20): Promise<{ fingerprint?: string }> {
-    if (this.sessionApiAvailable === false) {
-      await this.mergeLocalSessions()
-      return { fingerprint: this.sessionFingerprint }
-    }
-    try {
-      let payload = await this.client.listSessions(limit, this.sessionListEtag)
-      this.sessionApiAvailable = true
-      const previousFingerprint = this.sessionFingerprint
-      const nextFingerprint = stringValue(payload.fingerprint) || this.sessionFingerprint
-      const fingerprintChanged = Boolean(
-        previousFingerprint &&
-        nextFingerprint &&
-        previousFingerprint !== nextFingerprint
-      )
-      if (fingerprintChanged && payload.sessions_unchanged === true) {
-        this.sessionListEtag = undefined
-        payload = await this.client.listSessions(limit)
-      }
-      this.sessionFingerprint = stringValue(payload.fingerprint) || this.sessionFingerprint
-      this.sessionListEtag = stringValue(payload.list_etag) || this.sessionListEtag
-      if (payload.sessions_unchanged !== true) {
-        this.sessions = normalizeSessionMetadataList(payload.sessions)
-      }
-      await this.mergeLocalSessions({ includeSyncedLocalOnly: false })
-    } catch (error) {
-      if (isSessionApiUnavailable(error)) {
-        this.sessionApiAvailable = false
-        this.sessionFingerprint = undefined
-        this.sessionListEtag = undefined
-        this.sessions = []
-        await this.mergeLocalSessions({ includeSyncedLocalOnly: true })
-        return {}
-      }
-      await this.mergeLocalSessions({ includeSyncedLocalOnly: true })
-      return { fingerprint: this.sessionFingerprint }
-    }
-    return { fingerprint: this.sessionFingerprint }
-  }
-
-  private async postSessionList(post: PostMessage): Promise<void> {
-    try {
-      await this.syncDueSessionSnapshots(post)
-      await this.refreshSessions(50)
-      post({
-        type: "session.list",
-        sessions: this.sessions,
-        fingerprint: this.sessionFingerprint,
-      })
-    } catch (error) {
-      post({ type: "session.error", message: errorMessage(error) })
-    }
-  }
-
-  private async loadSession(
-    sessionId: string,
-    post: PostMessage,
-    options: {
-      suppressListRefresh?: boolean
-      reason?: "initial" | "explicit"
-      isStale?: () => boolean
-    } = {}
-  ): Promise<void> {
-    if (!sessionId) {
-      post({ type: "session.error", message: "Missing session id." })
-      return
-    }
-    try {
-      const payload = await this.client.loadSession(sessionId)
-      if (options.isStale?.()) {
-        return
-      }
-      const metadata = normalizeSessionMetadata(payload.metadata)
-      let bundle = buildSessionBundle(payload, metadata)
-      const localPayload = await this.sessionOutbox.payload(this.client.hostUrl, metadata.id || sessionId)
-      if (localPayload) {
-        const localMetadata = normalizeSessionMetadata(localPayload.metadata)
-        const localBundle = buildSessionBundle(localPayload, localMetadata)
-        if (shouldPreserveLocalSessionContent(bundle, localBundle)) {
-          bundle = mergeSessionBundleWithLocalContent(
-            bundle,
-            localBundle,
-            enrichTurnsWithHistoryMapping(arrayValue(localBundle.turns), arrayValue(payload.messages))
-          )
-        }
-      }
-      this.currentSessionId = metadata.id
-      this.context.workspaceState.update("labrastro.currentSessionId", metadata.id)
-      if (!options.suppressListRefresh) {
-        await this.refreshSessions()
-      }
-      post({
-        type: "session.loaded",
-        sessionId: metadata.id,
-        reason: options.reason,
-        metadata,
-        bundle,
-        runtimeState: objectValue(payload.runtime_state),
-        sessions: this.sessions,
-        fingerprint: this.sessionFingerprint,
-      })
-    } catch (error) {
-      const localPayload = await this.sessionOutbox.payload(this.client.hostUrl, sessionId)
-      if (localPayload) {
-        if (options.isStale?.()) {
-          return
-        }
-        const metadata = normalizeSessionMetadata(localPayload.metadata)
-        const bundle = buildSessionBundle(localPayload, metadata)
-        this.currentSessionId = metadata.id
-        await this.context.workspaceState.update("labrastro.currentSessionId", metadata.id)
-        if (!options.suppressListRefresh) {
-          await this.refreshSessions()
-        }
-        post({
-          type: "session.loaded",
-          sessionId: metadata.id,
-          reason: options.reason,
-          metadata,
-          bundle,
-          runtimeState: objectValue(localPayload.runtime_state),
-          sessions: this.sessions,
-          fingerprint: this.sessionFingerprint,
-        })
-        return
-      }
-      post({ type: "session.error", message: errorMessage(error) })
-    }
-  }
-
-  private async createSession(
-    post: PostMessage,
-    options: { suppressListRefresh?: boolean; fingerprint?: string } = {}
-  ): Promise<void> {
-    if (this.sessionApiAvailable === false) {
-      this.currentSessionId = undefined
-      await this.context.workspaceState.update("labrastro.currentSessionId", undefined)
-      await this.mergeLocalSessions()
-      post({
-        type: "session.list",
-        sessions: this.sessions,
-        fingerprint: this.sessionFingerprint,
-      })
-      return
-    }
-    try {
-      const payload = await this.client.newSession()
-      this.sessionApiAvailable = true
-      const metadata = normalizeSessionMetadata(payload.metadata)
-      const bundle = buildSessionBundle(payload, metadata)
-      this.currentSessionId = metadata.id
-      this.context.workspaceState.update("labrastro.currentSessionId", metadata.id)
-      if (!options.suppressListRefresh) {
-        await this.refreshSessions()
-      }
-      if (!this.sessionFingerprint) {
-        this.sessionFingerprint = stringValue(payload.fingerprint) || options.fingerprint
-      }
-      post({
-        type: "session.created",
-        sessionId: metadata.id,
-        metadata,
-        bundle,
-        runtimeState: objectValue(payload.runtime_state),
-        sessions: this.sessions,
-        fingerprint: this.sessionFingerprint,
-      })
-    } catch (error) {
-      if (isSessionApiUnavailable(error)) {
-        this.sessionApiAvailable = false
-        this.currentSessionId = undefined
-        await this.context.workspaceState.update("labrastro.currentSessionId", undefined)
-        post({
-          type: "session.list",
-          sessions: this.sessions,
-          fingerprint: this.sessionFingerprint,
-        })
-        return
-      }
-      post({ type: "session.error", message: errorMessage(error) })
-    }
-  }
-
-  private async forkSession(
-    request: {
-      sourceSessionId: string
-      keepThroughMessageIndex: number
-      snapshot: Record<string, unknown>
-      composeText?: string
-      composeMode?: string
-      sourceLabel?: string
-      sourceMessageId?: string
-      sourceNodeId?: string
-      sessionTitle?: string
-      sessionSummary?: string
-      sessionKind?: string
-    },
-    post: PostMessage
-  ): Promise<void> {
-    const sourceSessionId = request.sourceSessionId.trim()
-    if (!sourceSessionId || isLocalDraftSessionId(sourceSessionId)) {
-      post({ type: "session.error", message: "Fork 需要基于真实远端会话。" })
-      return
-    }
-    if (this.sessionApiAvailable === false) {
-      post({ type: "session.error", message: "当前后端不支持会话 Fork。" })
-      return
-    }
-    try {
-      const payload = await this.client.forkSession(
-        sourceSessionId,
-        request.keepThroughMessageIndex,
-        request.snapshot
-      )
-      this.sessionApiAvailable = true
-      const metadata = normalizeSessionMetadata(payload.metadata)
-      if (metadata.id) {
-        this.currentSessionId = metadata.id
-        await this.context.workspaceState.update("labrastro.currentSessionId", metadata.id)
-      }
-      await this.refreshSessions()
-      post({
-        type: "session.forked",
-        sessionId: metadata.id,
-        metadata,
-        bundle: buildSessionBundle(payload, metadata),
-        runtimeState: objectValue(payload.runtime_state),
-        sessions: this.sessions,
-        fingerprint: this.sessionFingerprint || stringValue(payload.fingerprint),
-        sourceSessionId,
-        keepThroughMessageIndex: request.keepThroughMessageIndex,
-        composeText: request.composeText,
-        composeMode: request.composeMode,
-        sourceLabel: request.sourceLabel,
-        sourceMessageId: request.sourceMessageId,
-        sourceNodeId: request.sourceNodeId,
-        sessionTitle: request.sessionTitle,
-        sessionSummary: request.sessionSummary,
-        sessionKind: request.sessionKind,
-      })
-    } catch (error) {
-      if (isSessionApiUnavailable(error)) {
-        this.sessionApiAvailable = false
-      }
-      post({ type: "session.error", message: errorMessage(error) })
-    }
-  }
-
-  private async deleteSession(sessionId: string, post: PostMessage): Promise<void> {
-    if (!sessionId) {
-      post({ type: "session.error", message: "Missing session id." })
-      return
-    }
-    await this.sessionOutbox.delete(this.client.hostUrl, sessionId)
-
-    const postDeleted = async (deletedCurrent: boolean, loadNext = true) => {
-      this.sessions = this.sessions.filter((session) => session.id !== sessionId)
-      if (deletedCurrent) {
-        this.currentSessionId = undefined
-        await this.context.workspaceState.update("labrastro.currentSessionId", undefined)
-      }
-      await this.postSessionSyncStatus(post)
-      post({
-        type: "session.deleted",
-        sessionId,
-        sessions: this.sessions,
-        fingerprint: this.sessionFingerprint,
-      })
-      if (deletedCurrent) {
-        const nextSessionId = this.sessions[0]?.id
-        if (loadNext && nextSessionId) {
-          await this.loadSession(nextSessionId, post, { suppressListRefresh: true })
-        } else {
-          post({
-            type: "session.list",
-            sessions: this.sessions,
-            fingerprint: this.sessionFingerprint,
-          })
-        }
-      }
-    }
-
-    if (isLocalDraftSessionId(sessionId) || this.sessionApiAvailable === false) {
-      await postDeleted(this.currentSessionId === sessionId, false)
-      return
-    }
-    try {
-      await this.client.deleteSession(sessionId)
-      const deletedCurrent = this.currentSessionId === sessionId
-      await this.refreshSessions()
-      await postDeleted(deletedCurrent)
-    } catch (error) {
-      if (
-        isRemoteError(error, "session_not_found", 404) ||
-        isRemoteError(error, "session_fingerprint_mismatch", 403)
-      ) {
-        const deletedCurrent = this.currentSessionId === sessionId
-        await this.refreshSessions()
-        await postDeleted(deletedCurrent)
-        return
-      }
-      post({ type: "session.error", message: errorMessage(error) })
-    }
-  }
-
-  private async saveSessionSnapshot(
-    sessionId: string,
-    snapshot: Record<string, unknown>,
-    snapshotDigest: string | undefined,
-    post: PostMessage
-  ): Promise<void> {
-    if (!sessionId || !Object.keys(snapshot).length) return
-    const hostUrl = this.client.hostUrl
-    const localDraft = isLocalDraftSessionId(sessionId)
-    const canUpload =
-      !localDraft &&
-      this.sessionApiAvailable !== false &&
-      this.backendCapabilities?.sessionHistoryWritable !== false
-    const record = await this.sessionOutbox.upsert(
-      hostUrl,
-      sessionId,
-      snapshot,
-      snapshotDigest,
-      "pending",
-      canUpload ? undefined : this.sessionHistoryDisabledMessage()
-    )
-    this.postSnapshotStored(record, post)
-    await this.postSessionSyncStatus(post)
-    if (!canUpload) {
-      return
-    }
-    if (this.activeChatId) {
-      this.scheduleSnapshotSync(hostUrl, {
-        ...record,
-        nextAttemptAt: Date.now() + 1_000,
-      })
-      return
-    }
-    await this.syncSnapshotRecord(hostUrl, sessionId, post)
-  }
-
-  private async switchSessionMainModel(
-    sessionId: string | undefined,
-    providerId: string,
-    modelId: string,
-    parameters: Record<string, unknown>,
-    requestId: string,
-    post: PostMessage
-  ): Promise<void> {
-    if (!providerId || !modelId) {
-      post({ type: "session.model.error", message: "缺少服务商或模型 ID。", requestId })
-      return
-    }
-    if (!sessionId || isLocalDraftSessionId(sessionId)) {
-      post({ type: "session.model.error", message: "模型切换需要先绑定真实远端会话。", requestId })
-      return
-    }
-    if (this.sessionApiAvailable === false) {
-      post({ type: "session.model.error", message: "当前后端不支持会话模型切换。", requestId })
-      return
-    }
-    try {
-      const payload = await this.client.switchSessionMainModel(sessionId, providerId, modelId, parameters)
-      this.sessionApiAvailable = true
-      const metadata = normalizeSessionMetadata(payload.metadata)
-      if (metadata.id) {
-        this.currentSessionId = metadata.id
-        await this.context.workspaceState.update("labrastro.currentSessionId", metadata.id)
-      }
-      await this.refreshSessions()
-      if (metadata.id) {
-        post({
-          type: "session.state",
-          sessionId: metadata.id,
-          metadata,
-          bundle: buildSessionBundle(payload, metadata),
-          runtimeState: objectValue(payload.runtime_state),
-          sessions: this.sessions,
-          fingerprint: this.sessionFingerprint || stringValue(payload.fingerprint),
-        })
-      }
-      post({
-        type: "session.model.state",
-        sessionId: metadata.id || sessionId,
-        payload,
-        runtimeState: objectValue(payload.runtime_state),
-        providerId,
-        modelId,
-        requestId,
-      })
-    } catch (error) {
-      if (isSessionApiUnavailable(error)) {
-        this.sessionApiAvailable = false
-      }
-      post({ type: "session.model.error", message: errorMessage(error), providerId, modelId, requestId })
     }
   }
 
@@ -2211,13 +1126,13 @@ export class LabrastroController implements vscode.Disposable {
 
   private async refreshEnvironmentSessionList(post: PostMessage): Promise<void> {
     try {
-      await this.syncDueSessionSnapshots(post)
-      await this.refreshSessions()
-      post({
+      await this.sessionCoordinator.syncDueSessionSnapshots(post)
+      await this.sessionCoordinator.refreshSessions()
+      this.emitSessionMessage({
         type: "session.list",
-        sessions: this.sessions,
-        fingerprint: this.sessionFingerprint,
-      })
+        sessions: this.sessionCoordinator.list,
+        fingerprint: this.sessionCoordinator.fingerprint,
+      }, post)
     } catch {
       // Session history refresh should not mask the environment run result.
     }
@@ -2237,110 +1152,21 @@ export class LabrastroController implements vscode.Disposable {
     } = {}
   ): Promise<void> {
     try {
-      this.activeDraftSessionId = options.draftSessionId
-      const requestedRemoteSessionId = requestedSessionId && !isLocalDraftSessionId(requestedSessionId)
-        ? requestedSessionId
-        : undefined
-      if (!requestedRemoteSessionId && this.sessionInitialization) {
-        this.sessionInitializationToken += 1
-      }
-      let sessionId = requestedRemoteSessionId
-      const startupProviderId = stringValue(options.providerId) || ""
-      const startupModelId = stringValue(options.modelId) || ""
-      const startupParameters = objectValue(options.parameters)
-      const hasStartupModelOverride = Boolean(startupProviderId && startupModelId)
-      const capabilities = await this.ensureBackendCapabilities()
-      const supportsFreshSessionWithoutHint =
-        capabilities?.freshSessionWithoutSessionHint === true
-      if (
-        !sessionId &&
-        (hasStartupModelOverride || !supportsFreshSessionWithoutHint) &&
-        this.sessionApiAvailable !== false
-      ) {
-        try {
-          const created = await this.client.newSession()
-          this.sessionApiAvailable = true
-          const metadata = normalizeSessionMetadata(created.metadata)
-          sessionId = metadata.id
-          this.currentSessionId = metadata.id
-          await this.context.workspaceState.update("labrastro.currentSessionId", metadata.id)
-          await this.refreshSessions()
-          post({
-            type: "session.created",
-            sessionId: metadata.id,
-            metadata,
-            bundle: buildSessionBundle(created, metadata),
-            runtimeState: objectValue(created.runtime_state),
-            sessions: this.sessions,
-            fingerprint: this.sessionFingerprint,
-          })
-        } catch (error) {
-          if (!isSessionApiUnavailable(error)) {
-            throw error
-          }
-          this.sessionApiAvailable = false
-          sessionId = undefined
-          this.currentSessionId = undefined
-          await this.context.workspaceState.update("labrastro.currentSessionId", undefined)
-        }
-      }
-      if (hasStartupModelOverride && (!sessionId || this.sessionApiAvailable === false)) {
-        post({ type: "chat.error", message: "当前后端不支持会话模型切换。" })
-        this.activeDraftSessionId = undefined
+      this.chatRunCoordinator.setActiveDraftSessionId(options.draftSessionId)
+      const preparedSession = await this.sessionCoordinator.prepareChatSession(
+        requestedSessionId,
+        post,
+        options
+      )
+      if (!preparedSession.ok) {
+        this.chatRunCoordinator.clearActiveDraftSessionId()
         return
       }
-      if (hasStartupModelOverride && sessionId) {
-        const modelPayload = await this.client.switchSessionMainModel(
-          sessionId,
-          startupProviderId,
-          startupModelId,
-          startupParameters
-        )
-        this.sessionApiAvailable = true
-        const metadata = normalizeSessionMetadata(modelPayload.metadata)
-        if (metadata.id) {
-          sessionId = metadata.id
-          this.currentSessionId = metadata.id
-          await this.context.workspaceState.update("labrastro.currentSessionId", metadata.id)
-        }
-        await this.refreshSessions()
-        if (metadata.id) {
-          post({
-            type: "session.state",
-            sessionId: metadata.id,
-            metadata,
-            bundle: buildSessionBundle(modelPayload, metadata),
-            runtimeState: objectValue(modelPayload.runtime_state),
-            sessions: this.sessions,
-            fingerprint: this.sessionFingerprint || stringValue(modelPayload.fingerprint),
-          })
-        }
-        post({
-          type: "session.model.state",
-          sessionId: metadata.id || sessionId,
-          payload: modelPayload,
-          runtimeState: objectValue(modelPayload.runtime_state),
-          providerId: startupProviderId,
-          modelId: startupModelId,
-          requestId: "",
-        })
-      }
-      if (
-        !sessionId &&
-        !supportsFreshSessionWithoutHint &&
-        !canStartSessionlessChat(
-          false,
-          capabilities
-        )
-      ) {
-        post({ type: "chat.error", message: LEGACY_BACKEND_UPGRADE_MESSAGE })
-        this.activeDraftSessionId = undefined
-        return
-      }
+      let sessionId = preparedSession.sessionId
       this.emitChatMessage({ type: "chat.started", text }, post)
       const start = await this.client.startChat(text, sessionId, options)
       const chatId = String(start.chat_id || "")
-      this.setActiveChatRun({
+      this.chatRunCoordinator.setActiveRun({
         chatId,
         cursor: 0,
         sessionId,
@@ -2353,14 +1179,14 @@ export class LabrastroController implements vscode.Disposable {
       this.emitChatMessage({ type: "chat.session", chatId, sessionId }, post)
       let cursor = 0
       while (!this.disposed) {
-        if (this.activeChatRun?.chatId !== chatId) {
+        if (this.chatRunCoordinator.activeRun?.chatId !== chatId) {
           break
         }
         let stream: Record<string, unknown>
         try {
           stream = await this.client.streamChat(chatId, cursor, 2)
-          const reconnecting = this.activeChatRun?.status === "reconnecting"
-          this.patchActiveChatRun({
+          const reconnecting = this.chatRunCoordinator.activeRun?.status === "reconnecting"
+          this.chatRunCoordinator.patchActiveRun({
             status: "running",
             reconnectAttempts: 0,
             reconnectStartedAt: undefined,
@@ -2368,18 +1194,18 @@ export class LabrastroController implements vscode.Disposable {
             nextRetryAt: undefined,
             lastStreamAt: new Date().toISOString(),
           })
-          if (reconnecting && this.activeChatRun) {
+          if (reconnecting && this.chatRunCoordinator.activeRun) {
             this.emitChatMessage(
               {
                 type: "chat.reconnected",
                 chatId,
-                payload: activeChatRunPayload(this.activeChatRun),
+                payload: this.chatRunCoordinator.activeRunPayload(),
               },
               post
             )
           }
         } catch (error) {
-          const activeRun = this.activeChatRun
+          const activeRun = this.chatRunCoordinator.activeRun
           if (
             activeRun?.chatId === chatId &&
             classifyRemoteError(error) === "transient_network" &&
@@ -2387,7 +1213,7 @@ export class LabrastroController implements vscode.Disposable {
           ) {
             const delayMs = retryDelayForChatRun(activeRun)
             const reconnectStartedAt = activeRun.reconnectStartedAt ?? Date.now()
-            const next = this.patchActiveChatRun({
+            const next = this.chatRunCoordinator.patchActiveRun({
               status: "reconnecting",
               reconnectAttempts: activeRun.reconnectAttempts + 1,
               reconnectStartedAt,
@@ -2399,7 +1225,7 @@ export class LabrastroController implements vscode.Disposable {
                 type: "chat.reconnecting",
                 chatId,
                 message: errorMessage(error),
-                payload: next ? activeChatRunPayload(next) : undefined,
+                payload: next ? this.chatRunCoordinator.activeRunPayload() : undefined,
               },
               post
             )
@@ -2426,39 +1252,19 @@ export class LabrastroController implements vscode.Disposable {
                   type: "chat.error",
                   message: `会话绑定异常：当前会话 ${sessionId}，远端返回 ${remoteSessionId}。`,
                 }, post)
-                this.setActiveChatRun(undefined)
-                this.activeDraftSessionId = undefined
+                this.chatRunCoordinator.clearActiveRun()
                 return
               }
-              if (remoteSessionId && remoteSessionId !== this.currentSessionId) {
-                const draftSessionId = this.activeDraftSessionId
-                if (draftSessionId) {
-                  const adopted = await this.sessionOutbox.adoptDraft(
-                    this.client.hostUrl,
-                    draftSessionId,
-                    remoteSessionId
-                  )
-                  if (adopted) {
-                    this.postSnapshotStored(adopted, post)
-                  }
-                }
-                this.emitChatMessage({
-                  type: "session.adopted",
-                  sessionId: remoteSessionId,
-                  previousSessionId: draftSessionId,
-                }, post)
-              }
-              this.currentSessionId = remoteSessionId || sessionId
-              this.patchActiveChatRun({
-                sessionId: this.currentSessionId,
+              const currentSessionId = await this.sessionCoordinator.adoptRemoteSession(
+                remoteSessionId,
+                sessionId,
+                this.chatRunCoordinator.activeDraftSessionId,
+                post
+              )
+              this.chatRunCoordinator.patchActiveRun({
+                sessionId: currentSessionId,
                 draftSessionId: undefined,
               })
-              if (this.currentSessionId) {
-                await this.context.workspaceState.update(
-                  "labrastro.currentSessionId",
-                  this.currentSessionId
-                )
-              }
             }
           }
           for (const event of events) {
@@ -2469,58 +1275,39 @@ export class LabrastroController implements vscode.Disposable {
           this.emitChatMessage({ type: "chat.events", chatId, events }, post)
         }
         cursor = nextCursor
-        this.patchActiveChatRun({
+        this.chatRunCoordinator.patchActiveRun({
           cursor,
           lastStreamAt: new Date().toISOString(),
         })
         if (stream.done) {
-          try {
-            await this.syncDueSessionSnapshots(post)
-            await this.refreshSessions()
-            const currentSessionId = this.currentSessionId
-            if (currentSessionId && !isLocalDraftSessionId(currentSessionId)) {
-              await this.loadSession(currentSessionId, post, {
-                suppressListRefresh: true,
-                reason: "explicit",
-              })
-            } else {
-              this.emitChatMessage({
-                type: "session.list",
-                sessions: this.sessions,
-                fingerprint: this.sessionFingerprint,
-              }, post)
-            }
-          } catch {
-            // Chat completion should not fail because history refresh failed.
-          }
+          await this.sessionCoordinator.reloadCurrentAfterChatDone(post)
           this.emitChatMessage({ type: "chat.done", chatId }, post)
-          if (this.activeChatRun?.chatId === chatId) {
-            this.setActiveChatRun(undefined)
+          if (this.chatRunCoordinator.activeRun?.chatId === chatId) {
+            this.chatRunCoordinator.setActiveRun(undefined)
           }
-          this.activeDraftSessionId = undefined
+          this.chatRunCoordinator.clearActiveDraftSessionId()
           break
         }
       }
     } catch (error) {
       this.emitChatMessage({ type: "chat.error", message: chatErrorMessage(error) }, post)
       await this.postConnectionStateIfAuthRequired(error, post)
-      this.setActiveChatRun(undefined)
-      this.activeDraftSessionId = undefined
+      this.chatRunCoordinator.clearActiveRun()
     }
   }
 
   private async cancelChat(chatId: string | undefined, post: PostMessage): Promise<void> {
-    const targetChatId = chatId || this.activeChatId
+    const targetChatId = chatId || this.chatRunCoordinator.activeChatId
     if (!targetChatId) {
       post({ type: "chat.error", message: "当前没有正在运行的会话。" })
       return
     }
     try {
       await this.client.cancelChat(targetChatId, "user_cancelled")
-      if (this.activeChatRun?.chatId === targetChatId) {
-        this.setActiveChatRun(undefined)
+      if (this.chatRunCoordinator.activeRun?.chatId === targetChatId) {
+        this.chatRunCoordinator.setActiveRun(undefined)
       }
-      this.activeDraftSessionId = undefined
+      this.chatRunCoordinator.clearActiveDraftSessionId()
       this.emitChatMessage({ type: "chat.cancelled", chatId: targetChatId, reason: "user_cancelled" }, post)
     } catch (error) {
       post({ type: "chat.error", message: `停止失败：${errorMessage(error)}` })
@@ -2581,11 +1368,8 @@ export class LabrastroController implements vscode.Disposable {
 
   dispose(): void {
     this.disposed = true
-    this.setActiveChatRun(undefined)
-    for (const timer of this.snapshotSyncTimers.values()) {
-      clearTimeout(timer)
-    }
-    this.snapshotSyncTimers.clear()
+    this.chatRunCoordinator.clearActiveRun()
+    this.sessionCoordinator.dispose()
     void this.client.stopPeer()
   }
 }
@@ -2623,31 +1407,6 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function activeChatRunPayload(run: ActiveChatRun): Record<string, unknown> {
-  return {
-    chatId: run.chatId,
-    chat_id: run.chatId,
-    cursor: run.cursor,
-    sessionId: run.sessionId,
-    session_id: run.sessionId,
-    draftSessionId: run.draftSessionId,
-    draft_session_id: run.draftSessionId,
-    status: run.status,
-    startedAt: run.startedAt,
-    started_at: run.startedAt,
-    reconnectAttempts: run.reconnectAttempts,
-    reconnect_attempts: run.reconnectAttempts,
-    reconnectStartedAt: run.reconnectStartedAt,
-    reconnect_started_at: run.reconnectStartedAt,
-    lastError: run.lastError,
-    last_error: run.lastError,
-    lastStreamAt: run.lastStreamAt,
-    last_stream_at: run.lastStreamAt,
-    nextRetryAt: run.nextRetryAt,
-    next_retry_at: run.nextRetryAt,
-  }
-}
-
 function retryDelayForChatRun(run: ActiveChatRun): number {
   return CHAT_STREAM_RETRY_DELAYS_MS[
     Math.min(run.reconnectAttempts, CHAT_STREAM_RETRY_DELAYS_MS.length - 1)
@@ -2657,31 +1416,6 @@ function retryDelayForChatRun(run: ActiveChatRun): number {
 function canRetryChatStream(run: ActiveChatRun): boolean {
   const startedAt = run.reconnectStartedAt ?? Date.now()
   return Date.now() - startedAt <= CHAT_STREAM_RECOVERY_DEADLINE_MS
-}
-
-function sanitizeAutoApprovalOptions(value: unknown): Record<AutoApprovalOptionKey, boolean> {
-  const raw = objectValue(value)
-  return (Object.keys(DEFAULT_AUTO_APPROVAL_OPTIONS) as AutoApprovalOptionKey[]).reduce<Record<AutoApprovalOptionKey, boolean>>(
-    (options, key) => {
-      options[key] = raw[key] === true
-      return options
-    },
-    { ...DEFAULT_AUTO_APPROVAL_OPTIONS }
-  )
-}
-
-function sanitizeCommandRules(value: unknown): string[] {
-  if (!Array.isArray(value)) return []
-  const seen = new Set<string>()
-  const rules: string[] = []
-  for (const item of value) {
-    const rule = String(item).trim().replace(/\s+/g, " ")
-    const key = rule.toLowerCase()
-    if (!rule || seen.has(key)) continue
-    seen.add(key)
-    rules.push(rule)
-  }
-  return rules
 }
 
 function resolveWorkspacePath(pathValue: string): string | undefined {
@@ -2715,310 +1449,6 @@ function postAuthError(post: (message: Record<string, unknown>) => void, error: 
     payload.body = error.body
   }
   post({ type: "auth.error", message, payload })
-}
-
-function isSessionApiUnavailable(error: unknown): boolean {
-  return isRemoteError(error, "not_found", 404) || isRemoteError(error, "sessions_unavailable", 503)
-}
-
-function normalizeSessionMetadata(value: unknown): SessionMetadataState {
-  const payload = objectValue(value)
-  return {
-    id: stringValue(payload.id) || "",
-    model: stringValue(payload.model) || "",
-    savedAt: stringValue(payload.savedAt) || stringValue(payload.saved_at) || "",
-    preview: stringValue(payload.preview) || "",
-    fingerprint: stringValue(payload.fingerprint) || "",
-    kind: normalizeSessionKind(payload.kind),
-    parentSessionId: stringValue(payload.parentSessionId) || stringValue(payload.parent_session_id) || undefined,
-    sourceSessionId: stringValue(payload.sourceSessionId) || stringValue(payload.source_session_id) || undefined,
-    sourceNodeId: stringValue(payload.sourceNodeId) || stringValue(payload.source_node_id) || undefined,
-    returnNodeId: stringValue(payload.returnNodeId) || stringValue(payload.return_node_id) || undefined,
-    summary: stringValue(payload.summary) || undefined,
-    syncStatus: normalizeSyncStatus(payload.syncStatus) || normalizeSyncStatus(payload.sync_status),
-    syncError: stringValue(payload.syncError) || stringValue(payload.sync_error) || undefined,
-    source: normalizeSessionSource(payload.source),
-  }
-}
-
-function normalizeSessionMetadataList(value: unknown): SessionMetadataState[] {
-  if (!Array.isArray(value)) return []
-  return value
-    .map((item) => normalizeSessionMetadata(item))
-    .filter((item) => item.id)
-}
-
-function normalizeSyncStatus(value: unknown): SessionSnapshotSyncStatus | undefined {
-  return value === "synced" || value === "pending" || value === "failed"
-    ? value
-    : undefined
-}
-
-function normalizeSessionSource(value: unknown): "server" | "local" | "merged" | undefined {
-  return value === "server" || value === "local" || value === "merged"
-    ? value
-    : undefined
-}
-
-function normalizeSessionKind(value: unknown): SessionMetadataState["kind"] | undefined {
-  return value === "main" || value === "fork" || value === "subagent"
-    ? value
-    : undefined
-}
-
-function buildSessionBundle(
-  payload: Record<string, unknown>,
-  metadata: SessionMetadataState
-): Record<string, unknown> {
-  const snapshot = objectValue(payload.snapshot)
-  const snapshotSession = objectValue(snapshot.session)
-  const snapshotStats = objectValue(snapshot.stats)
-  const runtimeState = objectValue(payload.runtime_state)
-  const modelProfile = objectValue(payload.model_profile)
-  const session = {
-    id: metadata.id,
-    title:
-      stringValue(snapshotSession.title) ||
-      metadata.preview ||
-      "新会话",
-    updatedAt:
-      stringValue(snapshotSession.updatedAt) ||
-      metadata.savedAt ||
-      new Date().toISOString(),
-    kind: normalizeSessionKind(snapshotSession.kind) || metadata.kind || "main",
-    state: stringValue(snapshotSession.state) || "active",
-    parentSessionId: stringValue(snapshotSession.parentSessionId) || metadata.parentSessionId,
-    sourceSessionId: stringValue(snapshotSession.sourceSessionId) || metadata.sourceSessionId,
-    sourceNodeId: stringValue(snapshotSession.sourceNodeId) || metadata.sourceNodeId,
-    returnNodeId: stringValue(snapshotSession.returnNodeId) || metadata.returnNodeId,
-    summary: stringValue(snapshotSession.summary) || metadata.summary || metadata.preview,
-    syncStatus: metadata.syncStatus,
-    syncError: metadata.syncError,
-    source: metadata.source,
-  }
-  const fallback = buildBundleFromMessages(metadata, arrayValue(payload.messages))
-  const turns = Array.isArray(snapshot.turns) ? snapshot.turns : arrayValue(fallback.turns)
-  const fallbackStats = objectValue(fallback.stats)
-  return {
-    session,
-    stats: {
-      ...(Object.keys(snapshotStats).length ? snapshotStats : fallbackStats),
-      model:
-        stringValue(snapshotStats.model) ||
-        stringValue(modelProfile.model) ||
-        stringValue(runtimeState.model) ||
-        metadata.model,
-      mode:
-        stringValue(snapshotStats.mode) ||
-        stringValue(runtimeState.active_mode),
-      contextWindow:
-        numberValue(snapshotStats.contextWindow) ||
-        numberValue(modelProfile.max_context_tokens) ||
-        numberValue(runtimeState.max_context_tokens) ||
-        numberValue(fallbackStats.contextWindow) ||
-        0,
-      maxOutputTokens:
-        numberValue(snapshotStats.maxOutputTokens) ||
-        numberValue(modelProfile.max_tokens) ||
-        numberValue(fallbackStats.maxOutputTokens) ||
-        0,
-    },
-    turns: enrichTurnsWithHistoryMapping(turns, arrayValue(payload.messages)),
-    traceNodes: Array.isArray(snapshot.traceNodes)
-      ? snapshot.traceNodes
-      : fallback.traceNodes,
-    traceEdges: Array.isArray(snapshot.traceEdges)
-      ? snapshot.traceEdges
-      : fallback.traceEdges,
-    traceUI: {
-      activeNodeId: null,
-      selectedNodeId: null,
-      focusedBranchId: "main",
-      showInspector: false,
-      showMiniMap: false,
-      viewMode: "compact",
-      ...objectValue(snapshot.traceUI),
-    },
-  }
-}
-
-function buildBundleFromMessages(
-  metadata: SessionMetadataState,
-  messages: unknown[]
-): Record<string, unknown> {
-  const turns: Record<string, unknown>[] = []
-  let pendingTurn: Record<string, unknown> | undefined
-  let displayIndex = 0
-  for (const raw of messages) {
-    const message = objectValue(raw)
-    const role = stringValue(message.role)
-    const content = messageContent(message.content)
-    if (!content || role === "system") continue
-    if (role === "user") {
-      pendingTurn = {
-        userMessage: {
-          id: `${metadata.id}-user-${displayIndex}`,
-          role: "user",
-          text: content,
-          parts: [],
-          timestamp: Date.parse(metadata.savedAt) || Date.now(),
-        },
-        assistantMessages: [],
-      }
-      turns.push(pendingTurn)
-      displayIndex += 1
-    } else if (role === "assistant") {
-      if (!pendingTurn) {
-        pendingTurn = {
-          userMessage: {
-            id: `${metadata.id}-user-${displayIndex}`,
-            role: "user",
-            text: "",
-            parts: [],
-            timestamp: Date.parse(metadata.savedAt) || Date.now(),
-          },
-          assistantMessages: [],
-        }
-        turns.push(pendingTurn)
-      }
-      const assistantMessages = arrayValue(pendingTurn.assistantMessages)
-      assistantMessages.push({
-        id: `${metadata.id}-assistant-${displayIndex}`,
-        role: "assistant",
-        text: content,
-        parts: [
-          {
-            id: `${metadata.id}-assistant-part-${displayIndex}`,
-            type: "text",
-            text: content,
-            textFormat: "markdown",
-          },
-        ],
-        timestamp: Date.parse(metadata.savedAt) || Date.now(),
-      })
-      pendingTurn.assistantMessages = assistantMessages
-      displayIndex += 1
-    }
-  }
-  return {
-    stats: {
-      taskText: metadata.preview || "新会话",
-      tokensIn: 0,
-      tokensOut: 0,
-      cacheReads: null,
-      cacheWrites: null,
-      totalCost: null,
-      costStatus: "unavailable",
-      contextTokens: 0,
-      contextWindow: 0,
-      maxOutputTokens: 0,
-      runStatus: "idle",
-    },
-    turns: enrichTurnsWithHistoryMapping(turns, messages),
-    traceNodes: [],
-    traceEdges: [],
-  }
-}
-
-function enrichTurnsWithHistoryMapping(
-  turns: unknown[],
-  messages: unknown[]
-): unknown[] {
-  const conversation = cloneArray(turns)
-  if (!conversation.length) return conversation
-
-  const conversationIndexes = messages
-    .map((rawMessage, rawIndex) => ({
-      rawIndex,
-      message: objectValue(rawMessage),
-    }))
-    .filter(({ message }) => isConversationMessage(message))
-
-  const userPositions = conversationIndexes
-    .map((entry, position) => ({ ...entry, position }))
-    .filter((entry) => stringValue(entry.message.role) === "user")
-
-  for (let turnIndex = 0; turnIndex < conversation.length && turnIndex < userPositions.length; turnIndex += 1) {
-    const turn = objectValue(conversation[turnIndex])
-    const userPosition = userPositions[turnIndex]
-    const nextUserPosition = userPositions[turnIndex + 1]?.position ?? conversationIndexes.length
-    const segmentEndEntry = conversationIndexes[Math.max(userPosition.position, nextUserPosition - 1)]
-    const firstResponseEntry = conversationIndexes[userPosition.position + 1]
-    const historyMessageIndex = firstResponseEntry?.rawIndex ?? segmentEndEntry?.rawIndex ?? userPosition.rawIndex
-    const historyCutIndex = segmentEndEntry?.rawIndex ?? userPosition.rawIndex
-    const userMessage = objectValue(turn.userMessage)
-    turn.userMessage = {
-      ...userMessage,
-      historyMessageIndex: userPosition.rawIndex,
-      historyCutIndex: userPosition.rawIndex,
-    }
-    turn.assistantMessages = arrayValue(turn.assistantMessages).map((rawAssistantMessage) => {
-      const assistantMessage = objectValue(rawAssistantMessage)
-      return {
-        ...assistantMessage,
-        historyMessageIndex,
-        historyCutIndex,
-        parts: arrayValue(assistantMessage.parts).map((rawPart) =>
-          enrichPartHistoryCutIndex(rawPart, historyCutIndex)
-        ),
-      }
-    })
-    conversation[turnIndex] = turn
-  }
-
-  return conversation
-}
-
-function enrichPartHistoryCutIndex(rawPart: unknown, historyCutIndex: number): Record<string, unknown> {
-  const part = objectValue(rawPart)
-  const type = stringValue(part.type)
-  if (
-    type !== "tool" &&
-    type !== "terminal" &&
-    type !== "session" &&
-    type !== "parallel_tools" &&
-    type !== "parallel_sessions"
-  ) {
-    return part
-  }
-  return {
-    ...part,
-    historyCutIndex,
-  }
-}
-
-function cloneArray<T>(value: T[]): T[] {
-  return JSON.parse(JSON.stringify(value)) as T[]
-}
-
-function isConversationMessage(message: Record<string, unknown>): boolean {
-  const role = stringValue(message.role)
-  if (role !== "user" && role !== "assistant" && role !== "tool") {
-    return false
-  }
-  if (messageContent(message.content)) return true
-  if (arrayValue(message.parts).length > 0) return true
-  if (arrayValue(message.tool_calls).length > 0) return true
-  return role === "tool"
-}
-
-function messageContent(value: unknown): string {
-  if (typeof value === "string") return value
-  if (Array.isArray(value)) {
-    return value
-      .map((item) => {
-        if (typeof item === "string") return item
-        const payload = objectValue(item)
-        return stringValue(payload.text) || stringValue(payload.content) || ""
-      })
-      .filter(Boolean)
-      .join("\n")
-  }
-  return ""
-}
-
-function arrayValue(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : []
 }
 
 function createEmptyEnvironmentSnapshot(): EnvironmentSnapshot {
@@ -3083,7 +1513,7 @@ function buildEnvironmentEntries(
       check: stringValue(item.check) || "",
       install: stringValue(item.install) || "",
       command: stringValue(item.command) || "",
-      tags: toStringArray(item.capabilities),
+      tags: toStringArray(item.tags),
       status: "unchecked" as const,
     }))
   const mcpEntries = (Array.isArray(manifest.mcp_servers) ? manifest.mcp_servers : [])
@@ -3374,7 +1804,7 @@ function toolchainPayloadFromIngestCandidate(
   if (kind === "cli") {
     payload.command = textValue(candidate.command).trim()
     payload.placement = textValue(candidate.placement)
-    payload.capabilities = toStringArray(candidate.capabilities)
+    payload.tags = toStringArray(candidate.tags)
   } else if (kind === "mcp") {
     payload.command = textValue(candidate.command).trim()
     payload.args = toStringArray(candidate.args)
@@ -3481,132 +1911,4 @@ function truncateText(value: string, maxChars: number): string {
 
 function toStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : []
-}
-
-class ApprovalDocumentProvider implements vscode.TextDocumentContentProvider {
-  static readonly scheme = "labrastro-approval"
-  private readonly documents = new Map<string, string>()
-  private readonly approvals = new Map<string, ApprovalDetail>()
-
-  provideTextDocumentContent(uri: vscode.Uri): string {
-    return this.documents.get(uri.toString()) || ""
-  }
-
-  async store(payload: Record<string, unknown>): Promise<void> {
-    const detail = this.toDetail(payload)
-    if (!detail.approvalId) return
-    this.approvals.set(detail.approvalId, detail)
-    if (detail.diff) {
-      await this.open(detail.approvalId)
-    }
-  }
-
-  async open(approvalId: string): Promise<void> {
-    const detail = this.approvals.get(approvalId)
-    if (!detail) {
-      void vscode.window.showWarningMessage("Labrastro approval details are no longer available.")
-      return
-    }
-    const targetColumn =
-      vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.Active
-    if (detail.diff) {
-      const originalUri = this.putDocument(
-        `${detail.approvalId}/original/${detail.fileName}`,
-        detail.diff.originalText
-      )
-      const modifiedUri = this.putDocument(
-        `${detail.approvalId}/modified/${detail.fileName}`,
-        detail.diff.modifiedText
-      )
-      await vscode.commands.executeCommand(
-        "vscode.diff",
-        originalUri,
-        modifiedUri,
-        detail.title,
-        { preview: false, viewColumn: targetColumn }
-      )
-      return
-    }
-
-    const markdownUri = this.putDocument(
-      `${detail.approvalId}/approval.md`,
-      detail.markdown
-    )
-    const doc = await vscode.workspace.openTextDocument(markdownUri)
-    await vscode.languages.setTextDocumentLanguage(doc, "markdown")
-    await vscode.window.showTextDocument(doc, {
-      preview: false,
-      viewColumn: targetColumn,
-    })
-  }
-
-  private putDocument(path: string, content: string): vscode.Uri {
-    const uri = vscode.Uri.from({
-      scheme: ApprovalDocumentProvider.scheme,
-      path: "/" + path.replace(/^\/+/, ""),
-    })
-    this.documents.set(uri.toString(), content)
-    return uri
-  }
-
-  private toDetail(payload: Record<string, unknown>): ApprovalDetail {
-    const approvalId = stringValue(payload.approval_id) || ""
-    const toolName = stringValue(payload.tool_name) || "tool"
-    const sections = Array.isArray(payload.sections) ? payload.sections : []
-    const diffSection = sections.find(
-      (section): section is Record<string, unknown> =>
-        Boolean(
-          section &&
-            typeof section === "object" &&
-            (section as Record<string, unknown>).kind === "diff" &&
-            typeof (section as Record<string, unknown>).original_text === "string" &&
-            typeof (section as Record<string, unknown>).modified_text === "string"
-        )
-    )
-    const pathValue =
-      stringValue(diffSection?.resolved_path) ||
-      stringValue(diffSection?.path) ||
-      `${toolName}.txt`
-    const fileName = sanitizeFileName(pathValue.split(/[\\/]/).pop() || `${toolName}.txt`)
-    return {
-      approvalId,
-      title: `Labrastro Approval: ${toolName} ${fileName}`,
-      fileName,
-      markdown:
-        stringValue(payload.content) ||
-        [
-          `## Approval required: ${toolName}`,
-          stringValue(payload.reason) || "",
-          "```json",
-          JSON.stringify(payload, null, 2),
-          "```",
-        ]
-          .filter(Boolean)
-          .join("\n\n"),
-      rawPayload: payload,
-      diff: diffSection
-        ? {
-            originalText: stringValue(diffSection.original_text) || "",
-            modifiedText: stringValue(diffSection.modified_text) || "",
-          }
-        : undefined,
-    }
-  }
-}
-
-interface ApprovalDetail {
-  approvalId: string
-  title: string
-  fileName: string
-  markdown: string
-  rawPayload: Record<string, unknown>
-  diff?: {
-    originalText: string
-    modifiedText: string
-  }
-}
-
-function sanitizeFileName(value: string): string {
-  const clean = value.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").trim()
-  return clean || "approval.txt"
 }

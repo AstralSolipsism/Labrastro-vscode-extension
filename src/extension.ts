@@ -27,7 +27,10 @@ export function activate(context: vscode.ExtensionContext) {
   const labrastroController = new LabrastroController(context)
   const sidebarProvider = new SidebarProvider(context.extensionUri, labrastroController)
   const settingsPanelProvider = new SettingsPanelProvider(context.extensionUri, labrastroController)
-  const agentManagerPanelProvider = new AgentManagerPanelProvider(context.extensionUri)
+  const agentManagerPanelProvider = new AgentManagerPanelProvider(
+    context.extensionUri,
+    labrastroController
+  )
 
   // ─────────────────────────────────────────────────────────
   // 2. 注册侧边栏 WebviewViewProvider

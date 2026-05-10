@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 服务器状态上下文。
  *
  * 复刻 Kilocode 的 ServerProvider 模式：
@@ -33,7 +33,7 @@ interface ServerContextValue {
   actionResult: () => Record<string, unknown> | undefined
   serverSettingsState: () => Record<string, unknown> | undefined
   serverSettingsError: () => string | undefined
-  backendCapabilities: () => Record<string, unknown>
+  backendFeatures: () => Record<string, unknown>
   authUsersState: () => Record<string, unknown> | undefined
   authDevicesState: () => Record<string, unknown> | undefined
   authAuditState: () => Record<string, unknown> | undefined
@@ -107,7 +107,7 @@ export const ServerProvider: ParentComponent = (props) => {
   const [actionResult, setActionResult] = createSignal<Record<string, unknown> | undefined>()
   const [serverSettingsState, setServerSettingsState] = createSignal<Record<string, unknown> | undefined>()
   const [serverSettingsError, setServerSettingsError] = createSignal<string | undefined>()
-  const [backendCapabilities, setBackendCapabilities] = createSignal<Record<string, unknown>>({})
+  const [backendFeatures, setBackendFeatures] = createSignal<Record<string, unknown>>({})
   const [authUsersState, setAuthUsersState] = createSignal<Record<string, unknown> | undefined>()
   const [authDevicesState, setAuthDevicesState] = createSignal<Record<string, unknown> | undefined>()
   const [authAuditState, setAuthAuditState] = createSignal<Record<string, unknown> | undefined>()
@@ -170,8 +170,8 @@ export const ServerProvider: ParentComponent = (props) => {
       if (msg.type === "serverSettings.error") {
         setServerSettingsError(typeof msg.message === "string" ? msg.message : "Server settings request failed")
       }
-      if (msg.type === "backend.capabilities" && typeof msg.payload === "object" && msg.payload) {
-        setBackendCapabilities(msg.payload as Record<string, unknown>)
+      if (msg.type === "backend.features" && typeof msg.payload === "object" && msg.payload) {
+        setBackendFeatures(msg.payload as Record<string, unknown>)
       }
       if (msg.type === "auth.users" && typeof msg.payload === "object" && msg.payload) {
         setAuthUsersState(msg.payload as Record<string, unknown>)
@@ -293,7 +293,7 @@ export const ServerProvider: ParentComponent = (props) => {
     actionResult,
     serverSettingsState,
     serverSettingsError,
-    backendCapabilities,
+    backendFeatures,
     authUsersState,
     authDevicesState,
     authAuditState,

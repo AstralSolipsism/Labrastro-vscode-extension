@@ -1,6 +1,7 @@
 import * as vscode from "vscode"
 import { buildWebviewHtml } from "./webview-html"
 import { LabrastroController } from "./LabrastroController"
+import { isWebviewToHostMessage } from "./protocol/messages"
 
 /**
  * 面板视图类型。
@@ -144,49 +145,42 @@ export class SettingsPanelProvider implements vscode.Disposable {
         return
       }
     }
-    const webviewPostDisposable = this.labrastro.registerWebviewPost(postToWebview)
+    const webviewPostDisposable = this.labrastro.registerWebviewPost(postToWebview, "settings")
 
-    // ① closePanel：面板内返回按钮关闭面板
-    const closePanelDisposable = panel.webview.onDidReceiveMessage((msg) => {
-      if (msg.type === "closePanel") {
-        panel.dispose()
-      }
-    })
-
-    // ② webviewReady：Webview 就绪后发送 navigate 消息让前端切换到对应视图
-    const readyDisposable = panel.webview.onDidReceiveMessage((msg) => {
-      if (msg.type === "webviewReady") {
-        // 短暂延迟确保 SolidJS 已完成挂载
-        setTimeout(() => {
-          void (async () => {
-            if (disposed) return
-            await this.labrastro.postInitialState(postToWebview, {
-              initializeSession: false,
-            })
-            postToWebview({
-              type: "navigate",
-              view,
-              tab: this.tabs.get(view),
-            })
-          })().catch((error) => {
-            if (!disposed) {
-              console.warn("[labrastro] postInitialState failed", error)
-            }
-          })
-        }, 50)
-      }
-    })
-
-    // ③ settingsTabChanged：记忆用户在 Settings 面板中选中的子 Tab
-    const tabDisposable = panel.webview.onDidReceiveMessage((msg) => {
-      if (msg.type === "settingsTabChanged" && typeof msg.tab === "string") {
-        this.tabs.set(view, msg.tab)
-      }
-    })
-
-    // ④ 通用消息转发（showInfo、openExternal 等）
-    const genericDisposable = panel.webview.onDidReceiveMessage(async (msg) => {
+    const messageDisposable = panel.webview.onDidReceiveMessage(async (msg) => {
       try {
+        if (!isWebviewToHostMessage(msg)) {
+          console.log("[labrastro] ignored unknown settings message", msg)
+          return
+        }
+        if (msg.type === "closePanel") {
+          panel.dispose()
+          return
+        }
+        if (msg.type === "webviewReady") {
+          setTimeout(() => {
+            void (async () => {
+              if (disposed) return
+              await this.labrastro.postInitialState(postToWebview, {
+                initializeSession: false,
+              })
+              postToWebview({
+                type: "navigate",
+                view,
+                tab: this.tabs.get(view),
+              })
+            })().catch((error) => {
+              if (!disposed) {
+                console.warn("[labrastro] postInitialState failed", error)
+              }
+            })
+          }, 50)
+          return
+        }
+        if (msg.type === "settingsTabChanged" && typeof msg.tab === "string") {
+          this.tabs.set(view, msg.tab)
+          return
+        }
         if (msg.type === "showInfo" && typeof msg.text === "string") {
           vscode.window.showInformationMessage(msg.text)
           return
@@ -208,10 +202,7 @@ export class SettingsPanelProvider implements vscode.Disposable {
     panel.onDidDispose(() => {
       disposed = true
       console.log(`[labrastro] ${PANEL_TITLES[view]} 面板已关闭`)
-      closePanelDisposable.dispose()
-      readyDisposable.dispose()
-      tabDisposable.dispose()
-      genericDisposable.dispose()
+      messageDisposable.dispose()
       webviewPostDisposable.dispose()
       this.panels.delete(view)
       this.tabs.delete(view)

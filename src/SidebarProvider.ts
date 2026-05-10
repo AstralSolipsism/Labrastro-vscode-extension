@@ -1,6 +1,7 @@
 import * as vscode from "vscode"
 import { buildWebviewHtml } from "./webview-html"
 import { LabrastroController } from "./LabrastroController"
+import { isWebviewToHostMessage, type WebviewToHostMessage } from "./protocol/messages"
 
 /**
  * 侧边栏 Webview 提供器。
@@ -92,11 +93,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         return
       }
     }
-    this.disposables.push(this.labrastro.registerWebviewPost(postToWebview))
+    this.disposables.push(this.labrastro.registerWebviewPost(postToWebview, "sidebar"))
     webview.onDidReceiveMessage(
-      async (message: Record<string, unknown>) => {
+      async (message: unknown) => {
         try {
-          const type = message.type as string
+          if (!isWebviewToHostMessage(message)) {
+            console.log("[labrastro] ignored unknown sidebar message", message)
+            return
+          }
+          const type = message.type
 
           switch (type) {
             case "webviewReady":
@@ -174,7 +179,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
    * 处理用户发送的聊天消息。
    * 这里是简化的示例——真实项目中会连接 LLM API。
    */
-  private async handleUserMessage(message: Record<string, unknown>): Promise<void> {
+  private async handleUserMessage(message: WebviewToHostMessage): Promise<void> {
     const text = message.text as string
     if (!text) return
     await this.labrastro.handleMessage({ type: "chat.send", text }, (payload) =>

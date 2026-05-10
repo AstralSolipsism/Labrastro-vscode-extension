@@ -1,4 +1,4 @@
-import { EventEmitter } from "events"
+﻿import { EventEmitter } from "events"
 import * as fsSync from "fs"
 import * as fs from "fs/promises"
 import * as os from "os"
@@ -189,13 +189,13 @@ function mockPeerFetch(artifactContent = Buffer.from("peer-binary"), serverVersi
         { headers: { "Content-Type": "application/json" } }
       )
     }
-    if (url.endsWith("/remote/capabilities")) {
+    if (url.endsWith("/remote/features")) {
       return new Response(
         JSON.stringify({
           ok: true,
           api_version: 1,
           server_version: serverVersion,
-          capabilities: {
+          features: {
             sessions: true,
             chat_stream: true,
             fresh_session_without_session_hint: true,
@@ -306,8 +306,8 @@ describe("LabrastroRemoteClient remote errors", () => {
   })
 })
 
-describe("LabrastroRemoteClient capabilities", () => {
-  it("normalizes executor capabilities from the backend payload", async () => {
+describe("LabrastroRemoteClient features", () => {
+  it("normalizes executor features from the backend payload", async () => {
     vscodeMock.labrastroValue = "http://127.0.0.1:8765"
     const context = {
       secrets: {
@@ -321,11 +321,11 @@ describe("LabrastroRemoteClient capabilities", () => {
         ok: true,
         api_version: 1,
         server_version: "0.3.0",
-        capabilities: {
+        features: {
           sessions: true,
           chat_stream: true,
           agent_runtime: {
-            executor_capabilities: {
+            executor_features: {
               claude: {
                 installed: true,
                 version: "2.0.1",
@@ -346,9 +346,9 @@ describe("LabrastroRemoteClient capabilities", () => {
       { headers: { "Content-Type": "application/json" } }
     )))
 
-    const capabilities = await new LabrastroRemoteClient(context as never).capabilities()
+    const features = await new LabrastroRemoteClient(context as never).features()
 
-    expect(capabilities.agentRuntime.executorCapabilities.claude).toMatchObject({
+    expect(features.agentRuntime.executorFeatures.claude).toMatchObject({
       installed: true,
       version: "2.0.1",
       streamJson: true,
@@ -1058,13 +1058,13 @@ describe("LabrastroRemoteClient peer retry strategy", () => {
           headers: { "Content-Type": "application/json" },
         })
       }
-      if (url.pathname === "/remote/capabilities") {
+      if (url.pathname === "/remote/features") {
         return new Response(
           JSON.stringify({
             ok: true,
             api_version: 1,
             server_version: "0.2.9",
-            capabilities: {
+            features: {
               sessions: true,
               chat_stream: true,
               fresh_session_without_session_hint: true,
@@ -1184,7 +1184,7 @@ describe("LabrastroRemoteClient peer startup", () => {
     await Promise.all([client.environmentManifest(), client.environmentManifest()])
 
     expect(fetchPathCount(fetchMock, "/remote/auth/bootstrap-token")).toBe(1)
-    expect(fetchPathCount(fetchMock, "/remote/capabilities")).toBe(1)
+    expect(fetchPathCount(fetchMock, "/remote/features")).toBe(1)
     expect(fetchPathCount(fetchMock, `/remote/artifacts/${peerTarget().os}/${peerTarget().arch}/rcoder-peer`)).toBe(1)
     expect(fetchPathCount(fetchMock, "/remote/environment/manifest")).toBe(2)
     expect(childProcessMock.spawn).toHaveBeenCalledTimes(1)
