@@ -11,6 +11,11 @@
  */
 
 import { createContext, useContext, onMount, onCleanup, ParentComponent } from "solid-js"
+import {
+  isHostToWebviewMessage,
+  type HostToWebviewMessage,
+  type WebviewToHostMessage,
+} from "../protocol/messages"
 
 // ─────────────────────────────────────────────────────────────
 // VS Code API 类型定义
@@ -57,15 +62,12 @@ function getVSCodeAPI(): VSCodeAPI {
 // ─────────────────────────────────────────────────────────────
 
 /** 来自 Extension Host 的消息（即 Extension → Webview 方向） */
-export interface ExtensionMessage {
-  type: string
-  [key: string]: unknown
-}
+export type ExtensionMessage = HostToWebviewMessage
 
 /** Context 提供的值 */
 interface VSCodeContextValue {
   /** 向 Extension Host 发送消息（Webview → Extension 方向） */
-  postMessage: (message: Record<string, unknown>) => void
+  postMessage: (message: WebviewToHostMessage) => void
   /**
    * 注册来自 Extension Host 的消息监听器。
    * 返回取消注册的函数。
@@ -93,7 +95,11 @@ export const VSCodeProvider: ParentComponent = (props) => {
 
   // 监听来自 Extension Host 的消息
   const messageListener = (event: MessageEvent) => {
-    const message = event.data as ExtensionMessage
+    if (!isHostToWebviewMessage(event.data)) {
+      console.warn("[labrastro] ignored unknown host message", event.data)
+      return
+    }
+    const message = event.data
     handlers.forEach((handler) => handler(message))
   }
 
