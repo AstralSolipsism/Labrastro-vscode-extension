@@ -23,7 +23,7 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
     deleteProfile,
     currentProfileDraft,
     currentProfileIdLocked,
-    selectedProfileExecutorCapability,
+    selectedProfileExecutorFeature,
     renameProfile,
     updateProfileField,
     setProfileExecutorSelect,
@@ -33,7 +33,6 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
     PROFILE_APPROVAL_MODE_OPTIONS,
     PROFILE_CONFIG_ISOLATION_OPTIONS,
     runtimeModelOptions,
-    renderRuntimeChoiceList,
     registeredMcpServers,
     profileMcpValidationWarnings,
     renderStringChoiceList,
@@ -48,9 +47,8 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
     setAgentNameInput,
     profileIdList,
     updateAgentField,
-    AGENT_CAPABILITY_OPTIONS,
-    agentMcpValidationWarnings,
-    skillNameOptions,
+    capabilityPackageOptions,
+    selectedAgentCapabilityPackages,
     formatAgentConfigList,
     parseAgentConfigListText,
     runtimePolling,
@@ -156,29 +154,29 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
                   </select>
                   <small class="field-help">{runtimeOptionDescription(PROFILE_EXECUTOR_OPTIONS, currentProfileDraft()!.executor)}</small>
                 </label>
-                <Show when={selectedProfileExecutorCapability()}>
+                <Show when={selectedProfileExecutorFeature()}>
                   <div class="executor-capability-panel field-label--full">
                     <div class="executor-capability-panel__header">
-                      <strong>{t("agentConfig.profile.executorCapability")}</strong>
+                      <strong>{t("agentConfig.profile.executorFeature")}</strong>
                       <span>{currentProfileDraft()!.executor}</span>
                     </div>
                     <div class="settings-badge-group">
-                      <StatusBadge tone={selectedProfileExecutorCapability()!.installed ? "success" : "error"}>
-                        {selectedProfileExecutorCapability()!.installed ? t("agentConfig.profile.capability.installed") : t("agentConfig.profile.capability.missing")}
+                      <StatusBadge tone={selectedProfileExecutorFeature()!.installed ? "success" : "error"}>
+                        {selectedProfileExecutorFeature()!.installed ? t("agentConfig.profile.feature.installed") : t("agentConfig.profile.feature.missing")}
                       </StatusBadge>
-                      <Show when={selectedProfileExecutorCapability()!.version}>
-                        <StatusBadge>{selectedProfileExecutorCapability()!.version}</StatusBadge>
+                      <Show when={selectedProfileExecutorFeature()!.version}>
+                        <StatusBadge>{selectedProfileExecutorFeature()!.version}</StatusBadge>
                       </Show>
-                      <StatusBadge tone={selectedProfileExecutorCapability()!.streamJson ? "success" : "muted"}>{t("agentConfig.profile.capability.streamJson")}</StatusBadge>
-                      <StatusBadge tone={selectedProfileExecutorCapability()!.sessionDiscovery ? "success" : "muted"}>{t("agentConfig.profile.capability.sessionDiscovery")}</StatusBadge>
-                      <StatusBadge tone={selectedProfileExecutorCapability()!.resumeById ? "success" : "muted"}>{t("agentConfig.profile.capability.resume")}</StatusBadge>
-                      <StatusBadge tone={selectedProfileExecutorCapability()!.mcpConfig ? "success" : "muted"}>{t("agentConfig.profile.capability.mcp")}</StatusBadge>
-                      <Show when={selectedProfileExecutorCapability()!.runtimeHomeIsolation}>
-                        <StatusBadge>{selectedProfileExecutorCapability()!.runtimeHomeIsolation}</StatusBadge>
+                      <StatusBadge tone={selectedProfileExecutorFeature()!.streamJson ? "success" : "muted"}>{t("agentConfig.profile.feature.streamJson")}</StatusBadge>
+                      <StatusBadge tone={selectedProfileExecutorFeature()!.sessionDiscovery ? "success" : "muted"}>{t("agentConfig.profile.feature.sessionDiscovery")}</StatusBadge>
+                      <StatusBadge tone={selectedProfileExecutorFeature()!.resumeById ? "success" : "muted"}>{t("agentConfig.profile.feature.resume")}</StatusBadge>
+                      <StatusBadge tone={selectedProfileExecutorFeature()!.mcpConfig ? "success" : "muted"}>{t("agentConfig.profile.feature.mcp")}</StatusBadge>
+                      <Show when={selectedProfileExecutorFeature()!.runtimeHomeIsolation}>
+                        <StatusBadge>{selectedProfileExecutorFeature()!.runtimeHomeIsolation}</StatusBadge>
                       </Show>
                     </div>
-                    <Show when={selectedProfileExecutorCapability()!.limitations.length > 0}>
-                      <small>{t("agentConfig.profile.capability.limitations")}: {selectedProfileExecutorCapability()!.limitations.join("; ")}</small>
+                    <Show when={selectedProfileExecutorFeature()!.limitations.length > 0}>
+                      <small>{t("agentConfig.profile.feature.limitations")}: {selectedProfileExecutorFeature()!.limitations.join("; ")}</small>
                     </Show>
                   </div>
                 </Show>
@@ -327,44 +325,49 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
                   <input type="number" min="1" step="1" value={currentAgentDraft()!.max_concurrent_tasks} onInput={(e) => updateAgentField("max_concurrent_tasks", Math.max(1, Math.floor(Number(e.currentTarget.value) || 1)))} />
                   <small class="field-help">{t("agentConfig.agent.maxConcurrentTasksDesc")}</small>
                 </label>
-                <label class="field-label field-label--full"><span>{t("agentConfig.agent.capabilities")}</span>
-                  {renderRuntimeChoiceList(
-                    AGENT_CAPABILITY_OPTIONS,
-                    currentAgentDraft()!.capabilitiesText,
-                    (next) => updateAgentField("capabilitiesText", next),
-                    ", ",
-                  )}
-                  <small class="field-help">{t("agentConfig.agent.capabilitiesDesc")}</small>
+                <label class="field-label field-label--full"><span>{t("agentConfig.agent.dispatchProfile")}</span>
+                  <textarea rows={5} value={currentAgentDraft()!.dispatchProfileText} onInput={(e) => updateAgentField("dispatchProfileText", e.currentTarget.value)} />
+                  <small class="field-help">{t("agentConfig.agent.dispatchProfileDesc")}</small>
+                </label>
+                <label class="field-label field-label--full"><span>{t("agentConfig.agent.dispatchExamples")}</span>
+                  <textarea rows={4} value={currentAgentDraft()!.dispatchExamplesText} onInput={(e) => updateAgentField("dispatchExamplesText", e.currentTarget.value)} />
+                  <small class="field-help">{t("agentConfig.agent.dispatchExamplesDesc")}</small>
+                </label>
+                <label class="field-label field-label--full"><span>{t("agentConfig.agent.dispatchAvoid")}</span>
+                  <textarea rows={3} value={currentAgentDraft()!.dispatchAvoidText} onInput={(e) => updateAgentField("dispatchAvoidText", e.currentTarget.value)} />
+                  <small class="field-help">{t("agentConfig.agent.dispatchAvoidDesc")}</small>
                 </label>
                 <label class="field-label field-label--full"><span>{t("agentConfig.agent.systemAppend")}</span>
                   <textarea rows={4} value={currentAgentDraft()!.systemAppend} onInput={(e) => updateAgentField("systemAppend", e.currentTarget.value)} />
                   <small class="field-help">{t("agentConfig.agent.systemAppendDesc")}</small>
                 </label>
-                <label class="field-label field-label--full"><span>{t("agentConfig.agent.mcpServers")}</span>
+                <label class="field-label field-label--full"><span>{t("agentConfig.agent.capabilityRefs")}</span>
                   {renderStringChoiceList(
-                    registeredMcpServers(),
-                    currentAgentDraft()!.mcpServersText,
-                    (next) => updateAgentField("mcpServersText", next),
-                    t("agentConfig.profile.mcpServers.empty"),
-                  )}
-                  <small class="field-help">{t("agentConfig.agent.mcpServersDesc")}</small>
-                </label>
-                <Show when={agentMcpValidationWarnings().length > 0}>
-                  <div class="settings-warning">
-                    <span class="codicon codicon-warning" aria-hidden="true" />
-                    <span>{t("agentConfig.profile.mcpNotRegistered")}: {agentMcpValidationWarnings().join(", ")}</span>
-                  </div>
-                </Show>
-                <label class="field-label field-label--full"><span>{t("agentConfig.agent.skills")}</span>
-                  {renderStringChoiceList(
-                    skillNameOptions(),
-                    currentAgentDraft()!.skillsText,
-                    (next) => updateAgentField("skillsText", formatAgentConfigList(parseAgentConfigListText(next), ", ")),
-                    t("agentConfig.agent.skills.empty"),
+                    capabilityPackageOptions(),
+                    currentAgentDraft()!.capabilityRefsText,
+                    (next) => updateAgentField("capabilityRefsText", formatAgentConfigList(parseAgentConfigListText(next), ", ")),
+                    t("agentConfig.agent.capabilityRefs.empty"),
                     ", ",
                   )}
-                  <small class="field-help">{t("agentConfig.agent.skillsDesc")}</small>
+                  <small class="field-help">{t("agentConfig.agent.capabilityRefsDesc")}</small>
                 </label>
+                <Show when={selectedAgentCapabilityPackages().length > 0}>
+                  <div class="toolchain-detail-section field-label--full">
+                    <span>{t("agentConfig.agent.capabilityPackagesPreview")}</span>
+                    <For each={selectedAgentCapabilityPackages()}>{(pkg) => (
+                      <div class="toolchain-detail-block">
+                        <strong>{pkg.name || pkg.id}</strong>
+                        <small>{pkg.description || pkg.id}</small>
+                        <div class="settings-badge-group">
+                          <For each={pkg.mcpServers}>{(item) => <StatusBadge>MCP: {item}</StatusBadge>}</For>
+                          <For each={pkg.skills}>{(item) => <StatusBadge>Skill: {item}</StatusBadge>}</For>
+                          <For each={pkg.cliTools}>{(item) => <StatusBadge>CLI: {item}</StatusBadge>}</For>
+                          <For each={pkg.permissions}>{(item) => <StatusBadge>{item}</StatusBadge>}</For>
+                        </div>
+                      </div>
+                    )}</For>
+                  </div>
+                </Show>
                 <details class="settings-details settings-details--embedded field-label--full">
                   <summary>
                     <span class="codicon codicon-settings-gear" aria-hidden="true" />

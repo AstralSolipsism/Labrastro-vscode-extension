@@ -34,7 +34,7 @@ export const OtherTab: Component<TabProps> = (props) => {
               <button
                 type="button"
                 class={`language-option ${locale() === loc.id ? "language-option--active" : ""}`}
-                onClick={() => setLocale(loc.id as Locale, (msg) => vscode.postMessage(msg))}
+                onClick={() => setLocale(loc.id as Locale, vscode.postMessage)}
               >
                 <span class="language-option__native">{loc.nativeLabel}</span>
                 <span class="language-option__label">{loc.label}</span>

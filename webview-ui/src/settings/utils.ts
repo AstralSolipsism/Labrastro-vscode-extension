@@ -63,10 +63,11 @@ export interface AgentDefinitionDraft {
   description: string
   runtime_profile: string
   max_concurrent_tasks: number
-  capabilitiesText: string
+  dispatchProfileText: string
+  dispatchExamplesText: string
+  dispatchAvoidText: string
   systemAppend: string
-  mcpServersText: string
-  skillsText: string
+  capabilityRefsText: string
   credentialRefsText: string
 }
 
@@ -77,7 +78,7 @@ export interface ToolchainEditorState {
   command: string
   argsText: string
   envText: string
-  capabilitiesText: string
+  tagsText: string
   check: string
   install: string
   repoUrl: string
@@ -242,9 +243,10 @@ export function uniqueCommandRules(values: string[]): string[] {
   const seen = new Set<string>()
   const rules: string[] = []
   for (const value of values) {
-    const rule = value.trim()
-    if (!rule || seen.has(rule)) continue
-    seen.add(rule)
+    const rule = value.trim().replace(/\s+/g, " ")
+    const key = rule.toLowerCase()
+    if (!rule || seen.has(key)) continue
+    seen.add(key)
     rules.push(rule)
   }
   return rules
@@ -289,15 +291,20 @@ export function runtimeProfileDraftToPayload(draft: RuntimeProfileDraft): Record
 }
 
 export function agentDefinitionDraftToPayload(draft: AgentDefinitionDraft): Record<string, unknown> {
+  const dispatch: Record<string, unknown> = {}
+  if (draft.dispatchProfileText.trim()) dispatch.profile = draft.dispatchProfileText.trim()
+  const examples = parseStringList(draft.dispatchExamplesText)
+  if (examples.length) dispatch.examples = examples
+  const avoid = parseStringList(draft.dispatchAvoidText)
+  if (avoid.length) dispatch.avoid = avoid
   return {
     name: draft.name,
     description: draft.description || undefined,
     runtime_profile: draft.runtime_profile || undefined,
     max_concurrent_tasks: Math.max(1, Math.floor(draft.max_concurrent_tasks || 1)),
-    capabilities: parseStringList(draft.capabilitiesText),
+    dispatch: Object.keys(dispatch).length ? dispatch : undefined,
     system_append: draft.systemAppend || undefined,
-    mcp: { servers: parseStringList(draft.mcpServersText) },
-    skills: parseStringList(draft.skillsText),
+    capability_refs: parseStringList(draft.capabilityRefsText),
     credential_refs: parseStringList(draft.credentialRefsText),
   }
 }
@@ -310,7 +317,7 @@ export function toolchainEditorToPayload(editor: ToolchainEditorState): Record<s
     command: editor.command || undefined,
     args: parseStringList(editor.argsText),
     env: parseKvText(editor.envText),
-    capabilities: parseStringList(editor.capabilitiesText),
+    tags: parseStringList(editor.tagsText),
     check: editor.check || undefined,
     install: editor.install || undefined,
     repo_url: editor.repoUrl || undefined,

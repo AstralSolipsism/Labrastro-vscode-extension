@@ -1,5 +1,7 @@
+import type { WebviewToHostMessage } from "../protocol/messages"
+
 export interface SettingsMessagePort {
-  postMessage(message: Record<string, unknown>): void
+  postMessage(message: WebviewToHostMessage): void
 }
 
 export const settingsMessages = {

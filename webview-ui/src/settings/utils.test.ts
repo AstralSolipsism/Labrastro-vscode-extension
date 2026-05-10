@@ -13,6 +13,11 @@ import {
   toolchainEditorToPayload,
   uniqueCommandRules,
 } from "./utils"
+import {
+  connectionSaveResultKey,
+  sanitizeAutoApproveOptions,
+  serverAgentRuntimeSettingsPayload,
+} from "./settingsControllerUtils"
 
 describe("settings utils", () => {
   it("builds provider payloads without leaking empty api keys", () => {
@@ -135,19 +140,23 @@ describe("settings utils", () => {
       description: "",
       runtime_profile: "codex",
       max_concurrent_tasks: 0,
-      capabilitiesText: "code_review, test",
+      dispatchProfileText: "Best for reviewing backend changes.",
+      dispatchExamplesText: "Review a runtime patch\nCheck test coverage",
+      dispatchAvoidText: "Production deploys",
       systemAppend: "Be concise.",
-      mcpServersText: "github",
-      skillsText: "bevy\nui-ux-pro-max",
+      capabilityRefsText: "github-review",
       credentialRefsText: "",
     })).toMatchObject({
       name: "Reviewer",
       description: undefined,
       runtime_profile: "codex",
       max_concurrent_tasks: 1,
-      capabilities: ["code_review", "test"],
-      mcp: { servers: ["github"] },
-      skills: ["bevy", "ui-ux-pro-max"],
+      dispatch: {
+        profile: "Best for reviewing backend changes.",
+        examples: ["Review a runtime patch", "Check test coverage"],
+        avoid: ["Production deploys"],
+      },
+      capability_refs: ["github-review"],
     })
   })
 
@@ -159,7 +168,7 @@ describe("settings utils", () => {
       command: "npx",
       argsText: "@upstash/context7-mcp",
       envText: "TOKEN=abc",
-      capabilitiesText: "docs",
+      tagsText: "docs",
       check: "npx context7 --help",
       install: "npm install",
       repoUrl: "https://github.com/upstash/context7",
@@ -167,6 +176,7 @@ describe("settings utils", () => {
     })).toMatchObject({
       kind: "mcp",
       name: "context7",
+      tags: ["docs"],
       args: ["@upstash/context7-mcp"],
       env: { TOKEN: "abc" },
       docs: [{ title: "Docs", url: "https://context7.com" }],
@@ -197,6 +207,21 @@ describe("settings utils", () => {
       "git status",
       "npm test",
     ])
+  })
+
+  it("normalizes settings controller helper payloads", () => {
+    expect(connectionSaveResultKey({
+      hostUrlSaveRequested: "http://new",
+      hostUrl: "http://old",
+      hostUrlSaveApplied: false,
+    })).toBe("http://new|http://old|false")
+    expect(sanitizeAutoApproveOptions({ readOnly: true, execute: false, custom: true }).readOnly).toBe(true)
+    expect(serverAgentRuntimeSettingsPayload(2.8, 0)).toEqual({
+      agent_runtime: {
+        max_running_agents: 2,
+        max_shells_per_agent: 1,
+      },
+    })
   })
 
   it("does not render an extra notice for an authenticated ready connection", () => {

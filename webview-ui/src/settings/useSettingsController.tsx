@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from "solid-js"
+﻿import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from "solid-js"
 import { useVSCode } from "../context/vscode"
 import { useServer } from "../context/server"
 import {
@@ -20,7 +20,12 @@ import {
 import { t } from "../i18n"
 import { updateCommandRuleLists } from "../utils/command-auto-approval"
 import { settingsMessages } from "./settingsMessages"
-import { isAccountAdminRole, resolveConnectionNotice } from "./utils"
+import {
+  connectionSaveResultKey,
+  sanitizeAutoApproveOptions,
+  serverAgentRuntimeSettingsPayload,
+} from "./settingsControllerUtils"
+import { isAccountAdminRole, resolveConnectionNotice, uniqueCommandRules } from "./utils"
 import {
   DEFAULT_AUTO_APPROVE_OPTIONS,
   approvalFromPayload,
@@ -159,7 +164,7 @@ interface ToolchainRecord {
   name: string
   enabled?: boolean
   command?: string
-  capabilities?: string[]
+  tags?: string[]
   args?: string[]
   env?: Record<string, string>
   cwd?: string
@@ -209,7 +214,7 @@ interface ToolchainDashboardItem {
   last_updated: string
 }
 
-interface ExecutorCapabilityView {
+interface ExecutorFeatureView {
   installed: boolean
   version: string
   streamJson: boolean
@@ -223,13 +228,24 @@ interface ExecutorCapabilityView {
   limitations: string[]
 }
 
+interface CapabilityPackageView {
+  id: string
+  name: string
+  description: string
+  mcpServers: string[]
+  skills: string[]
+  cliTools: string[]
+  permissions: string[]
+  source: string
+}
+
 interface ToolchainEditorState {
   mode: "create" | "edit"
   kind: ToolchainKind
   name: string
   enabled: boolean
   command: string
-  capabilitiesText: string
+  tagsText: string
   argsText: string
   envText: string
   cwd: string
@@ -278,11 +294,12 @@ interface AgentDefinitionDraft {
   description: string
   runtime_profile: string
   modelKey: string
-  capabilitiesText: string
+  dispatchProfileText: string
+  dispatchExamplesText: string
+  dispatchAvoidText: string
   systemAppend: string
   agentMd: string
-  mcpServersText: string
-  skillsText: string
+  capabilityRefsText: string
   max_concurrent_tasks: number
   credentialRefsText: string
 }
@@ -323,17 +340,6 @@ const PROFILE_CONFIG_ISOLATION_OPTIONS: RuntimeOption[] = [
   { value: "shared", labelKey: "agentConfig.profile.configIsolation.shared", descKey: "agentConfig.profile.configIsolation.shared.desc" },
   { value: "inherit", labelKey: "agentConfig.profile.configIsolation.inherit", descKey: "agentConfig.profile.configIsolation.inherit.desc" },
 ]
-const AGENT_CAPABILITY_OPTIONS: RuntimeOption[] = [
-  { value: "read_repo", labelKey: "agentConfig.agent.capability.readRepo", descKey: "agentConfig.agent.capability.readRepo.desc" },
-  { value: "code_review", labelKey: "agentConfig.agent.capability.codeReview", descKey: "agentConfig.agent.capability.codeReview.desc" },
-  { value: "edit_code", labelKey: "agentConfig.agent.capability.editCode", descKey: "agentConfig.agent.capability.editCode.desc" },
-  { value: "run_tests", labelKey: "agentConfig.agent.capability.runTests", descKey: "agentConfig.agent.capability.runTests.desc" },
-  { value: "open_pr", labelKey: "agentConfig.agent.capability.openPr", descKey: "agentConfig.agent.capability.openPr.desc" },
-  { value: "use_mcp", labelKey: "agentConfig.agent.capability.useMcp", descKey: "agentConfig.agent.capability.useMcp.desc" },
-  { value: "environment.check", labelKey: "agentConfig.agent.capability.environmentCheck", descKey: "agentConfig.agent.capability.environmentCheck.desc" },
-  { value: "environment.configure", labelKey: "agentConfig.agent.capability.environmentConfigure", descKey: "agentConfig.agent.capability.environmentConfigure.desc" },
-  { value: "environment.manifest.read", labelKey: "agentConfig.agent.capability.environmentManifestRead", descKey: "agentConfig.agent.capability.environmentManifestRead.desc" },
-]
 
 function emptyProfileDraft(id = ""): RuntimeProfileDraft {
   return {
@@ -359,11 +365,12 @@ function emptyAgentDraft(id = ""): AgentDefinitionDraft {
     description: "",
     runtime_profile: "",
     modelKey: "",
-    capabilitiesText: "",
+    dispatchProfileText: "",
+    dispatchExamplesText: "",
+    dispatchAvoidText: "",
     systemAppend: "",
     agentMd: "",
-    mcpServersText: "",
-    skillsText: "",
+    capabilityRefsText: "",
     max_concurrent_tasks: 1,
     credentialRefsText: "",
   }
@@ -392,8 +399,8 @@ function profileToDraft(id: string, profile: Record<string, unknown>): RuntimePr
 /** 将后端 agent 对象转为编辑器 draft */
 function agentToDraft(id: string, agent: Record<string, unknown>): AgentDefinitionDraft {
   const prompt = objectValue(agent.prompt)
-  const mcp = objectValue(agent.mcp)
   const model = objectValue(agent.model)
+  const dispatch = objectValue(agent.dispatch)
   const providerId = stringValue(model.provider || model.provider_id)
   const modelId = stringValue(model.model || model.model_id)
   return {
@@ -402,11 +409,12 @@ function agentToDraft(id: string, agent: Record<string, unknown>): AgentDefiniti
     description: stringValue(agent.description),
     runtime_profile: stringValue(agent.runtime_profile),
     modelKey: providerId && modelId ? modelOptionKey(providerId, modelId) : "",
-    capabilitiesText: stringArray(agent.capabilities).join(", "),
+    dispatchProfileText: stringValue(dispatch.profile),
+    dispatchExamplesText: stringArray(dispatch.examples).join("\n"),
+    dispatchAvoidText: stringArray(dispatch.avoid).join("\n"),
     systemAppend: stringValue(prompt.system_append),
     agentMd: stringValue(prompt.agent_md),
-    mcpServersText: stringArray(mcp.servers).join("\n"),
-    skillsText: stringArray(agent.skills).join(", "),
+    capabilityRefsText: stringArray(agent.capability_refs).join(", "),
     max_concurrent_tasks: numberValue(agent.max_concurrent_tasks, 1),
     credentialRefsText: kvObjectToText(objectValue(agent.credential_refs)),
   }
@@ -457,16 +465,19 @@ function agentDraftToPayload(draft: AgentDefinitionDraft): Record<string, unknow
   if (draft.runtime_profile) payload.runtime_profile = draft.runtime_profile
   const [providerId, modelId] = splitModelOptionKey(draft.modelKey)
   if (providerId && modelId) payload.model = { provider: providerId, model: modelId }
-  const capabilities = parseAgentConfigListText(draft.capabilitiesText)
-  if (capabilities.length) payload.capabilities = capabilities
-  const prompt: Record<string, string> = {}
+  const dispatch: Record<string, unknown> = {}
+  if (draft.dispatchProfileText.trim()) dispatch.profile = draft.dispatchProfileText.trim()
+  const dispatchExamples = parseAgentConfigListText(draft.dispatchExamplesText)
+  if (dispatchExamples.length) dispatch.examples = dispatchExamples
+  const dispatchAvoid = parseAgentConfigListText(draft.dispatchAvoidText)
+  if (dispatchAvoid.length) dispatch.avoid = dispatchAvoid
+  if (Object.keys(dispatch).length) payload.dispatch = dispatch
+  const prompt: Record<string, string> = {}
   if (draft.systemAppend) prompt.system_append = draft.systemAppend
   if (draft.agentMd) prompt.agent_md = draft.agentMd
   if (Object.keys(prompt).length) payload.prompt = prompt
-  const mcpServers = parseAgentConfigListText(draft.mcpServersText)
-  if (mcpServers.length) payload.mcp = { servers: mcpServers }
-  const skills = parseAgentConfigListText(draft.skillsText)
-  if (skills.length) payload.skills = skills
+  const capabilityRefs = parseAgentConfigListText(draft.capabilityRefsText)
+  if (capabilityRefs.length) payload.capability_refs = capabilityRefs
   const credRefs = textToKvObject(draft.credentialRefsText)
   if (Object.keys(credRefs).length) payload.credential_refs = credRefs
   return payload
@@ -668,7 +679,7 @@ function emptyToolchainEditor(kind: ToolchainKind): ToolchainEditorState {
     name: "",
     enabled: true,
     command: "",
-    capabilitiesText: "",
+    tagsText: "",
     argsText: "",
     envText: "",
     cwd: "",
@@ -700,7 +711,7 @@ function toolchainEditorFromRecord(record: ToolchainRecord): ToolchainEditorStat
     name: record.name,
     enabled: boolValue(record.enabled, true),
     command: stringValue(record.command),
-    capabilitiesText: stringListText(record.capabilities),
+    tagsText: stringListText(record.tags),
     argsText: stringListText(record.args),
     envText: mapText(record.env),
     cwd: stringValue(record.cwd),
@@ -747,7 +758,7 @@ function toolchainPayloadFromEditor(editor: ToolchainEditorState): Record<string
   if (editor.kind === "cli") {
     payload.command = editor.command.trim()
     payload.placement = editor.placement || "local"
-    payload.capabilities = parseStringList(editor.capabilitiesText)
+    payload.tags = parseStringList(editor.tagsText)
   } else if (editor.kind === "mcp") {
     payload.command = editor.command.trim()
     payload.args = parseStringList(editor.argsText)
@@ -770,20 +781,34 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : []
 }
 
-function executorCapabilityValue(value: unknown): ExecutorCapabilityView {
-  const capability = objectValue(value)
+function executorFeatureValue(value: unknown): ExecutorFeatureView {
+  const feature = objectValue(value)
   return {
-    installed: capability.installed === true,
-    version: stringValue(capability.version),
-    streamJson: capability.streamJson === true,
-    sessionDiscovery: capability.sessionDiscovery === true,
-    resumeById: capability.resumeById === true,
-    usage: capability.usage === true,
-    mcpConfig: capability.mcpConfig === true,
-    runtimeHomeIsolation: stringValue(capability.runtimeHomeIsolation),
-    modelArg: capability.modelArg === true,
-    testedVersion: stringValue(capability.testedVersion),
-    limitations: stringArray(capability.limitations),
+    installed: feature.installed === true,
+    version: stringValue(feature.version),
+    streamJson: feature.streamJson === true,
+    sessionDiscovery: feature.sessionDiscovery === true,
+    resumeById: feature.resumeById === true,
+    usage: feature.usage === true,
+    mcpConfig: feature.mcpConfig === true,
+    runtimeHomeIsolation: stringValue(feature.runtimeHomeIsolation),
+    modelArg: feature.modelArg === true,
+    testedVersion: stringValue(feature.testedVersion),
+    limitations: stringArray(feature.limitations),
+  }
+}
+
+function capabilityPackageValue(id: string, value: unknown): CapabilityPackageView {
+  const item = objectValue(value)
+  return {
+    id,
+    name: stringValue(item.name, id),
+    description: stringValue(item.description),
+    mcpServers: stringArray(item.mcp_servers),
+    skills: stringArray(item.skills),
+    cliTools: stringArray(item.cli_tools),
+    permissions: stringArray(item.permissions),
+    source: stringValue(item.source),
   }
 }
 
@@ -1017,26 +1042,6 @@ function dashboardItemToRecord(item: ToolchainDashboardItem): ToolchainRecord {
   }
 }
 
-function uniqueCommandRules(values: string[]): string[] {
-  const seen = new Set<string>()
-  const rules: string[] = []
-  for (const value of values) {
-    const rule = value.trim().replace(/\s+/g, " ")
-    if (!rule || seen.has(rule.toLowerCase())) continue
-    seen.add(rule.toLowerCase())
-    rules.push(rule)
-  }
-  return rules
-}
-
-function sanitizeAutoApproveOptions(value: unknown): Record<string, boolean> {
-  const raw = objectValue(value)
-  return Object.keys(DEFAULT_AUTO_APPROVE_OPTIONS).reduce<Record<string, boolean>>((options, key) => {
-    options[key] = raw[key] === true
-    return options
-  }, {})
-}
-
 function makeProfileId(providerId: string, modelId: string): string {
   return `${providerId}-${modelId}`.replace(/[^a-zA-Z0-9_.-]+/g, "-")
 }
@@ -1346,16 +1351,6 @@ function formatConnectionSaveResult(result: Record<string, unknown> | undefined)
   return undefined
 }
 
-function connectionSaveResultKey(result: Record<string, unknown> | undefined): string | undefined {
-  if (!result) return undefined
-  return [
-    stringValue(result.hostUrlSaveRequested),
-    stringValue(result.hostUrl),
-    stringValue(result.hostUrlSaveApplied),
-    stringValue(result.message),
-  ].join("|")
-}
-
 export function createSettingsController(props: SettingsViewProps) {
   const vscode = useVSCode()
   const server = useServer()
@@ -1641,16 +1636,26 @@ export function createSettingsController(props: SettingsViewProps) {
   const agentRuntimeSettings = createMemo(() =>
     objectValue(objectValue(serverSettingsPayload().settings).agent_runtime)
   )
+  const capabilityPackageViews = createMemo<CapabilityPackageView[]>(() => {
+    const settings = objectValue(serverSettingsPayload().settings)
+    const packages = objectValue(settings.capability_packages)
+    return Object.entries(packages)
+      .map(([id, value]) => capabilityPackageValue(id, value))
+      .sort((a, b) => a.id.localeCompare(b.id))
+  })
+  const capabilityPackageOptions = createMemo(() =>
+    capabilityPackageViews().map((item) => item.id)
+  )
   const agentRuntimeState = createMemo(() =>
     objectValue(serverSettingsPayload().runtime || server.adminState().agent_runtime)
 
   )  /* ── Agent 配置 computed ── */
-  const executorCapabilities = createMemo<Record<string, ExecutorCapabilityView>>(() => {
-    const agentRuntime = objectValue(server.backendCapabilities().agentRuntime)
-    const raw = objectValue(agentRuntime.executorCapabilities)
-    const result: Record<string, ExecutorCapabilityView> = {}
-    for (const [executor, capability] of Object.entries(raw)) {
-      result[executor] = executorCapabilityValue(capability)
+  const executorFeatures = createMemo<Record<string, ExecutorFeatureView>>(() => {
+    const agentRuntime = objectValue(server.backendFeatures().agentRuntime)
+    const raw = objectValue(agentRuntime.executorFeatures)
+    const result: Record<string, ExecutorFeatureView> = {}
+    for (const [executor, feature] of Object.entries(raw)) {
+      result[executor] = executorFeatureValue(feature)
     }
     return result
   })
@@ -1671,12 +1676,16 @@ export function createSettingsController(props: SettingsViewProps) {
       ...(typeof value === "object" && value ? value as Record<string, unknown> : {}),
     }))
   })
-  const environmentAgentCandidates = createMemo<Array<Record<string, unknown> & { id: string }>>(() =>
-    agentRuntimeAgents().filter((agent) => {
-      const capabilities = stringArray(agent.capabilities)
-      return capabilities.includes("environment.check") || capabilities.includes("environment.configure")
+  const environmentAgentCandidates = createMemo<Array<Record<string, unknown> & { id: string }>>(() => {
+    const packages = new Map(capabilityPackageViews().map((item) => [item.id, item]))
+    return agentRuntimeAgents().filter((agent) => {
+      const refs = stringArray(agent.capability_refs)
+      return refs.some((ref) => {
+        const pkg = packages.get(ref)
+        return pkg?.permissions.some((permission) => permission.startsWith("environment.")) === true
+      })
     })
-  )
+  })
   const registeredMcpServers = createMemo(() => {
     const groups = toolchainGroups()
     return groups.mcp.map((item) => item.name)
@@ -1684,9 +1693,17 @@ export function createSettingsController(props: SettingsViewProps) {
   const profileIdList = createMemo(() => Object.keys(profileDrafts()))
   const currentProfileDraft = createMemo(() => profileDrafts()[selectedProfileId()])
   const currentAgentDraft = createMemo(() => agentDrafts()[selectedAgentId()])
-  const selectedProfileExecutorCapability = createMemo(() => {
+  const selectedAgentCapabilityPackages = createMemo(() => {
+    const draft = currentAgentDraft()
+    if (!draft) return []
+    const byId = new Map(capabilityPackageViews().map((item) => [item.id, item]))
+    return parseAgentConfigListText(draft.capabilityRefsText)
+      .map((id) => byId.get(id))
+      .filter((item): item is CapabilityPackageView => Boolean(item))
+  })
+  const selectedProfileExecutorFeature = createMemo(() => {
     const executor = currentProfileDraft()?.executor || ""
-    return executor ? executorCapabilities()[executor] : undefined
+    return executor ? executorFeatures()[executor] : undefined
   })
   const savedProfileIdSet = createMemo(() => new Set(agentRuntimeProfiles().map((profile) => profile.id)))
   const savedAgentIdSet = createMemo(() => new Set(agentRuntimeAgents().map((agent) => agent.id)))
@@ -1720,18 +1737,8 @@ export function createSettingsController(props: SettingsViewProps) {
     }
     return result
   })
-  const skillNameOptions = createMemo(() =>
-    toolchainGroups().skill.map((item) => item.name).filter(Boolean)
-  )
   const profileMcpValidationWarnings = createMemo(() => {
     const draft = currentProfileDraft()
-    if (!draft) return []
-    const registered = registeredMcpServers()
-    return draft.mcpServersText.split("\n").map((s) => s.trim()).filter(Boolean)
-      .filter((name) => !registered.includes(name))
-  })
-  const agentMcpValidationWarnings = createMemo(() => {
-    const draft = currentAgentDraft()
     if (!draft) return []
     const registered = registeredMcpServers()
     return draft.mcpServersText.split("\n").map((s) => s.trim()).filter(Boolean)
@@ -1748,7 +1755,7 @@ export function createSettingsController(props: SettingsViewProps) {
     const task = runtimeTask()
     const executor = stringValue(task?.executor)
     const sessionId = stringValue(task?.executor_session_id)
-    return Boolean(executor && sessionId && executorCapabilities()[executor]?.resumeById)
+    return Boolean(executor && sessionId && executorFeatures()[executor]?.resumeById)
   })
   const toolchainIngestState = createMemo(() => server.toolchainIngestState())
   const toolchainIngestLogs = createMemo(() => {
@@ -2357,12 +2364,10 @@ const refreshAdmin = () => {
     setServerMaxRunningAgents(maxAgents)
     setServerMaxShellsPerAgent(maxShells)
     setServerSettingsDirty(false)
-    settingsMessages.updateServerSettings(vscode, {
-      agent_runtime: {
-        max_running_agents: maxAgents,
-        max_shells_per_agent: maxShells,
-      },
-    })
+    settingsMessages.updateServerSettings(
+      vscode,
+      serverAgentRuntimeSettingsPayload(maxAgents, maxShells)
+    )
   }
   const runToolchainIngest = () => {
     settingsMessages.runToolchainIngest(vscode, {
@@ -2836,7 +2841,6 @@ const refreshAdmin = () => {
     onCleanup(unsubscribe)
   })
 
-
   return {
     vscode,
     server,
@@ -2850,7 +2854,6 @@ const refreshAdmin = () => {
     PROFILE_HOME_POLICY_OPTIONS,
     PROFILE_APPROVAL_MODE_OPTIONS,
     PROFILE_CONFIG_ISOLATION_OPTIONS,
-    AGENT_CAPABILITY_OPTIONS,
     setProfileExecutorSelect,
     setAgentNameInput,
     executorPickerOpen,
@@ -3079,7 +3082,7 @@ const refreshAdmin = () => {
     serverSettingsPayload,
     agentRuntimeSettings,
     agentRuntimeState,
-    executorCapabilities,
+    executorFeatures,
     agentRuntimeProfiles,
     agentRuntimeAgents,
     environmentAgentCandidates,
@@ -3087,15 +3090,15 @@ const refreshAdmin = () => {
     profileIdList,
     currentProfileDraft,
     currentAgentDraft,
-    selectedProfileExecutorCapability,
+    selectedProfileExecutorFeature,
     savedProfileIdSet,
     savedAgentIdSet,
     currentProfileIdLocked,
     currentAgentIdLocked,
     runtimeModelOptions,
-    skillNameOptions,
     profileMcpValidationWarnings,
-    agentMcpValidationWarnings,
+    capabilityPackageOptions,
+    selectedAgentCapabilityPackages,
     selectedRuntimeTaskId,
     runtimeLastSeq,
     runtimeTerminal,

@@ -224,7 +224,7 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
   }
 
   const deleteToolchain = (record: ToolchainRecord) => {
-    if (!globalThis.confirm(`删除 ${record.name}？此操作会从服务器能力清单移除该条目。`)) return
+    if (!globalThis.confirm(`删除 ${record.name}？此操作会从服务器能力组件清单移除该条目。`)) return
     settingsMessages.deleteToolchain(vscode, record.kind, record.name)
   }
 
@@ -350,8 +350,8 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
               </select>
             </label>
             <label class="field-label">
-              <span>能力标签</span>
-              <textarea rows={3} value={editor.capabilitiesText} placeholder="每行一个能力，例如 code-search" onInput={(event) => patchToolchainEditor({ capabilitiesText: event.currentTarget.value })} />
+              <span>组件标签</span>
+              <textarea rows={3} value={editor.tagsText} placeholder="每行一个组件标签，例如 code-search" onInput={(event) => patchToolchainEditor({ tagsText: event.currentTarget.value })} />
             </label>
           </Show>
 
@@ -467,13 +467,13 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
             刷新清单
           </RefreshButton>
           <button class="btn btn-secondary" onClick={() => openCreateToolchain("cli")}>
-            新增 CLI 能力
+            新增 CLI 组件
           </button>
           <button class="btn btn-secondary" onClick={() => openCreateToolchain("mcp")}>
-            新增 MCP 能力
+            新增 MCP 组件
           </button>
           <button class="btn btn-secondary" onClick={() => openCreateToolchain("skill")}>
-            新增 Skill 能力
+            新增 Skill 组件
           </button>
           <label class="field-label field-label--compact">
             <span>环境 Agent</span>
@@ -524,13 +524,13 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
         <div class="settings-success">{toolchainActionFeedback()}</div>
       </Show>
       <Show when={!environmentAgentCandidates().length}>
-        <div class="settings-empty-note">没有具备环境能力的 Agent。请在 Agent 配置中创建具备环境能力的 Agent。</div>
+        <div class="settings-empty-note">没有带环境任务标签的 Agent。请在 Agent 配置中创建适合环境任务的 Agent。</div>
       </Show>
 
       <section class="settings-section settings-section--flat">
         <div class="settings-section-heading">
           <div>
-            <span>服务器能力 Manifest</span>
+            <span>服务器能力组件 Manifest</span>
           </div>
           <RefreshButton class="btn-secondary" onClick={() => settingsMessages.refreshToolchains(vscode)}>
             刷新管理列表
@@ -726,7 +726,7 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
           <div class="settings-success">{toolchainActionFeedback()}</div>
         </Show>
         <Show when={!environmentAgentCandidates().length}>
-          <div class="settings-empty-note">没有具备环境能力的 Agent。请在 Agent 配置中创建具备环境能力的 Agent。</div>
+          <div class="settings-empty-note">没有带环境任务标签的 Agent。请在 Agent 配置中创建适合环境任务的 Agent。</div>
         </Show>
 
         <div class="toolchain-summary-grid">
@@ -751,7 +751,7 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
         <section class="settings-section settings-section--flat toolchain-ingest-panel">
           <div class="settings-section-heading">
             <div>
-              <span>新增能力</span>
+              <span>新增能力组件</span>
             </div>
             <StatusBadge tone={toolchainIngestState().running === true ? "warning" : toolchainIngestState().persisted === true ? "success" : "muted"}>
               {toolchainIngestState().running === true ? "运行中" : toolchainIngestState().persisted === true ? "已写入" : "待命"}
@@ -786,7 +786,7 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
             <div class="toolchain-ingest-actions">
               <button class="btn btn-primary" onClick={runToolchainIngest} disabled={toolchainIngestState().running === true || (!ingestRepoUrl().trim() && !ingestDocsUrl().trim() && !ingestDocsText().trim())}>
                 <span class="codicon codicon-sparkle" aria-hidden="true" />
-                {hasToolchainIngestDuplicates() ? "仍然新增能力" : "新增能力"}
+                {hasToolchainIngestDuplicates() ? "仍然新增组件" : "新增组件"}
               </button>
               <Show when={toolchainIngestState().running === true}>
                 <button class="btn btn-danger" onClick={cancelToolchainIngest}>
@@ -804,7 +804,7 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
             <div class="settings-warning toolchain-duplicate-warning">
               <span class="codicon codicon-warning" aria-hidden="true" />
               <div>
-                <strong>可能已存在相关能力</strong>
+                <strong>可能已存在相关组件</strong>
                 <Show when={toolchainIngestDuplicates().repo.length}>
                   <p>相同仓库：{toolchainIngestDuplicates().repo.map(duplicateMatchLabel).join("、")}</p>
                 </Show>
@@ -839,16 +839,16 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
               </div>
             </div>
 
-            <div class="toolchain-table" role="table" aria-label="能力清单">
+            <div class="toolchain-table" role="table" aria-label="能力组件清单">
               <div class="toolchain-table__row toolchain-table__row--head" role="row">
-                <span>能力名称</span>
+                <span>组件名称</span>
                 <span>{t("toolchain.filterKind")}</span>
                 <span>来源/文档</span>
                 <span>部署属性</span>
                 <span>安装/运行状态</span>
                 <span>操作</span>
               </div>
-              <Show when={filteredToolchainItems().length} fallback={<div class="toolchain-empty">没有匹配的能力条目。</div>}>
+              <Show when={filteredToolchainItems().length} fallback={<div class="toolchain-empty">没有匹配的组件条目。</div>}>
                 <For each={filteredToolchainItems()}>
                   {(item) => {
                     const record = () => dashboardItemToRecord(item)
@@ -993,7 +993,7 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
                   </div>
                   <div class="toolchain-detail-section">
                     <span>解析 Agent 日志</span>
-                    <Show when={toolchainIngestLogs().length} fallback={<small>尚未运行新增能力 Agent。</small>}>
+                    <Show when={toolchainIngestLogs().length} fallback={<small>尚未运行新增能力组件 Agent。</small>}>
                       <div class="toolchain-ingest-log-list">
                         <For each={toolchainIngestLogs().slice(-6)}>
                           {(log) => (

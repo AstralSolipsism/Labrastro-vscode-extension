@@ -9,6 +9,7 @@
 import { createSignal } from "solid-js"
 import zhCN from "./zh-CN"
 import en from "./en"
+import type { WebviewToHostMessage } from "../protocol/messages"
 
 // ─────────────────────────────────────────────────────────────
 // 类型 & 常量
@@ -34,7 +35,7 @@ const [locale, setLocaleSignal] = createSignal<Locale>("zh-CN")
  *
  * 可选传入 vscode postMessage 函数，用于持久化到 Extension Host 的 workspaceState。
  */
-export function setLocale(loc: Locale, postMessage?: (msg: Record<string, unknown>) => void): void {
+export function setLocale(loc: Locale, postMessage?: (msg: WebviewToHostMessage) => void): void {
   setLocaleSignal(loc)
   postMessage?.({ type: "locale.save", locale: loc })
 }
