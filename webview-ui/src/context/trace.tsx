@@ -15,7 +15,9 @@ import type {
 } from "../components/chat/mock-data"
 import {
   isLocalDraftSessionId,
+  mergeRemoteBundlePreservingLocalContent,
   sessionBundleHasContent,
+  shouldPreserveExistingSessionContent,
   shouldIgnoreInitialSessionLoad,
 } from "../utils/session-history"
 import {
@@ -137,8 +139,30 @@ function normalizeSession(value: unknown): MockSession | undefined {
         : typeof payload.saved_at === "string"
           ? payload.saved_at
           : new Date().toISOString(),
-    kind: "main",
+    kind: payload.kind === "fork" || payload.kind === "subagent" || payload.kind === "main"
+      ? payload.kind as MockSession["kind"]
+      : "main",
     state: "active",
+    parentSessionId: typeof payload.parentSessionId === "string"
+      ? payload.parentSessionId
+      : typeof payload.parent_session_id === "string"
+        ? payload.parent_session_id
+        : undefined,
+    sourceSessionId: typeof payload.sourceSessionId === "string"
+      ? payload.sourceSessionId
+      : typeof payload.source_session_id === "string"
+        ? payload.source_session_id
+        : undefined,
+    sourceNodeId: typeof payload.sourceNodeId === "string"
+      ? payload.sourceNodeId
+      : typeof payload.source_node_id === "string"
+        ? payload.source_node_id
+        : undefined,
+    returnNodeId: typeof payload.returnNodeId === "string"
+      ? payload.returnNodeId
+      : typeof payload.return_node_id === "string"
+        ? payload.return_node_id
+        : undefined,
     summary: typeof payload.summary === "string"
       ? payload.summary
       : typeof payload.preview === "string"
@@ -285,6 +309,15 @@ interface TraceContextValue {
   focusTraceNode: (nodeId: string | null) => void
   focusBranch: (branchId: string | null) => void
   clearPanelIntent: () => void
+  linkForkSession: (options: {
+    sourceSessionId: string
+    sourceMessageId?: string
+    sourceNodeId?: string
+    childSessionId: string
+    childSessionTitle: string
+    childSessionSummary?: string
+    childSessionKind?: "fork" | "subagent"
+  }) => void
   createMockFork: (sourceNodeId: string, mode?: "fork" | "subagent") => string | null
   createMockRollback: (sourceNodeId: string, targetNodeId?: string) => string | null
   openAgentManager: (options?: TraceNavigationPayload) => void
@@ -546,6 +579,70 @@ export const TraceProvider: ParentComponent = (props) => {
 
   const clearPanelIntent = () => {
     setPanelIntent(null)
+  }
+
+  const linkForkSession = (options: {
+    sourceSessionId: string
+    sourceMessageId?: string
+    sourceNodeId?: string
+    childSessionId: string
+    childSessionTitle: string
+    childSessionSummary?: string
+    childSessionKind?: "fork" | "subagent"
+  }) => {
+    const sourceBundle = getSessionBundle(options.sourceSessionId)
+    if (!sourceBundle) return
+    const alreadyLinked = sourceBundle.turns.some((turn) =>
+      turn.assistantMessages.some((message) =>
+        message.parts.some((part) => part.type === "session" && part.sessionId === options.childSessionId)
+      )
+    )
+    if (alreadyLinked) return
+
+    const partId = buildMockId("part-session")
+    const messageId = buildMockId("msg-session")
+    const referenceMessage: MockMessage = {
+      id: messageId,
+      role: "assistant",
+      text: "",
+      timestamp: Date.now(),
+      historyCutIndex: undefined,
+      traceNodeId: options.sourceNodeId,
+      parts: [
+        {
+          id: partId,
+          type: "session",
+          sessionId: options.childSessionId,
+          sessionTitle: options.childSessionTitle,
+          sessionKind: options.childSessionKind || "fork",
+          sessionState: "active",
+          sessionSummary: options.childSessionSummary,
+          traceNodeId: options.sourceNodeId,
+          traceNodeKind: options.childSessionKind === "subagent" ? "subagent_spawn" : "fork",
+          traceNodeStatus: "success",
+        },
+      ],
+    }
+
+    const nextBundle: MockSessionBundle = {
+      ...cloneValue(sourceBundle),
+      session: {
+        ...cloneValue(sourceBundle.session),
+        updatedAt: new Date().toISOString(),
+      },
+      turns: appendAssistantMessageNearAnchor(
+        sourceBundle.turns,
+        options.sourceMessageId || options.sourceNodeId,
+        referenceMessage
+      ),
+    }
+    writeSessionBundle(options.sourceSessionId, nextBundle, {
+      applyToCurrent: options.sourceSessionId === currentSessionId(),
+      preserveIntent: true,
+    })
+    if (options.sourceSessionId !== currentSessionId()) {
+      scheduleSessionSnapshot(options.sourceSessionId, nextBundle)
+    }
   }
 
   const createMockFork = (sourceNodeId: string, mode: "fork" | "subagent" = "fork") => {
@@ -1090,7 +1187,12 @@ export const TraceProvider: ParentComponent = (props) => {
       }
 
       if (
-        (msg.type === "session.loaded" || msg.type === "session.created" || msg.type === "session.state") &&
+        (
+          msg.type === "session.loaded" ||
+          msg.type === "session.created" ||
+          msg.type === "session.state" ||
+          msg.type === "session.forked"
+        ) &&
         typeof msg.sessionId === "string"
       ) {
         if (shouldIgnoreInitialSessionLoad(currentSessionId(), msg.sessionId, msg.reason)) {
@@ -1107,12 +1209,20 @@ export const TraceProvider: ParentComponent = (props) => {
             draftSessionId && draftSessionId !== msg.sessionId && isLocalDraftSessionId(draftSessionId)
               ? getSessionBundle(draftSessionId)
               : undefined
-          const bundle = draftBundle ? mergeRemoteBundleWithDraft(remoteBundle, draftBundle) : remoteBundle
+          const existingBundle = getSessionBundle(msg.sessionId)
+          const bundle = draftBundle
+            ? mergeRemoteBundleWithDraft(remoteBundle, draftBundle)
+            : shouldPreserveExistingSessionContent(remoteBundle, existingBundle)
+              ? mergeRemoteBundlePreservingLocalContent(remoteBundle, existingBundle!)
+              : remoteBundle
 
           writeSessionBundle(msg.sessionId, bundle, {
             applyToCurrent: true,
-            skipSnapshot: true,
-            includeInHistory: msg.type !== "session.created" || sessionBundleHasContent(bundle),
+            skipSnapshot: msg.type !== "session.forked",
+            includeInHistory:
+              msg.type === "session.forked" ||
+              msg.type !== "session.created" ||
+              sessionBundleHasContent(bundle),
           })
           if (draftBundle && draftSessionId) {
             removeSessionBundle(draftSessionId)
@@ -1185,9 +1295,10 @@ export const TraceProvider: ParentComponent = (props) => {
     deleteSession,
     focusTraceNode,
     focusBranch,
-    clearPanelIntent,
-    createMockFork,
-    createMockRollback,
+      clearPanelIntent,
+      linkForkSession,
+      createMockFork,
+      createMockRollback,
     openAgentManager,
     applyPanelNavigation,
     createSession,

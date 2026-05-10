@@ -1,11 +1,11 @@
 import { Component, For, Show } from "solid-js"
 import { t } from "../../i18n"
-import { useAutoScroll } from "../../hooks/useAutoScroll"
 import { SessionTurn } from "./SessionTurn"
 import { WelcomeState } from "./WelcomeState"
 import { WorkingIndicator } from "./WorkingIndicator"
 import { IconButton } from "../common/IconButton"
-import type { MockTurn, MockSession } from "./mock-data"
+import { useVirtualMessageList } from "./useVirtualMessageList"
+import type { MockTurn, MockSession, MockMessage, MockPart } from "./mock-data"
 
 interface MessageListProps {
   turns: MockTurn[]
@@ -16,38 +16,65 @@ interface MessageListProps {
   selectedTraceNodeId?: string | null
   onSelectSession?: (id: string) => void
   onTraceNodeSelect?: (nodeId: string) => void
+  onCopyMessage?: (message: MockMessage) => Promise<void> | void
+  onEditForkMessage?: (message: MockMessage) => void
+  onForkMessage?: (message: MockMessage) => void
+  onCopyToolCommand?: (part: MockPart) => Promise<void> | void
+  onCopyToolOutput?: (part: MockPart) => Promise<void> | void
+  onForkPart?: (part: MockPart) => void
 }
 
 export const MessageList: Component<MessageListProps> = (props) => {
-  const autoScroll = useAutoScroll({
-    working: () => props.isWorking,
+  const virtualList = useVirtualMessageList({
+    turns: () => props.turns,
+    isWorking: () => props.isWorking,
+    overscan: 6,
   })
   const isEmpty = () => props.turns.length === 0
 
   return (
     <div class="message-list-container">
       <div
-        ref={autoScroll.scrollRef}
-        onScroll={autoScroll.handleScroll}
+        ref={virtualList.bindScroll}
+        onScroll={virtualList.handleScroll}
         class="message-list"
         role="log"
         aria-live="polite"
       >
-        <div ref={autoScroll.contentRef} classList={{ "message-list__empty-wrap": isEmpty() }}>
+        <div classList={{ "message-list__empty-wrap": isEmpty() }}>
           <Show when={isEmpty()}>
             <WelcomeState recentSessions={props.recentSessions} onSelectSession={props.onSelectSession} />
           </Show>
 
           <Show when={!isEmpty()}>
-            <For each={props.turns}>
-              {(turn) => (
-                <SessionTurn
-                  turn={turn}
-                  selectedTraceNodeId={props.selectedTraceNodeId}
-                  onTraceNodeSelect={props.onTraceNodeSelect}
-                />
-              )}
-            </For>
+            <div
+              class="message-list__virtual-content"
+              style={{ height: `${virtualList.totalHeight()}px` }}
+            >
+              <For each={virtualList.visibleItems()}>
+                {(item) => (
+                  <div
+                    ref={virtualList.bindItem(item)}
+                    class="message-list__virtual-item"
+                    data-virtual-turn-id={item.id}
+                    style={{ transform: `translateY(${item.top}px)` }}
+                  >
+                    <SessionTurn
+                      turn={item.turn}
+                      selectedTraceNodeId={props.selectedTraceNodeId}
+                      onSelectSession={props.onSelectSession}
+                      onTraceNodeSelect={props.onTraceNodeSelect}
+                      onCopyMessage={props.onCopyMessage}
+                      onEditForkMessage={props.onEditForkMessage}
+                      onForkMessage={props.onForkMessage}
+                      onCopyToolCommand={props.onCopyToolCommand}
+                      onCopyToolOutput={props.onCopyToolOutput}
+                      onForkPart={props.onForkPart}
+                    />
+                  </div>
+                )}
+              </For>
+            </div>
           </Show>
 
           <WorkingIndicator
@@ -58,9 +85,9 @@ export const MessageList: Component<MessageListProps> = (props) => {
         </div>
       </div>
 
-      <Show when={autoScroll.userScrolled()}>
+      <Show when={virtualList.userScrolled()}>
         <div class="scroll-to-bottom">
-          <IconButton icon="chevron-down" title={t("chat.scrollToBottom")} onClick={() => autoScroll.resume()} />
+          <IconButton icon="chevron-down" title={t("chat.scrollToBottom")} onClick={() => virtualList.scrollToBottom()} />
         </div>
       </Show>
     </div>

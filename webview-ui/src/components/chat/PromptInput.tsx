@@ -1,4 +1,4 @@
-import { Component, For, Show, createSignal } from "solid-js"
+import { Component, For, Show, createEffect, createSignal } from "solid-js"
 import { IconButton } from "../common/IconButton"
 import { DropdownMenu } from "../common/interaction"
 import { t } from "../../i18n"
@@ -6,6 +6,8 @@ import type { ChatModeOption, ChatModelOption } from "../../chat/chatState"
 
 interface PromptInputProps {
   disabled?: boolean
+  draftText?: string
+  draftNonce?: string | number
   modeOptions?: ChatModeOption[]
   selectedMode?: string
   modeLabel?: string
@@ -27,6 +29,20 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const [modeMenuOpen, setModeMenuOpen] = createSignal(false)
   const [modelMenuOpen, setModelMenuOpen] = createSignal(false)
   let textareaRef: HTMLTextAreaElement | undefined
+
+  createEffect(() => {
+    props.draftNonce
+    const draft = props.draftText
+    if (draft === undefined) return
+    setText(draft)
+    queueMicrotask(() => {
+      if (!textareaRef) return
+      textareaRef.value = draft
+      adjustHeight()
+      textareaRef.focus()
+      textareaRef.setSelectionRange(draft.length, draft.length)
+    })
+  })
 
   const adjustHeight = () => {
     if (!textareaRef) return

@@ -433,6 +433,11 @@ const en: Record<string, string> = {
   "chat.relativeTime.yesterday": "Yesterday",
   "chat.relativeTime.daysAgo": "{n}d ago",
   "chat.relativeTime.weeksAgo": "{n}w ago",
+  "chat.copyMessage": "Copy message",
+  "chat.editAndFork": "Edit and fork",
+  "chat.forkFromHere": "Fork from here",
+  "chat.copyCommand": "Copy command",
+  "chat.copyToolOutput": "Copy output",
 
   // ── TaskHeader ──
   "task.label": "Task",
@@ -491,8 +496,10 @@ const en: Record<string, string> = {
   "tool.approval.autoApproved": "Auto-approved",
   "tool.approval.approved": "Approved",
   "tool.approval.pending": "Pending",
+  "tool.cancelRequested": "Stop requested for the current tool call.",
   "tool.shell.commandUnavailable": "Command content unavailable",
   "tool.shell.needsApproval": "This command requires approval before execution.",
+  "tool.shell.queued": "Waiting for the previous command to finish.",
   "tool.shell.awaitingApproval": "Awaiting approval before execution.",
   "tool.shell.approved": "Approved, waiting for output.",
   "tool.shell.running": "Command running, waiting for output.",
@@ -506,6 +513,8 @@ const en: Record<string, string> = {
   "tool.context.default": "Context Event",
   "tool.parallel.default": "Parallel Batch",
   "tool.locateTraceNode": "Locate trace node",
+  "runtime.agentQueue.chatWaiting": "Waiting for the server to start this chat...",
+  "runtime.agentQueue.subagentWaiting": "Sub-agent task queued...",
 
   // ── UiEvent ──
   "uiEvent.remote": "Remote",

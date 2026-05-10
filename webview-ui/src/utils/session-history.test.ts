@@ -3,8 +3,10 @@ import type { MockSessionBundle } from "../components/chat/mock-data"
 import { mockTraceUI } from "../components/chat/mock-data"
 import {
   isLocalDraftSessionId,
+  mergeRemoteBundlePreservingLocalContent,
   remoteSessionIdForMutation,
   sessionBundleHasContent,
+  shouldPreserveExistingSessionContent,
   shouldIgnoreInitialSessionLoad,
 } from "./session-history"
 
@@ -49,6 +51,98 @@ describe("session history", () => {
         ])
       )
     ).toBe(true)
+  })
+
+  it("preserves a populated local bundle when a later remote state is empty", () => {
+    const local = bundle([
+      {
+        userMessage: {
+          id: "u1",
+          role: "user",
+          text: "list repos",
+          parts: [],
+          timestamp: 0,
+        },
+        assistantMessages: [],
+      },
+    ])
+
+    expect(shouldPreserveExistingSessionContent(bundle([]), local)).toBe(true)
+    expect(shouldPreserveExistingSessionContent(local, local)).toBe(false)
+    expect(shouldPreserveExistingSessionContent(bundle([]), undefined)).toBe(false)
+  })
+
+  it("preserves structured local transcript when the remote bundle falls back to plain messages", () => {
+    const local = bundle([
+      {
+        userMessage: {
+          id: "u1",
+          role: "user",
+          text: "run tool",
+          parts: [],
+          timestamp: 0,
+        },
+        assistantMessages: [
+          {
+            id: "a1",
+            role: "assistant",
+            text: "",
+            parts: [
+              {
+                id: "tool-1",
+                type: "tool",
+                tool: "mcp",
+                status: "complete",
+              },
+            ],
+            timestamp: 1,
+          },
+        ],
+      },
+    ])
+    const remote = bundle([
+      {
+        userMessage: {
+          id: "ru1",
+          role: "user",
+          text: "run tool",
+          parts: [],
+          timestamp: 0,
+          historyMessageIndex: 0,
+          historyCutIndex: 0,
+        },
+        assistantMessages: [
+          {
+            id: "ra1",
+            role: "assistant",
+            text: "done",
+            parts: [
+              {
+                id: "text-1",
+                type: "text",
+                text: "done",
+              },
+            ],
+            timestamp: 1,
+            historyMessageIndex: 1,
+            historyCutIndex: 2,
+          },
+        ],
+      },
+    ])
+
+    expect(shouldPreserveExistingSessionContent(remote, local)).toBe(true)
+
+    const merged = mergeRemoteBundlePreservingLocalContent(remote, local)
+    expect(merged.turns[0].assistantMessages[0].parts[0]).toMatchObject({
+      type: "tool",
+      tool: "mcp",
+      historyCutIndex: 2,
+    })
+    expect(merged.turns[0].assistantMessages[0]).toMatchObject({
+      historyMessageIndex: 1,
+      historyCutIndex: 2,
+    })
   })
 })
 

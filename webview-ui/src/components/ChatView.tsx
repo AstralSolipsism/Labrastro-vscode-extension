@@ -12,6 +12,7 @@ import {
   extractApprovalCommand,
   type ApprovalDecision,
   type ApprovalDetails,
+  type AutoApprovalCategory,
 } from "./chat/ApprovalDetailsDialog"
 import { IconButton } from "./common/IconButton"
 import { RefreshButton } from "./common/RefreshButton"
@@ -20,6 +21,25 @@ import { useTrace } from "../context/trace"
 import { useVSCode } from "../context/vscode"
 import { useServer } from "../context/server"
 import { chatMessages, routeSelectedChatMode } from "../chat/chatMessages"
+import {
+  copyTextForMessage,
+  copyTextForToolCommand,
+  copyTextForToolOutput,
+  copyTextForTranscript,
+  keepThroughIndexForMessageFork,
+  keepThroughIndexForPartFork,
+  keepThroughIndexForUserEdit,
+} from "../chat/conversationInteractions"
+import {
+  clearPromptQueue,
+  createPromptQueueState,
+  enqueuePrompt,
+  resolvePromptQueueAfterChat,
+  resumePromptQueue,
+  type PromptQueueState,
+} from "../chat/promptQueue"
+import { resolveRuntimeStatusUiAction } from "../chat/runtimeStatus"
+import { filterSessionHistory, sessionKindBadge, type SessionHistorySort } from "../chat/sessionHistoryView"
 import {
   canUseTaskflow,
   modelDescription,
@@ -34,6 +54,7 @@ import {
   resolveModeSelection,
   shouldAcceptModelSwitchResponse,
 } from "../chat/chatState"
+import { t } from "../i18n"
 import {
   defaultCommandRuleCandidateRules,
   evaluateCommandDecision,
@@ -98,10 +119,14 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const [pendingApprovals, setPendingApprovals] = createSignal<PendingApproval[]>([])
   const [selectedApproval, setSelectedApproval] = createSignal<PendingApproval | undefined>()
   const [historyQuery, setHistoryQuery] = createSignal("")
-  const [historySort, setHistorySort] = createSignal<"newest" | "oldest">("newest")
+  const [historySort, setHistorySort] = createSignal<SessionHistorySort>("newest")
+  const [showBranchSessions, setShowBranchSessions] = createSignal(false)
   const [deleteSessionId, setDeleteSessionId] = createSignal<string | undefined>()
   const [sessionOperationError, setSessionOperationError] = createSignal("")
   const [sessionSyncStatus, setSessionSyncStatus] = createSignal<Record<string, unknown>>({})
+  const [queuedPrompts, setQueuedPrompts] = createSignal<PromptQueueState>(createPromptQueueState())
+  const [forkCompose, setForkCompose] = createSignal<ForkComposeState | undefined>()
+  const [forkComposeNonce, setForkComposeNonce] = createSignal(0)
   const initialWebviewState = vscode.getState<ChatWebviewState>() || {}
   const [autoApproveOptions, setAutoApproveOptions] = createSignal<Record<string, boolean>>(
     sanitizeAutoApproveOptions(initialWebviewState.autoApproveOptions)
@@ -145,18 +170,10 @@ const ChatView: Component<ChatViewProps> = (props) => {
     trace.currentSession()?.title ||
     ""
   const filteredHistorySessions = createMemo(() => {
-    const query = historyQuery().trim().toLowerCase()
-    const sessions = trace.recentSessions().filter((session) => {
-      if (!query) return true
-      return [
-        session.title,
-        session.summary,
-        session.id,
-      ].some((value) => (value || "").toLowerCase().includes(query))
-    })
-    return [...sessions].sort((left, right) => {
-      const diff = new Date(right.updatedAt || 0).getTime() - new Date(left.updatedAt || 0).getTime()
-      return historySort() === "newest" ? diff : -diff
+    return filterSessionHistory(trace.allSessions(), {
+      query: historyQuery(),
+      sort: historySort(),
+      showBranches: showBranchSessions(),
     })
   })
   const sessionSyncNotice = createMemo(() => {
@@ -318,7 +335,19 @@ const ChatView: Component<ChatViewProps> = (props) => {
     trace.patchStats({ runStatus: nextStatus })
     stopTimer()
     const queuedSwitchStarted = applyQueuedModelSwitch()
-    if (options.startNextEnvironment && !queuedSwitchStarted) {
+    if (queuedSwitchStarted) {
+      if (nextStatus !== "done") {
+        setQueuedPrompts((current) => resolvePromptQueueAfterChat(current, nextStatus).state)
+      }
+      return
+    }
+    const promptResolution = resolvePromptQueueAfterChat(queuedPrompts(), nextStatus)
+    setQueuedPrompts(promptResolution.state)
+    if (promptResolution.nextPrompt) {
+      window.setTimeout(() => sendChatText(promptResolution.nextPrompt as string), 0)
+      return
+    }
+    if (options.startNextEnvironment) {
       window.setTimeout(startNextEnvironmentQueueItem, 0)
     }
   }
@@ -493,7 +522,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       if (
         part.type === "tool" &&
         part.tool === toolName &&
-        ["running", "awaiting_approval", "approved"].includes(part.status || "")
+        ["pending", "running", "awaiting_approval", "approved"].includes(part.status || "")
       ) {
         return index
       }
@@ -523,17 +552,76 @@ const ChatView: Component<ChatViewProps> = (props) => {
   }
 
   const markActiveToolsCancelled = () => {
+    const cancellationMessage = t("tool.cancelRequested")
     updateAssistantParts((parts) =>
       parts.map((part) => {
         if (part.type !== "tool") return part
-        if (!["running", "awaiting_approval", "approved"].includes(part.status || "")) return part
+        if (!["pending", "running", "awaiting_approval", "approved"].includes(part.status || "")) return part
+        if (!isShellToolName(part.tool, part.toolSource)) {
+          return {
+            ...part,
+            status: "cancelled",
+            toolOutput: part.toolOutput || cancellationMessage,
+          }
+        }
+        const existingChunks = part.toolOutputChunks?.length
+          ? part.toolOutputChunks
+          : shellChunksFromText(part.toolOutput || "")
+        const lastChunk = existingChunks[existingChunks.length - 1]
+        const shellOutput = lastChunk?.stream === "system" && lastChunk.content === cancellationMessage
+          ? { chunks: existingChunks, truncated: Boolean(part.toolOutputTruncated) }
+          : appendShellOutputChunk(existingChunks, "system", cancellationMessage)
         return {
           ...part,
           status: "cancelled",
-          toolOutput: part.toolOutput || "已请求停止当前工具调用。",
+          toolOutput: buildShellOutputText(shellOutput.chunks) || cancellationMessage,
+          toolOutputChunks: shellOutput.chunks,
+          toolOutputTruncated: shellOutput.truncated || part.toolOutputTruncated,
         }
       })
     )
+  }
+
+  const applyRuntimeStatusEvent = (payload: Record<string, unknown>) => {
+    const action = resolveRuntimeStatusUiAction(payload)
+    if (action.kind === "shell_tool_update") {
+      const parts = ensureAssistantMessage().parts
+      const existingIndex = resolveToolPartIndex(parts, "shell", action.toolCallId)
+      const existing = existingIndex >= 0 ? parts[existingIndex] : undefined
+      let nextChunks = existing?.toolOutputChunks
+      let nextOutput = existing?.toolOutput || ""
+      let nextTruncated = existing?.toolOutputTruncated
+      if (action.textKey) {
+        const systemText = t(action.textKey)
+        const seededChunks = existing?.toolOutputChunks?.length
+          ? existing.toolOutputChunks
+          : shellChunksFromText(existing?.toolOutput || "")
+        const lastChunk = seededChunks[seededChunks.length - 1]
+        const shellOutput = lastChunk?.stream === "system" && lastChunk.content === systemText
+          ? { chunks: seededChunks, truncated: Boolean(existing?.toolOutputTruncated) }
+          : appendShellOutputChunk(seededChunks, "system", systemText)
+        nextChunks = shellOutput.chunks
+        nextOutput = buildShellOutputText(shellOutput.chunks)
+        nextTruncated = shellOutput.truncated || existing?.toolOutputTruncated
+      }
+      upsertToolPart("shell", {
+        status: action.nextStatus,
+        toolCallId: action.toolCallId,
+        toolOutput: nextOutput,
+        toolOutputChunks: nextChunks,
+        toolOutputTruncated: nextTruncated,
+        toolOutputFormat: "terminal",
+      }, action.toolCallId)
+      return
+    }
+    if (action.kind === "append_text") {
+      appendTextPart(t(action.textKey), action.prefix)
+      return
+    }
+    if (action.kind === "ignore") {
+      return
+    }
+    appendViewPart(payload)
   }
 
   const applyUsageUpdate = (payload: Record<string, unknown>) => {
@@ -618,8 +706,10 @@ const ChatView: Component<ChatViewProps> = (props) => {
           format: format === "markdown" ? "markdown" : "plain",
         })
       }
-    } else if (type === "view" || type === "runtime_status") {
+    } else if (type === "view") {
       appendViewPart(payload)
+    } else if (type === "runtime_status") {
+      applyRuntimeStatusEvent(payload)
     } else if (type === "context_event") {
       appendContextEventPart(payload)
     } else if (isStructuredUiEventType(type)) {
@@ -819,6 +909,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
 
   const selectSession = (sessionId: string) => {
     setSelectedApproval(undefined)
+    setForkCompose(undefined)
     trace.loadSession(sessionId)
     props.onHistoryClose?.()
   }
@@ -837,9 +928,187 @@ const ChatView: Component<ChatViewProps> = (props) => {
     }
   })
 
+  const writeClipboard = async (text: string) => {
+    if (!text.trim()) return
+    await navigator.clipboard.writeText(text)
+  }
+
+  const copyMessage = async (message: MockMessage) => {
+    await writeClipboard(copyTextForMessage(message))
+  }
+
+  const copyToolCommand = async (part: MockPart) => {
+    await writeClipboard(copyTextForToolCommand(part))
+  }
+
+  const copyToolOutput = async (part: MockPart) => {
+    await writeClipboard(copyTextForToolOutput(part))
+  }
+
+  const copyCurrentTranscript = async () => {
+    await writeClipboard(copyTextForTranscript(trace.turns()))
+  }
+
+  const continueQueuedPrompts = () => {
+    if (isWorking() || modelSwitching()) return
+    const resumed = resumePromptQueue(queuedPrompts())
+    setQueuedPrompts(resumed.state)
+    if (resumed.nextPrompt) {
+      sendChatText(resumed.nextPrompt)
+    }
+  }
+
+  const clearQueuedPrompts = () => {
+    setQueuedPrompts(clearPromptQueue())
+  }
+
   const handleModelUnavailable = () => {
     setModelSwitchError("正在刷新模型列表...")
     chatMessages.refreshAdmin(vscode)
+  }
+
+  const sliceTurnsForFork = (keepThroughMessageIndex: number) => {
+    const sourceBundle = trace.currentSessionId()
+      ? trace.getSessionBundle(trace.currentSessionId() as string)
+      : undefined
+    if (!sourceBundle) return []
+    return sourceBundle.turns
+      .filter((turn) => {
+        const userIndex = turn.userMessage.historyMessageIndex
+        return typeof userIndex === "number" && userIndex <= keepThroughMessageIndex
+      })
+      .map((turn) => ({
+        ...turn,
+        assistantMessages: turn.assistantMessages.filter((message) => {
+          const historyCutIndex = message.historyCutIndex
+          return typeof historyCutIndex === "number" && historyCutIndex <= keepThroughMessageIndex
+        }),
+      }))
+  }
+
+  const buildForkSnapshot = (
+    sourceSessionId: string,
+    options: {
+      keepThroughMessageIndex: number
+      sourceNodeId?: string
+      sessionTitle: string
+      sessionSummary: string
+      sessionKind: "fork" | "subagent"
+    }
+  ) => {
+    const sourceBundle = trace.getSessionBundle(sourceSessionId)
+    const stats = sourceBundle?.stats || trace.stats()
+    return {
+      version: 1,
+      sessionId: "",
+      session: {
+        id: "",
+        title: options.sessionTitle,
+        updatedAt: new Date().toISOString(),
+        kind: options.sessionKind,
+        state: "active",
+        parentSessionId: sourceSessionId,
+        sourceSessionId,
+        sourceNodeId: options.sourceNodeId,
+        summary: options.sessionSummary,
+      },
+      stats: {
+        ...stats,
+        taskText: options.sessionSummary,
+        runStatus: "idle",
+      },
+      turns: sliceTurnsForFork(options.keepThroughMessageIndex),
+      traceNodes: [],
+      traceEdges: [],
+      traceUI: {
+        activeNodeId: null,
+        selectedNodeId: null,
+        focusedBranchId: "main",
+        showInspector: false,
+        showMiniMap: false,
+        viewMode: "compact",
+      },
+    }
+  }
+
+  const requestForkSession = (options: {
+    keepThroughMessageIndex: number
+    composeText: string
+    composeMode: "edit" | "fork"
+    sourceLabel: string
+    sourceMessageId?: string
+    sourceNodeId?: string
+  }) => {
+    const sourceSessionId = trace.currentSessionId()
+    const remoteSourceSessionId = remoteSessionIdForMutation(sourceSessionId)
+    if (!sourceSessionId || !remoteSourceSessionId) return
+    const sessionTitle =
+      options.composeMode === "edit"
+        ? `编辑 Fork · ${options.sourceLabel}`
+        : `Fork · ${options.sourceLabel}`
+    const sessionSummary =
+      options.composeMode === "edit"
+        ? `从「${options.sourceLabel}」编辑并继续这条分支。`
+        : `从「${options.sourceLabel}」继续新的分支会话。`
+    vscode.postMessage({
+      type: "session.fork",
+      sourceSessionId: remoteSourceSessionId,
+      keepThroughMessageIndex: options.keepThroughMessageIndex,
+      snapshot: buildForkSnapshot(remoteSourceSessionId, {
+        keepThroughMessageIndex: options.keepThroughMessageIndex,
+        sourceNodeId: options.sourceNodeId,
+        sessionTitle,
+        sessionSummary,
+        sessionKind: "fork",
+      }),
+      composeText: options.composeText,
+      composeMode: options.composeMode,
+      sourceLabel: options.sourceLabel,
+      sourceMessageId: options.sourceMessageId,
+      sourceNodeId: options.sourceNodeId,
+      sessionTitle,
+      sessionSummary,
+      sessionKind: "fork",
+    })
+  }
+
+  const editMessageAndFork = (message: MockMessage) => {
+    const keepThroughMessageIndex = keepThroughIndexForUserEdit(message)
+    if (keepThroughMessageIndex === undefined) return
+    requestForkSession({
+      keepThroughMessageIndex,
+      composeText: message.text,
+      composeMode: "edit",
+      sourceLabel: message.text.slice(0, 48) || "用户消息",
+      sourceMessageId: message.id,
+      sourceNodeId: message.traceNodeId,
+    })
+  }
+
+  const forkFromMessage = (message: MockMessage) => {
+    const keepThroughMessageIndex = keepThroughIndexForMessageFork(message)
+    if (keepThroughMessageIndex === undefined) return
+    requestForkSession({
+      keepThroughMessageIndex,
+      composeText: "",
+      composeMode: "fork",
+      sourceLabel: message.text.slice(0, 48) || "助手消息",
+      sourceMessageId: message.id,
+      sourceNodeId: message.traceNodeId,
+    })
+  }
+
+  const forkFromPart = (part: MockPart) => {
+    const keepThroughMessageIndex = keepThroughIndexForPartFork(part)
+    if (keepThroughMessageIndex === undefined) return
+    requestForkSession({
+      keepThroughMessageIndex,
+      composeText: "",
+      composeMode: "fork",
+      sourceLabel: part.sessionTitle || part.terminalTitle || part.viewTitle || part.tool || "会话记录",
+      sourceMessageId: part.id,
+      sourceNodeId: part.traceNodeId,
+    })
   }
 
   const sendChatText = (
@@ -859,6 +1128,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     const startupModelOverride = !remoteSessionId
       ? modelOptions().find((item) => item.id === localModelOverrideProfile())
       : undefined
+    const activeForkCompose = forkCompose()
 
     trace.appendTurn({
       userMessage: {
@@ -879,6 +1149,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
     setWorkingText("正在分析请求")
     setPendingApprovals([])
     setSelectedApproval(undefined)
+    if (activeForkCompose && activeForkCompose.sessionId === sessionId) {
+      setForkCompose(undefined)
+    }
     trace.patchStats({ taskText: text, runStatus: "running", ...(mode ? { mode } : {}) })
     startTimer()
     chatMessages.send(vscode, {
@@ -896,7 +1169,13 @@ const ChatView: Component<ChatViewProps> = (props) => {
     })
   }
 
-  const handleSend = (text: string) => sendChatText(text)
+  const handleSend = (text: string) => {
+    if (isWorking()) {
+      setQueuedPrompts((current) => enqueuePrompt(current, text))
+      return
+    }
+    sendChatText(text)
+  }
 
   const handleModelChange = (profileId: string) => {
     const nextProfile = profileId.trim()
@@ -1066,6 +1345,21 @@ const ChatView: Component<ChatViewProps> = (props) => {
     window.setTimeout(() => setRememberingApprovalId(""), 0)
   }
 
+  const alwaysAllowApprovalCategory = (approval: PendingApproval) => {
+    if (rememberingApprovalId()) return
+    const category = classifyApproval(approval)
+    if (!isCategoryAlwaysAllowAction(category)) return
+    const nextOptions = { ...autoApproveOptions(), [category]: true }
+    setRememberingApprovalId(approval.approvalId)
+    setAutoApproveOptions(nextOptions)
+    vscode.postMessage({
+      type: "autoApproval.update",
+      options: nextOptions,
+    })
+    replyApproval(approval, "allow_once")
+    window.setTimeout(() => setRememberingApprovalId(""), 0)
+  }
+
   const quickRememberApprovalDecision = (approval: PendingApproval, decision: ApprovalDecision) => {
     const rules = defaultCommandRuleCandidateRules(extractApprovalCommand(approval))
     if (!rules.length) return
@@ -1096,7 +1390,12 @@ const ChatView: Component<ChatViewProps> = (props) => {
         setAutoApprovalPlatform(String(payload.platform || "browser"))
       }
       if (
-        (msg.type === "session.loaded" || msg.type === "session.created" || msg.type === "session.state") &&
+        (
+          msg.type === "session.loaded" ||
+          msg.type === "session.created" ||
+          msg.type === "session.state" ||
+          msg.type === "session.forked"
+        ) &&
         typeof msg.sessionId === "string"
       ) {
         if (remoteSessionIdForMutation(msg.sessionId)) {
@@ -1106,6 +1405,35 @@ const ChatView: Component<ChatViewProps> = (props) => {
         if (Object.keys(runtime).length) {
           setSessionRuntimeState(runtime)
         }
+      }
+      if (msg.type === "session.forked" && typeof msg.sessionId === "string") {
+        const composeText = stringValue(msg.composeText) || ""
+        const composeMode = (stringValue(msg.composeMode) || "fork") as "edit" | "fork"
+        const sourceLabel = stringValue(msg.sourceLabel) || stringValue(msg.sessionTitle) || "Fork"
+        const sourceSessionId = stringValue(msg.sourceSessionId)
+        const sourceMessageId = stringValue(msg.sourceMessageId) || undefined
+        const sourceNodeId = stringValue(msg.sourceNodeId) || undefined
+        const sessionTitle = stringValue(msg.sessionTitle) || sourceLabel
+        const sessionSummary = stringValue(msg.sessionSummary) || undefined
+        const sessionKind = stringValue(msg.sessionKind) === "subagent" ? "subagent" : "fork"
+        if (sourceSessionId) {
+          trace.linkForkSession({
+            sourceSessionId,
+            sourceMessageId,
+            sourceNodeId,
+            childSessionId: msg.sessionId,
+            childSessionTitle: sessionTitle,
+            childSessionSummary: sessionSummary,
+            childSessionKind: sessionKind,
+          })
+        }
+        setForkCompose({
+          sessionId: msg.sessionId,
+          sourceLabel,
+          mode: composeMode,
+          draftText: composeText,
+        })
+        setForkComposeNonce((value) => value + 1)
       }
       if (msg.type === "session.adopted" && typeof msg.sessionId === "string") {
         const previousSessionId = typeof msg.previousSessionId === "string" ? msg.previousSessionId : ""
@@ -1145,13 +1473,21 @@ const ChatView: Component<ChatViewProps> = (props) => {
         setModelSwitchError("")
         setModelRollbackProfile("")
         setPendingModelProfile("")
-        if (environmentRunQueue().length) window.setTimeout(startNextEnvironmentQueueItem, 0)
+        if (queuedPrompts().items.length) {
+          window.setTimeout(continueQueuedPrompts, 0)
+        } else if (environmentRunQueue().length) {
+          window.setTimeout(startNextEnvironmentQueueItem, 0)
+        }
       }
       if (msg.type === "session.model.error") {
         const requestId = stringValue(msg.requestId) || stringValue(msg.request_id) || ""
         if (!shouldAcceptModelSwitchResponse(modelSwitchRequestId(), requestId)) return
         restoreModelAfterSwitchFailure(typeof msg.message === "string" ? msg.message : "模型切换失败")
-        if (environmentRunQueue().length) window.setTimeout(startNextEnvironmentQueueItem, 0)
+        if (queuedPrompts().items.length) {
+          window.setTimeout(continueQueuedPrompts, 0)
+        } else if (environmentRunQueue().length) {
+          window.setTimeout(startNextEnvironmentQueueItem, 0)
+        }
       }
       if (msg.type === "session.deleted") {
         setSessionOperationError("")
@@ -1185,6 +1521,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
       }
       if (msg.type === "chat.session" && typeof msg.chatId === "string") {
         setActiveChatId(msg.chatId)
+        const sessionId = stringValue(msg.sessionId) || stringValue(msg.session_id)
+        if (sessionId) setActiveRunSessionId(sessionId)
         if (pendingCancel()) {
           sendCancel(msg.chatId)
           setPendingCancel(false)
@@ -1284,6 +1622,12 @@ const ChatView: Component<ChatViewProps> = (props) => {
           selectedTraceNodeId={trace.selectedTraceNodeId()}
           onSelectSession={selectSession}
           onTraceNodeSelect={focusTraceNode}
+          onCopyMessage={copyMessage}
+          onEditForkMessage={editMessageAndFork}
+          onForkMessage={forkFromMessage}
+          onCopyToolCommand={copyToolCommand}
+          onCopyToolOutput={copyToolOutput}
+          onForkPart={forkFromPart}
         />
       </main>
 
@@ -1300,6 +1644,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
                 const summary = () => approvalSummary(approval)
                 const quickRememberRules = () => defaultCommandRuleCandidateRules(extractApprovalCommand(approval))
                 const canQuickRemember = () => summary().category === "execute" && quickRememberRules().length > 0
+                const canAlwaysAllowCategory = () => isCategoryAlwaysAllowAction(summary().category)
                 const remembering = () => rememberingApprovalId() === approval.approvalId
                 return (
                   <div class="approval-strip__item">
@@ -1317,7 +1662,16 @@ const ChatView: Component<ChatViewProps> = (props) => {
                           disabled={remembering()}
                           onClick={() => quickRememberApprovalDecision(approval, "allow_once")}
                         >
-                          {remembering() ? "写入中..." : "批准并记住"}
+                          {remembering() ? "写入中..." : "批准并始终运行"}
+                        </button>
+                      </Show>
+                      <Show when={canAlwaysAllowCategory()}>
+                        <button
+                          type="button"
+                          disabled={remembering()}
+                          onClick={() => alwaysAllowApprovalCategory(approval)}
+                        >
+                          {remembering() ? "写入中..." : "批准并始终允许 MCP"}
                         </button>
                       </Show>
                       <button type="button" onClick={() => replyApproval(approval, "allow_once")}>批准一次</button>
@@ -1338,8 +1692,33 @@ const ChatView: Component<ChatViewProps> = (props) => {
             </For>
           </div>
         </Show>
+        <Show when={forkCompose() && trace.currentSessionId() === forkCompose()!.sessionId}>
+          <div class="fork-compose-banner" role="status">
+            <span class="codicon codicon-git-branch" aria-hidden="true" />
+            <strong>{forkCompose()!.mode === "edit" ? "编辑并 Fork" : "从此 Fork"}</strong>
+            <span>来源：{forkCompose()!.sourceLabel}</span>
+          </div>
+        </Show>
+        <Show when={queuedPrompts().items.length > 0}>
+          <div class="prompt-queue-banner" role="status">
+            <span class="codicon codicon-history" aria-hidden="true" />
+            <span>
+              {queuedPrompts().paused
+                ? `${queuedPrompts().items.length} 条输入已排队，上一轮未成功完成。`
+                : `${queuedPrompts().items.length} 条输入会在当前回复后继续发送。`}
+            </span>
+            <div class="prompt-queue-banner__actions">
+              <Show when={!isWorking()}>
+                <button type="button" onClick={continueQueuedPrompts}>继续发送</button>
+              </Show>
+              <button type="button" onClick={clearQueuedPrompts}>清空</button>
+            </div>
+          </div>
+        </Show>
         <PromptInput
-          disabled={isWorking()}
+          disabled={chatStatus() === "stopping"}
+          draftText={trace.currentSessionId() === forkCompose()?.sessionId ? forkCompose()?.draftText : undefined}
+          draftNonce={forkComposeNonce()}
           modeOptions={modeOptions()}
           selectedMode={selectedMode()}
           modeLabel={selectedModeLabel()}
@@ -1388,7 +1767,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
               </button>
               <div class="session-history-panel__title">
                 <h2>会话历史</h2>
-                <span>{trace.recentSessions().length} 个会话</span>
+                <span>{filteredHistorySessions().length} / {(showBranchSessions() ? trace.allSessions().length : trace.recentSessions().length)} 个会话</span>
               </div>
               <IconButton icon="close" title="关闭" onClick={() => props.onHistoryClose?.()} />
             </header>
@@ -1422,6 +1801,14 @@ const ChatView: Component<ChatViewProps> = (props) => {
                   最早
                 </button>
               </div>
+              <button
+                type="button"
+                class="session-history-toggle"
+                classList={{ "session-history-toggle--active": showBranchSessions() }}
+                onClick={() => setShowBranchSessions((value) => !value)}
+              >
+                {showBranchSessions() ? "隐藏分支" : "显示分支"}
+              </button>
             </div>
             <div class="session-history-panel__body">
               <Show when={sessionOperationError()}>
@@ -1438,7 +1825,10 @@ const ChatView: Component<ChatViewProps> = (props) => {
                   {(session) => (
                     <div
                       class="session-history-item"
-                      classList={{ "session-history-item--active": session.id === trace.currentSessionId() }}
+                      classList={{
+                        "session-history-item--active": session.id === trace.currentSessionId(),
+                        "session-history-item--child": Boolean(session.parentSessionId),
+                      }}
                       role="button"
                       tabIndex={0}
                       onClick={() => selectSession(session.id)}
@@ -1450,7 +1840,12 @@ const ChatView: Component<ChatViewProps> = (props) => {
                       }}
                     >
                       <span class="session-history-item__main">
-                        <span class="session-history-item__title">{session.title || session.summary || session.id}</span>
+                        <span class="session-history-item__title">
+                          {session.title || session.summary || session.id}
+                          <Show when={sessionKindBadge(session)}>
+                            <span class="session-history-item__badge">{sessionKindBadge(session)}</span>
+                          </Show>
+                        </span>
                         <span class="session-history-item__summary">{session.summary || session.id}</span>
                       </span>
                       <span class="session-history-item__side">
@@ -1485,7 +1880,16 @@ const ChatView: Component<ChatViewProps> = (props) => {
               </Show>
             </div>
             <footer class="session-history-footer">
-              <span>{filteredHistorySessions().length} / {trace.recentSessions().length}</span>
+              <span>{filteredHistorySessions().length} / {(showBranchSessions() ? trace.allSessions().length : trace.recentSessions().length)}</span>
+              <button
+                type="button"
+                class="btn-secondary"
+                onClick={() => {
+                  void copyCurrentTranscript().catch(() => undefined)
+                }}
+              >
+                复制当前转录
+              </button>
               <RefreshButton class="btn-secondary" onClick={() => vscode.postMessage({ type: "session.list" })}>
                 刷新
               </RefreshButton>
@@ -1525,6 +1929,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
             autoApprovalPending={rememberingApprovalId() === approval().approvalId}
             onClose={() => setSelectedApproval(undefined)}
             onDecision={(decision) => replyApproval(approval(), decision)}
+            onAlwaysAllow={() => alwaysAllowApprovalCategory(approval())}
             onRememberDecision={(decision, rules) => rememberApprovalDecision(approval(), decision, rules)}
           />
         )}
@@ -1555,6 +1960,17 @@ function sanitizeStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.map((item) => String(item).trim()).filter(Boolean)
     : []
+}
+
+interface ForkComposeState {
+  sessionId: string
+  sourceLabel: string
+  mode: "edit" | "fork"
+  draftText: string
+}
+
+function isCategoryAlwaysAllowAction(category: AutoApprovalCategory): boolean {
+  return category === "mcp"
 }
 
 function upsertPendingApproval(items: PendingApproval[], next: PendingApproval): PendingApproval[] {

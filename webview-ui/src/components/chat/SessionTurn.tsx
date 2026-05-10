@@ -1,4 +1,4 @@
-import { Component, For, Match, Show, Suspense, Switch, createEffect, createMemo, createSignal, lazy } from "solid-js"
+import { Component, For, Match, Show, Switch, createEffect, createMemo, createSignal } from "solid-js"
 import { t } from "../../i18n"
 import type { MockTurn, MockPart, MockMessage } from "./mock-data"
 import {
@@ -12,7 +12,9 @@ import {
   type TraceNodeKind,
 } from "../../types/trace"
 import { IconButton } from "../common/IconButton"
+import { MarkdownBlock } from "../common/MarkdownBlock"
 import { ApprovalDetailsBody, approvalFromPayload } from "./ApprovalDetailsDialog"
+import { canEditForkMessage, canForkMessage, canForkPart } from "../../chat/conversationInteractions"
 import {
   extractShellCommand,
   isShellToolName,
@@ -21,11 +23,6 @@ import {
   type ShellOutputChunk,
   type ShellOutputStream,
 } from "../../utils/shell-tool-output"
-
-const MarkdownBlock = lazy(async () => ({
-  default: (await import("../common/MarkdownBlock")).MarkdownBlock,
-}))
-
 
 function getToolLabel(name: string): string {
   const labels: Record<string, string> = {
@@ -68,6 +65,19 @@ const TOOL_ICONS: Record<string, string> = {
   apply_patch: "diff-modified",
 }
 
+const CARD_OPEN_STATE = new Map<string, boolean>()
+const CARD_DETAILS_OPEN_STATE = new Map<string, boolean>()
+
+function initialCardOpenState(partId: string, fallback: boolean): boolean {
+  const saved = CARD_OPEN_STATE.get(partId)
+  return saved ?? fallback
+}
+
+function initialCardDetailsOpenState(partId: string, fallback: boolean): boolean {
+  const saved = CARD_DETAILS_OPEN_STATE.get(partId)
+  return saved ?? fallback
+}
+
 function traceKindForPart(part: MockPart): TraceNodeKind {
   return part.traceNodeKind || inferTraceNodeKindFromToolName(part.tool)
 }
@@ -100,7 +110,14 @@ function markerClass(kind: TraceNodeKind, status = "success" as ReturnType<typeo
 interface SessionTurnProps {
   turn: MockTurn
   selectedTraceNodeId?: string | null
+  onSelectSession?: (sessionId: string) => void
   onTraceNodeSelect?: (nodeId: string) => void
+  onCopyMessage?: (message: MockMessage) => Promise<void> | void
+  onEditForkMessage?: (message: MockMessage) => void
+  onForkMessage?: (message: MockMessage) => void
+  onCopyToolCommand?: (part: MockPart) => Promise<void> | void
+  onCopyToolOutput?: (part: MockPart) => Promise<void> | void
+  onForkPart?: (part: MockPart) => void
 }
 
 interface MessageMarkerProps {
@@ -122,13 +139,23 @@ const MessageMarker: Component<MessageMarkerProps> = (props) => {
 interface PartProps {
   part: MockPart
   selectedTraceNodeId?: string | null
+  onSelectSession?: (sessionId: string) => void
   onTraceNodeSelect?: (nodeId: string) => void
+  onCopyToolCommand?: (part: MockPart) => Promise<void> | void
+  onCopyToolOutput?: (part: MockPart) => Promise<void> | void
+  onForkPart?: (part: MockPart) => void
 }
 
 const ToolPart: Component<PartProps> = (props) => {
   const [open, setOpen] = createSignal(
-    ["running", "awaiting_approval", "denied", "error", "cancelled"].includes(props.part.status || "")
+    initialCardOpenState(
+      props.part.id,
+      ["pending", "running", "awaiting_approval", "denied", "error", "cancelled"].includes(props.part.status || "")
+    )
   )
+  createEffect(() => {
+    CARD_OPEN_STATE.set(props.part.id, open())
+  })
   const kind = () => traceKindForPart(props.part)
   const status = () => traceStatusForPart(props.part)
   const selected = () => Boolean(props.part.traceNodeId && props.part.traceNodeId === props.selectedTraceNodeId)
@@ -167,18 +194,23 @@ const ToolPart: Component<PartProps> = (props) => {
       class="tool-card"
       classList={{
         "tool-card--selected": selected(),
-        "tool-card--awaiting": props.part.status === "awaiting_approval",
+        "tool-card--awaiting": props.part.status === "pending" || props.part.status === "awaiting_approval",
         "tool-card--error": props.part.status === "error",
         "tool-card--cancelled": props.part.status === "cancelled" || props.part.status === "denied",
       }}
       data-trace-node-id={props.part.traceNodeId}
+      onClick={(event) => event.stopPropagation()}
     >
       <button
         type="button"
         class="tool-card__header"
-        onClick={() => {
-          if (props.part.traceNodeId) props.onTraceNodeSelect?.(props.part.traceNodeId)
-          setOpen((value) => !value)
+        onClick={(event) => {
+          event.stopPropagation()
+          setOpen((value) => {
+            const next = !value
+            CARD_OPEN_STATE.set(props.part.id, next)
+            return next
+          })
         }}
       >
         <span class="tool-card__icon">
@@ -233,6 +265,28 @@ const ToolPart: Component<PartProps> = (props) => {
               <pre class="tool-card__code">{formatJson(props.part.toolResultMeta)}</pre>
             </ToolSection>
           </Show>
+          <div class="message-action-row tool-card__actions">
+            <Show when={props.part.toolOutput}>
+              <IconButton
+                icon="copy"
+                title={t("chat.copyToolOutput")}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  return props.onCopyToolOutput?.(props.part)
+                }}
+              />
+            </Show>
+            <Show when={canForkPart(props.part)}>
+              <IconButton
+                icon="git-branch"
+                title={t("chat.forkFromHere")}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  props.onForkPart?.(props.part)
+                }}
+              />
+            </Show>
+          </div>
         </div>
       </Show>
     </div>
@@ -249,9 +303,7 @@ const ToolSection: Component<{ title: string; children: import("solid-js").JSX.E
 const ToolOutput: Component<{ part: MockPart }> = (props) => (
   <Switch fallback={<pre class="tool-card__output">{props.part.toolOutput}</pre>}>
     <Match when={props.part.toolOutputFormat === "markdown"}>
-      <Suspense fallback={<pre class="tool-card__output">{props.part.toolOutput}</pre>}>
-        <MarkdownBlock text={props.part.toolOutput} class="tool-card__markdown" />
-      </Suspense>
+      <MarkdownBlock text={props.part.toolOutput} class="tool-card__markdown" />
     </Match>
     <Match when={props.part.toolOutputFormat === "json"}>
       <pre class="tool-card__output">{formatJson(parseJsonOrRaw(props.part.toolOutput || ""))}</pre>
@@ -270,6 +322,7 @@ function approvalDecisionLabel(decision?: string, status?: string): string {
 }
 
 function shellEmptyText(status?: string): string {
+  if (status === "pending") return t("tool.shell.queued")
   if (status === "awaiting_approval") return t("tool.shell.awaitingApproval")
   if (status === "approved") return t("tool.shell.approved")
   if (status === "running") return t("tool.shell.running")
@@ -292,9 +345,18 @@ function omitShellCommandFields(input?: Record<string, unknown>): Record<string,
 
 const ShellToolPart: Component<PartProps> = (props) => {
   const [open, setOpen] = createSignal(
-    ["running", "awaiting_approval", "approved", "denied", "error", "cancelled"].includes(props.part.status || "")
+    initialCardOpenState(
+      props.part.id,
+      ["pending", "running", "awaiting_approval", "approved", "denied", "error", "cancelled"].includes(props.part.status || "")
+    )
   )
-  const [detailsOpen, setDetailsOpen] = createSignal(false)
+  const [detailsOpen, setDetailsOpen] = createSignal(initialCardDetailsOpenState(props.part.id, false))
+  createEffect(() => {
+    CARD_OPEN_STATE.set(props.part.id, open())
+  })
+  createEffect(() => {
+    CARD_DETAILS_OPEN_STATE.set(props.part.id, detailsOpen())
+  })
   const kind = () => traceKindForPart(props.part)
   const status = () => traceStatusForPart(props.part)
   const selected = () => Boolean(props.part.traceNodeId && props.part.traceNodeId === props.selectedTraceNodeId)
@@ -330,18 +392,23 @@ const ShellToolPart: Component<PartProps> = (props) => {
       class="tool-card shell-card"
       classList={{
         "tool-card--selected": selected(),
-        "tool-card--awaiting": props.part.status === "awaiting_approval",
+        "tool-card--awaiting": props.part.status === "pending" || props.part.status === "awaiting_approval",
         "tool-card--error": props.part.status === "error",
         "tool-card--cancelled": props.part.status === "cancelled" || props.part.status === "denied",
       }}
       data-trace-node-id={props.part.traceNodeId}
+      onClick={(event) => event.stopPropagation()}
     >
       <button
         type="button"
         class="tool-card__header shell-card__header"
-        onClick={() => {
-          if (props.part.traceNodeId) props.onTraceNodeSelect?.(props.part.traceNodeId)
-          setOpen((value) => !value)
+        onClick={(event) => {
+          event.stopPropagation()
+          setOpen((value) => {
+            const next = !value
+            CARD_OPEN_STATE.set(props.part.id, next)
+            return next
+          })
         }}
       >
         <span class="tool-card__icon">
@@ -405,7 +472,14 @@ const ShellToolPart: Component<PartProps> = (props) => {
             <button
               type="button"
               class="shell-card__details-toggle"
-              onClick={() => setDetailsOpen((value) => !value)}
+              onClick={(event) => {
+                event.stopPropagation()
+                setDetailsOpen((value) => {
+                  const next = !value
+                  CARD_DETAILS_OPEN_STATE.set(props.part.id, next)
+                  return next
+                })
+              }}
             >
               <span class={`codicon codicon-chevron-${detailsOpen() ? "down" : "right"}`} aria-hidden="true" />
               <span>{t("tool.section.details")}</span>
@@ -443,6 +517,36 @@ const ShellToolPart: Component<PartProps> = (props) => {
             </Show>
           </div>
         </Show>
+        <div class="message-action-row tool-card__actions shell-card__actions">
+          <IconButton
+            icon="copy"
+            title={t("chat.copyCommand")}
+            onClick={(event) => {
+              event.stopPropagation()
+              return props.onCopyToolCommand?.(props.part)
+            }}
+          />
+          <Show when={props.part.toolOutput || props.part.toolFinalOutput || props.part.toolOutputChunks?.length}>
+            <IconButton
+              icon="copy"
+              title={t("chat.copyToolOutput")}
+              onClick={(event) => {
+                event.stopPropagation()
+                return props.onCopyToolOutput?.(props.part)
+              }}
+            />
+          </Show>
+          <Show when={canForkPart(props.part)}>
+            <IconButton
+              icon="git-branch"
+              title={t("chat.forkFromHere")}
+              onClick={(event) => {
+                event.stopPropagation()
+                props.onForkPart?.(props.part)
+              }}
+            />
+          </Show>
+        </div>
       </Show>
     </div>
   )
@@ -459,7 +563,10 @@ const TracePart: Component<PartProps> = (props) => {
       class="trace-event"
       classList={{ "trace-event--selected": selected() }}
       data-trace-node-id={props.part.traceNodeId}
-      onClick={() => props.part.traceNodeId && props.onTraceNodeSelect?.(props.part.traceNodeId)}
+      onClick={(event) => {
+        event.stopPropagation()
+        if (props.part.traceNodeId) props.onTraceNodeSelect?.(props.part.traceNodeId)
+      }}
     >
       <span class={markerClass(kind(), status(), selected())} aria-hidden="true" />
       <span class="trace-event__body">
@@ -486,7 +593,14 @@ const SessionPart: Component<PartProps> = (props) => {
       type="button"
       class="session-card"
       data-trace-node-id={props.part.traceNodeId}
-      onClick={() => props.part.traceNodeId && props.onTraceNodeSelect?.(props.part.traceNodeId)}
+      onClick={(event) => {
+        event.stopPropagation()
+        if (props.part.sessionId) {
+          props.onSelectSession?.(props.part.sessionId)
+          return
+        }
+        if (props.part.traceNodeId) props.onTraceNodeSelect?.(props.part.traceNodeId)
+      }}
     >
       <span class={markerClass(kind(), status())} aria-hidden="true" />
       <span class="session-card__body">
@@ -501,14 +615,15 @@ const SessionPart: Component<PartProps> = (props) => {
 
 const MarkdownText: Component<{ text?: string; format?: "plain" | "markdown" }> = (props) => (
   <Show when={props.format === "markdown"} fallback={<div class="assistant-text-part">{props.text}</div>}>
-    <Suspense fallback={<div class="assistant-text-part">{props.text}</div>}>
-      <MarkdownBlock text={props.text} />
-    </Suspense>
+    <MarkdownBlock text={props.text} />
   </Show>
 )
 
 const RemoteStatusPart: Component<PartProps> = (props) => {
-  const [open, setOpen] = createSignal(false)
+  const [open, setOpen] = createSignal(initialCardOpenState(props.part.id, false))
+  createEffect(() => {
+    CARD_OPEN_STATE.set(props.part.id, open())
+  })
   const fields = () => [
     ["Peer", props.part.remotePeerId],
     ["Session", props.part.remoteSessionId],
@@ -517,8 +632,19 @@ const RemoteStatusPart: Component<PartProps> = (props) => {
   ].filter(([, value]) => value)
 
   return (
-    <div class="remote-status-card">
-      <button type="button" class="remote-status-card__header" onClick={() => setOpen((value) => !value)}>
+    <div class="remote-status-card" onClick={(event) => event.stopPropagation()}>
+      <button
+        type="button"
+        class="remote-status-card__header"
+        onClick={(event) => {
+          event.stopPropagation()
+          setOpen((value) => {
+            const next = !value
+            CARD_OPEN_STATE.set(props.part.id, next)
+            return next
+          })
+        }}
+      >
         <span class="codicon codicon-remote-explorer" aria-hidden="true" />
         <span class="remote-status-card__body">
           <span class="remote-status-card__title">{t("tool.remote.connected")}</span>
@@ -545,10 +671,24 @@ const RemoteStatusPart: Component<PartProps> = (props) => {
 }
 
 const TerminalPart: Component<PartProps> = (props) => {
-  const [open, setOpen] = createSignal(true)
+  const [open, setOpen] = createSignal(initialCardOpenState(props.part.id, true))
+  createEffect(() => {
+    CARD_OPEN_STATE.set(props.part.id, open())
+  })
   return (
-    <div class="terminal-card">
-      <button type="button" class="terminal-card__header" onClick={() => setOpen((value) => !value)}>
+    <div class="terminal-card" onClick={(event) => event.stopPropagation()}>
+      <button
+        type="button"
+        class="terminal-card__header"
+        onClick={(event) => {
+          event.stopPropagation()
+          setOpen((value) => {
+            const next = !value
+            CARD_OPEN_STATE.set(props.part.id, next)
+            return next
+          })
+        }}
+      >
         <span class="codicon codicon-terminal" aria-hidden="true" />
         <span>{props.part.terminalTitle || t("tool.terminal.default")}</span>
         <span class={`codicon codicon-chevron-${open() ? "down" : "right"}`} aria-hidden="true" />
@@ -561,11 +701,25 @@ const TerminalPart: Component<PartProps> = (props) => {
 }
 
 const ViewPart: Component<PartProps> = (props) => {
-  const [open, setOpen] = createSignal(false)
+  const [open, setOpen] = createSignal(initialCardOpenState(props.part.id, false))
+  createEffect(() => {
+    CARD_OPEN_STATE.set(props.part.id, open())
+  })
   const summary = () => markdownSummary(props.part.viewPayload || {})
   return (
-    <div class="view-card">
-      <button type="button" class="view-card__header" onClick={() => setOpen((value) => !value)}>
+    <div class="view-card" onClick={(event) => event.stopPropagation()}>
+      <button
+        type="button"
+        class="view-card__header"
+        onClick={(event) => {
+          event.stopPropagation()
+          setOpen((value) => {
+            const next = !value
+            CARD_OPEN_STATE.set(props.part.id, next)
+            return next
+          })
+        }}
+      >
         <span class="codicon codicon-layout" aria-hidden="true" />
         <span class="view-card__body">
           <span class="view-card__title">{props.part.viewTitle || t("tool.view.default")}</span>
@@ -576,9 +730,7 @@ const ViewPart: Component<PartProps> = (props) => {
       <Show when={open()}>
         <div class="view-card__content">
           <Show when={summary()}>
-            <Suspense fallback={<div class="structured-card__markdown">{summary()}</div>}>
-              <MarkdownBlock text={summary()} class="structured-card__markdown" />
-            </Suspense>
+            <MarkdownBlock text={summary()} class="structured-card__markdown" />
           </Show>
           <pre class="structured-card__json">{formatJson(props.part.viewPayload || {})}</pre>
         </div>
@@ -588,11 +740,25 @@ const ViewPart: Component<PartProps> = (props) => {
 }
 
 const ContextEventPart: Component<PartProps> = (props) => {
-  const [open, setOpen] = createSignal(false)
+  const [open, setOpen] = createSignal(initialCardOpenState(props.part.id, false))
+  createEffect(() => {
+    CARD_OPEN_STATE.set(props.part.id, open())
+  })
   const summary = () => markdownSummary(props.part.contextPayload || {})
   return (
-    <div class="context-event-card">
-      <button type="button" class="context-event-card__header" onClick={() => setOpen((value) => !value)}>
+    <div class="context-event-card" onClick={(event) => event.stopPropagation()}>
+      <button
+        type="button"
+        class="context-event-card__header"
+        onClick={(event) => {
+          event.stopPropagation()
+          setOpen((value) => {
+            const next = !value
+            CARD_OPEN_STATE.set(props.part.id, next)
+            return next
+          })
+        }}
+      >
         <span class="codicon codicon-file-submodule" aria-hidden="true" />
         <span class="context-event-card__body">
           <span class="context-event-card__title">{props.part.contextTitle || t("tool.context.default")}</span>
@@ -603,9 +769,7 @@ const ContextEventPart: Component<PartProps> = (props) => {
       <Show when={open()}>
         <div class="context-event-card__content">
           <Show when={summary()}>
-            <Suspense fallback={<div class="structured-card__markdown">{summary()}</div>}>
-              <MarkdownBlock text={summary()} class="structured-card__markdown" />
-            </Suspense>
+            <MarkdownBlock text={summary()} class="structured-card__markdown" />
           </Show>
           <pre class="structured-card__json">{formatJson(props.part.contextPayload || {})}</pre>
         </div>
@@ -639,7 +803,10 @@ const UI_EVENT_ICONS: Record<string, string> = {
 }
 
 const UiEventPart: Component<PartProps> = (props) => {
-  const [open, setOpen] = createSignal(false)
+  const [open, setOpen] = createSignal(initialCardOpenState(props.part.id, false))
+  createEffect(() => {
+    CARD_OPEN_STATE.set(props.part.id, open())
+  })
   const kind = () => props.part.uiEventKind || "system"
   const label = () => getUiEventLabel(kind()) || kind()
   const icon = () => UI_EVENT_ICONS[kind()] || "output"
@@ -647,8 +814,19 @@ const UiEventPart: Component<PartProps> = (props) => {
   const summary = () => markdownSummary(props.part.uiEventPayload || {})
 
   return (
-    <div class="ui-event-card" classList={{ [`ui-event-card--${level()}`]: true }}>
-      <button type="button" class="ui-event-card__header" onClick={() => setOpen((value) => !value)}>
+    <div class="ui-event-card" classList={{ [`ui-event-card--${level()}`]: true }} onClick={(event) => event.stopPropagation()}>
+      <button
+        type="button"
+        class="ui-event-card__header"
+        onClick={(event) => {
+          event.stopPropagation()
+          setOpen((value) => {
+            const next = !value
+            CARD_OPEN_STATE.set(props.part.id, next)
+            return next
+          })
+        }}
+      >
         <span class={`codicon codicon-${icon()}`} aria-hidden="true" />
         <span class="ui-event-card__body">
           <span class="ui-event-card__title">{props.part.uiEventTitle || label()}</span>
@@ -659,9 +837,7 @@ const UiEventPart: Component<PartProps> = (props) => {
       <Show when={open()}>
         <div class="ui-event-card__content">
           <Show when={summary()}>
-            <Suspense fallback={<div class="structured-card__markdown">{summary()}</div>}>
-              <MarkdownBlock text={summary()} class="structured-card__markdown" />
-            </Suspense>
+            <MarkdownBlock text={summary()} class="structured-card__markdown" />
           </Show>
           <pre class="structured-card__json">{formatJson(props.part.uiEventPayload || {})}</pre>
         </div>
@@ -674,14 +850,18 @@ const PartView: Component<PartProps> = (props) => {
   return (
     <Switch
       fallback={
-        <div class="parallel-card">
+        <div class="parallel-card" onClick={(event) => event.stopPropagation()}>
           <div class="parallel-card__title">{props.part.parallelTitle || t("tool.parallel.default")}</div>
           <For each={props.part.parallelItems || []}>
             {(item) => (
               <PartView
                 part={item}
                 selectedTraceNodeId={props.selectedTraceNodeId}
+                onSelectSession={props.onSelectSession}
                 onTraceNodeSelect={props.onTraceNodeSelect}
+                onCopyToolCommand={props.onCopyToolCommand}
+                onCopyToolOutput={props.onCopyToolOutput}
+                onForkPart={props.onForkPart}
               />
             )}
           </For>
@@ -735,7 +915,31 @@ export const SessionTurn: Component<SessionTurnProps> = (props) => {
         onClick={() => props.turn.userMessage.traceNodeId && props.onTraceNodeSelect?.(props.turn.userMessage.traceNodeId)}
       >
         <MessageMarker message={props.turn.userMessage} selected={userSelected()} />
-        <div class="user-message__text">{props.turn.userMessage.text}</div>
+        <div class="assistant-message__body">
+          <div class="user-message__text">{props.turn.userMessage.text}</div>
+          <div class="message-action-row">
+            <Show when={props.onCopyMessage}>
+              <IconButton
+                icon="copy"
+                title={t("chat.copyMessage")}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  return props.onCopyMessage?.(props.turn.userMessage)
+                }}
+              />
+            </Show>
+            <Show when={canEditForkMessage(props.turn.userMessage)}>
+              <IconButton
+                icon="edit"
+                title={t("chat.editAndFork")}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  props.onEditForkMessage?.(props.turn.userMessage)
+                }}
+              />
+            </Show>
+          </div>
+        </div>
       </div>
 
       <For each={props.turn.assistantMessages}>
@@ -751,20 +955,44 @@ export const SessionTurn: Component<SessionTurnProps> = (props) => {
             >
               <MessageMarker message={message} selected={selected()} />
               <div class="assistant-message__body">
-                <div class="message-action-row">
-                  <Show when={message.traceNodeId}>
-                    <IconButton icon="inspect" title={t("tool.locateTraceNode")} onClick={() => props.onTraceNodeSelect?.(message.traceNodeId as string)} />
-                  </Show>
-                </div>
                 <For each={message.parts}>
                   {(part) => (
                     <PartView
                       part={part}
                       selectedTraceNodeId={props.selectedTraceNodeId}
+                      onSelectSession={props.onSelectSession}
                       onTraceNodeSelect={props.onTraceNodeSelect}
+                      onCopyToolCommand={props.onCopyToolCommand}
+                      onCopyToolOutput={props.onCopyToolOutput}
+                      onForkPart={props.onForkPart}
                     />
                   )}
                 </For>
+                <div class="message-action-row">
+                  <Show when={props.onCopyMessage}>
+                    <IconButton
+                      icon="copy"
+                      title={t("chat.copyMessage")}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        return props.onCopyMessage?.(message)
+                      }}
+                    />
+                  </Show>
+                  <Show when={canForkMessage(message)}>
+                    <IconButton
+                      icon="git-branch"
+                      title={t("chat.forkFromHere")}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        props.onForkMessage?.(message)
+                      }}
+                    />
+                  </Show>
+                  <Show when={message.traceNodeId}>
+                    <IconButton icon="inspect" title={t("tool.locateTraceNode")} onClick={() => props.onTraceNodeSelect?.(message.traceNodeId as string)} />
+                  </Show>
+                </div>
               </div>
             </div>
           )

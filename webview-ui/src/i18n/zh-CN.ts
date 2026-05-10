@@ -433,6 +433,11 @@ const zhCN: Record<string, string> = {
   "chat.relativeTime.yesterday": "昨天",
   "chat.relativeTime.daysAgo": "{n}天前",
   "chat.relativeTime.weeksAgo": "{n}周前",
+  "chat.copyMessage": "复制消息",
+  "chat.editAndFork": "编辑并 Fork",
+  "chat.forkFromHere": "从此 Fork",
+  "chat.copyCommand": "复制命令",
+  "chat.copyToolOutput": "复制输出",
 
   // ── TaskHeader ──
   "task.label": "任务",
@@ -491,8 +496,10 @@ const zhCN: Record<string, string> = {
   "tool.approval.autoApproved": "自动批准",
   "tool.approval.approved": "已批准",
   "tool.approval.pending": "待批准",
+  "tool.cancelRequested": "已请求停止当前工具调用。",
   "tool.shell.commandUnavailable": "命令内容不可用",
   "tool.shell.needsApproval": "该命令需要批准后执行。",
+  "tool.shell.queued": "等待前一个命令完成后执行。",
   "tool.shell.awaitingApproval": "等待审批后执行。",
   "tool.shell.approved": "已批准，等待执行输出。",
   "tool.shell.running": "命令执行中，等待输出。",
@@ -506,6 +513,8 @@ const zhCN: Record<string, string> = {
   "tool.context.default": "上下文事件",
   "tool.parallel.default": "并发批次",
   "tool.locateTraceNode": "定位轨迹节点",
+  "runtime.agentQueue.chatWaiting": "等待服务端开始本次会话...",
+  "runtime.agentQueue.subagentWaiting": "子任务排队中...",
 
   // ── UiEvent ──
   "uiEvent.remote": "远程",
