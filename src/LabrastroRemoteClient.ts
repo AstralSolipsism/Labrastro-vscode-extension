@@ -49,10 +49,10 @@ export interface BackendFeatures {
   issueAssignment: boolean
   freshSessionWithoutSessionHint: boolean
   peerTokenHeartbeatRefresh: boolean
-  agentRuntime: AgentRuntimeFeatures
+  agentRuns: AgentRunFeatures
 }
 
-export interface AgentRuntimeFeatures {
+export interface AgentRunFeatures {
   executorFeatures: Record<string, ExecutorFeature>
 }
 
@@ -351,24 +351,24 @@ export class LabrastroRemoteClient {
     return this.authenticatedPost("/remote/admin/server-settings/update", payload)
   }
 
-  async runtimeSubmit(payload: JsonObject): Promise<JsonObject> {
-    return this.authenticatedPost("/remote/admin/runtime/submit", payload)
+  async agentRunSubmit(payload: JsonObject): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/agent-runs/submit", payload)
   }
 
   async environmentRun(payload: JsonObject): Promise<JsonObject> {
     return this.authenticatedPost("/remote/admin/environment/run", payload)
   }
 
-  async runtimeEvents(payload: JsonObject): Promise<JsonObject> {
-    return this.authenticatedPost("/remote/admin/runtime/events", payload)
+  async agentRunEvents(payload: JsonObject): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/agent-runs/events", payload)
   }
 
-  async runtimeCancel(payload: JsonObject): Promise<JsonObject> {
-    return this.authenticatedPost("/remote/admin/runtime/cancel", payload)
+  async agentRunCancel(payload: JsonObject): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/agent-runs/cancel", payload)
   }
 
-  async runtimeRetry(payload: JsonObject): Promise<JsonObject> {
-    return this.authenticatedPost("/remote/admin/runtime/retry", payload)
+  async agentRunRetry(payload: JsonObject): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/agent-runs/retry", payload)
   }
 
   async features(): Promise<BackendFeatures> {
@@ -1035,11 +1035,11 @@ function normalizeBackendFeatures(payload: JsonObject): BackendFeatures {
     issueAssignment: features.issue_assignment === true,
     freshSessionWithoutSessionHint: features.fresh_session_without_session_hint === true,
     peerTokenHeartbeatRefresh: features.peer_token_heartbeat_refresh === true,
-    agentRuntime: normalizeAgentRuntimeFeatures(features.agent_runtime),
+    agentRuns: normalizeAgentRunFeatures(features.agent_runs),
   }
 }
 
-function normalizeAgentRuntimeFeatures(value: unknown): AgentRuntimeFeatures {
+function normalizeAgentRunFeatures(value: unknown): AgentRunFeatures {
   const runtime = objectValue(value)
   const executorFeatures: Record<string, ExecutorFeature> = {}
   for (const [executor, feature] of Object.entries(objectValue(runtime.executor_features))) {

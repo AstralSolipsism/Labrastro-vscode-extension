@@ -324,7 +324,7 @@ describe("LabrastroRemoteClient features", () => {
         features: {
           sessions: true,
           chat_stream: true,
-          agent_runtime: {
+          agent_runs: {
             executor_features: {
               claude: {
                 installed: true,
@@ -348,7 +348,7 @@ describe("LabrastroRemoteClient features", () => {
 
     const features = await new LabrastroRemoteClient(context as never).features()
 
-    expect(features.agentRuntime.executorFeatures.claude).toMatchObject({
+    expect(features.agentRuns.executorFeatures.claude).toMatchObject({
       installed: true,
       version: "2.0.1",
       streamJson: true,
@@ -502,8 +502,8 @@ describe("LabrastroRemoteClient runtime admin API", () => {
     vi.stubGlobal("fetch", fetchMock)
     const client = new LabrastroRemoteClient(context as never)
 
-    await expect(client.runtimeSubmit({ agent_id: "reviewer" })).resolves.toMatchObject({
-      path: "/remote/admin/runtime/submit",
+    await expect(client.agentRunSubmit({ agent_id: "reviewer" })).resolves.toMatchObject({
+      path: "/remote/admin/agent-runs/submit",
       body: { agent_id: "reviewer" },
       authorization: "Bearer access-token-1",
     })
@@ -511,14 +511,14 @@ describe("LabrastroRemoteClient runtime admin API", () => {
       path: "/remote/admin/environment/run",
       body: { mode: "check", agent_id: "environment_configurator" },
     })
-    await expect(client.runtimeEvents({ task_id: "task-1", after_seq: 1 })).resolves.toMatchObject({
-      path: "/remote/admin/runtime/events",
+    await expect(client.agentRunEvents({ agent_run_id: "task-1", after_seq: 1 })).resolves.toMatchObject({
+      path: "/remote/admin/agent-runs/events",
     })
-    await expect(client.runtimeCancel({ task_id: "task-1" })).resolves.toMatchObject({
-      path: "/remote/admin/runtime/cancel",
+    await expect(client.agentRunCancel({ agent_run_id: "task-1" })).resolves.toMatchObject({
+      path: "/remote/admin/agent-runs/cancel",
     })
-    await expect(client.runtimeRetry({ task_id: "task-1" })).resolves.toMatchObject({
-      path: "/remote/admin/runtime/retry",
+    await expect(client.agentRunRetry({ agent_run_id: "task-1" })).resolves.toMatchObject({
+      path: "/remote/admin/agent-runs/retry",
     })
   })
 

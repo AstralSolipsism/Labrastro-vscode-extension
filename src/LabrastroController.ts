@@ -131,7 +131,7 @@ export class LabrastroController implements vscode.Disposable {
     this.environmentCoordinator = new EnvironmentCoordinator({
       client: this.client,
       isEnvironmentRunActive: () => this.environmentCoordinator.isEnvironmentRunActive(),
-      runtimeSubmitPayload: this.runtimeSubmitPayload.bind(this),
+      agentRunSubmitPayload: this.agentRunSubmitPayload.bind(this),
       refreshToolchainState: this.refreshToolchainState.bind(this),
       refreshEnvironmentManifest: this.refreshEnvironmentManifest.bind(this),
       startToolchainIngest: this.startToolchainIngest.bind(this),
@@ -348,7 +348,7 @@ export class LabrastroController implements vscode.Disposable {
     this.broadcastWebviewMessage(payload)
   }
 
-  private runtimeSubmitPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  private agentRunSubmitPayload(payload: Record<string, unknown>): Record<string, unknown> {
     const metadata: Record<string, unknown> = {
       ...objectValue(payload.metadata),
     }
@@ -580,10 +580,10 @@ export class LabrastroController implements vscode.Disposable {
         workspace_root: workspaceRoot,
         agent_id: agentId || undefined,
       })
-      const task = objectValue(start.task)
-      taskId = stringValue(task.id) || stringValue(start.task_id) || ""
+      const task = objectValue(start.agent_run)
+      taskId = stringValue(task.id) || stringValue(start.agent_run_id) || ""
       if (!taskId) {
-        throw new Error("environment_task_id_missing")
+        throw new Error("environment_agent_run_id_missing")
       }
       const selectedAgentId = stringValue(start.agent_id) || agentId
 
@@ -649,8 +649,8 @@ export class LabrastroController implements vscode.Disposable {
   ): Promise<void> {
     let afterSeq = 0
     while (!this.disposed && this.activeEnvironmentRun?.taskId === taskId) {
-      const payload = await this.client.runtimeEvents({
-        task_id: taskId,
+      const payload = await this.client.agentRunEvents({
+        agent_run_id: taskId,
         after_seq: afterSeq,
       })
       const events = Array.isArray(payload.events) ? payload.events : []
@@ -858,8 +858,8 @@ export class LabrastroController implements vscode.Disposable {
     post({ type: "environment.run.completed", payload: this.environmentSnapshot })
     try {
       if (run.taskId) {
-        await this.client.runtimeCancel({
-          task_id: run.taskId,
+        await this.client.agentRunCancel({
+          agent_run_id: run.taskId,
           reason: "user_cancelled",
         })
       }

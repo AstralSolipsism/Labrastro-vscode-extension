@@ -6,7 +6,7 @@ import { errorMessage, objectValue, stringValue } from "../controller-utils"
 export interface EnvironmentCoordinatorOptions {
   client: LabrastroRemoteClient
   isEnvironmentRunActive: () => boolean
-  runtimeSubmitPayload: (payload: Record<string, unknown>) => Record<string, unknown>
+  agentRunSubmitPayload: (payload: Record<string, unknown>) => Record<string, unknown>
   refreshToolchainState: (post: PostMessage) => Promise<void>
   refreshEnvironmentManifest: (post: PostMessage) => Promise<void>
   startToolchainIngest: (input: Record<string, unknown>, post: PostMessage) => Promise<void>
@@ -87,33 +87,33 @@ export class EnvironmentCoordinator {
 
   async handleMessage(message: WebviewToHostMessage, post: PostMessage): Promise<boolean> {
     switch (message.type) {
-      case "runtime.submit":
+      case "agentRun.submit":
         try {
-          const payload = this.options.runtimeSubmitPayload(objectValue(message.payload))
-          post({ type: "runtime.task", payload: await this.options.client.runtimeSubmit(payload) })
+          const payload = this.options.agentRunSubmitPayload(objectValue(message.payload))
+          post({ type: "agentRun.submitted", payload: await this.options.client.agentRunSubmit(payload) })
         } catch (error) {
-          post({ type: "runtime.error", message: errorMessage(error) })
+          post({ type: "agentRun.error", message: errorMessage(error) })
         }
         return true
-      case "runtime.events":
+      case "agentRun.events":
         try {
-          post({ type: "runtime.events", payload: await this.options.client.runtimeEvents(objectValue(message.payload)) })
+          post({ type: "agentRun.events", payload: await this.options.client.agentRunEvents(objectValue(message.payload)) })
         } catch (error) {
-          post({ type: "runtime.error", message: errorMessage(error) })
+          post({ type: "agentRun.error", message: errorMessage(error) })
         }
         return true
-      case "runtime.cancel":
+      case "agentRun.cancel":
         try {
-          post({ type: "runtime.cancelled", payload: await this.options.client.runtimeCancel(objectValue(message.payload)) })
+          post({ type: "agentRun.cancelled", payload: await this.options.client.agentRunCancel(objectValue(message.payload)) })
         } catch (error) {
-          post({ type: "runtime.error", message: errorMessage(error) })
+          post({ type: "agentRun.error", message: errorMessage(error) })
         }
         return true
-      case "runtime.retry":
+      case "agentRun.retry":
         try {
-          post({ type: "runtime.task", payload: await this.options.client.runtimeRetry(objectValue(message.payload)) })
+          post({ type: "agentRun.submitted", payload: await this.options.client.agentRunRetry(objectValue(message.payload)) })
         } catch (error) {
-          post({ type: "runtime.error", message: errorMessage(error) })
+          post({ type: "agentRun.error", message: errorMessage(error) })
         }
         return true
       case "environment.refreshManifest":

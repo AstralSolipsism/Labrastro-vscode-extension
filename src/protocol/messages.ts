@@ -1,5 +1,5 @@
 ﻿export type PanelView = "chat" | "settings" | "about" | "agentManager"
-export type TraceNavigationIntent = "inspect" | "fork" | "rollback" | "subagent"
+export type TraceNavigationIntent = "inspect" | "fork" | "rollback" | "delegated_run"
 
 export interface NavigateMessage {
   type: "navigate"
@@ -56,10 +56,10 @@ export type HostToWebviewMessageType =
   | "environment.snapshot"
   | "executorType.state"
   | "locale.state"
-  | "runtime.cancelled"
-  | "runtime.error"
-  | "runtime.events"
-  | "runtime.task"
+  | "agentRun.cancelled"
+  | "agentRun.error"
+  | "agentRun.events"
+  | "agentRun.submitted"
   | "serverSettings.error"
   | "serverSettings.state"
   | "session.adopted"
@@ -132,10 +132,10 @@ export type WebviewToHostMessageType =
   | "provider.models"
   | "provider.record"
   | "provider.test"
-  | "runtime.cancel"
-  | "runtime.events"
-  | "runtime.retry"
-  | "runtime.submit"
+  | "agentRun.cancel"
+  | "agentRun.events"
+  | "agentRun.retry"
+  | "agentRun.submit"
   | "sendMessage"
   | "serverSettings.read"
   | "serverSettings.update"
@@ -193,10 +193,10 @@ const HOST_TO_WEBVIEW_TYPES = new Set<HostToWebviewMessageType>([
   "environment.snapshot",
   "executorType.state",
   "locale.state",
-  "runtime.cancelled",
-  "runtime.error",
-  "runtime.events",
-  "runtime.task",
+  "agentRun.cancelled",
+  "agentRun.error",
+  "agentRun.events",
+  "agentRun.submitted",
   "serverSettings.error",
   "serverSettings.state",
   "session.adopted",
@@ -264,10 +264,10 @@ const WEBVIEW_TO_HOST_TYPES = new Set<WebviewToHostMessageType>([
   "provider.models",
   "provider.record",
   "provider.test",
-  "runtime.cancel",
-  "runtime.events",
-  "runtime.retry",
-  "runtime.submit",
+  "agentRun.cancel",
+  "agentRun.events",
+  "agentRun.retry",
+  "agentRun.submit",
   "sendMessage",
   "serverSettings.read",
   "serverSettings.update",

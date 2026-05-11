@@ -4,16 +4,16 @@ import { EnvironmentCoordinator } from "./EnvironmentCoordinator"
 function coordinator(active = false) {
   const options = {
     client: {
-      runtimeSubmit: vi.fn(async (payload) => ({ task: payload })),
-      runtimeEvents: vi.fn(),
-      runtimeCancel: vi.fn(),
-      runtimeRetry: vi.fn(),
+      agentRunSubmit: vi.fn(async (payload) => ({ agent_run: payload })),
+      agentRunEvents: vi.fn(),
+      agentRunCancel: vi.fn(),
+      agentRunRetry: vi.fn(),
       toolchainRecord: vi.fn(async () => ({ ok: true })),
       toolchainDelete: vi.fn(),
       toolchainEnable: vi.fn(),
     },
     isEnvironmentRunActive: vi.fn(() => active),
-    runtimeSubmitPayload: vi.fn((payload) => ({ ...payload, normalized: true })),
+    agentRunSubmitPayload: vi.fn((payload) => ({ ...payload, normalized: true })),
     refreshToolchainState: vi.fn(),
     refreshEnvironmentManifest: vi.fn(),
     startToolchainIngest: vi.fn(),
@@ -48,14 +48,14 @@ describe("EnvironmentCoordinator", () => {
     expect(subject.activeToolchainIngestChatId).toBe("chat-1")
   })
 
-  it("normalizes runtime submit payloads through the existing host helper", async () => {
+  it("normalizes AgentRun submit payloads through the existing host helper", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
 
-    await subject.handleMessage({ type: "runtime.submit", payload: { prompt: "hello" } }, post)
+    await subject.handleMessage({ type: "agentRun.submit", payload: { prompt: "hello" } }, post)
 
-    expect(options.runtimeSubmitPayload).toHaveBeenCalledWith({ prompt: "hello" })
-    expect(post).toHaveBeenCalledWith({ type: "runtime.task", payload: { task: { prompt: "hello", normalized: true } } })
+    expect(options.agentRunSubmitPayload).toHaveBeenCalledWith({ prompt: "hello" })
+    expect(post).toHaveBeenCalledWith({ type: "agentRun.submitted", payload: { agent_run: { prompt: "hello", normalized: true } } })
   })
 
   it("refreshes toolchain and manifest after a successful toolchain record when idle", async () => {
