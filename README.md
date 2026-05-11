@@ -22,6 +22,8 @@
 
 Labrastro 后端基座负责远端 relay、会话持久化、Provider 管理、MCP 分发、环境清单、Agent Runtime 和任务控制面。VS Code 插件连接这个基座，把中心化配置和任务调度落到当前本地工作区。
 
+当前工作区中，`dogcode` 是 VS Code/Webview MVP 的事实来源；ReuleauxCoder/Labrastro server 是后端控制面与执行基座。插件前端已经完成基础建设，不应被视为缺失项。
+
 ## 架构关系
 
 ```mermaid
@@ -54,8 +56,10 @@ flowchart LR
 - 远程会话创建、加载、保存快照与历史恢复。
 - Provider、模型 Profile、主/副模型目标管理。
 - CLI / MCP / Skills 工具链清单管理。
-- Agent Runtime 执行器能力展示：installed、stream-json、session discovery、resume、MCP 和隔离状态；重试入口区分 fresh run 与继续同一 CLI 会话。
+- Agent Runtime 与 AgentRun：执行器能力展示、AgentRun 提交/事件轮询/取消/重试、fresh run 与继续同一 CLI 会话区分。
 - 当前工作区环境检查与配置流程。
+- 当前工作区 peer 编排、bootstrap token 获取和 `rcoder-peer` artifact 下载。
+- Taskflow chat mode 基础入口；Review Cards、自然澄清流程和详情页仍是后续产品化项。
 - 命令审批、自动批准规则与审批详情查看。
 - Trace Preview 原型入口，用于后续恢复更完整的 agent 过程深查。
 
@@ -93,6 +97,23 @@ docker compose logs -f labrastro-host
 ```
 
 默认服务会监听容器内 `0.0.0.0:8765`，并映射到宿主机 `8765` 端口。
+
+基础部署允许 `LABRASTRO_DATABASE_URL` 留空。此时后端进入无数据库兼容模式，适合本地、开发和单实例试用，但有这些降级：
+
+- auth 使用 file store，依赖后端 `.rcoder` volume 保存账号和 refresh token。
+- session 使用文件 store，依赖后端 `.rcoder` / session volume 保存快照。
+- AgentRun、Taskflow、ProjectState、Issue、Assignment、Mention 在当前实现中重启不可恢复或能力降级。
+- GitHub PR lifecycle 和 review follow-up 需要 Postgres。
+- peer registry、peer token、relay pending queue 仍是单实例内存态。
+- Postgres overlay 当前不等于完整 Taskflow 生产持久化；Taskflow 表存在，但 store wiring 尚未完成。
+
+需要 Postgres 控制面时，在后端仓库使用：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --build
+```
+
+启用 Postgres 后，已 wiring 的 runtime/session/auth/collaboration/GitHub 控制面状态可进入 Postgres；Taskflow 的生产级恢复仍以后续 store wiring 为准。
 
 生产环境预期通过 Nginx、Caddy、Traefik 或 Cloudflare 等反向代理把 HTTPS Host URL 转发到容器 HTTP 端口，例如：
 
