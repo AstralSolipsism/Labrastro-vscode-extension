@@ -34,6 +34,7 @@ describe("ChatRunCoordinator", () => {
       text: "hello",
       sessionId: "s1",
       workflowMode: "chat",
+      taskflowId: "taskflow-1",
       draftSessionId: "session-local",
       providerId: "p1",
       modelId: "m1",
@@ -43,6 +44,7 @@ describe("ChatRunCoordinator", () => {
     expect(options.startChat).toHaveBeenCalledWith("hello", "s1", post, {
       mode: undefined,
       workflowMode: "chat",
+      taskflowId: "taskflow-1",
       draftSessionId: "session-local",
       providerId: "p1",
       modelId: "m1",

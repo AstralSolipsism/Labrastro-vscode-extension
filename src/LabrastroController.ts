@@ -1145,6 +1145,7 @@ export class LabrastroController implements vscode.Disposable {
     options: {
       mode?: string
       workflowMode?: string
+      taskflowId?: string
       draftSessionId?: string
       providerId?: string
       modelId?: string

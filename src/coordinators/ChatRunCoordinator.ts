@@ -32,6 +32,7 @@ export interface ChatRunCoordinatorOptions {
     options: {
       mode?: string
       workflowMode?: string
+      taskflowId?: string
       draftSessionId?: string
       providerId?: string
       modelId?: string
@@ -103,6 +104,7 @@ export class ChatRunCoordinator {
           void this.options.startChat(message.text, stringValue(message.sessionId), post, {
             mode: stringValue(message.mode),
             workflowMode: stringValue(message.workflowMode) || stringValue(message.workflow_mode),
+            taskflowId: stringValue(message.taskflowId) || stringValue(message.taskflow_id),
             draftSessionId: stringValue(message.draftSessionId) || stringValue(message.draft_session_id),
             providerId: stringValue(message.providerId) || stringValue(message.provider_id),
             modelId: stringValue(message.modelId) || stringValue(message.model_id),

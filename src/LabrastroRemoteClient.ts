@@ -511,14 +511,16 @@ export class LabrastroRemoteClient {
   async startChat(
     prompt: string,
     sessionId?: string,
-    options: { mode?: string; workflowMode?: string } = {}
+    options: { mode?: string; workflowMode?: string; taskflowId?: string; taskflow_id?: string } = {}
   ): Promise<JsonObject> {
+    const taskflowId = options.taskflowId?.trim() || options.taskflow_id?.trim()
     return this.postPeerJson("/remote/chat/start", (peer) => ({
       peer_token: peer.peer_token,
       prompt,
       session_hint: sessionId,
       ...(options.mode?.trim() ? { mode: options.mode.trim() } : {}),
       ...(options.workflowMode?.trim() ? { workflow_mode: options.workflowMode.trim() } : {}),
+      ...(taskflowId ? { taskflow_id: taskflowId } : {}),
     }))
   }
 

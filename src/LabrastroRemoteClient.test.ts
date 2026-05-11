@@ -231,11 +231,7 @@ function remoteContractFixtures(): Array<{
   request: unknown
   response: unknown
 }> {
-  const contractPath = path.resolve(
-    __dirname,
-    "..",
-    "..",
-    "ezcode",
+  const relativeContractPath = path.join(
     "labrastro_server",
     "interfaces",
     "http",
@@ -243,6 +239,15 @@ function remoteContractFixtures(): Array<{
     "protocol",
     "contracts.json"
   )
+  const candidates = [
+    path.resolve(__dirname, "..", "..", relativeContractPath),
+    path.resolve(__dirname, "..", "..", "ReuleauxCoder", relativeContractPath),
+    path.resolve(__dirname, "..", "..", "ezcode", relativeContractPath),
+  ]
+  const contractPath = candidates.find((candidate) => fsSync.existsSync(candidate))
+  if (!contractPath) {
+    throw new Error(`Unable to find remote protocol contracts.json. Tried: ${candidates.join(", ")}`)
+  }
   return JSON.parse(fsSync.readFileSync(contractPath, "utf-8")).fixtures
 }
 
@@ -818,6 +823,7 @@ describe("LabrastroRemoteClient chat start", () => {
     await expect(client.startChat("hello", "session-1", {
       mode: "taskflow",
       workflowMode: "taskflow",
+      taskflowId: "taskflow-1",
     })).resolves.toMatchObject({ chat_id: "chat-1" })
 
     expect(postedBody).toMatchObject({
@@ -826,7 +832,9 @@ describe("LabrastroRemoteClient chat start", () => {
       session_hint: "session-1",
       mode: "taskflow",
       workflow_mode: "taskflow",
+      taskflow_id: "taskflow-1",
     })
+    expect(postedBody).not.toHaveProperty("taskflow_goal_id")
   })
 
   it("switches the current session main model through the peer session endpoint", async () => {
