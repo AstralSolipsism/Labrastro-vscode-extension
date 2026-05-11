@@ -1,4 +1,4 @@
-import { Component, For, Show } from "solid-js"
+﻿import { Component, For, Show } from "solid-js"
 import {
   getTraceNavigationIntentLabel,
   type TraceBranchKind,
@@ -42,7 +42,7 @@ export const AgentBranchBreadcrumb: Component<AgentBranchBreadcrumbProps> = (pro
               class="agent-manager-breadcrumb__item"
               classList={{
                 "agent-manager-breadcrumb__item--current": item.id === props.currentBranchId,
-                "agent-manager-breadcrumb__item--subagent": item.kind === "subagent",
+                "agent-manager-breadcrumb__item--delegated_run": item.kind === "delegated_run",
               }}
               onClick={() => props.onSelectBranch(item.id)}
             >

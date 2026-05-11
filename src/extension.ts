@@ -1,4 +1,4 @@
-import * as vscode from "vscode"
+﻿import * as vscode from "vscode"
 import { AgentManagerPanelProvider } from "./AgentManagerPanelProvider"
 import { LabrastroController } from "./LabrastroController"
 import { SidebarProvider } from "./SidebarProvider"
@@ -88,7 +88,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand(
       "labrastro.openAgentManager",
-      (options?: { nodeId?: string; branchId?: string; sessionId?: string; intent?: "inspect" | "fork" | "rollback" | "subagent" }) => {
+      (options?: { nodeId?: string; branchId?: string; sessionId?: string; intent?: "inspect" | "fork" | "rollback" | "delegated_run" }) => {
         agentManagerPanelProvider.openPanel(options)
       }
     )

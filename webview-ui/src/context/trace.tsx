@@ -1,4 +1,4 @@
-import { createContext, useContext, ParentComponent, createMemo, createSignal, onCleanup, onMount } from "solid-js"
+﻿import { createContext, useContext, ParentComponent, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import type {
   TraceEdge,
   TraceNavigationIntent,
@@ -139,7 +139,7 @@ function normalizeSession(value: unknown): MockSession | undefined {
         : typeof payload.saved_at === "string"
           ? payload.saved_at
           : new Date().toISOString(),
-    kind: payload.kind === "fork" || payload.kind === "subagent" || payload.kind === "main"
+    kind: payload.kind === "fork" || payload.kind === "delegated_run" || payload.kind === "main"
       ? payload.kind as MockSession["kind"]
       : "main",
     state: "active",
@@ -316,9 +316,9 @@ interface TraceContextValue {
     childSessionId: string
     childSessionTitle: string
     childSessionSummary?: string
-    childSessionKind?: "fork" | "subagent"
+    childSessionKind?: "fork" | "delegated_run"
   }) => void
-  createMockFork: (sourceNodeId: string, mode?: "fork" | "subagent") => string | null
+  createMockFork: (sourceNodeId: string, mode?: "fork" | "delegated_run") => string | null
   createMockRollback: (sourceNodeId: string, targetNodeId?: string) => string | null
   openAgentManager: (options?: TraceNavigationPayload) => void
   applyPanelNavigation: (payload?: TraceNavigationPayload) => void
@@ -588,7 +588,7 @@ export const TraceProvider: ParentComponent = (props) => {
     childSessionId: string
     childSessionTitle: string
     childSessionSummary?: string
-    childSessionKind?: "fork" | "subagent"
+    childSessionKind?: "fork" | "delegated_run"
   }) => {
     const sourceBundle = getSessionBundle(options.sourceSessionId)
     if (!sourceBundle) return
@@ -618,7 +618,7 @@ export const TraceProvider: ParentComponent = (props) => {
           sessionState: "active",
           sessionSummary: options.childSessionSummary,
           traceNodeId: options.sourceNodeId,
-          traceNodeKind: options.childSessionKind === "subagent" ? "subagent_spawn" : "fork",
+          traceNodeKind: options.childSessionKind === "delegated_run" ? "delegated_run_spawn" : "fork",
           traceNodeStatus: "success",
         },
       ],
@@ -645,7 +645,7 @@ export const TraceProvider: ParentComponent = (props) => {
     }
   }
 
-  const createMockFork = (sourceNodeId: string, mode: "fork" | "subagent" = "fork") => {
+  const createMockFork = (sourceNodeId: string, mode: "fork" | "delegated_run" = "fork") => {
     const sourceSessionId = currentSessionId()
     if (!sourceSessionId) return null
 
@@ -655,20 +655,20 @@ export const TraceProvider: ParentComponent = (props) => {
     const sourceNode = sourceBundle.traceNodes.find((node) => node.id === sourceNodeId)
     if (!sourceNode) return null
 
-    const sessionId = buildMockId(mode === "subagent" ? "session-subagent" : "session-fork")
+    const sessionId = buildMockId(mode === "delegated_run" ? "session-delegated_run" : "session-fork")
     const partId = buildMockId("part-session")
     const messageId = buildMockId("msg-session")
-    const controlNodeId = buildMockId(mode === "subagent" ? "trace-subagent" : "trace-fork")
+    const controlNodeId = buildMockId(mode === "delegated_run" ? "trace-delegated_run" : "trace-fork")
     const nowIso = new Date().toISOString()
     const now = Date.now()
     const maxStep = sourceBundle.traceNodes.reduce((value, node) => Math.max(value, node.step), 0)
     const sessionTitle =
-      mode === "subagent"
-        ? `子代理 · ${sourceNode.title}`
+      mode === "delegated_run"
+        ? `委托运行 · ${sourceNode.title}`
         : `Fork · ${sourceNode.title}`
     const sessionSummary =
-      mode === "subagent"
-        ? `从「${sourceNode.title}」派发的子代理会话，独立执行并回流结果。`
+      mode === "delegated_run"
+        ? `从「${sourceNode.title}」派发的委托运行会话，独立执行并回流结果。`
         : `从「${sourceNode.title}」Fork 出的新会话，用于继续探索或交付。`
 
     const nextSession: MockSession = {
@@ -686,7 +686,7 @@ export const TraceProvider: ParentComponent = (props) => {
     const controlNode: TraceNode = {
       id: controlNodeId,
       category: "control",
-      kind: mode === "subagent" ? "subagent_spawn" : "fork",
+      kind: mode === "delegated_run" ? "delegated_run_spawn" : "fork",
       status: "success",
       branchId: "main",
       lane: 0,
@@ -695,7 +695,7 @@ export const TraceProvider: ParentComponent = (props) => {
       parentId: sourceNode.id,
       forkFrom: sourceNode.id,
       transcriptAnchorId: partId,
-      title: mode === "subagent" ? `派发子代理：${sessionTitle}` : `创建 Fork 会话：${sessionTitle}`,
+      title: mode === "delegated_run" ? `派发委托运行：${sessionTitle}` : `创建 Fork 会话：${sessionTitle}`,
       summary: sessionSummary,
       meta: {
         sessionId,
@@ -736,7 +736,7 @@ export const TraceProvider: ParentComponent = (props) => {
         ...sourceBundle.traceEdges,
         {
           id: buildMockId("trace-edge"),
-          kind: mode === "subagent" ? "subagent" : "fork",
+          kind: mode === "delegated_run" ? "delegated_run" : "fork",
           source: sourceNode.id,
           target: controlNodeId,
           branchId: "main",
@@ -761,8 +761,8 @@ export const TraceProvider: ParentComponent = (props) => {
           id: childUserMessageId,
           role: "user",
           text:
-            mode === "subagent"
-              ? `独立处理「${sourceNode.title}」对应的子任务，并在完成后返回父会话。`
+            mode === "delegated_run"
+              ? `独立处理「${sourceNode.title}」对应的委托运行，并在完成后返回父会话。`
               : `从「${sourceNode.title}」继续推进这条 Fork 会话。`,
           parts: [],
           timestamp: now,
@@ -778,14 +778,14 @@ export const TraceProvider: ParentComponent = (props) => {
             timestamp: now + 1,
             traceNodeId: childAssistantNodeId,
             traceNodeKind: "assistant_message",
-            traceNodeStatus: mode === "subagent" ? "active" : "queued",
+            traceNodeStatus: mode === "delegated_run" ? "active" : "queued",
             parts: [
               {
                 id: buildMockId("part-text"),
                 type: "text",
                 text:
-                  mode === "subagent"
-                    ? "子代理会话已创建，等待继续补充工具执行与结果回流。"
+                  mode === "delegated_run"
+                    ? "委托运行会话已创建，等待继续补充工具执行与结果回流。"
                     : "Fork 会话已创建，等待继续补充这条分支上的对话与操作。",
               },
             ],
@@ -805,24 +805,24 @@ export const TraceProvider: ParentComponent = (props) => {
         step: 1,
         startedAt: nowIso,
         transcriptAnchorId: childUserMessageId,
-        title: mode === "subagent" ? "子代理任务启动" : "Fork 会话启动",
+        title: mode === "delegated_run" ? "委托运行任务启动" : "Fork 会话启动",
         summary: sessionSummary,
       },
       {
         id: childAssistantNodeId,
         category: "conversation",
         kind: "assistant_message",
-        status: mode === "subagent" ? "active" : "queued",
+        status: mode === "delegated_run" ? "active" : "queued",
         branchId: "main",
         lane: 0,
         step: 2,
         startedAt: nowIso,
         parentId: childUserNodeId,
         transcriptAnchorId: childAssistantMessageId,
-        title: mode === "subagent" ? "子代理等待执行" : "Fork 会话等待继续",
+        title: mode === "delegated_run" ? "委托运行等待执行" : "Fork 会话等待继续",
         summary:
-          mode === "subagent"
-            ? "等待在子代理会话中继续追加真实执行内容。"
+          mode === "delegated_run"
+            ? "等待在委托运行会话中继续追加真实执行内容。"
             : "等待在 Fork 会话中继续追加真实执行内容。",
       },
     ]

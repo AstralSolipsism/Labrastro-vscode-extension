@@ -1,4 +1,4 @@
-import * as vscode from "vscode"
+﻿import * as vscode from "vscode"
 import { buildWebviewHtml } from "./webview-html"
 import { LabrastroController } from "./LabrastroController"
 import { isWebviewToHostMessage } from "./protocol/messages"
@@ -7,7 +7,7 @@ export interface AgentManagerOpenOptions {
   nodeId?: string
   branchId?: string
   sessionId?: string
-  intent?: "inspect" | "fork" | "rollback" | "subagent"
+  intent?: "inspect" | "fork" | "rollback" | "delegated_run"
 }
 
 const AGENT_MANAGER_VIEW_TYPE = "labrastro.agentManagerPanel"

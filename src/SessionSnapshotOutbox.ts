@@ -1,4 +1,4 @@
-import * as fs from "fs/promises"
+﻿import * as fs from "fs/promises"
 import * as path from "path"
 import { createHash } from "crypto"
 import type * as vscode from "vscode"
@@ -28,7 +28,7 @@ export interface SessionSnapshotMetadata {
   savedAt: string
   preview: string
   fingerprint: string
-  kind?: "main" | "fork" | "subagent"
+  kind?: "main" | "fork" | "delegated_run"
   parentSessionId?: string
   sourceSessionId?: string
   sourceNodeId?: string
@@ -415,7 +415,7 @@ function normalizeStatus(value: unknown): SessionSnapshotSyncStatus {
 function normalizeSessionKind(
   value: unknown
 ): SessionSnapshotMetadata["kind"] | undefined {
-  return value === "fork" || value === "subagent" || value === "main"
+  return value === "fork" || value === "delegated_run" || value === "main"
     ? value
     : undefined
 }

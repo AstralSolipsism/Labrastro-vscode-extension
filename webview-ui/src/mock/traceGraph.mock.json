@@ -1,4 +1,4 @@
-{
+﻿{
   "version": "1.0.0",
   "locale": "zh-CN",
   "session": {
@@ -36,7 +36,7 @@
       "edgeKinds": {
         "sequential": "顺序边",
         "fork": "分叉边",
-        "subagent": "子代理边",
+        "delegated_run": "委托运行边",
         "rollback": "回退边",
         "return": "返回边",
         "abandoned": "废弃边",
@@ -45,7 +45,7 @@
       "branchLabels": {
         "branch.main": "主分支",
         "branch.explore": "探索分支",
-        "branch.subagentA": "子代理 A",
+        "branch.delegated_runA": "委托运行 A",
         "branch.fix": "修复分支"
       },
       "nodeKinds": {
@@ -60,7 +60,7 @@
         "file_edit": "文件修改",
         "rollback": "回退",
         "fork": "分叉",
-        "subagent_spawn": "子代理分发",
+        "delegated_run_spawn": "委托运行分发",
         "task_dispatch": "任务派发"
       }
     },
@@ -84,7 +84,7 @@
       "edgeKinds": {
         "sequential": "Sequential",
         "fork": "Fork",
-        "subagent": "Subagent",
+        "delegated_run": "Delegated Run",
         "rollback": "Rollback",
         "return": "Return",
         "abandoned": "Abandoned",
@@ -93,7 +93,7 @@
       "branchLabels": {
         "branch.main": "Main Branch",
         "branch.explore": "Explore Branch",
-        "branch.subagentA": "Subagent A",
+        "branch.delegated_runA": "Delegated Run A",
         "branch.fix": "Fix Branch"
       },
       "nodeKinds": {
@@ -108,7 +108,7 @@
         "file_edit": "File Edit",
         "rollback": "Rollback",
         "fork": "Fork",
-        "subagent_spawn": "Subagent Spawn",
+        "delegated_run_spawn": "Delegated Run Spawn",
         "task_dispatch": "Task Dispatch"
       }
     }
@@ -138,9 +138,9 @@
       "forkNodeId": "n10",
       "lane": 2,
       "depth": 2,
-      "kind": "subagent",
+      "kind": "delegated_run",
       "state": "abandoned",
-      "labelKey": "branch.subagentA"
+      "labelKey": "branch.delegated_runA"
     },
     {
       "id": "b-fix",
@@ -305,7 +305,7 @@
     {
       "id": "n10",
       "category": "control",
-      "kind": "subagent_spawn",
+      "kind": "delegated_run_spawn",
       "status": "success",
       "branchId": "b-explore",
       "lane": 1,
@@ -313,10 +313,10 @@
       "startedAt": "2026-04-11T10:20:22.000Z",
       "endedAt": "2026-04-11T10:20:22.000Z",
       "parentId": "n9",
-      "title": "启动子代理验证",
-      "summary": "让子代理单独评估复杂图谱的可视密度。",
+      "title": "启动委托运行验证",
+      "summary": "让委托运行单独评估复杂图谱的可视密度。",
       "meta": {
-        "availableActions": ["inspect", "subagent"]
+        "availableActions": ["inspect", "delegated_run"]
       }
     },
     {
@@ -330,7 +330,7 @@
       "startedAt": "2026-04-11T10:20:23.000Z",
       "endedAt": "2026-04-11T10:20:24.000Z",
       "parentId": "n10",
-      "title": "子代理分析图密度",
+      "title": "委托运行分析图密度",
       "summary": "判断 sidebar 模式下全屏图谱信息过载。"
     },
     {
@@ -358,7 +358,7 @@
       "startedAt": "2026-04-11T10:20:26.000Z",
       "endedAt": "2026-04-11T10:20:27.000Z",
       "parentId": "n10b",
-      "title": "子代理返回负反馈",
+      "title": "委托运行返回负反馈",
       "summary": "结论：sidebar 下不适合默认全展开。"
     },
     {
@@ -476,7 +476,7 @@
     { "id": "e7", "kind": "fork", "source": "n7", "target": "n8", "branchId": "b-explore", "emphasis": "strong" },
     { "id": "e8", "kind": "sequential", "source": "n8", "target": "n9", "branchId": "b-explore" },
     { "id": "e9", "kind": "sequential", "source": "n9", "target": "n10", "branchId": "b-explore" },
-    { "id": "e10", "kind": "subagent", "source": "n10", "target": "n10a", "branchId": "b-agent-a", "emphasis": "strong" },
+    { "id": "e10", "kind": "delegated_run", "source": "n10", "target": "n10a", "branchId": "b-agent-a", "emphasis": "strong" },
     { "id": "e11", "kind": "sequential", "source": "n10a", "target": "n10b", "branchId": "b-agent-a" },
     { "id": "e12", "kind": "sequential", "source": "n10b", "target": "n10c", "branchId": "b-agent-a" },
     { "id": "e13", "kind": "return", "source": "n10c", "target": "n11", "branchId": "b-explore" },

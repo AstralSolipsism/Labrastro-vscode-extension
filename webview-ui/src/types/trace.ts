@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Trace Graph 领域模型与共享元数据。
  *
  * 这一层的目标是：
@@ -30,7 +30,7 @@ export const TRACE_NODE_KINDS = [
   "file_edit",
   "rollback",
   "fork",
-  "subagent_spawn",
+  "delegated_run_spawn",
   "task_dispatch",
 ] as const
 export type TraceNodeKind = (typeof TRACE_NODE_KINDS)[number]
@@ -57,7 +57,7 @@ export type TraceInteractionState = (typeof TRACE_INTERACTION_STATES)[number]
 export const TRACE_EDGE_KINDS = [
   "sequential",
   "fork",
-  "subagent",
+  "delegated_run",
   "rollback",
   "return",
   "abandoned",
@@ -65,7 +65,7 @@ export const TRACE_EDGE_KINDS = [
 ] as const
 export type TraceEdgeKind = (typeof TRACE_EDGE_KINDS)[number]
 
-export const TRACE_BRANCH_KINDS = ["main", "fork", "subagent"] as const
+export const TRACE_BRANCH_KINDS = ["main", "fork", "delegated_run"] as const
 export type TraceBranchKind = (typeof TRACE_BRANCH_KINDS)[number]
 
 export const TRACE_BRANCH_STATES = [
@@ -83,7 +83,7 @@ export const TRACE_NAVIGATION_INTENTS = [
   "inspect",
   "fork",
   "rollback",
-  "subagent",
+  "delegated_run",
 ] as const
 export type TraceNavigationIntent = (typeof TRACE_NAVIGATION_INTENTS)[number]
 
@@ -264,7 +264,7 @@ export const TRACE_I18N: TraceGraphI18n = {
     edgeKinds: {
       sequential: "顺序边",
       fork: "分叉边",
-      subagent: "子代理边",
+      delegated_run: "委托运行边",
       rollback: "回退边",
       return: "返回边",
       abandoned: "废弃边",
@@ -282,7 +282,7 @@ export const TRACE_I18N: TraceGraphI18n = {
       file_edit: "文件修改",
       rollback: "回退",
       fork: "分叉",
-      subagent_spawn: "子代理分发",
+      delegated_run_spawn: "委托运行分发",
       task_dispatch: "任务派发",
     },
     toolStatuses: {
@@ -321,7 +321,7 @@ export const TRACE_I18N: TraceGraphI18n = {
     edgeKinds: {
       sequential: "Sequential",
       fork: "Fork",
-      subagent: "Subagent",
+      delegated_run: "Delegated Run",
       rollback: "Rollback",
       return: "Return",
       abandoned: "Abandoned",
@@ -339,7 +339,7 @@ export const TRACE_I18N: TraceGraphI18n = {
       file_edit: "File Edit",
       rollback: "Rollback",
       fork: "Fork",
-      subagent_spawn: "Subagent Spawn",
+      delegated_run_spawn: "Delegated Run Spawn",
       task_dispatch: "Task Dispatch",
     },
     toolStatuses: {
@@ -474,13 +474,13 @@ export const TRACE_KIND_META: Record<TraceNodeKind, TraceKindMeta> = {
       "en-US": "FK",
     },
   },
-  subagent_spawn: {
+  delegated_run_spawn: {
     category: "control",
     shape: "hexagon",
-    className: "trace-node--shape-hexagon trace-node--kind-subagent",
+    className: "trace-node--shape-hexagon trace-node--kind-delegated_run",
     shortLabel: {
-      "zh-CN": "子",
-      "en-US": "SA",
+      "zh-CN": "委",
+      "en-US": "DR",
     },
   },
   task_dispatch: {
@@ -540,7 +540,7 @@ export const TRACE_STATUS_META: Record<TraceNodeStatus, TraceStatusMeta> = {
 export const TRACE_EDGE_CLASS_MAP: Record<TraceEdgeKind, string> = {
   sequential: "trace-edge--sequential",
   fork: "trace-edge--fork",
-  subagent: "trace-edge--subagent",
+  delegated_run: "trace-edge--delegated_run",
   rollback: "trace-edge--rollback",
   return: "trace-edge--return",
   abandoned: "trace-edge--abandoned",
@@ -603,13 +603,13 @@ export function getTraceNavigationIntentLabel(
       inspect: "查看节点",
       fork: "从此 Fork",
       rollback: "回退到此",
-      subagent: "派发子代理",
+      delegated_run: "派发委托运行",
     },
     "en-US": {
       inspect: "Inspect",
       fork: "Fork From Here",
       rollback: "Rollback To Here",
-      subagent: "Spawn Subagent",
+      delegated_run: "Spawn Delegated Run",
     },
   }
 
@@ -630,7 +630,7 @@ export function inferTraceNodeKindFromToolName(toolName?: string): TraceNodeKind
     case "apply_patch":
       return "file_edit"
     case "spawn_agent":
-      return "subagent_spawn"
+      return "delegated_run_spawn"
     case "fork_task":
     case "fork_session":
       return "fork"

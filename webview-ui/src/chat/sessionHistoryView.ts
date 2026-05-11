@@ -1,4 +1,4 @@
-import type { MockSession } from "../components/chat/mock-data"
+﻿import type { MockSession } from "../components/chat/mock-data"
 
 export type SessionHistorySort = "newest" | "oldest"
 
@@ -28,6 +28,6 @@ export function filterSessionHistory(
 
 export function sessionKindBadge(session: MockSession): string {
   if (session.kind === "fork") return "Fork"
-  if (session.kind === "subagent") return "Subagent"
+  if (session.kind === "delegated_run") return "delegated_run"
   return ""
 }

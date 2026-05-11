@@ -1,4 +1,4 @@
-import { Component, For, Match, Show, Switch, createEffect, createMemo, createSignal } from "solid-js"
+﻿import { Component, For, Match, Show, Switch, createEffect, createMemo, createSignal } from "solid-js"
 import { t } from "../../i18n"
 import type { MockTurn, MockPart, MockMessage } from "./mock-data"
 import {
@@ -34,6 +34,7 @@ function getToolLabel(name: string): string {
     glob: t("tool.glob"),
     mcp: t("tool.mcp"),
     agent: t("tool.agent"),
+    delegate_agent: t("tool.agent"),
     spawn_agent: t("tool.spawnAgent"),
     send_input: t("tool.sendInput"),
     wait_agent: t("tool.waitAgent"),
@@ -55,6 +56,7 @@ const TOOL_ICONS: Record<string, string> = {
   glob: "symbol-file",
   mcp: "server-process",
   agent: "hubot",
+  delegate_agent: "hubot",
   spawn_agent: "hubot",
   send_input: "send",
   wait_agent: "watch",
@@ -579,7 +581,7 @@ const TracePart: Component<PartProps> = (props) => {
 }
 
 const SessionPart: Component<PartProps> = (props) => {
-  const kind = () => props.part.traceNodeKind || (props.part.sessionKind === "subagent" ? "subagent_spawn" : "fork")
+  const kind = () => props.part.traceNodeKind || (props.part.sessionKind === "delegated_run" ? "delegated_run_spawn" : "fork")
   const status = () => props.part.traceNodeStatus || "success"
 
   return (

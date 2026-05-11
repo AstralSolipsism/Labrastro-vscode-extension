@@ -1,4 +1,4 @@
-import type { MockSession, MockSessionBundle } from "../components/chat/mock-data"
+﻿import type { MockSession, MockSessionBundle } from "../components/chat/mock-data"
 import type { TraceEdge, TraceNode } from "../types/trace"
 
 export interface SessionTreeEntry {
@@ -180,7 +180,7 @@ export function buildOrchestrationGraph(
     if (sourceNodeId) {
       edges.push({
         id: `session-link:${entry.session.parentSessionId}:${entry.session.id}`,
-        kind: entry.session.kind === "subagent" ? "subagent" : "fork",
+        kind: entry.session.kind === "delegated_run" ? "delegated_run" : "fork",
         source: sourceNodeId,
         target: firstChildNodeId,
         branchId: "session",

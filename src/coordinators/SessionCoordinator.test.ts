@@ -18,7 +18,7 @@ const writableFeatures: BackendFeatures = {
   issueAssignment: false,
   freshSessionWithoutSessionHint: false,
   peerTokenHeartbeatRefresh: false,
-  agentRuntime: { executorFeatures: {} },
+  agentRuns: { executorFeatures: {} },
 }
 
 async function coordinator(

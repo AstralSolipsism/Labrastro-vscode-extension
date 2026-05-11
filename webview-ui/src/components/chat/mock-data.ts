@@ -1,4 +1,4 @@
-import type {
+﻿import type {
   TraceEdge,
   TraceGraphUIState,
   TraceNode,
@@ -9,7 +9,7 @@ import type {
 import type { ShellOutputChunk } from "../../utils/shell-tool-output"
 import type { TimelineEvent } from "./TaskTimeline"
 
-export type MockSessionKind = "main" | "fork" | "subagent"
+export type MockSessionKind = "main" | "fork" | "delegated_run"
 export type MockSessionState = "active" | "success" | "streaming" | "abandoned" | "cancelled" | "error"
 
 export interface MockPart {

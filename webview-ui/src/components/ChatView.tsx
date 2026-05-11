@@ -1,4 +1,4 @@
-import { Component, For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js"
+﻿import { Component, For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { TaskHeader } from "./chat/TaskHeader"
 import { MessageList } from "./chat/MessageList"
 import { PromptInput } from "./chat/PromptInput"
@@ -714,10 +714,10 @@ const ChatView: Component<ChatViewProps> = (props) => {
       appendContextEventPart(payload)
     } else if (isStructuredUiEventType(type)) {
       appendUiEventPart(type, payload)
-    } else if (type === "subagent_completed") {
+    } else if (type === "delegated_run_completed") {
       appendViewPart({
-        title: "子任务完成",
-        kind: "subagent",
+        title: "委托运行完成",
+        kind: "delegated_run",
         payload,
       })
     } else if (type === "usage_update" || type === "run_stats") {
@@ -993,7 +993,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       sourceNodeId?: string
       sessionTitle: string
       sessionSummary: string
-      sessionKind: "fork" | "subagent"
+      sessionKind: "fork" | "delegated_run"
     }
   ) => {
     const sourceBundle = trace.getSessionBundle(sourceSessionId)
@@ -1415,7 +1415,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         const sourceNodeId = stringValue(msg.sourceNodeId) || undefined
         const sessionTitle = stringValue(msg.sessionTitle) || sourceLabel
         const sessionSummary = stringValue(msg.sessionSummary) || undefined
-        const sessionKind = stringValue(msg.sessionKind) === "subagent" ? "subagent" : "fork"
+        const sessionKind = stringValue(msg.sessionKind) === "delegated_run" ? "delegated_run" : "fork"
         if (sourceSessionId) {
           trace.linkForkSession({
             sourceSessionId,
@@ -2103,7 +2103,7 @@ function inferToolOutputFormat(
     normalizedSource.includes("mcp") ||
     normalizedTool.includes("agent") ||
     normalizedTool === "mcp" ||
-    normalizedTool === "subagent"
+    normalizedTool === "delegate_agent"
   ) {
     return "markdown"
   }

@@ -25,7 +25,7 @@ interface SessionMetadataState {
   savedAt: string
   preview: string
   fingerprint: string
-  kind?: "main" | "fork" | "subagent"
+  kind?: "main" | "fork" | "delegated_run"
   parentSessionId?: string
   sourceSessionId?: string
   sourceNodeId?: string
@@ -970,7 +970,7 @@ function normalizeSessionSource(value: unknown): "server" | "local" | "merged" |
 }
 
 function normalizeSessionKind(value: unknown): SessionMetadataState["kind"] | undefined {
-  return value === "main" || value === "fork" || value === "subagent"
+  return value === "main" || value === "fork" || value === "delegated_run"
     ? value
     : undefined
 }

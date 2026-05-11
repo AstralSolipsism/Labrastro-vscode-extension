@@ -1,4 +1,4 @@
-import { Component, For, Show, createMemo } from "solid-js"
+﻿import { Component, For, Show, createMemo } from "solid-js"
 import {
   getTraceNavigationIntentLabel,
   getTraceNodeKindLabel,
@@ -32,7 +32,7 @@ interface AgentManagerDetailPaneProps {
   onSelectNode: (nodeId: string) => void
   onEnterBranch: (branchId: string, nodeId?: string) => void
   onLocateActive: () => void
-  onCreateFork: (nodeId: string, mode?: "fork" | "subagent") => void
+  onCreateFork: (nodeId: string, mode?: "fork" | "delegated_run") => void
   onCreateRollback: (sourceNodeId: string, targetNodeId?: string) => void
   onClearIntent: () => void
 }
@@ -123,13 +123,13 @@ export const AgentManagerDetailPane: Component<AgentManagerDetailPaneProps> = (p
                   从此 Fork
                 </button>
               </Show>
-              <Show when={props.intent === "subagent"}>
+              <Show when={props.intent === "delegated_run"}>
                 <button
                   type="button"
                   class="agent-manager-inline-btn agent-manager-inline-btn--primary"
-                  onClick={() => props.onCreateFork(node().id, "subagent")}
+                  onClick={() => props.onCreateFork(node().id, "delegated_run")}
                 >
-                  派发子代理
+                  派发委托运行
                 </button>
               </Show>
 
@@ -143,9 +143,9 @@ export const AgentManagerDetailPane: Component<AgentManagerDetailPaneProps> = (p
               <button
                 type="button"
                 class="agent-manager-inline-btn"
-                onClick={() => props.onCreateFork(node().id, "subagent")}
+                onClick={() => props.onCreateFork(node().id, "delegated_run")}
               >
-                Subagent
+                委托运行
               </button>
               <button
                 type="button"
@@ -204,7 +204,7 @@ export const AgentManagerDetailPane: Component<AgentManagerDetailPaneProps> = (p
                       class="agent-manager-inline-link"
                       onClick={() => props.onEnterBranch(branch.id, branch.rootNodeId)}
                     >
-                      {branch.kind === "subagent" ? "进入子代理" : "进入分支"} · {branch.label} ({branch.count})
+                      {branch.kind === "delegated_run" ? "进入委托运行" : "进入分支"} · {branch.label} ({branch.count})
                     </button>
                   )}
                 </For>
