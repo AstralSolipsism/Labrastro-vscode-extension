@@ -168,19 +168,19 @@ export const settingsMessages = {
     })
   },
 
-  submitRuntime(port: SettingsMessagePort, payload: Record<string, unknown>): void {
-    port.postMessage({ type: "runtime.submit", payload })
+  submitAgentRun(port: SettingsMessagePort, payload: Record<string, unknown>): void {
+    port.postMessage({ type: "agentRun.submit", payload })
   },
 
-  runtimeEvents(port: SettingsMessagePort, payload: Record<string, unknown>): void {
-    port.postMessage({ type: "runtime.events", payload })
+  agentRunEvents(port: SettingsMessagePort, payload: Record<string, unknown>): void {
+    port.postMessage({ type: "agentRun.events", payload })
   },
 
-  cancelRuntime(port: SettingsMessagePort, payload: Record<string, unknown>): void {
-    port.postMessage({ type: "runtime.cancel", payload })
+  cancelAgentRun(port: SettingsMessagePort, payload: Record<string, unknown>): void {
+    port.postMessage({ type: "agentRun.cancel", payload })
   },
 
-  retryRuntime(port: SettingsMessagePort, payload: Record<string, unknown>): void {
-    port.postMessage({ type: "runtime.retry", payload })
+  retryAgentRun(port: SettingsMessagePort, payload: Record<string, unknown>): void {
+    port.postMessage({ type: "agentRun.retry", payload })
   },
 }

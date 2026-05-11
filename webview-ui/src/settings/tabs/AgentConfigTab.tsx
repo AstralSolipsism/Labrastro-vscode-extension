@@ -1,4 +1,4 @@
-import { Component, For, Show } from "solid-js"
+﻿import { Component, For, Show } from "solid-js"
 import { t } from "../../i18n"
 import { RefreshButton } from "../../components/common/RefreshButton"
 import { SelectableList } from "../../components/common/interaction"
@@ -51,19 +51,19 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
     selectedAgentCapabilityPackages,
     formatAgentConfigList,
     parseAgentConfigListText,
-    runtimePolling,
-    runtimeTerminal,
-    runtimeTaskCanResume,
-    selectedRuntimeTaskId,
-    runtimePrompt,
-    setRuntimePrompt,
-    submitRuntimeAgentTask,
-    runtimeSubmitting,
-    cancelRuntimeAgentTask,
-    retryRuntimeAgentTask,
-    runtimeError,
-    runtimeTask,
-    runtimeEvents,
+    agentRunPolling,
+    agentRunTerminal,
+    agentRunCanResume,
+    selectedAgentRunId,
+    agentRunPrompt,
+    setAgentRunPrompt,
+    submitAgentRunTest,
+    agentRunSubmitting,
+    cancelAgentRunTest,
+    retryAgentRunTest,
+    agentRunError,
+    agentRun,
+    agentRunEvents,
     numberValue,
     stringValue,
     objectValue,
@@ -303,6 +303,25 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
                 <label class="field-label"><span>{t("agentConfig.agent.description")}</span>
                   <input value={currentAgentDraft()!.description} onInput={(e) => updateAgentField("description", e.currentTarget.value)} />
                 </label>
+                <label class="field-label"><span>{t("agentConfig.agent.role")}</span>
+                  <select value={currentAgentDraft()!.role} onChange={(e) => updateAgentField("role", e.currentTarget.value)}>
+                    <option value="coordinator">{t("agentConfig.agent.role.coordinator")}</option>
+                    <option value="worker">{t("agentConfig.agent.role.worker")}</option>
+                    <option value="reviewer">{t("agentConfig.agent.role.reviewer")}</option>
+                    <option value="environment">{t("agentConfig.agent.role.environment")}</option>
+                  </select>
+                  <small class="field-help">{t("agentConfig.agent.roleDesc")}</small>
+                </label>
+                <label class="field-label agent-config-toggle">
+                  <input
+                    type="checkbox"
+                    checked={currentAgentDraft()!.entrypoint}
+                    onChange={(e) => updateAgentField("entrypoint", e.currentTarget.checked)}
+                  />
+                  <span>{t("agentConfig.agent.entrypoint")}</span>
+                  <small class="field-help">{t("agentConfig.agent.entrypointDesc")}</small>
+                </label>
+
                 <label class="field-label"><span>{t("agentConfig.agent.runtimeProfile")}</span>
                   <select value={currentAgentDraft()!.runtime_profile} onChange={(e) => updateAgentField("runtime_profile", e.currentTarget.value)}>
                     <option value="">{t("agentConfig.agent.runtimeProfile.none")}</option>
@@ -389,53 +408,53 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
       <section class="settings-section settings-section--flat">
         <div class="settings-section-heading">
           <span>{t("agentConfig.runtimeTest.title")}</span>
-          <StatusBadge tone={runtimePolling() ? "warning" : runtimeTerminal() ? "success" : "muted"}>
-            {selectedRuntimeTaskId() || t("agentConfig.runtimeTest.idle")}
+          <StatusBadge tone={agentRunPolling() ? "warning" : agentRunTerminal() ? "success" : "muted"}>
+            {selectedAgentRunId() || t("agentConfig.runtimeTest.idle")}
           </StatusBadge>
         </div>
         <div class="settings-form-grid">
           <label class="field-label field-label--full"><span>{t("agentConfig.runtimeTest.prompt")}</span>
-            <textarea rows={4} value={runtimePrompt()} onInput={(e) => setRuntimePrompt(e.currentTarget.value)} />
+            <textarea rows={4} value={agentRunPrompt()} onInput={(e) => setAgentRunPrompt(e.currentTarget.value)} />
           </label>
           <div class="settings-actions settings-actions--left field-label--full">
-            <button class="btn btn-primary" onClick={submitRuntimeAgentTask} disabled={runtimeSubmitting() || !selectedAgentId()}>
+            <button class="btn btn-primary" onClick={submitAgentRunTest} disabled={agentRunSubmitting() || !selectedAgentId()}>
               <span class="codicon codicon-play" aria-hidden="true" />
-              {runtimeSubmitting() ? t("agentConfig.runtimeTest.submitting") : t("agentConfig.runtimeTest.submit")}
+              {agentRunSubmitting() ? t("agentConfig.runtimeTest.submitting") : t("agentConfig.runtimeTest.submit")}
             </button>
-            <button class="btn btn-secondary" onClick={cancelRuntimeAgentTask} disabled={!selectedRuntimeTaskId() || runtimeTerminal()}>
+            <button class="btn btn-secondary" onClick={cancelAgentRunTest} disabled={!selectedAgentRunId() || agentRunTerminal()}>
               <span class="codicon codicon-debug-stop" aria-hidden="true" />
               {t("agentConfig.runtimeTest.cancel")}
             </button>
             <RefreshButton
               class="btn-secondary"
-              onClick={() => retryRuntimeAgentTask(false)}
-              disabled={!selectedRuntimeTaskId()}
-              loading={runtimeSubmitting()}
+              onClick={() => retryAgentRunTest(false)}
+              disabled={!selectedAgentRunId()}
+              loading={agentRunSubmitting()}
               loadingLabel={t("agentConfig.runtimeTest.submitting")}
             >
               {t("agentConfig.runtimeTest.retryFresh")}
             </RefreshButton>
-            <Show when={runtimeTaskCanResume()} fallback={
-              <Show when={selectedRuntimeTaskId()}>
+            <Show when={agentRunCanResume()} fallback={
+              <Show when={selectedAgentRunId()}>
                 <StatusBadge tone="muted">{t("agentConfig.runtimeTest.freshOnly")}</StatusBadge>
               </Show>
             }>
-              <button class="btn btn-secondary" onClick={() => retryRuntimeAgentTask(true)} disabled={runtimeSubmitting()}>
+              <button class="btn btn-secondary" onClick={() => retryAgentRunTest(true)} disabled={agentRunSubmitting()}>
                 <span class="codicon codicon-history" aria-hidden="true" />
                 {t("agentConfig.runtimeTest.retryResume")}
               </button>
             </Show>
           </div>
         </div>
-        <Show when={runtimeError()}>
-          <div class="settings-error">{runtimeError()}</div>
+        <Show when={agentRunError()}>
+          <div class="settings-error">{agentRunError()}</div>
         </Show>
-        <Show when={runtimeTask()}>
-          <pre class="settings-result">{JSON.stringify(runtimeTask(), null, 2)}</pre>
+        <Show when={agentRun()}>
+          <pre class="settings-result">{JSON.stringify(agentRun(), null, 2)}</pre>
         </Show>
         <div class="runtime-event-list">
-          <Show when={runtimeEvents().length > 0} fallback={<p class="settings-empty-note">{t("agentConfig.runtimeTest.noEvents")}</p>}>
-            <For each={runtimeEvents()}>
+          <Show when={agentRunEvents().length > 0} fallback={<p class="settings-empty-note">{t("agentConfig.runtimeTest.noEvents")}</p>}>
+            <For each={agentRunEvents()}>
               {(event) => (
                 <div class="runtime-event">
                   <span class="runtime-event__seq">#{String(numberValue(event.seq, 0))}</span>

@@ -344,10 +344,11 @@ function resolveActiveAgentModel(
 ): Record<string, unknown> {
   const explicit = objectValue(adminState.active_agent_model)
   if (Object.keys(explicit).length) return explicit
-  const agentRuntime = objectValue(adminState.agent_runtime)
+  const settings = objectValue(adminState.server_settings)
+  const agentRegistry = objectValue(settings.agent_registry)
   const agents = Object.keys(objectValue(adminState.agent_profiles)).length
     ? objectValue(adminState.agent_profiles)
-    : objectValue(agentRuntime.agents)
+    : objectValue(agentRegistry.agents)
   const activeMode = stringValue(runtimeState?.active_mode) || stringValue(adminState.active_mode)
   return objectValue(objectValue(agents[activeMode]).model)
 }

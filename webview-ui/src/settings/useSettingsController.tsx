@@ -13,7 +13,7 @@ import {
   parseAgentConfigListText,
   renameRecordKey,
   replaceRuntimeProfileReferences,
-  resolveNewAgentRuntimeProfile,
+  resolveNewAgentRunProfile,
   toggleAgentConfigListValue,
   validateAgentConfigId,
 } from "../utils/agent-config"
@@ -23,7 +23,7 @@ import { settingsMessages } from "./settingsMessages"
 import {
   connectionSaveResultKey,
   sanitizeAutoApproveOptions,
-  serverAgentRuntimeSettingsPayload,
+  serverAgentRunSettingsPayload,
 } from "./settingsControllerUtils"
 import { isAccountAdminRole, resolveConnectionNotice, uniqueCommandRules } from "./utils"
 import {
@@ -292,6 +292,9 @@ interface AgentDefinitionDraft {
   id: string
   name: string
   description: string
+  role: string
+  entrypoint: boolean
+
   runtime_profile: string
   modelKey: string
   dispatchProfileText: string
@@ -363,6 +366,9 @@ function emptyAgentDraft(id = ""): AgentDefinitionDraft {
     id,
     name: "",
     description: "",
+    role: "worker",
+    entrypoint: false,
+
     runtime_profile: "",
     modelKey: "",
     dispatchProfileText: "",
@@ -407,6 +413,9 @@ function agentToDraft(id: string, agent: Record<string, unknown>): AgentDefiniti
     id,
     name: stringValue(agent.name),
     description: stringValue(agent.description),
+    role: stringValue(agent.role, "worker"),
+    entrypoint: agent.entrypoint === true,
+
     runtime_profile: stringValue(agent.runtime_profile),
     modelKey: providerId && modelId ? modelOptionKey(providerId, modelId) : "",
     dispatchProfileText: stringValue(dispatch.profile),
@@ -462,6 +471,8 @@ function agentDraftToPayload(draft: AgentDefinitionDraft): Record<string, unknow
     max_concurrent_tasks: Math.max(1, Math.floor(draft.max_concurrent_tasks)),
   }
   if (draft.description) payload.description = draft.description
+  if (draft.role.trim()) payload.role = draft.role.trim()
+  if (draft.entrypoint) payload.entrypoint = true
   if (draft.runtime_profile) payload.runtime_profile = draft.runtime_profile
   const [providerId, modelId] = splitModelOptionKey(draft.modelKey)
   if (providerId && modelId) payload.model = { provider: providerId, model: modelId }
@@ -1440,11 +1451,11 @@ export function createSettingsController(props: SettingsViewProps) {
   const [agentConfigSavePending, setAgentConfigSavePending] = createSignal(false)
   const [agentConfigSaved, setAgentConfigSaved] = createSignal(false)
   const [agentConfigError, setAgentConfigError] = createSignal("")
-  const [runtimeTask, setRuntimeTask] = createSignal<Record<string, unknown> | undefined>()
-  const [runtimeEvents, setRuntimeEvents] = createSignal<Record<string, unknown>[]>([])
-  const [runtimeError, setRuntimeError] = createSignal("")
-  const [runtimeSubmitting, setRuntimeSubmitting] = createSignal(false)
-  const [runtimePolling, setRuntimePolling] = createSignal(false)
+  const [agentRun, setAgentRun] = createSignal<Record<string, unknown> | undefined>()
+  const [agentRunEvents, setAgentRunEvents] = createSignal<Record<string, unknown>[]>([])
+  const [agentRunError, setAgentRunError] = createSignal("")
+  const [agentRunSubmitting, setAgentRunSubmitting] = createSignal(false)
+  const [agentRunPolling, setAgentRunPolling] = createSignal(false)
   let profileExecutorSelect: HTMLSelectElement | undefined
   let agentNameInput: HTMLInputElement | undefined
   const setProfileExecutorSelect = (element: HTMLSelectElement) => {
@@ -1453,7 +1464,7 @@ export function createSettingsController(props: SettingsViewProps) {
   const setAgentNameInput = (element: HTMLInputElement) => {
     agentNameInput = element
   }
-  const [runtimePrompt, setRuntimePrompt] = createSignal("请用一句话回复 Labrastro runtime smoke")
+  const [agentRunPrompt, setAgentRunPrompt] = createSignal("请用一句话回复 Labrastro AgentRun smoke")
 
   const [profileId, setProfileId] = createSignal("")
   const [profileProvider, setProfileProvider] = createSignal("deepseek")
@@ -1630,12 +1641,17 @@ export function createSettingsController(props: SettingsViewProps) {
     const admin = server.adminState()
     return {
       settings: objectValue(admin.server_settings),
-      runtime: objectValue(admin.agent_runtime),
+      runtime: objectValue(admin.agent_runs),
     }
   })
-  const agentRuntimeSettings = createMemo(() =>
-    objectValue(objectValue(serverSettingsPayload().settings).agent_runtime)
-  )
+  const agentRunsSettings = createMemo<Record<string, unknown>>(() => {
+    const settings = objectValue(serverSettingsPayload().settings)
+    return {
+      ...objectValue(settings.run_limits),
+      runtime_profiles: objectValue(settings.runtime_profiles),
+      agents: objectValue(objectValue(settings.agent_registry).agents),
+    }
+  })
   const capabilityPackageViews = createMemo<CapabilityPackageView[]>(() => {
     const settings = objectValue(serverSettingsPayload().settings)
     const packages = objectValue(settings.capability_packages)
@@ -1646,13 +1662,13 @@ export function createSettingsController(props: SettingsViewProps) {
   const capabilityPackageOptions = createMemo(() =>
     capabilityPackageViews().map((item) => item.id)
   )
-  const agentRuntimeState = createMemo(() =>
-    objectValue(serverSettingsPayload().runtime || server.adminState().agent_runtime)
+  const agentRunsState = createMemo(() =>
+    objectValue(serverSettingsPayload().runtime || server.adminState().agent_runs)
 
   )  /* ── Agent 配置 computed ── */
   const executorFeatures = createMemo<Record<string, ExecutorFeatureView>>(() => {
-    const agentRuntime = objectValue(server.backendFeatures().agentRuntime)
-    const raw = objectValue(agentRuntime.executorFeatures)
+    const agentRuns = objectValue(server.backendFeatures().agentRuns)
+    const raw = objectValue(agentRuns.executorFeatures)
     const result: Record<string, ExecutorFeatureView> = {}
     for (const [executor, feature] of Object.entries(raw)) {
       result[executor] = executorFeatureValue(feature)
@@ -1660,16 +1676,16 @@ export function createSettingsController(props: SettingsViewProps) {
     return result
   })
 
-  const agentRuntimeProfiles = createMemo<Array<Record<string, unknown> & { id: string }>>(() => {
-    const settings = agentRuntimeSettings()
+  const agentRunsProfiles = createMemo<Array<Record<string, unknown> & { id: string }>>(() => {
+    const settings = agentRunsSettings()
     const profiles = objectValue(settings.runtime_profiles)
     return Object.entries(profiles).map(([id, value]) => ({
       id,
       ...(typeof value === "object" && value ? value as Record<string, unknown> : {}),
     }))
   })
-  const agentRuntimeAgents = createMemo<Array<Record<string, unknown> & { id: string }>>(() => {
-    const settings = agentRuntimeSettings()
+  const agentRunsAgents = createMemo<Array<Record<string, unknown> & { id: string }>>(() => {
+    const settings = agentRunsSettings()
     const agents = objectValue(settings.agents)
     return Object.entries(agents).map(([id, value]) => ({
       id,
@@ -1678,7 +1694,7 @@ export function createSettingsController(props: SettingsViewProps) {
   })
   const environmentAgentCandidates = createMemo<Array<Record<string, unknown> & { id: string }>>(() => {
     const packages = new Map(capabilityPackageViews().map((item) => [item.id, item]))
-    return agentRuntimeAgents().filter((agent) => {
+    return agentRunsAgents().filter((agent) => {
       const refs = stringArray(agent.capability_refs)
       return refs.some((ref) => {
         const pkg = packages.get(ref)
@@ -1705,8 +1721,8 @@ export function createSettingsController(props: SettingsViewProps) {
     const executor = currentProfileDraft()?.executor || ""
     return executor ? executorFeatures()[executor] : undefined
   })
-  const savedProfileIdSet = createMemo(() => new Set(agentRuntimeProfiles().map((profile) => profile.id)))
-  const savedAgentIdSet = createMemo(() => new Set(agentRuntimeAgents().map((agent) => agent.id)))
+  const savedProfileIdSet = createMemo(() => new Set(agentRunsProfiles().map((profile) => profile.id)))
+  const savedAgentIdSet = createMemo(() => new Set(agentRunsAgents().map((agent) => agent.id)))
   const currentProfileIdLocked = createMemo(() => savedProfileIdSet().has(selectedProfileId()))
   const currentAgentIdLocked = createMemo(() => savedAgentIdSet().has(selectedAgentId()))
   const runtimeModelOptions = createMemo(() => {
@@ -1744,15 +1760,15 @@ export function createSettingsController(props: SettingsViewProps) {
     return draft.mcpServersText.split("\n").map((s) => s.trim()).filter(Boolean)
       .filter((name) => !registered.includes(name))
   })
-  const selectedRuntimeTaskId = createMemo(() => stringValue(runtimeTask()?.id))
-  const runtimeLastSeq = createMemo(() =>
-    runtimeEvents().reduce((max, event) => Math.max(max, numberValue(event.seq, 0)), 0)
+  const selectedAgentRunId = createMemo(() => stringValue(agentRun()?.id))
+  const agentRunLastSeq = createMemo(() =>
+    agentRunEvents().reduce((max, event) => Math.max(max, numberValue(event.seq, 0)), 0)
   )
-  const runtimeTerminal = createMemo(() =>
-    runtimeEvents().some((event) => ["completed", "failed", "cancelled", "canceled"].includes(stringValue(event.type)))
+  const agentRunTerminal = createMemo(() =>
+    agentRunEvents().some((event) => ["completed", "failed", "cancelled", "canceled"].includes(stringValue(event.type)))
   )
-  const runtimeTaskCanResume = createMemo(() => {
-    const task = runtimeTask()
+  const agentRunCanResume = createMemo(() => {
+    const task = agentRun()
     const executor = stringValue(task?.executor)
     const sessionId = stringValue(task?.executor_session_id)
     return Boolean(executor && sessionId && executorFeatures()[executor]?.resumeById)
@@ -1869,8 +1885,8 @@ export function createSettingsController(props: SettingsViewProps) {
     }
   })
   createEffect(() => {
-    const profiles = agentRuntimeProfiles()
-    const agents = agentRuntimeAgents()
+    const profiles = agentRunsProfiles()
+    const agents = agentRunsAgents()
     if (!agentConfigDirty()) {
       const pDrafts: Record<string, RuntimeProfileDraft> = {}
       for (const p of profiles) pDrafts[p.id] = profileToDraft(p.id, p)
@@ -1881,36 +1897,36 @@ export function createSettingsController(props: SettingsViewProps) {
     }
   })
 
-  let runtimePollTimer: ReturnType<typeof setInterval> | undefined
+  let agentRunPollTimer: ReturnType<typeof setInterval> | undefined
 
-  const stopRuntimePolling = () => {
-    if (runtimePollTimer) {
-      clearInterval(runtimePollTimer)
-      runtimePollTimer = undefined
+  const stopAgentRunPolling = () => {
+    if (agentRunPollTimer) {
+      clearInterval(agentRunPollTimer)
+      agentRunPollTimer = undefined
     }
-    setRuntimePolling(false)
+    setAgentRunPolling(false)
   }
 
-  const requestRuntimeEvents = (taskId: string, afterSeq = runtimeLastSeq()) => {
+  const requestAgentRunEvents = (taskId: string, afterSeq = agentRunLastSeq()) => {
     if (!taskId) return
     vscode.postMessage({
-      type: "runtime.events",
+      type: "agentRun.events",
       payload: {
-        task_id: taskId,
+        agent_run_id: taskId,
         after_seq: afterSeq,
       },
     })
   }
 
-  const startRuntimePolling = (taskId: string) => {
-    stopRuntimePolling()
+  const startAgentRunPolling = (taskId: string) => {
+    stopAgentRunPolling()
     if (!taskId) return
-    setRuntimePolling(true)
-    requestRuntimeEvents(taskId, 0)
-    runtimePollTimer = setInterval(() => requestRuntimeEvents(taskId), 1500)
+    setAgentRunPolling(true)
+    requestAgentRunEvents(taskId, 0)
+    agentRunPollTimer = setInterval(() => requestAgentRunEvents(taskId), 1500)
   }
 
-  onCleanup(stopRuntimePolling)
+  onCleanup(stopAgentRunPolling)
 
   onMount(() => {
     const unsubscribe = vscode.onMessage((msg) => {
@@ -1925,21 +1941,21 @@ export function createSettingsController(props: SettingsViewProps) {
         setAgentConfigSaved(false)
         setAgentConfigError(typeof msg.message === "string" ? msg.message : "Server settings request failed")
       }
-      if (msg.type === "runtime.task" && typeof msg.payload === "object" && msg.payload) {
+      if (msg.type === "agentRun.submitted" && typeof msg.payload === "object" && msg.payload) {
         const payload = objectValue(msg.payload)
-        const task = objectValue(payload.task)
-        setRuntimeTask(task)
-        setRuntimeEvents([])
-        setRuntimeError("")
-        setRuntimeSubmitting(false)
-        startRuntimePolling(stringValue(task.id))
+        const task = objectValue(payload.agent_run || payload.task)
+        setAgentRun(task)
+        setAgentRunEvents([])
+        setAgentRunError("")
+        setAgentRunSubmitting(false)
+        startAgentRunPolling(stringValue(task.id))
       }
-      if (msg.type === "runtime.events" && typeof msg.payload === "object" && msg.payload) {
+      if (msg.type === "agentRun.events" && typeof msg.payload === "object" && msg.payload) {
         const events = Array.isArray(objectValue(msg.payload).events)
           ? objectValue(msg.payload).events as Record<string, unknown>[]
           : []
         if (events.length) {
-          setRuntimeEvents((current) => {
+          setAgentRunEvents((current) => {
             const next = [...current]
             const seen = new Set(next.map((event) => numberValue(event.seq, 0)))
             for (const event of events) {
@@ -1950,21 +1966,21 @@ export function createSettingsController(props: SettingsViewProps) {
           })
         }
       }
-      if (msg.type === "runtime.cancelled" && typeof msg.payload === "object" && msg.payload) {
-        setRuntimeError("")
-        requestRuntimeEvents(selectedRuntimeTaskId())
+      if (msg.type === "agentRun.cancelled" && typeof msg.payload === "object" && msg.payload) {
+        setAgentRunError("")
+        requestAgentRunEvents(selectedAgentRunId())
       }
-      if (msg.type === "runtime.error") {
-        setRuntimeSubmitting(false)
-        stopRuntimePolling()
-        setRuntimeError(typeof msg.message === "string" ? msg.message : "Runtime request failed")
+      if (msg.type === "agentRun.error") {
+        setAgentRunSubmitting(false)
+        stopAgentRunPolling()
+        setAgentRunError(typeof msg.message === "string" ? msg.message : "Runtime request failed")
       }
     })
     onCleanup(unsubscribe)
   })
 
   createEffect(() => {
-    if (runtimeTerminal()) stopRuntimePolling()
+    if (agentRunTerminal()) stopAgentRunPolling()
   })
 
 const switchTab = (tab: SettingsTab) => {
@@ -2034,13 +2050,12 @@ const switchTab = (tab: SettingsTab) => {
     vscode.postMessage({
       type: "serverSettings.update",
       payload: {
-        agent_runtime_update_mode: "replace",
-        agent_runtime: {
+        run_limits: {
           max_running_agents: maxAgents,
           max_shells_per_agent: maxShells,
-          runtime_profiles: profiles,
-          agents,
         },
+        runtime_profiles: profiles,
+        agent_registry: { agents },
       },
     })
   }
@@ -2111,7 +2126,7 @@ const switchTab = (tab: SettingsTab) => {
       ...savedAgentIdSet(),
     ])
     const draft = emptyAgentDraft(id)
-    draft.runtime_profile = resolveNewAgentRuntimeProfile(selectedProfileId(), profileIdList())
+    draft.runtime_profile = resolveNewAgentRunProfile(selectedProfileId(), profileIdList())
     setAgentDrafts((prev) => ({ ...prev, [id]: draft }))
     setSelectedAgentId(id)
     markAgentConfigDirty()
@@ -2238,58 +2253,60 @@ const switchTab = (tab: SettingsTab) => {
     )
   }
 
-  const submitRuntimeAgentTask = () => {
+  const submitAgentRunTest = () => {
     const agentId = selectedAgentId()
     if (!agentId) {
-      setRuntimeError("请先选择一个 Agent。")
+      setAgentRunError("请先选择一个 Agent。")
       return
     }
-    const prompt = runtimePrompt().trim()
+    const prompt = agentRunPrompt().trim()
     if (!prompt) {
-      setRuntimeError("请输入测试任务。")
+      setAgentRunError("请输入测试任务。")
       return
     }
-    setRuntimeSubmitting(true)
-    setRuntimeError("")
-    setRuntimeTask(undefined)
-    setRuntimeEvents([])
-    stopRuntimePolling()
+    setAgentRunSubmitting(true)
+    setAgentRunError("")
+    setAgentRun(undefined)
+    setAgentRunEvents([])
+    stopAgentRunPolling()
     vscode.postMessage({
-      type: "runtime.submit",
+      type: "agentRun.submit",
       payload: {
         agent_id: agentId,
+        source: "manual",
         issue_id: `manual-smoke-${Date.now()}`,
         prompt,
         metadata: {
+          agent_run_source: "manual",
           workspace_root: server.workspaceDirectory() || "",
         },
       },
     })
   }
 
-  const cancelRuntimeAgentTask = () => {
-    const taskId = selectedRuntimeTaskId()
+  const cancelAgentRunTest = () => {
+    const taskId = selectedAgentRunId()
     if (!taskId) return
     vscode.postMessage({
-      type: "runtime.cancel",
+      type: "agentRun.cancel",
       payload: {
-        task_id: taskId,
+        agent_run_id: taskId,
         reason: "user_cancelled",
       },
     })
   }
 
-  const retryRuntimeAgentTask = (resumeSession = false) => {
-    const taskId = selectedRuntimeTaskId()
+  const retryAgentRunTest = (resumeSession = false) => {
+    const taskId = selectedAgentRunId()
     if (!taskId) return
-    setRuntimeSubmitting(true)
-    setRuntimeEvents([])
-    stopRuntimePolling()
+    setAgentRunSubmitting(true)
+    setAgentRunEvents([])
+    stopAgentRunPolling()
     vscode.postMessage({
-      type: "runtime.retry",
+      type: "agentRun.retry",
       payload: {
-        task_id: taskId,
-        new_task_id: `${taskId}-retry-${Date.now()}`,
+        agent_run_id: taskId,
+        new_agent_run_id: `${taskId}-retry-${Date.now()}`,
         resume_session: resumeSession === true,
       },
     })
@@ -2366,7 +2383,7 @@ const refreshAdmin = () => {
     setServerSettingsDirty(false)
     settingsMessages.updateServerSettings(
       vscode,
-      serverAgentRuntimeSettingsPayload(maxAgents, maxShells)
+      serverAgentRunSettingsPayload(maxAgents, maxShells)
     )
   }
   const runToolchainIngest = () => {
@@ -2733,7 +2750,7 @@ const refreshAdmin = () => {
 
   createEffect(() => {
     if (serverSettingsDirty()) return
-    const settings = agentRuntimeSettings()
+    const settings = agentRunsSettings()
     const maxAgents = numberValue(settings.max_running_agents, 4)
     const maxShells = numberValue(settings.max_shells_per_agent, 1)
     setServerMaxRunningAgents(Math.max(1, Math.floor(maxAgents)))
@@ -3004,18 +3021,18 @@ const refreshAdmin = () => {
     setAgentConfigSaved,
     agentConfigError,
     setAgentConfigError,
-    runtimeTask,
-    setRuntimeTask,
-    runtimeEvents,
-    setRuntimeEvents,
-    runtimeError,
-    setRuntimeError,
-    runtimeSubmitting,
-    setRuntimeSubmitting,
-    runtimePolling,
-    setRuntimePolling,
-    runtimePrompt,
-    setRuntimePrompt,
+    agentRun,
+    setAgentRun,
+    agentRunEvents,
+    setAgentRunEvents,
+    agentRunError,
+    setAgentRunError,
+    agentRunSubmitting,
+    setAgentRunSubmitting,
+    agentRunPolling,
+    setAgentRunPolling,
+    agentRunPrompt,
+    setAgentRunPrompt,
     profileId,
     setProfileId,
     profileProvider,
@@ -3080,11 +3097,11 @@ const refreshAdmin = () => {
     selectedToolchain,
     toolchainSummary,
     serverSettingsPayload,
-    agentRuntimeSettings,
-    agentRuntimeState,
+    agentRunsSettings,
+    agentRunsState,
     executorFeatures,
-    agentRuntimeProfiles,
-    agentRuntimeAgents,
+    agentRunsProfiles,
+    agentRunsAgents,
     environmentAgentCandidates,
     registeredMcpServers,
     profileIdList,
@@ -3099,10 +3116,10 @@ const refreshAdmin = () => {
     profileMcpValidationWarnings,
     capabilityPackageOptions,
     selectedAgentCapabilityPackages,
-    selectedRuntimeTaskId,
-    runtimeLastSeq,
-    runtimeTerminal,
-    runtimeTaskCanResume,
+    selectedAgentRunId,
+    agentRunLastSeq,
+    agentRunTerminal,
+    agentRunCanResume,
     toolchainIngestState,
     toolchainIngestLogs,
     toolchainIngestDuplicates,
@@ -3129,9 +3146,9 @@ const refreshAdmin = () => {
     updateAgentField,
     renderStringChoiceList,
     renderRuntimeChoiceList,
-    submitRuntimeAgentTask,
-    cancelRuntimeAgentTask,
-    retryRuntimeAgentTask,
+    submitAgentRunTest,
+    cancelAgentRunTest,
+    retryAgentRunTest,
     refreshAdmin,
     executorLocation,
     executorEngine,

@@ -1,4 +1,4 @@
-import { Component, Show } from "solid-js"
+﻿import { Component, Show } from "solid-js"
 import { t } from "../../i18n"
 import { RefreshButton } from "../../components/common/RefreshButton"
 import { StatusBadge } from "../components/StatusBadge"
@@ -8,7 +8,7 @@ interface TabProps { controller: SettingsController & Record<string, any> }
 
 export const ServerSettingsTab: Component<TabProps> = (props) => {
   const {
-    agentRuntimeState,
+    agentRunsState,
     refreshServerSettings,
     saveServerSettings,
     serverSettingsDirty,
@@ -22,7 +22,7 @@ export const ServerSettingsTab: Component<TabProps> = (props) => {
     numberValue,
   } = props.controller
 
-  const runtime = agentRuntimeState()
+  const runtime = agentRunsState()
   return (
 
       <div class="settings-page">
@@ -44,7 +44,7 @@ export const ServerSettingsTab: Component<TabProps> = (props) => {
         <Show when={server.serverSettingsError()}>
           <div class="settings-error">{server.serverSettingsError()}</div>
         </Show>
-        <Show when={server.actionResult()?.ok === true && Object.keys(objectValue(objectValue(server.actionResult()?.settings).agent_runtime)).length > 0 && !serverSettingsDirty()}>
+        <Show when={server.actionResult()?.ok === true && Object.keys(objectValue(server.actionResult()?.settings)).length > 0 && !serverSettingsDirty()}>
           <div class="settings-success">服务端设置已保存并重载。</div>
         </Show>
 

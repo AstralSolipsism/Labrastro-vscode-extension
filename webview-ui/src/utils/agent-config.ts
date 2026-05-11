@@ -1,4 +1,4 @@
-export const AGENT_CONFIG_ID_PATTERN = /^[A-Za-z0-9_.-]+$/
+﻿export const AGENT_CONFIG_ID_PATTERN = /^[A-Za-z0-9_.-]+$/
 
 export type AgentConfigIdValidation =
   | { ok: true; id: string }
@@ -70,7 +70,7 @@ export function toggleAgentConfigListValue(
   return formatAgentConfigList(next, delimiter)
 }
 
-export function resolveNewAgentRuntimeProfile(
+export function resolveNewAgentRunProfile(
   selectedProfileId: string,
   profileIds: readonly string[],
 ): string {

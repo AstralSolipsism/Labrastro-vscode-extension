@@ -1,10 +1,10 @@
-import { describe, expect, it } from "vitest"
+﻿import { describe, expect, it } from "vitest"
 import {
   makeUniqueAgentConfigId,
   parseAgentConfigListText,
   renameRecordKey,
   replaceRuntimeProfileReferences,
-  resolveNewAgentRuntimeProfile,
+  resolveNewAgentRunProfile,
   toggleAgentConfigListValue,
   validateAgentConfigId,
 } from "./agent-config"
@@ -63,11 +63,11 @@ describe("agent config id helpers", () => {
   })
 
   it("defaults a new agent to the selected profile or first profile", () => {
-    expect(resolveNewAgentRuntimeProfile("selected_profile", ["first_profile"]))
+    expect(resolveNewAgentRunProfile("selected_profile", ["first_profile"]))
       .toBe("selected_profile")
-    expect(resolveNewAgentRuntimeProfile("", ["first_profile"]))
+    expect(resolveNewAgentRunProfile("", ["first_profile"]))
       .toBe("first_profile")
-    expect(resolveNewAgentRuntimeProfile("", []))
+    expect(resolveNewAgentRunProfile("", []))
       .toBe("")
   })
 

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+﻿import { describe, expect, it } from "vitest"
 import {
   PROVIDER_KIND_REGISTRY,
   agentDefinitionDraftToPayload,
@@ -16,7 +16,7 @@ import {
 import {
   connectionSaveResultKey,
   sanitizeAutoApproveOptions,
-  serverAgentRuntimeSettingsPayload,
+  serverAgentRunSettingsPayload,
 } from "./settingsControllerUtils"
 
 describe("settings utils", () => {
@@ -216,8 +216,8 @@ describe("settings utils", () => {
       hostUrlSaveApplied: false,
     })).toBe("http://new|http://old|false")
     expect(sanitizeAutoApproveOptions({ readOnly: true, execute: false, custom: true }).readOnly).toBe(true)
-    expect(serverAgentRuntimeSettingsPayload(2.8, 0)).toEqual({
-      agent_runtime: {
+    expect(serverAgentRunSettingsPayload(2.8, 0)).toEqual({
+      run_limits: {
         max_running_agents: 2,
         max_shells_per_agent: 1,
       },

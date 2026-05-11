@@ -1,4 +1,4 @@
-import { DEFAULT_AUTO_APPROVE_OPTIONS } from "../components/chat/approval-details"
+﻿import { DEFAULT_AUTO_APPROVE_OPTIONS } from "../components/chat/approval-details"
 
 export function sanitizeAutoApproveOptions(value: unknown): Record<string, boolean> {
   const raw = objectValue(value)
@@ -17,12 +17,12 @@ export function connectionSaveResultKey(result: Record<string, unknown> | undefi
   ].join("|")
 }
 
-export function serverAgentRuntimeSettingsPayload(
+export function serverAgentRunSettingsPayload(
   maxRunningAgents: number,
   maxShellsPerAgent: number
 ): Record<string, unknown> {
   return {
-    agent_runtime: {
+    run_limits: {
       max_running_agents: Math.max(1, Math.floor(maxRunningAgents)),
       max_shells_per_agent: Math.max(1, Math.floor(maxShellsPerAgent)),
     },
