@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+﻿import { describe, expect, it } from "vitest"
 import { resolveRuntimeStatusUiAction } from "./runtimeStatus"
 
 describe("resolveRuntimeStatusUiAction", () => {
@@ -39,15 +39,15 @@ describe("resolveRuntimeStatusUiAction", () => {
     })
   })
 
-  it("routes sub-agent queue waits into a lightweight subtask message", () => {
+  it("routes Delegated AgentRun queue waits into a lightweight delegated-run message", () => {
     expect(resolveRuntimeStatusUiAction({
       phase: "agent_queue",
       status: "queued",
-      agent_type: "subagent:review",
+      agent_type: "delegated_run:review",
     })).toEqual({
       kind: "append_text",
-      prefix: "runtime-agent-queue-subagent",
-      textKey: "runtime.agentQueue.subagentWaiting",
+      prefix: "runtime-agent-queue-delegated-run",
+      textKey: "runtime.agentQueue.delegatedRunWaiting",
     })
   })
 

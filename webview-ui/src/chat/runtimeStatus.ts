@@ -1,7 +1,7 @@
-export type RuntimeStatusTextKey =
+﻿export type RuntimeStatusTextKey =
   | "tool.shell.queued"
   | "runtime.agentQueue.chatWaiting"
-  | "runtime.agentQueue.subagentWaiting"
+  | "runtime.agentQueue.delegatedRunWaiting"
 
 export type RuntimeStatusUiAction =
   | {
@@ -12,8 +12,8 @@ export type RuntimeStatusUiAction =
   }
   | {
     kind: "append_text"
-    prefix: "runtime-agent-queue-chat" | "runtime-agent-queue-subagent"
-    textKey: "runtime.agentQueue.chatWaiting" | "runtime.agentQueue.subagentWaiting"
+    prefix: "runtime-agent-queue-chat" | "runtime-agent-queue-delegated-run"
+    textKey: "runtime.agentQueue.chatWaiting" | "runtime.agentQueue.delegatedRunWaiting"
   }
   | { kind: "ignore" }
   | { kind: "fallback_view" }
@@ -49,11 +49,11 @@ export function resolveRuntimeStatusUiAction(
     if (status === "running") return { kind: "ignore" }
     if (status === "queued") {
       const agentType = stringValue(payload.agent_type) || ""
-      if (agentType.startsWith("subagent")) {
+      if (agentType.startsWith("delegated_run")) {
         return {
           kind: "append_text",
-          prefix: "runtime-agent-queue-subagent",
-          textKey: "runtime.agentQueue.subagentWaiting",
+          prefix: "runtime-agent-queue-delegated-run",
+          textKey: "runtime.agentQueue.delegatedRunWaiting",
         }
       }
       return {
