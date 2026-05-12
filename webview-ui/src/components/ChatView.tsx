@@ -148,6 +148,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const [modelRollbackProfile, setModelRollbackProfile] = createSignal("")
   const [modelSwitchRequestId, setModelSwitchRequestId] = createSignal("")
   const [pendingModelProfile, setPendingModelProfile] = createSignal("")
+  const [taskflowId, setTaskflowId] = createSignal("")
 
   const hasMessages = () => trace.turns().length > 0
   const taskflowAvailable = createMemo(() => canUseTaskflow(server.backendFeatures()))
@@ -658,6 +659,14 @@ const ChatView: Component<ChatViewProps> = (props) => {
       appendTextPart("连接恢复后发现部分流式事件已过期，正在刷新会话状态。", "events-lost")
       const sessionId = remoteSessionIdForMutation(trace.currentSessionId())
       if (sessionId) trace.loadSession(sessionId)
+    } else if (type === "taskflow_started") {
+      const taskflow = objectValue(payload.taskflow)
+      const meta = objectValue(taskflow.meta)
+      const nextTaskflowId = stringValue(meta.taskflow_id) || stringValue(taskflow.taskflow_id)
+      if (nextTaskflowId) {
+        setTaskflowId(nextTaskflowId)
+        chatMessages.openTaskflow(vscode, nextTaskflowId)
+      }
     } else if (type === "remote_peer_ready") {
       const remoteSessionId = String(payload.session_id || "")
       const currentSessionId = trace.currentSessionId()
@@ -1203,6 +1212,10 @@ const ChatView: Component<ChatViewProps> = (props) => {
     })
   }
 
+  const openTaskflowPanel = () => {
+    chatMessages.openTaskflow(vscode, taskflowId())
+  }
+
   const startEnvironmentQueueItem = (item: EnvironmentQueueItem) => {
     let sessionId = trace.currentSessionId()
 
@@ -1556,6 +1569,10 @@ const ChatView: Component<ChatViewProps> = (props) => {
           }
         }
       }
+      if (msg.type === "taskflow.focusChatInteraction") {
+        const nextTaskflowId = stringValue(msg.taskflowId) || stringValue(msg.taskflow_id)
+        if (nextTaskflowId) setTaskflowId(nextTaskflowId)
+      }
       if (msg.type === "chat.done") {
         finishChatRun(chatStatus() === "cancelled" ? "cancelled" : "done", { startNextEnvironment: true })
       }
@@ -1691,6 +1708,17 @@ const ChatView: Component<ChatViewProps> = (props) => {
           onForkPart={forkFromPart}
         />
       </main>
+
+      <Show when={taskflowId()}>
+        <div class="taskflow-chat-bridge" role="status">
+          <span class="codicon codicon-type-hierarchy-sub" aria-hidden="true" />
+          <span>
+            <strong>Taskflow 已启动</strong>
+            <small>{taskflowId()}</small>
+          </span>
+          <button type="button" onClick={openTaskflowPanel}>打开 Taskflow</button>
+        </div>
+      </Show>
 
       <footer class="chat-dock">
         <AutoApproveMenu

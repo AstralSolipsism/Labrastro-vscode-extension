@@ -25,6 +25,38 @@
   background: var(--ez-bg);
 }
 
+.taskflow-chat-bridge {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-top: 1px solid var(--ez-border);
+  background: var(--vscode-editorWidget-background, var(--ez-bg));
+  padding: 8px 12px;
+  font-size: 12px;
+}
+
+.taskflow-chat-bridge > span:nth-child(2) {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.taskflow-chat-bridge small {
+  overflow: hidden;
+  color: var(--vscode-descriptionForeground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.taskflow-chat-bridge button {
+  border: 1px solid var(--ez-border);
+  background: var(--vscode-button-secondaryBackground, transparent);
+  color: var(--vscode-button-secondaryForeground, inherit);
+  padding: 4px 8px;
+}
+
 .task-header {
   flex: 0 0 auto;
   padding: 8px 10px;

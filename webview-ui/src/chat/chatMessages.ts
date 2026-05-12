@@ -92,6 +92,13 @@ export const chatMessages = {
     })
   },
 
+  openTaskflow(port: ChatMessagePort, taskflowId?: string): void {
+    port.postMessage({
+      type: "openTaskflow",
+      ...(taskflowId ? { taskflowId } : {}),
+    })
+  },
+
   refreshAdmin(port: ChatMessagePort): void {
     port.postMessage({ type: "admin.refresh" })
   },
