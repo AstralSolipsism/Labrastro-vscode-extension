@@ -1,6 +1,6 @@
 import type * as vscode from "vscode"
 
-export type WebviewTarget = "sidebar" | "settings" | "agentManager"
+export type WebviewTarget = "sidebar" | "settings" | "agentManager" | "taskflow"
 export type PostMessage = (message: Record<string, unknown>) => Thenable<boolean> | void
 
 interface WebviewRegistration {

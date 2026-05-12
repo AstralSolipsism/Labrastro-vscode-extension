@@ -7,16 +7,20 @@ describe("WebviewBus", () => {
     const sidebar = vi.fn()
     const settings = vi.fn()
     const agentManager = vi.fn()
+    const taskflow = vi.fn()
 
     bus.register("sidebar", sidebar)
     bus.register("settings", settings)
     bus.register("agentManager", agentManager)
+    bus.register("taskflow", taskflow)
 
     bus.broadcast({ type: "chat.events" }, ["sidebar"])
+    bus.broadcast({ type: "taskflow.complexity", taskflowId: "tf-1" }, ["taskflow"])
 
     expect(sidebar).toHaveBeenCalledWith({ type: "chat.events" })
     expect(settings).not.toHaveBeenCalled()
     expect(agentManager).not.toHaveBeenCalled()
+    expect(taskflow).toHaveBeenCalledWith({ type: "taskflow.complexity", taskflowId: "tf-1" })
   })
 
   it("keeps chat events out of settings while sending session state to trace views", () => {
@@ -24,17 +28,21 @@ describe("WebviewBus", () => {
     const sidebar = vi.fn()
     const settings = vi.fn()
     const agentManager = vi.fn()
+    const taskflow = vi.fn()
 
     bus.register("sidebar", sidebar)
     bus.register("settings", settings)
     bus.register("agentManager", agentManager)
+    bus.register("taskflow", taskflow)
 
     bus.broadcast({ type: "chat.started" }, ["sidebar"])
     bus.broadcast({ type: "session.loaded", sessionId: "s1" }, ["sidebar", "agentManager"])
+    bus.broadcast({ type: "taskflow.complexity", taskflowId: "tf-1" }, ["taskflow"])
 
     expect(sidebar).toHaveBeenCalledTimes(2)
     expect(agentManager).toHaveBeenCalledTimes(1)
     expect(agentManager).toHaveBeenCalledWith({ type: "session.loaded", sessionId: "s1" })
+    expect(taskflow).toHaveBeenCalledTimes(1)
     expect(settings).not.toHaveBeenCalled()
   })
 

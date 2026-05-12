@@ -1,4 +1,4 @@
-﻿export type PanelView = "chat" | "settings" | "about" | "agentManager"
+export type PanelView = "chat" | "settings" | "about" | "agentManager" | "taskflow"
 export type TraceNavigationIntent = "inspect" | "fork" | "rollback" | "delegated_run"
 
 export interface NavigateMessage {
@@ -8,6 +8,7 @@ export interface NavigateMessage {
   nodeId?: string
   branchId?: string
   sessionId?: string
+  taskflowId?: string
   intent?: TraceNavigationIntent
 }
 
@@ -82,6 +83,13 @@ export type HostToWebviewMessageType =
   | "toolchain.ingest.result"
   | "toolchain.ingest.started"
   | "toolchain.state"
+  | "taskflow.complexity"
+  | "taskflow.complexity.error"
+  | "taskflow.state"
+  | "taskflow.reviewCards"
+  | "taskflow.runtime"
+  | "taskflow.action.error"
+  | "taskflow.focusChatInteraction"
   | "traceFocusNode"
   | "traceSnapshot"
 
@@ -125,6 +133,7 @@ export type WebviewToHostMessageType =
   | "openAgentManager"
   | "openExternal"
   | "openFile"
+  | "openTaskflow"
   | "openSettings"
   | "provider.copy"
   | "provider.delete"
@@ -150,6 +159,23 @@ export type WebviewToHostMessageType =
   | "session.saveSnapshot"
   | "settingsTabChanged"
   | "showInfo"
+  | "taskflow.state.get"
+  | "taskflow.runtime.get"
+  | "taskflow.reviewCards.get"
+  | "taskflow.question.answer"
+  | "taskflow.decision.answer"
+  | "taskflow.reviewCard.answer"
+  | "taskflow.brief.compile"
+  | "taskflow.brief.ready"
+  | "taskflow.brief.confirm"
+  | "taskflow.goal.compile"
+  | "taskflow.dispatch.request"
+  | "taskflow.dispatch.confirm"
+  | "taskflow.dispatch.reject"
+  | "taskflow.workItem.dispatch"
+  | "taskflow.complexity.get"
+  | "taskflow.complexity.scan"
+  | "taskflow.focusChatInteraction"
   | "toolchain.delete"
   | "toolchain.enable"
   | "toolchain.ingest.cancel"
@@ -219,6 +245,13 @@ const HOST_TO_WEBVIEW_TYPES = new Set<HostToWebviewMessageType>([
   "toolchain.ingest.result",
   "toolchain.ingest.started",
   "toolchain.state",
+  "taskflow.complexity",
+  "taskflow.complexity.error",
+  "taskflow.state",
+  "taskflow.reviewCards",
+  "taskflow.runtime",
+  "taskflow.action.error",
+  "taskflow.focusChatInteraction",
   "traceFocusNode",
   "traceSnapshot",
 ])
@@ -257,6 +290,7 @@ const WEBVIEW_TO_HOST_TYPES = new Set<WebviewToHostMessageType>([
   "openAgentManager",
   "openExternal",
   "openFile",
+  "openTaskflow",
   "openSettings",
   "provider.copy",
   "provider.delete",
@@ -282,6 +316,23 @@ const WEBVIEW_TO_HOST_TYPES = new Set<WebviewToHostMessageType>([
   "session.saveSnapshot",
   "settingsTabChanged",
   "showInfo",
+  "taskflow.state.get",
+  "taskflow.runtime.get",
+  "taskflow.reviewCards.get",
+  "taskflow.question.answer",
+  "taskflow.decision.answer",
+  "taskflow.reviewCard.answer",
+  "taskflow.brief.compile",
+  "taskflow.brief.ready",
+  "taskflow.brief.confirm",
+  "taskflow.goal.compile",
+  "taskflow.dispatch.request",
+  "taskflow.dispatch.confirm",
+  "taskflow.dispatch.reject",
+  "taskflow.workItem.dispatch",
+  "taskflow.complexity.get",
+  "taskflow.complexity.scan",
+  "taskflow.focusChatInteraction",
   "toolchain.delete",
   "toolchain.enable",
   "toolchain.ingest.cancel",
