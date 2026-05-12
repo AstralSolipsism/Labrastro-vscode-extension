@@ -5,6 +5,22 @@ function coordinator() {
   const options = {
     client: {
       approvalReply: vi.fn(),
+      getTaskflowState: vi.fn(async () => ({ ok: true, taskflow: { id: "taskflow-1" } })),
+      getTaskflowRuntime: vi.fn(async () => ({ ok: true, task_runs: [] })),
+      getTaskflowReviewCards: vi.fn(async () => ({ ok: true, review_cards: [] })),
+      answerTaskflowQuestion: vi.fn(async () => ({ ok: true, taskflow: { id: "taskflow-1" } })),
+      answerTaskflowDecision: vi.fn(async () => ({ ok: true, taskflow: { id: "taskflow-1" } })),
+      answerTaskflowReviewCard: vi.fn(async () => ({ ok: true, taskflow: { id: "taskflow-1" } })),
+      compileTaskflowBrief: vi.fn(async () => ({ ok: true, taskflow: { id: "taskflow-1" } })),
+      markTaskflowBriefReady: vi.fn(async () => ({ ok: true, taskflow: { id: "taskflow-1" } })),
+      confirmTaskflowBrief: vi.fn(async () => ({ ok: true, taskflow: { id: "taskflow-1" } })),
+      compileTaskflowGoal: vi.fn(async () => ({ ok: true, plan: { id: "plan-1" } })),
+      requestTaskflowDispatch: vi.fn(async () => ({ ok: true, taskflow: { id: "taskflow-1" } })),
+      confirmTaskflowDispatch: vi.fn(async () => ({ ok: true, taskflow: { id: "taskflow-1" } })),
+      rejectTaskflowDispatch: vi.fn(async () => ({ ok: true, taskflow: { id: "taskflow-1" } })),
+      dispatchTaskflowWorkItem: vi.fn(async () => ({ ok: true, task_run: { id: "task-run-1" } })),
+      getTaskflowComplexity: vi.fn(async () => ({ ok: true, complexity: { estimate: { level: "L2" } } })),
+      scanTaskflowRepoComplexity: vi.fn(async () => ({ ok: true, complexity: { estimate: { level: "L3" } } })),
     },
     context: {
       workspaceState: {
@@ -75,6 +91,169 @@ describe("ChatRunCoordinator", () => {
       approval_id: "approval-1",
       decision: "allow_once",
       reason: "ok",
+    })
+  })
+
+  it("routes taskflow complexity requests and posts results", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+
+    await expect(subject.handleMessage({
+      type: "taskflow.complexity.get",
+      taskflowId: "taskflow-1",
+    }, post)).resolves.toBe(true)
+    await expect(subject.handleMessage({
+      type: "taskflow.complexity.scan",
+      taskflowId: "taskflow-1",
+      workspacePath: "G:/repo/main",
+      repositoryId: "repo-main",
+    }, post)).resolves.toBe(true)
+
+    expect(options.client.getTaskflowComplexity).toHaveBeenCalledWith("taskflow-1")
+    expect(options.client.scanTaskflowRepoComplexity).toHaveBeenCalledWith("taskflow-1", {
+      workspacePath: "G:/repo/main",
+      repositoryId: "repo-main",
+    })
+    expect(post).toHaveBeenCalledWith({
+      type: "taskflow.complexity",
+      taskflowId: "taskflow-1",
+      payload: { ok: true, complexity: { estimate: { level: "L2" } } },
+    })
+    expect(post).toHaveBeenCalledWith({
+      type: "taskflow.complexity",
+      taskflowId: "taskflow-1",
+      payload: { ok: true, complexity: { estimate: { level: "L3" } } },
+    })
+  })
+
+  it("routes taskflow operating console requests and posts typed host messages", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    const client = options.client as Record<string, ReturnType<typeof vi.fn>>
+
+    await expect(subject.handleMessage({ type: "taskflow.state.get", taskflowId: "taskflow-1" }, post)).resolves.toBe(true)
+    await expect(subject.handleMessage({ type: "taskflow.reviewCards.get", taskflowId: "taskflow-1" }, post)).resolves.toBe(true)
+    await expect(subject.handleMessage({ type: "taskflow.runtime.get", taskflowId: "taskflow-1" }, post)).resolves.toBe(true)
+    await expect(subject.handleMessage({
+      type: "taskflow.question.answer",
+      taskflowId: "taskflow-1",
+      questionId: "question-1",
+      answer: "No migration.",
+      actor: "user",
+    }, post)).resolves.toBe(true)
+    await expect(subject.handleMessage({
+      type: "taskflow.decision.answer",
+      taskflowId: "taskflow-1",
+      decisionId: "decision-1",
+      selectedOptionId: "brief",
+      answer: "Use brief.",
+      rationale: "Explicit boundary.",
+      actor: "user",
+    }, post)).resolves.toBe(true)
+    await expect(subject.handleMessage({
+      type: "taskflow.reviewCard.answer",
+      taskflowId: "taskflow-1",
+      cardId: "card-1",
+      action: "accept_recommendation",
+      value: "brief",
+      actor: "user",
+    }, post)).resolves.toBe(true)
+    await expect(subject.handleMessage({
+      type: "taskflow.brief.compile",
+      taskflowId: "taskflow-1",
+      actor: "agent",
+    }, post)).resolves.toBe(true)
+    await expect(subject.handleMessage({
+      type: "taskflow.brief.ready",
+      taskflowId: "taskflow-1",
+      version: 2,
+      actor: "agent",
+    }, post)).resolves.toBe(true)
+    await expect(subject.handleMessage({
+      type: "taskflow.brief.confirm",
+      taskflowId: "taskflow-1",
+      version: 2,
+      actor: "user",
+    }, post)).resolves.toBe(true)
+    await expect(subject.handleMessage({ type: "taskflow.goal.compile", taskflowId: "taskflow-1" }, post)).resolves.toBe(true)
+    await expect(subject.handleMessage({
+      type: "taskflow.dispatch.request",
+      taskflowId: "taskflow-1",
+      workItemIds: ["work-item-1"],
+      actor: "user",
+      rationale: "Ready.",
+    }, post)).resolves.toBe(true)
+    await expect(subject.handleMessage({
+      type: "taskflow.dispatch.confirm",
+      taskflowId: "taskflow-1",
+      decisionId: "dispatch-decision-1",
+      actor: "user",
+    }, post)).resolves.toBe(true)
+    await expect(subject.handleMessage({
+      type: "taskflow.dispatch.reject",
+      taskflowId: "taskflow-1",
+      decisionId: "dispatch-decision-2",
+      actor: "user",
+    }, post)).resolves.toBe(true)
+    await expect(subject.handleMessage({
+      type: "taskflow.workItem.dispatch",
+      taskflowId: "taskflow-1",
+      workItemId: "work-item-1",
+      dispatchDecisionId: "dispatch-decision-1",
+      executorHint: "agent-1",
+    }, post)).resolves.toBe(true)
+
+    expect(client.getTaskflowState).toHaveBeenCalledWith("taskflow-1")
+    expect(client.getTaskflowReviewCards).toHaveBeenCalledWith("taskflow-1")
+    expect(client.getTaskflowRuntime).toHaveBeenCalledWith("taskflow-1")
+    expect(client.answerTaskflowQuestion).toHaveBeenCalledWith("taskflow-1", "question-1", {
+      answer: "No migration.",
+      actor: "user",
+    })
+    expect(client.answerTaskflowDecision).toHaveBeenCalledWith("taskflow-1", "decision-1", {
+      selectedOptionId: "brief",
+      answer: "Use brief.",
+      rationale: "Explicit boundary.",
+      actor: "user",
+    })
+    expect(client.answerTaskflowReviewCard).toHaveBeenCalledWith("taskflow-1", "card-1", {
+      action: "accept_recommendation",
+      value: "brief",
+      actor: "user",
+      comment: undefined,
+    })
+    expect(client.compileTaskflowBrief).toHaveBeenCalledWith("taskflow-1", { actor: "agent" })
+    expect(client.markTaskflowBriefReady).toHaveBeenCalledWith("taskflow-1", { version: 2, actor: "agent" })
+    expect(client.confirmTaskflowBrief).toHaveBeenCalledWith("taskflow-1", { version: 2, actor: "user" })
+    expect(client.compileTaskflowGoal).toHaveBeenCalledWith("taskflow-1")
+    expect(client.requestTaskflowDispatch).toHaveBeenCalledWith("taskflow-1", {
+      workItemIds: ["work-item-1"],
+      actor: "user",
+      rationale: "Ready.",
+      metadata: undefined,
+    })
+    expect(client.confirmTaskflowDispatch).toHaveBeenCalledWith("taskflow-1", "dispatch-decision-1", { actor: "user" })
+    expect(client.rejectTaskflowDispatch).toHaveBeenCalledWith("taskflow-1", "dispatch-decision-2", { actor: "user" })
+    expect(client.dispatchTaskflowWorkItem).toHaveBeenCalledWith("taskflow-1", "work-item-1", {
+      dispatchDecisionId: "dispatch-decision-1",
+      executorHint: "agent-1",
+      metadata: undefined,
+    })
+    expect(post).toHaveBeenCalledWith({
+      type: "taskflow.state",
+      taskflowId: "taskflow-1",
+      action: "taskflow.state.get",
+      payload: { ok: true, taskflow: { id: "taskflow-1" } },
+    })
+    expect(post).toHaveBeenCalledWith({
+      type: "taskflow.reviewCards",
+      taskflowId: "taskflow-1",
+      payload: { ok: true, review_cards: [] },
+    })
+    expect(post).toHaveBeenCalledWith({
+      type: "taskflow.runtime",
+      taskflowId: "taskflow-1",
+      payload: { ok: true, task_runs: [] },
     })
   })
 

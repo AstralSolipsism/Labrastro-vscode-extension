@@ -3,7 +3,7 @@ import type { LabrastroRemoteClient } from "../LabrastroRemoteClient"
 import type { ApprovalDocumentProvider } from "../ApprovalDocumentProvider"
 import type { PostMessage } from "../WebviewBus"
 import type { WebviewToHostMessage } from "../protocol/messages"
-import { chatErrorMessage, stringValue } from "../controller-utils"
+import { chatErrorMessage, numberValue, objectValue, stringValue } from "../controller-utils"
 
 const ACTIVE_CHAT_RUN_KEY = "labrastro.activeChatRun"
 
@@ -139,9 +139,174 @@ export class ChatRunCoordinator {
       case "approval.openDetails":
         await this.options.approvalDocuments.open(stringValue(message.approvalId) || "")
         return true
+      case "taskflow.state.get":
+        return this.handleTaskflowAction(message, post, "taskflow.state", message.type, (taskflowId) =>
+          this.options.client.getTaskflowState(taskflowId)
+        )
+      case "taskflow.reviewCards.get":
+        return this.handleTaskflowAction(message, post, "taskflow.reviewCards", message.type, (taskflowId) =>
+          this.options.client.getTaskflowReviewCards(taskflowId)
+        )
+      case "taskflow.runtime.get":
+        return this.handleTaskflowAction(message, post, "taskflow.runtime", message.type, (taskflowId) =>
+          this.options.client.getTaskflowRuntime(taskflowId)
+        )
+      case "taskflow.question.answer":
+        return this.handleTaskflowAction(message, post, "taskflow.state", message.type, (taskflowId) =>
+          this.options.client.answerTaskflowQuestion(
+            taskflowId,
+            stringValue(message.questionId) || stringValue(message.question_id) || "",
+            {
+              answer: stringValue(message.answer) || "",
+              actor: stringValue(message.actor),
+              rationale: stringValue(message.rationale),
+              confidence: numberValue(message.confidence),
+            }
+          )
+        )
+      case "taskflow.decision.answer":
+        return this.handleTaskflowAction(message, post, "taskflow.state", message.type, (taskflowId) =>
+          this.options.client.answerTaskflowDecision(
+            taskflowId,
+            stringValue(message.decisionId) || stringValue(message.decision_id) || "",
+            {
+              selectedOptionId: stringValue(message.selectedOptionId) || stringValue(message.selected_option_id),
+              answer: stringValue(message.answer),
+              rationale: stringValue(message.rationale),
+              actor: stringValue(message.actor),
+            }
+          )
+        )
+      case "taskflow.reviewCard.answer":
+        return this.handleTaskflowAction(message, post, "taskflow.state", message.type, (taskflowId) =>
+          this.options.client.answerTaskflowReviewCard(
+            taskflowId,
+            stringValue(message.cardId) || stringValue(message.card_id) || "",
+            {
+              action: stringValue(message.action) || "",
+              value: message.value,
+              actor: stringValue(message.actor),
+              comment: stringValue(message.comment),
+            }
+          )
+        )
+      case "taskflow.brief.compile":
+        return this.handleTaskflowAction(message, post, "taskflow.state", message.type, (taskflowId) =>
+          this.options.client.compileTaskflowBrief(taskflowId, { actor: stringValue(message.actor) })
+        )
+      case "taskflow.brief.ready":
+        return this.handleTaskflowAction(message, post, "taskflow.state", message.type, (taskflowId) =>
+          this.options.client.markTaskflowBriefReady(taskflowId, {
+            version: numberValue(message.version),
+            actor: stringValue(message.actor),
+          })
+        )
+      case "taskflow.brief.confirm":
+        return this.handleTaskflowAction(message, post, "taskflow.state", message.type, (taskflowId) =>
+          this.options.client.confirmTaskflowBrief(taskflowId, {
+            version: numberValue(message.version),
+            actor: stringValue(message.actor),
+          })
+        )
+      case "taskflow.goal.compile":
+        return this.handleTaskflowAction(message, post, "taskflow.state", message.type, (taskflowId) =>
+          this.options.client.compileTaskflowGoal(taskflowId)
+        )
+      case "taskflow.dispatch.request":
+        return this.handleTaskflowAction(message, post, "taskflow.state", message.type, (taskflowId) =>
+          this.options.client.requestTaskflowDispatch(taskflowId, {
+            workItemIds: stringList(message.workItemIds) || stringList(message.work_item_ids),
+            actor: stringValue(message.actor),
+            rationale: stringValue(message.rationale),
+            metadata: message.metadata ? objectValue(message.metadata) : undefined,
+          })
+        )
+      case "taskflow.dispatch.confirm":
+        return this.handleTaskflowAction(message, post, "taskflow.state", message.type, (taskflowId) =>
+          this.options.client.confirmTaskflowDispatch(
+            taskflowId,
+            stringValue(message.decisionId) || stringValue(message.decision_id) || "",
+            { actor: stringValue(message.actor) }
+          )
+        )
+      case "taskflow.dispatch.reject":
+        return this.handleTaskflowAction(message, post, "taskflow.state", message.type, (taskflowId) =>
+          this.options.client.rejectTaskflowDispatch(
+            taskflowId,
+            stringValue(message.decisionId) || stringValue(message.decision_id) || "",
+            { actor: stringValue(message.actor) }
+          )
+        )
+      case "taskflow.workItem.dispatch":
+        return this.handleTaskflowAction(message, post, "taskflow.state", message.type, (taskflowId) =>
+          this.options.client.dispatchTaskflowWorkItem(
+            taskflowId,
+            stringValue(message.workItemId) || stringValue(message.work_item_id) || "",
+            {
+              dispatchDecisionId: stringValue(message.dispatchDecisionId) || stringValue(message.dispatch_decision_id),
+              executorHint: stringValue(message.executorHint) || stringValue(message.executor_hint),
+              metadata: message.metadata ? objectValue(message.metadata) : undefined,
+            }
+          )
+        )
+      case "taskflow.complexity.get": {
+        const taskflowId = stringValue(message.taskflowId) || stringValue(message.taskflow_id)
+        if (!taskflowId) return true
+        try {
+          const payload = await this.options.client.getTaskflowComplexity(taskflowId)
+          post({ type: "taskflow.complexity", taskflowId, payload })
+        } catch (error) {
+          post({ type: "taskflow.complexity.error", taskflowId, message: chatErrorMessage(error) })
+          await this.options.postConnectionStateIfAuthRequired(error, post)
+        }
+        return true
+      }
+      case "taskflow.complexity.scan": {
+        const taskflowId = stringValue(message.taskflowId) || stringValue(message.taskflow_id)
+        if (!taskflowId) return true
+        try {
+          const payload = await this.options.client.scanTaskflowRepoComplexity(taskflowId, {
+            workspacePath: stringValue(message.workspacePath) || stringValue(message.workspace_path),
+            repositoryId: stringValue(message.repositoryId) || stringValue(message.repository_id),
+          })
+          post({ type: "taskflow.complexity", taskflowId, payload })
+        } catch (error) {
+          post({ type: "taskflow.complexity.error", taskflowId, message: chatErrorMessage(error) })
+          await this.options.postConnectionStateIfAuthRequired(error, post)
+        }
+        return true
+      }
       default:
         return false
     }
+  }
+
+  private async handleTaskflowAction(
+    message: WebviewToHostMessage,
+    post: PostMessage,
+    responseType: "taskflow.state" | "taskflow.reviewCards" | "taskflow.runtime",
+    action: string,
+    invoke: (taskflowId: string) => Promise<Record<string, unknown>>
+  ): Promise<boolean> {
+    const taskflowId = stringValue(message.taskflowId) || stringValue(message.taskflow_id)
+    if (!taskflowId) return true
+    try {
+      const payload = await invoke(taskflowId)
+      if (responseType === "taskflow.state") {
+        post({ type: responseType, taskflowId, action, payload })
+      } else {
+        post({ type: responseType, taskflowId, payload })
+      }
+    } catch (error) {
+      post({
+        type: "taskflow.action.error",
+        taskflowId,
+        action,
+        message: chatErrorMessage(error),
+      })
+      await this.options.postConnectionStateIfAuthRequired(error, post)
+    }
+    return true
   }
 }
 
@@ -168,4 +333,10 @@ export function activeChatRunPayload(run: ActiveChatRun): Record<string, unknown
     nextRetryAt: run.nextRetryAt,
     next_retry_at: run.nextRetryAt,
   }
+}
+
+function stringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const values = value.map((item) => String(item)).filter((item) => item.trim())
+  return values.length ? values : undefined
 }
