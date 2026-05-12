@@ -144,6 +144,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
               })
               break
 
+            case "openTaskflow":
+              vscode.commands.executeCommand("labrastro.openTaskflow", {
+                taskflowId: typeof message.taskflowId === "string" ? message.taskflowId : undefined,
+              })
+              break
+
             case "showInfo":
               // 显示信息通知
               if (typeof message.text === "string") {

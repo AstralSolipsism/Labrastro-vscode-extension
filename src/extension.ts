@@ -3,6 +3,7 @@ import { AgentManagerPanelProvider } from "./AgentManagerPanelProvider"
 import { LabrastroController } from "./LabrastroController"
 import { SidebarProvider } from "./SidebarProvider"
 import { SettingsPanelProvider } from "./SettingsPanelProvider"
+import { TaskflowPanelProvider } from "./TaskflowPanelProvider"
 
 /**
  * 插件激活入口。
@@ -28,6 +29,10 @@ export function activate(context: vscode.ExtensionContext) {
   const sidebarProvider = new SidebarProvider(context.extensionUri, labrastroController)
   const settingsPanelProvider = new SettingsPanelProvider(context.extensionUri, labrastroController)
   const agentManagerPanelProvider = new AgentManagerPanelProvider(
+    context.extensionUri,
+    labrastroController
+  )
+  const taskflowPanelProvider = new TaskflowPanelProvider(
     context.extensionUri,
     labrastroController
   )
@@ -94,6 +99,15 @@ export function activate(context: vscode.ExtensionContext) {
     )
   )
 
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "labrastro.openTaskflow",
+      (options?: { taskflowId?: string }) => {
+        taskflowPanelProvider.openPanel(options)
+      }
+    )
+  )
+
   // ─────────────────────────────────────────────────────────
   // 4. 注册 Panel Serializer（重启恢复）
   //
@@ -123,6 +137,14 @@ export function activate(context: vscode.ExtensionContext) {
     })
   )
 
+  context.subscriptions.push(
+    vscode.window.registerWebviewPanelSerializer("labrastro.taskflowPanel", {
+      async deserializeWebviewPanel(panel: vscode.WebviewPanel) {
+        taskflowPanelProvider.deserializePanel(panel)
+      },
+    })
+  )
+
   // ─────────────────────────────────────────────────────────
   // 5. 注册清理逻辑
   // ─────────────────────────────────────────────────────────
@@ -130,6 +152,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(sidebarProvider)
   context.subscriptions.push(settingsPanelProvider)
   context.subscriptions.push(agentManagerPanelProvider)
+  context.subscriptions.push(taskflowPanelProvider)
   context.subscriptions.push(labrastroController)
 
   console.log(`[labrastro startup] extension.activate ${Date.now() - activatedAt}ms`)

@@ -209,6 +209,18 @@ export class LabrastroController implements vscode.Disposable {
     return this.webviewBus.register(target, post)
   }
 
+  focusTaskflowChatInteraction(options: { taskflowId?: string; reason?: string } = {}): void {
+    void vscode.commands.executeCommand("workbench.view.extension.labrastro-ActivityBar")
+    this.emitTargetedMessage(
+      {
+        type: "taskflow.focusChatInteraction",
+        ...(options.taskflowId ? { taskflowId: options.taskflowId } : {}),
+        ...(options.reason ? { reason: options.reason } : {}),
+      },
+      ["sidebar"]
+    )
+  }
+
   private connectionErrorState(
     message: string,
     options: { hostUrlSaveRequested?: string } = {}

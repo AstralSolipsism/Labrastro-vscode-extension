@@ -26,7 +26,8 @@
     "onCommand:labrastro.openSessionHistory",
     "onCommand:labrastro.openSettings",
     "onCommand:labrastro.openAbout",
-    "onCommand:labrastro.openAgentManager"
+    "onCommand:labrastro.openAgentManager",
+    "onCommand:labrastro.openTaskflow"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -73,6 +74,11 @@
         "command": "labrastro.openAgentManager",
         "title": "Open Labrastro Trace Preview",
         "icon": "$(list-tree)"
+      },
+      {
+        "command": "labrastro.openTaskflow",
+        "title": "Open Labrastro Taskflow",
+        "icon": "$(type-hierarchy-sub)"
       }
     ],
     "configuration": {
