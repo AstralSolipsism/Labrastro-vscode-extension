@@ -26,13 +26,14 @@ import "./styles/main.css"
 const SettingsView = lazy(() => import("./components/SettingsView"))
 const AboutView = lazy(() => import("./components/AboutView"))
 const AgentManagerView = lazy(() => import("./components/AgentManagerView"))
+const TaskflowView = lazy(() => import("./components/TaskflowView"))
 
 // ─────────────────────────────────────────────────────────────
 // 视图类型
 // ─────────────────────────────────────────────────────────────
 
-type ViewType = "chat" | "settings" | "about" | "agentManager"
-const VALID_VIEWS = new Set<string>(["chat", "settings", "about", "agentManager"])
+type ViewType = "chat" | "settings" | "about" | "agentManager" | "taskflow"
+const VALID_VIEWS = new Set<string>(["chat", "settings", "about", "agentManager", "taskflow"])
 
 interface EnvironmentRunRequest {
   id: string
@@ -52,6 +53,7 @@ const AppContent: Component = () => {
   const [panelNodeId, setPanelNodeId] = createSignal<string | undefined>(undefined)
   const [panelBranchId, setPanelBranchId] = createSignal<string | undefined>(undefined)
   const [panelSessionId, setPanelSessionId] = createSignal<string | undefined>(undefined)
+  const [panelTaskflowId, setPanelTaskflowId] = createSignal<string | undefined>(undefined)
   const [panelIntent, setPanelIntent] = createSignal<TraceNavigationIntent | undefined>(undefined)
   const [settingsTab, setSettingsTab] = createSignal<string | undefined>(undefined)
   const [sessionHistoryOpen, setSessionHistoryOpen] = createSignal(false)
@@ -75,6 +77,7 @@ const AppContent: Component = () => {
         setPanelNodeId(typeof msg.nodeId === "string" ? msg.nodeId : undefined)
         setPanelBranchId(typeof msg.branchId === "string" ? msg.branchId : undefined)
         setPanelSessionId(typeof msg.sessionId === "string" ? msg.sessionId : undefined)
+        setPanelTaskflowId(typeof msg.taskflowId === "string" ? msg.taskflowId : undefined)
         setPanelIntent(typeof msg.intent === "string" ? msg.intent as TraceNavigationIntent : undefined)
         setSettingsTab(msg.view === "settings" && typeof msg.tab === "string" ? msg.tab : undefined)
 
@@ -127,7 +130,9 @@ const AppContent: Component = () => {
                 ? t("panel.settings")
                 : currentView() === "about"
                   ? t("panel.about")
-                  : t("panel.tracePreview")
+                  : currentView() === "taskflow"
+                    ? "Taskflow"
+                    : t("panel.tracePreview")
             }
           </span>
         </div>
@@ -175,6 +180,11 @@ const AppContent: Component = () => {
               sessionId={panelSessionId()}
               intent={panelIntent()}
             />
+          </Suspense>
+        </Match>
+        <Match when={currentView() === "taskflow"}>
+          <Suspense fallback={null}>
+            <TaskflowView taskflowId={panelTaskflowId()} />
           </Suspense>
         </Match>
       </Switch>
