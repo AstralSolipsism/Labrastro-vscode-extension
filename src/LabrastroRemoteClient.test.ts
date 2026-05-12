@@ -994,6 +994,251 @@ describe("LabrastroRemoteClient chat start", () => {
       },
     ])
   })
+
+  it("calls taskflow complexity control-plane peer endpoints", async () => {
+    vscodeMock.labrastroValue = "http://127.0.0.1:8765"
+    const context = {
+      secrets: {
+        get: vi.fn(async () => undefined),
+      },
+    }
+    const calls: Array<{ method: string; url: string; body: Record<string, unknown> }> = []
+    const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
+      calls.push({
+        method: String(init?.method || "GET"),
+        url: String(input),
+        body: init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {},
+      })
+      return new Response(JSON.stringify({ ok: true, complexity: { estimate: { level: "L2" } } }), {
+        headers: { "Content-Type": "application/json" },
+      })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    const client = new LabrastroRemoteClient(context as never)
+    ;(client as unknown as { peerInfo: { peer_id: string; peer_token: string } }).peerInfo = {
+      peer_id: "peer-1",
+      peer_token: "peer-token-1",
+    }
+    const peerProcess = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter
+      stderr: EventEmitter
+      exitCode: number | null
+      kill: ReturnType<typeof vi.fn>
+    }
+    peerProcess.stdout = new EventEmitter()
+    peerProcess.stderr = new EventEmitter()
+    peerProcess.exitCode = null
+    peerProcess.kill = vi.fn()
+    ;(client as unknown as { peerProcess: typeof peerProcess }).peerProcess = peerProcess
+
+    await client.startTaskflow({
+      projectId: "project-1",
+      rawGoal: "Build Taskflow console.",
+      taskflowId: "taskflow-1",
+      goalId: "goal-1",
+    })
+    await client.getTaskflowState("taskflow-1")
+    await client.getTaskflowComplexity("taskflow-1")
+    await client.getTaskflowReviewCards("taskflow-1")
+    await client.getTaskflowRuntime("taskflow-1")
+    await client.recordTaskflowDiscoveryTurn("taskflow-1", {
+      actor: "agent",
+      work_item_candidates: [{ id: "candidate-1" }],
+    })
+    await client.answerTaskflowQuestion("taskflow-1", "question-1", {
+      answer: "No migration.",
+      actor: "user",
+    })
+    await client.answerTaskflowDecision("taskflow-1", "decision-1", {
+      selectedOptionId: "brief",
+      answer: "Use brief confirmation.",
+      rationale: "Explicit boundary.",
+      actor: "user",
+    })
+    await client.answerTaskflowReviewCard("taskflow-1", "card-1", {
+      action: "accept_recommendation",
+      value: "brief",
+      actor: "user",
+    })
+    await client.compileTaskflowBrief("taskflow-1", { actor: "agent" })
+    await client.markTaskflowBriefReady("taskflow-1", { version: 2, actor: "agent" })
+    await client.confirmTaskflowBrief("taskflow-1", { version: 2, actor: "user" })
+    await client.compileTaskflowGoal("taskflow-1")
+    await client.requestTaskflowDispatch("taskflow-1", {
+      workItemIds: ["work-item-1"],
+      actor: "user",
+      rationale: "Ready.",
+    })
+    await client.confirmTaskflowDispatch("taskflow-1", "dispatch-decision-1", { actor: "user" })
+    await client.rejectTaskflowDispatch("taskflow-1", "dispatch-decision-2", { actor: "user" })
+    await client.dispatchTaskflowWorkItem("taskflow-1", "work-item-1", {
+      dispatchDecisionId: "dispatch-decision-1",
+      executorHint: "agent-1",
+      metadata: { priority: "high" },
+    })
+    await client.scanTaskflowRepoComplexity("taskflow-1", {
+      workspacePath: "G:/repo/main",
+      repositoryId: "repo-main",
+    })
+    await client.recordTaskflowComplexityEvidence("taskflow-1", [
+      { id: "evidence-1", dimension: "interface_impact", source_type: "goal", score_delta: 2 },
+    ])
+    await client.overrideTaskflowComplexity("taskflow-1", {
+      level: "L3",
+      reason: "Architectural governance required.",
+      actor: "architect",
+    })
+
+    expect(calls[0]).toMatchObject({
+      method: "POST",
+      url: "http://127.0.0.1:8765/remote/taskflow/taskflows",
+      body: {
+        peer_token: "peer-token-1",
+        project_id: "project-1",
+        raw_goal: "Build Taskflow console.",
+        taskflow_id: "taskflow-1",
+        goal_id: "goal-1",
+      },
+    })
+    expect(calls.slice(1, 5)).toMatchObject([
+      {
+        method: "GET",
+        url: "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1?peer_token=peer-token-1",
+      },
+      {
+        method: "GET",
+        url: "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/complexity?peer_token=peer-token-1",
+      },
+      {
+        method: "GET",
+        url: "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/review-cards?peer_token=peer-token-1",
+      },
+      {
+        method: "GET",
+        url: "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/runtime?peer_token=peer-token-1",
+      },
+    ])
+    expect(calls.slice(5, 19)).toMatchObject([
+      {
+        method: "POST",
+        url: "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/discovery-turn",
+        body: {
+          peer_token: "peer-token-1",
+          actor: "agent",
+          work_item_candidates: [{ id: "candidate-1" }],
+        },
+      },
+      {
+        method: "POST",
+        url: "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/questions/question-1/answer",
+        body: {
+          peer_token: "peer-token-1",
+          answer: "No migration.",
+          actor: "user",
+        },
+      },
+      {
+        method: "POST",
+        url: "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/decisions/decision-1/answer",
+        body: {
+          peer_token: "peer-token-1",
+          selected_option_id: "brief",
+          answer: "Use brief confirmation.",
+          rationale: "Explicit boundary.",
+          actor: "user",
+        },
+      },
+      {
+        method: "POST",
+        url: "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/review-cards/card-1/answer",
+        body: {
+          peer_token: "peer-token-1",
+          action: "accept_recommendation",
+          value: "brief",
+          actor: "user",
+        },
+      },
+      {
+        method: "POST",
+        url: "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/brief/compile",
+        body: { peer_token: "peer-token-1", actor: "agent" },
+      },
+      {
+        method: "POST",
+        url: "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/brief/ready",
+        body: { peer_token: "peer-token-1", version: 2, actor: "agent" },
+      },
+      {
+        method: "POST",
+        url: "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/brief/confirm",
+        body: { peer_token: "peer-token-1", version: 2, actor: "user" },
+      },
+      {
+        method: "POST",
+        url: "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/compile",
+        body: { peer_token: "peer-token-1" },
+      },
+      {
+        method: "POST",
+        url: "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/dispatch-decisions",
+        body: {
+          peer_token: "peer-token-1",
+          work_item_ids: ["work-item-1"],
+          actor: "user",
+          rationale: "Ready.",
+        },
+      },
+      {
+        method: "POST",
+        url: "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/dispatch-decisions/dispatch-decision-1/confirm",
+        body: { peer_token: "peer-token-1", actor: "user" },
+      },
+      {
+        method: "POST",
+        url: "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/dispatch-decisions/dispatch-decision-2/reject",
+        body: { peer_token: "peer-token-1", actor: "user" },
+      },
+      {
+        method: "POST",
+        url: "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/work-items/work-item-1/dispatch",
+        body: {
+          peer_token: "peer-token-1",
+          dispatch_decision_id: "dispatch-decision-1",
+          executor_hint: "agent-1",
+          metadata: { priority: "high" },
+        },
+      },
+      {
+        method: "POST",
+        url: "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/complexity/scan-repo",
+        body: {
+          peer_token: "peer-token-1",
+          workspace_path: "G:/repo/main",
+          repository_id: "repo-main",
+        },
+      },
+      {
+        method: "POST",
+        url: "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/complexity/evidence",
+        body: {
+          peer_token: "peer-token-1",
+          evidence: [
+            { id: "evidence-1", dimension: "interface_impact", source_type: "goal", score_delta: 2 },
+          ],
+        },
+      },
+    ])
+    expect(calls[19]).toMatchObject({
+      method: "POST",
+      url: "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/complexity/override",
+      body: {
+        peer_token: "peer-token-1",
+        level: "L3",
+        reason: "Architectural governance required.",
+        actor: "architect",
+      },
+    })
+  })
 })
 
 describe("LabrastroRemoteClient peer retry strategy", () => {

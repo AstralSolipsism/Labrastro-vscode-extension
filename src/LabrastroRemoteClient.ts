@@ -524,6 +524,221 @@ export class LabrastroRemoteClient {
     }))
   }
 
+  async startTaskflow(options: {
+    projectId?: string
+    project_id?: string
+    rawGoal?: string
+    raw_goal?: string
+    goal?: string
+    sessionId?: string
+    session_id?: string
+    taskflowId?: string
+    taskflow_id?: string
+    goalId?: string
+    goal_id?: string
+    metadata?: JsonObject
+  }): Promise<JsonObject> {
+    return this.postPeerJson("/remote/taskflow/taskflows", (peer) => ({
+      peer_token: peer.peer_token,
+      project_id: options.projectId || options.project_id || "",
+      raw_goal: options.rawGoal || options.raw_goal || options.goal || "",
+      ...(options.sessionId || options.session_id ? { session_id: options.sessionId || options.session_id } : {}),
+      ...(options.taskflowId || options.taskflow_id ? { taskflow_id: options.taskflowId || options.taskflow_id } : {}),
+      ...(options.goalId || options.goal_id ? { goal_id: options.goalId || options.goal_id } : {}),
+      ...(options.metadata ? { metadata: options.metadata } : {}),
+    }))
+  }
+
+  async getTaskflowState(taskflowId: string): Promise<JsonObject> {
+    return this.getPeerJson(`/remote/taskflow/taskflows/${encodeURIComponent(taskflowId)}`)
+  }
+
+  async getTaskflowComplexity(taskflowId: string): Promise<JsonObject> {
+    return this.getPeerJson(`/remote/taskflow/taskflows/${encodeURIComponent(taskflowId)}/complexity`)
+  }
+
+  async getTaskflowReviewCards(taskflowId: string): Promise<JsonObject> {
+    return this.getPeerJson(`/remote/taskflow/taskflows/${encodeURIComponent(taskflowId)}/review-cards`)
+  }
+
+  async getTaskflowRuntime(taskflowId: string): Promise<JsonObject> {
+    return this.getPeerJson(`/remote/taskflow/taskflows/${encodeURIComponent(taskflowId)}/runtime`)
+  }
+
+  async recordTaskflowDiscoveryTurn(taskflowId: string, payload: JsonObject): Promise<JsonObject> {
+    return this.taskflowPost(taskflowId, "discovery-turn", payload)
+  }
+
+  async answerTaskflowQuestion(
+    taskflowId: string,
+    questionId: string,
+    payload: { answer?: string; actor?: string; rationale?: string; confidence?: number } & JsonObject
+  ): Promise<JsonObject> {
+    return this.taskflowPost(
+      taskflowId,
+      `questions/${encodeURIComponent(questionId)}/answer`,
+      payload
+    )
+  }
+
+  async answerTaskflowDecision(
+    taskflowId: string,
+    decisionId: string,
+    payload: {
+      selectedOptionId?: string
+      selected_option_id?: string
+      answer?: string
+      rationale?: string
+      actor?: string
+    } & JsonObject
+  ): Promise<JsonObject> {
+    const { selectedOptionId, selected_option_id, ...rest } = payload
+    return this.taskflowPost(
+      taskflowId,
+      `decisions/${encodeURIComponent(decisionId)}/answer`,
+      {
+        ...rest,
+        selected_option_id: selectedOptionId || selected_option_id,
+      }
+    )
+  }
+
+  async answerTaskflowReviewCard(
+    taskflowId: string,
+    cardId: string,
+    payload: { action?: string; value?: unknown; actor?: string; comment?: string } & JsonObject
+  ): Promise<JsonObject> {
+    return this.taskflowPost(
+      taskflowId,
+      `review-cards/${encodeURIComponent(cardId)}/answer`,
+      payload
+    )
+  }
+
+  async compileTaskflowBrief(
+    taskflowId: string,
+    payload: { actor?: string } & JsonObject = {}
+  ): Promise<JsonObject> {
+    return this.taskflowPost(taskflowId, "brief/compile", payload)
+  }
+
+  async markTaskflowBriefReady(
+    taskflowId: string,
+    payload: { version?: number; actor?: string } & JsonObject = {}
+  ): Promise<JsonObject> {
+    return this.taskflowPost(taskflowId, "brief/ready", payload)
+  }
+
+  async confirmTaskflowBrief(
+    taskflowId: string,
+    payload: { version?: number; actor?: string } & JsonObject = {}
+  ): Promise<JsonObject> {
+    return this.taskflowPost(taskflowId, "brief/confirm", payload)
+  }
+
+  async compileTaskflowGoal(taskflowId: string): Promise<JsonObject> {
+    return this.taskflowPost(taskflowId, "compile", {})
+  }
+
+  async requestTaskflowDispatch(
+    taskflowId: string,
+    payload: {
+      workItemIds?: string[]
+      work_item_ids?: string[]
+      actor?: string
+      rationale?: string
+      metadata?: JsonObject
+    } & JsonObject
+  ): Promise<JsonObject> {
+    const { workItemIds, work_item_ids, ...rest } = payload
+    return this.taskflowPost(taskflowId, "dispatch-decisions", {
+      ...rest,
+      work_item_ids: workItemIds || work_item_ids,
+    })
+  }
+
+  async confirmTaskflowDispatch(
+    taskflowId: string,
+    decisionId: string,
+    payload: { actor?: string } & JsonObject = {}
+  ): Promise<JsonObject> {
+    return this.taskflowPost(
+      taskflowId,
+      `dispatch-decisions/${encodeURIComponent(decisionId)}/confirm`,
+      payload
+    )
+  }
+
+  async rejectTaskflowDispatch(
+    taskflowId: string,
+    decisionId: string,
+    payload: { actor?: string } & JsonObject = {}
+  ): Promise<JsonObject> {
+    return this.taskflowPost(
+      taskflowId,
+      `dispatch-decisions/${encodeURIComponent(decisionId)}/reject`,
+      payload
+    )
+  }
+
+  async dispatchTaskflowWorkItem(
+    taskflowId: string,
+    workItemId: string,
+    payload: {
+      dispatchDecisionId?: string
+      dispatch_decision_id?: string
+      executorHint?: string
+      executor_hint?: string
+      metadata?: JsonObject
+    } & JsonObject
+  ): Promise<JsonObject> {
+    const { dispatchDecisionId, dispatch_decision_id, executorHint, executor_hint, ...rest } = payload
+    return this.taskflowPost(
+      taskflowId,
+      `work-items/${encodeURIComponent(workItemId)}/dispatch`,
+      {
+        ...rest,
+        dispatch_decision_id: dispatchDecisionId || dispatch_decision_id,
+        executor_hint: executorHint || executor_hint,
+      }
+    )
+  }
+
+  async scanTaskflowRepoComplexity(
+    taskflowId: string,
+    options: { workspacePath?: string; workspace_path?: string; repositoryId?: string; repository_id?: string } = {}
+  ): Promise<JsonObject> {
+    const workspacePath = options.workspacePath?.trim() || options.workspace_path?.trim()
+    const repositoryId = options.repositoryId?.trim() || options.repository_id?.trim()
+    return this.postPeerJson(`/remote/taskflow/taskflows/${encodeURIComponent(taskflowId)}/complexity/scan-repo`, (peer) => ({
+      peer_token: peer.peer_token,
+      ...(workspacePath ? { workspace_path: workspacePath } : {}),
+      ...(repositoryId ? { repository_id: repositoryId } : {}),
+    }))
+  }
+
+  async recordTaskflowComplexityEvidence(
+    taskflowId: string,
+    evidence: JsonObject[]
+  ): Promise<JsonObject> {
+    return this.postPeerJson(`/remote/taskflow/taskflows/${encodeURIComponent(taskflowId)}/complexity/evidence`, (peer) => ({
+      peer_token: peer.peer_token,
+      evidence,
+    }))
+  }
+
+  async overrideTaskflowComplexity(
+    taskflowId: string,
+    options: { level: string; reason: string; actor?: string }
+  ): Promise<JsonObject> {
+    return this.postPeerJson(`/remote/taskflow/taskflows/${encodeURIComponent(taskflowId)}/complexity/override`, (peer) => ({
+      peer_token: peer.peer_token,
+      level: options.level,
+      reason: options.reason,
+      ...(options.actor ? { actor: options.actor } : {}),
+    }))
+  }
+
   async streamChat(
     chatId: string,
     cursor: number,
@@ -753,6 +968,33 @@ export class LabrastroRemoteClient {
         await this.stopPeer()
         peer = await this.ensurePeer()
       }
+    )
+  }
+
+  private async getPeerJson(pathname: string): Promise<JsonObject> {
+    let peer = await this.ensurePeer()
+    const separator = pathname.includes("?") ? "&" : "?"
+    return retryInvalidPeerTokenOnce(
+      () => this.getJson(`${pathname}${separator}peer_token=${encodeURIComponent(peer.peer_token)}`),
+      async () => {
+        await this.stopPeer()
+        peer = await this.ensurePeer()
+      }
+    )
+  }
+
+  private async taskflowPost(
+    taskflowId: string,
+    pathSuffix: string,
+    payload: JsonObject
+  ): Promise<JsonObject> {
+    const cleanPayload = stripUndefined(payload)
+    return this.postPeerJson(
+      `/remote/taskflow/taskflows/${encodeURIComponent(taskflowId)}/${pathSuffix}`,
+      (peer) => ({
+        peer_token: peer.peer_token,
+        ...cleanPayload,
+      })
     )
   }
 
@@ -1074,6 +1316,12 @@ function numberValue(value: unknown): number | undefined {
 
 function objectValue(value: unknown): JsonObject {
   return value && typeof value === "object" ? (value as JsonObject) : {}
+}
+
+function stripUndefined(value: JsonObject): JsonObject {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, item]) => item !== undefined)
+  )
 }
 
 function stringValue(value: unknown): string {
