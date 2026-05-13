@@ -511,9 +511,22 @@ export class LabrastroRemoteClient {
   async startChat(
     prompt: string,
     sessionId?: string,
-    options: { mode?: string; workflowMode?: string; taskflowId?: string; taskflow_id?: string } = {}
+    options: {
+      mode?: string
+      workflowMode?: string
+      taskflowId?: string
+      taskflow_id?: string
+      providerId?: string
+      modelId?: string
+      parameters?: JsonObject
+    } = {}
   ): Promise<JsonObject> {
     const taskflowId = options.taskflowId?.trim() || options.taskflow_id?.trim()
+    const providerId = options.providerId?.trim()
+    const modelId = options.modelId?.trim()
+    const parameters = options.parameters && Object.keys(options.parameters).length
+      ? options.parameters
+      : undefined
     return this.postPeerJson("/remote/chat/start", (peer) => ({
       peer_token: peer.peer_token,
       prompt,
@@ -521,6 +534,8 @@ export class LabrastroRemoteClient {
       ...(options.mode?.trim() ? { mode: options.mode.trim() } : {}),
       ...(options.workflowMode?.trim() ? { workflow_mode: options.workflowMode.trim() } : {}),
       ...(taskflowId ? { taskflow_id: taskflowId } : {}),
+      ...(providerId && modelId ? { provider_id: providerId, model_id: modelId } : {}),
+      ...(providerId && modelId && parameters ? { parameters } : {}),
     }))
   }
 

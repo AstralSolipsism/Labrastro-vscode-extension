@@ -1134,9 +1134,14 @@ const ChatView: Component<ChatViewProps> = (props) => {
     }
     const remoteSessionId = remoteSessionIdForMutation(sessionId)
     const draftSessionId = sessionId && isLocalDraftSessionId(sessionId) ? sessionId : undefined
-    const startupModelOverride = !remoteSessionId
-      ? modelOptions().find((item) => item.id === localModelOverrideProfile())
+    const selectedModelOverrideProfile = localModelOverrideProfile() || selectedModelProfile()
+    const activeModelOverride = selectedModelOverrideProfile
+      ? modelOptions().find((item) => item.id === selectedModelOverrideProfile)
       : undefined
+    if (selectedModelOverrideProfile && !activeModelOverride) {
+      setModelSwitchError("当前选择的模型不可用，请刷新模型列表或重新选择模型。")
+      return
+    }
     const activeForkCompose = forkCompose()
 
     trace.appendTurn({
@@ -1167,11 +1172,11 @@ const ChatView: Component<ChatViewProps> = (props) => {
       text,
       sessionId: remoteSessionId,
       draftSessionId,
-      ...(startupModelOverride
+      ...(activeModelOverride
         ? {
-            providerId: startupModelOverride.providerId,
-            modelId: startupModelOverride.modelId,
-            parameters: startupModelOverride.parameters,
+            providerId: activeModelOverride.providerId,
+            modelId: activeModelOverride.modelId,
+            parameters: activeModelOverride.parameters,
           }
         : {}),
       ...route,
