@@ -124,7 +124,7 @@
     "typecheck:webview": "tsc -p webview-ui/tsconfig.json --noEmit",
     "typecheck": "npm run typecheck:extension && npm run typecheck:webview",
     "package": "node esbuild.js --production",
-    "package:vsix": "vsce package --out labrastro-vscode.vsix",
+    "package:vsix": "npm run package && vsce package --out labrastro-vscode.vsix",
     "test:auto-approval": "vitest run webview-ui/src/utils/command-auto-approval.test.ts",
     "test:chat": "vitest run webview-ui/src/chat/chatState.test.ts",
     "test:settings": "vitest run webview-ui/src/settings/utils.test.ts"
