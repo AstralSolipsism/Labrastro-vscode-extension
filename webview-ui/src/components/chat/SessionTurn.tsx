@@ -33,11 +33,7 @@ function getToolLabel(name: string): string {
     grep: t("tool.grep"),
     glob: t("tool.glob"),
     mcp: t("tool.mcp"),
-    agent: t("tool.agent"),
-    delegate_agent: t("tool.agent"),
-    spawn_agent: t("tool.spawnAgent"),
-    send_input: t("tool.sendInput"),
-    wait_agent: t("tool.waitAgent"),
+    delegate_agent: t("tool.delegateAgent"),
     write_to_file: t("tool.writeToFile"),
     execute_command: t("tool.executeCommand"),
     list_directory: t("tool.listDirectory"),
@@ -55,11 +51,7 @@ const TOOL_ICONS: Record<string, string> = {
   grep: "search",
   glob: "symbol-file",
   mcp: "server-process",
-  agent: "hubot",
   delegate_agent: "hubot",
-  spawn_agent: "hubot",
-  send_input: "send",
-  wait_agent: "watch",
   write_to_file: "edit",
   execute_command: "terminal",
   list_directory: "list-tree",
@@ -194,7 +186,7 @@ const ToolPart: Component<PartProps> = (props) => {
       classList={{
         "tool-card--selected": selected(),
         "tool-card--awaiting": props.part.status === "pending" || props.part.status === "awaiting_approval",
-        "tool-card--error": props.part.status === "error",
+        "tool-card--error": props.part.status === "error" || props.part.status === "protocol_error",
         "tool-card--cancelled": props.part.status === "cancelled" || props.part.status === "denied",
       }}
       data-trace-node-id={props.part.traceNodeId}
@@ -238,17 +230,14 @@ const ToolPart: Component<PartProps> = (props) => {
           <Show when={props.part.approvalId}>
             <ToolSection title={t("tool.section.approval")}>
               <div class="tool-card__approval">
-                <span>{props.part.approvalReason || t("tool.approval.needsApproval")}</span>
-                <Show when={props.part.approvalDecision}>
-                  <strong>
-                    {props.part.approvalDecision === "deny_once"
-                      ? t("tool.approval.denied")
-                      : props.part.approvalDecision === "auto_denied"
-                        ? t("tool.approval.autoDenied")
-                        : props.part.approvalDecision === "auto_approved"
-                          ? t("tool.approval.autoApproved")
-                          : t("tool.approval.approved")}
-                  </strong>
+                <div class="tool-card__approval-main">
+                  <span>{props.part.approvalReason || t("tool.approval.needsApproval")}</span>
+                  <Show when={props.part.approvalDecision}>
+                    <strong>{approvalDecisionLabel(props.part.approvalDecision, props.part.status)}</strong>
+                  </Show>
+                </div>
+                <Show when={approvalResultReasonForPart(props.part)}>
+                  <div class="tool-card__approval-result">{approvalResultReasonForPart(props.part)}</div>
                 </Show>
               </div>
               <ApprovalDetailsBody approval={approvalDetails()} compact />
@@ -315,9 +304,16 @@ function approvalDecisionLabel(decision?: string, status?: string): string {
   if (decision === "auto_denied") return t("tool.approval.autoDenied")
   if (decision === "auto_approved") return t("tool.approval.autoApproved")
   if (decision === "allow_once") return t("tool.approval.approved")
-  if (status === "approved" || status === "running" || status === "complete") return t("tool.approval.approved")
+  if (status === "approved" || status === "running" || status === "returned") return t("tool.approval.approved")
   if (status === "denied" || status === "cancelled") return t("tool.approval.denied")
   return t("tool.approval.pending")
+}
+
+function approvalResultReasonForPart(part: MockPart): string | undefined {
+  const resultReason = (part.approvalResultReason || "").trim()
+  if (!resultReason) return undefined
+  if (resultReason === (part.approvalReason || "").trim()) return undefined
+  return resultReason
 }
 
 function shellEmptyText(status?: string): string {
@@ -325,6 +321,7 @@ function shellEmptyText(status?: string): string {
   if (status === "awaiting_approval") return t("tool.shell.awaitingApproval")
   if (status === "approved") return t("tool.shell.approved")
   if (status === "running") return t("tool.shell.running")
+  if (status === "protocol_error") return t("tool.shell.protocolError")
   if (status === "error") return t("tool.shell.error")
   return t("tool.shell.noOutput")
 }
@@ -389,7 +386,7 @@ const ShellToolPart: Component<PartProps> = (props) => {
       classList={{
         "tool-card--selected": selected(),
         "tool-card--awaiting": props.part.status === "pending" || props.part.status === "awaiting_approval",
-        "tool-card--error": props.part.status === "error",
+        "tool-card--error": props.part.status === "error" || props.part.status === "protocol_error",
         "tool-card--cancelled": props.part.status === "cancelled" || props.part.status === "denied",
       }}
       data-trace-node-id={props.part.traceNodeId}
@@ -493,7 +490,12 @@ const ShellToolPart: Component<PartProps> = (props) => {
             <Show when={props.part.approvalId}>
               <ToolSection title={t("tool.section.approval")}>
                 <div class="shell-card__approval-detail">
-                  <span>{props.part.approvalReason || t("tool.shell.needsApproval")}</span>
+                  <div class="shell-card__approval-detail-text">
+                    <span>{props.part.approvalReason || t("tool.shell.needsApproval")}</span>
+                    <Show when={approvalResultReasonForPart(props.part)}>
+                      <span class="shell-card__approval-result">{approvalResultReasonForPart(props.part)}</span>
+                    </Show>
+                  </div>
                   <strong>{approvalDecisionLabel(props.part.approvalDecision, props.part.status)}</strong>
                 </div>
               </ToolSection>

@@ -41,6 +41,14 @@ import {
 import { resolveRuntimeStatusUiAction } from "../chat/runtimeStatus"
 import { filterSessionHistory, sessionKindBadge, type SessionHistorySort } from "../chat/sessionHistoryView"
 import {
+  approvalDecisionAfterResolution,
+  approvalStatusAfterResolution,
+  resolveActiveToolPartIndex,
+  resolveToolPartIndexForReturn,
+  statusAfterToolReturn,
+  upsertToolPartInParts,
+} from "../chat/tool-event-parts"
+import {
   canUseTaskflow,
   modelDescription,
   modelLabel,
@@ -513,43 +521,29 @@ const ChatView: Component<ChatViewProps> = (props) => {
     ])
   }
 
-  const resolveToolPartIndex = (parts: MockPart[], toolName: string, toolCallId?: string) => {
-    if (toolCallId) {
-      const index = parts.findIndex((part) => part.type === "tool" && part.toolCallId === toolCallId)
-      if (index >= 0) return index
-    }
-    for (let index = parts.length - 1; index >= 0; index -= 1) {
-      const part = parts[index]
-      if (
-        part.type === "tool" &&
-        part.tool === toolName &&
-        ["pending", "running", "awaiting_approval", "approved"].includes(part.status || "")
-      ) {
-        return index
-      }
-    }
-    return -1
+  const resolveToolPartIndex = (
+    parts: MockPart[],
+    toolName: string,
+    toolCallId?: string,
+    matchReturn = false,
+  ) => {
+    return matchReturn
+      ? resolveToolPartIndexForReturn(parts, toolName, toolCallId)
+      : resolveActiveToolPartIndex(parts, toolName, toolCallId)
   }
 
-  const upsertToolPart = (toolName: string, patch: Partial<MockPart>, fallbackId?: string) => {
-    updateAssistantParts((parts) => {
-      const toolCallId = patch.toolCallId || fallbackId
-      const id = `tool-${toolCallId || `${toolName}-${Date.now()}-${parts.length}`}`
-      const index = resolveToolPartIndex(parts, toolName, toolCallId)
-      const current: MockPart = index >= 0 ? parts[index] : {
-        id,
-        type: "tool",
-        tool: toolName,
-        toolCallId,
-        status: "running",
-        toolOutput: "",
-      }
-      const next = { ...current, ...patch, id, type: "tool", tool: toolName } as MockPart
-      if (index < 0) return [...parts, next]
-      const updated = [...parts]
-      updated[index] = next
-      return updated
-    })
+  const upsertToolPart = (
+    toolName: string,
+    patch: Partial<MockPart>,
+    fallbackId?: string,
+    options?: { matchReturn?: boolean },
+  ) => {
+    updateAssistantParts((parts) =>
+      upsertToolPartInParts(parts, toolName, patch, {
+        fallbackId,
+        matchReturn: options?.matchReturn,
+      })
+    )
   }
 
   const markActiveToolsCancelled = () => {
@@ -765,6 +759,22 @@ const ChatView: Component<ChatViewProps> = (props) => {
         toolOutputChunks: shellOutput?.chunks,
         toolOutputTruncated: shellOutput?.truncated || existing?.toolOutputTruncated,
       }, toolCallId)
+    } else if (type === "tool_call_protocol_error") {
+      const toolName = String(payload.tool_name || "tool")
+      const toolCallId = stringValue(payload.tool_call_id)
+      const code = stringValue(payload.code)
+      const message = String(payload.message || code || "Remote tool protocol error")
+      const output = code ? `[${code}] ${message}` : message
+      const meta: Record<string, unknown> = {}
+      if (code) meta.code = code
+      if (message) meta.message = message
+      upsertToolPart(toolName, {
+        status: "protocol_error",
+        toolCallId,
+        toolOutput: output,
+        toolOutputFormat: "plain",
+        toolResultMeta: meta,
+      }, toolCallId)
     } else if (type === "tool_call_end") {
       const toolName = String(payload.tool_name || "tool")
       const toolCallId = stringValue(payload.tool_call_id)
@@ -772,9 +782,10 @@ const ChatView: Component<ChatViewProps> = (props) => {
       const toolSource = stringValue(payload.tool_source)
       const finalOutput = String(payload.tool_result || "")
       const parts = ensureAssistantMessage().parts
-      const existingIndex = resolveToolPartIndex(parts, toolName, toolCallId)
+      const existingIndex = resolveToolPartIndex(parts, toolName, toolCallId, true)
       const existing = existingIndex >= 0 ? parts[existingIndex] : undefined
-      const isShell = isShellToolName(toolName, toolSource)
+      const resolvedToolSource = toolSource || existing?.toolSource
+      const isShell = isShellToolName(toolName, resolvedToolSource)
       const reconciledShellOutput = isShell
         ? reconcileShellFinalOutput(existing?.toolOutput, finalOutput, existing?.toolOutputChunks)
         : finalOutput
@@ -783,17 +794,18 @@ const ChatView: Component<ChatViewProps> = (props) => {
           ? existing.toolOutputChunks
           : shellChunksFromText(reconciledShellOutput)
         : existing?.toolOutputChunks
-      upsertToolPart(toolName, {
-        status: payload.tool_success === false ? "error" : "complete",
-        toolCallId,
-        toolSource,
+      const patch: Partial<MockPart> = {
+        status: statusAfterToolReturn(existing?.status),
+        toolSource: resolvedToolSource,
         toolEndedAt: numberValue(payload.ended_at),
         toolOutput: reconciledShellOutput,
-        toolOutputFormat: inferToolOutputFormat(toolName, toolSource, outputFormat),
+        toolOutputFormat: inferToolOutputFormat(toolName, resolvedToolSource, outputFormat),
         toolOutputChunks: shellChunks,
         toolFinalOutput: isShell ? finalOutput : undefined,
         toolResultMeta: objectValue(payload.meta),
-      }, toolCallId)
+      }
+      if (toolCallId) patch.toolCallId = toolCallId
+      upsertToolPart(toolName, patch, toolCallId, { matchReturn: true })
     } else if (type === "approval_request") {
       const next: PendingApproval = {
         ...approvalFromPayload(payload),
@@ -827,6 +839,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       const approvalId = String(payload.approval_id || "")
       const toolCallId = stringValue(payload.tool_call_id)
       const decision = String(payload.decision || "")
+      const reason = stringValue(payload.reason)
       setPendingApprovals((items) => items.filter((item) => item.approvalId !== approvalId))
       if (selectedApproval()?.approvalId === approvalId) setSelectedApproval(undefined)
       updateAssistantParts((parts) =>
@@ -836,8 +849,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
           if (!toolCallId && part.approvalId !== approvalId) return part
           return {
             ...part,
-            approvalDecision: decision,
-            status: decision === "allow_once" ? "approved" : "denied",
+            approvalDecision: approvalDecisionAfterResolution(part.approvalDecision, decision),
+            approvalResultReason: reason || part.approvalResultReason,
+            status: approvalStatusAfterResolution(decision, part.status),
           }
         })
       )

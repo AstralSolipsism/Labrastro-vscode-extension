@@ -1679,7 +1679,7 @@ function toolchainIngestEventLog(
   }
   if (type === "tool_call_end") {
     return {
-      level: payload.tool_success === false ? "warning" : "info",
+      level: "info",
       message: `工具完成：${textValue(payload.tool_name, "tool")}`,
       eventType: type,
     }

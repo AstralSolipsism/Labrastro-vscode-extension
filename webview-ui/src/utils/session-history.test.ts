@@ -92,7 +92,7 @@ describe("session history", () => {
                 id: "tool-1",
                 type: "tool",
                 tool: "mcp",
-                status: "complete",
+                status: "returned",
               },
             ],
             timestamp: 1,

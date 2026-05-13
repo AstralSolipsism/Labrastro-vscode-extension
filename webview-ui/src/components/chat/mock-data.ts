@@ -34,6 +34,7 @@ export interface MockPart {
   toolEndedAt?: number
   approvalId?: string
   approvalReason?: string
+  approvalResultReason?: string
   approvalDecision?: string
   approvalSections?: Record<string, unknown>[]
   approvalContent?: string
@@ -282,7 +283,7 @@ export const mockTurns: MockTurn[] = [
             tool: "list_directory",
             toolInput: { path: "labrastro-vscode" },
             toolOutput: "已确认 Solid Webview、mock 数据和 Trace 组件位置。",
-            status: "complete",
+            status: "returned",
             traceNodeId: "trace-tool-1",
             traceNodeKind: "tool_call",
             traceNodeStatus: "success",

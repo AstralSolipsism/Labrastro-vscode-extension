@@ -39,6 +39,7 @@ export const TRACE_NODE_STATUSES = [
   "queued",
   "active",
   "streaming",
+  "returned",
   "success",
   "error",
   "cancelled",
@@ -93,7 +94,8 @@ export const TOOL_EXECUTION_STATUSES = [
   "awaiting_approval",
   "approved",
   "denied",
-  "complete",
+  "returned",
+  "protocol_error",
   "error",
   "cancelled",
 ] as const
@@ -113,6 +115,7 @@ export type TraceMotionPreset =
   | "queued"
   | "active"
   | "streaming"
+  | "returned"
   | "success"
   | "error"
   | "cancelled"
@@ -250,6 +253,7 @@ export const TRACE_I18N: TraceGraphI18n = {
       queued: "待执行 / 排队中",
       active: "进行中 / 当前活跃",
       streaming: "流式输出中",
+      returned: "已返回",
       success: "已完成",
       error: "异常 / 失败",
       cancelled: "已取消",
@@ -291,7 +295,8 @@ export const TRACE_I18N: TraceGraphI18n = {
       awaiting_approval: "等待批准",
       approved: "已批准",
       denied: "已拒绝",
-      complete: "已完成",
+      returned: "已返回",
+      protocol_error: "协议错误",
       error: "失败",
       cancelled: "已取消",
     },
@@ -307,6 +312,7 @@ export const TRACE_I18N: TraceGraphI18n = {
       queued: "Queued",
       active: "Active",
       streaming: "Streaming",
+      returned: "Returned",
       success: "Success",
       error: "Error",
       cancelled: "Cancelled",
@@ -348,7 +354,8 @@ export const TRACE_I18N: TraceGraphI18n = {
       awaiting_approval: "Awaiting approval",
       approved: "Approved",
       denied: "Denied",
-      complete: "Complete",
+      returned: "Returned",
+      protocol_error: "Protocol error",
       error: "Error",
       cancelled: "Cancelled",
     },
@@ -510,6 +517,11 @@ export const TRACE_STATUS_META: Record<TraceNodeStatus, TraceStatusMeta> = {
     className: "trace-node--streaming",
     isTerminal: false,
   },
+  returned: {
+    motion: "returned",
+    className: "trace-node--returned",
+    isTerminal: true,
+  },
   success: {
     motion: "success",
     className: "trace-node--success",
@@ -553,7 +565,8 @@ export const TOOL_STATUS_TO_TRACE_STATUS: Record<ToolExecutionStatus, TraceNodeS
   awaiting_approval: "active",
   approved: "active",
   denied: "cancelled",
-  complete: "success",
+  returned: "returned",
+  protocol_error: "error",
   error: "error",
   cancelled: "cancelled",
 }
@@ -629,7 +642,7 @@ export function inferTraceNodeKindFromToolName(toolName?: string): TraceNodeKind
     case "replace_in_file":
     case "apply_patch":
       return "file_edit"
-    case "spawn_agent":
+    case "delegate_agent":
       return "delegated_run_spawn"
     case "fork_task":
     case "fork_session":

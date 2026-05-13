@@ -134,7 +134,8 @@ button {
 }
 
 .trace-node--active,
-.trace-node--streaming {
+.trace-node--streaming,
+.trace-node--returned {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--trace-accent) 20%, transparent);
 }
 
