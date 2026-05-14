@@ -101,13 +101,24 @@ export class ChatRunCoordinator {
     switch (message.type) {
       case "chat.send":
         if (typeof message.text === "string") {
+          const providerId = stringValue(message.providerId)
+          const modelId = stringValue(message.modelId)
+          if (!providerId || !modelId) {
+            post({
+              type: "chat.error",
+              message: providerId || modelId
+                ? "??????????????????"
+                : "????????????",
+            })
+            return true
+          }
           void this.options.startChat(message.text, stringValue(message.sessionId), post, {
             mode: stringValue(message.mode),
-            workflowMode: stringValue(message.workflowMode) || stringValue(message.workflow_mode),
-            taskflowId: stringValue(message.taskflowId) || stringValue(message.taskflow_id),
-            draftSessionId: stringValue(message.draftSessionId) || stringValue(message.draft_session_id),
-            providerId: stringValue(message.providerId) || stringValue(message.provider_id),
-            modelId: stringValue(message.modelId) || stringValue(message.model_id),
+            workflowMode: stringValue(message.workflowMode),
+            taskflowId: stringValue(message.taskflowId),
+            draftSessionId: stringValue(message.draftSessionId),
+            providerId,
+            modelId,
             parameters: message.parameters && typeof message.parameters === "object"
               ? message.parameters as Record<string, unknown>
               : {},

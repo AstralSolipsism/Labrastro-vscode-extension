@@ -68,6 +68,23 @@ describe("ChatRunCoordinator", () => {
     })
   })
 
+  it("rejects chat.send when the selected model is missing", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+
+    await expect(subject.handleMessage({
+      type: "chat.send",
+      text: "hello",
+      sessionId: "s1",
+    }, post)).resolves.toBe(true)
+
+    expect(options.startChat).not.toHaveBeenCalled()
+    expect(post).toHaveBeenCalledWith({
+      type: "chat.error",
+      message: "????????????",
+    })
+  })
+
   it("uses the active chat id for approval replies when the message omits chatId", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()

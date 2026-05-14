@@ -19,6 +19,7 @@ interface PromptInputProps {
   modelPendingLabel?: string
   modelSwitching?: boolean
   modelError?: string
+  modelRequired?: boolean
   onModelChange?: (modelId: string) => void
   onModelUnavailable?: () => void
   onSend?: (text: string) => void
@@ -53,6 +54,10 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const handleSend = () => {
     const draft = text().trim()
     if (!draft || props.disabled || props.modelSwitching) return
+    if (modelBlocked()) {
+      props.onModelUnavailable?.()
+      return
+    }
 
     props.onSend?.(draft)
     setText("")
@@ -65,6 +70,15 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const modeSelectorLabel = () => props.modeLabel || props.selectedMode || "Coder"
   const modelSelectorLabel = () => props.modelLabel || props.selectedModel || "Model"
   const hasModelOptions = () => Boolean(props.modelOptions?.length)
+  const selectedModelAvailable = () =>
+    Boolean(props.selectedModel && props.modelOptions?.some((option) => option.id === props.selectedModel))
+  const modelBlocked = () =>
+    props.modelRequired === true && (!hasModelOptions() || !selectedModelAvailable())
+  const sendButtonTitle = () => {
+    if (props.modelError) return props.modelError
+    if (modelBlocked()) return "请选择会话模型后再发送。"
+    return t("chat.send")
+  }
   const canOpenModelSelector = () => !props.modelSwitching
   const canShowModelMenu = () => canOpenModelSelector() && hasModelOptions()
   const modelSelectorTitle = () => {
@@ -139,7 +153,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
             </For>
           </DropdownMenu>
           <DropdownMenu
-            ariaLabel="会话主模型"
+            ariaLabel="会话模型"
             title={modelSelectorTitle()}
             open={modelMenuOpen() && canShowModelMenu()}
             disabled={!canOpenModelSelector()}
@@ -176,7 +190,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
               </>
             }
           >
-            <div class="prompt-menu__section-label">会话主模型</div>
+            <div class="prompt-menu__section-label">会话模型</div>
             <For each={props.modelOptions || []}>
               {(option) => (
                 <button
@@ -202,8 +216,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         <div class="prompt-input-actions">
           <IconButton
             icon="arrow-up"
-            title={t("chat.send")}
-            disabled={!text().trim() || props.disabled || props.modelSwitching}
+            title={sendButtonTitle()}
+            disabled={!text().trim() || props.disabled || props.modelSwitching || modelBlocked()}
             onClick={handleSend}
           />
         </div>
