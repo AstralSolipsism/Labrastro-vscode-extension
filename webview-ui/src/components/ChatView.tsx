@@ -58,6 +58,7 @@ import {
   normalizeModelOptions,
   resolveChatModeOptions,
   resolveHostTargetSummary,
+  resolveRequiredChatModelSelection,
   resolveModelSelection,
   resolveModeSelection,
   shouldAcceptModelSwitchResponse,
@@ -166,8 +167,13 @@ const ChatView: Component<ChatViewProps> = (props) => {
   })
   const selectedModeLabel = createMemo(() => modeLabel(selectedMode(), modeOptions()))
   const modelOptions = createMemo(() => normalizeModelOptions(server.adminState(), sessionRuntimeState()))
+  const selectedModelOverrideProfile = createMemo(() => localModelOverrideProfile() || selectedModelProfile())
+  const requiredModelSelection = createMemo(() =>
+    resolveRequiredChatModelSelection(selectedModelOverrideProfile(), modelOptions())
+  )
   const selectedModelLabel = createMemo(() => modelLabel(selectedModelProfile(), modelOptions(), trace.stats().model))
   const selectedModelDescription = createMemo(() => modelDescription(selectedModelProfile(), modelOptions(), trace.stats().model))
+  const visibleModelError = createMemo(() => modelSwitchError() || requiredModelSelection().message)
   const pendingModelLabel = createMemo(() => {
     const pending = pendingModelProfile()
     return pending ? `当前回复结束后切换到 ${modelLabel(pending, modelOptions(), pending)}` : ""
@@ -1149,14 +1155,12 @@ const ChatView: Component<ChatViewProps> = (props) => {
     }
     const remoteSessionId = remoteSessionIdForMutation(sessionId)
     const draftSessionId = sessionId && isLocalDraftSessionId(sessionId) ? sessionId : undefined
-    const selectedModelOverrideProfile = localModelOverrideProfile() || selectedModelProfile()
-    const activeModelOverride = selectedModelOverrideProfile
-      ? modelOptions().find((item) => item.id === selectedModelOverrideProfile)
-      : undefined
-    if (selectedModelOverrideProfile && !activeModelOverride) {
-      setModelSwitchError("当前选择的模型不可用，请刷新模型列表或重新选择模型。")
+    const activeModelResolution = requiredModelSelection()
+    if (!activeModelResolution.ok || !activeModelResolution.model) {
+      setModelSwitchError(activeModelResolution.message)
       return
     }
+    const activeModelOverride = activeModelResolution.model
     const activeForkCompose = forkCompose()
 
     trace.appendTurn({
@@ -1187,13 +1191,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
       text,
       sessionId: remoteSessionId,
       draftSessionId,
-      ...(activeModelOverride
-        ? {
-            providerId: activeModelOverride.providerId,
-            modelId: activeModelOverride.modelId,
-            parameters: activeModelOverride.parameters,
-          }
-        : {}),
+      providerId: activeModelOverride.providerId,
+      modelId: activeModelOverride.modelId,
+      parameters: activeModelOverride.parameters,
       ...route,
     })
   }
@@ -1643,7 +1643,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       selectedModelDescription,
       pendingModelLabel,
       modelSwitching,
-      modelSwitchError,
+      modelSwitchError: visibleModelError,
       handleModelChange,
       handleModelUnavailable,
     },
@@ -1838,7 +1838,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
           modelDescription={selectedModelDescription()}
           modelPendingLabel={pendingModelLabel()}
           modelSwitching={modelSwitching()}
-          modelError={modelSwitchError()}
+          modelError={visibleModelError()}
+          modelRequired={true}
           onModelChange={chatController.model.handleModelChange}
           onModelUnavailable={chatController.model.handleModelUnavailable}
           onSend={chatController.runtime.handleSend}
