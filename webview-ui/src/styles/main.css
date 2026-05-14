@@ -1543,6 +1543,36 @@ button {
   gap: 5px;
 }
 
+.model-profile-modal {
+  width: min(100%, 540px);
+}
+
+.model-profile-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.model-profile-form .field-label {
+  min-width: 0;
+}
+
+.model-profile-form .field-label:first-child,
+.model-profile-toggle {
+  grid-column: 1 / -1;
+}
+
+.model-profile-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ez-fg);
+}
+
+.model-profile-toggle input {
+  margin: 0;
+}
+
 .settings-empty-note--error {
   color: var(--ez-error);
 }
@@ -2544,7 +2574,8 @@ button {
   }
 
   .command-rule-grid,
-  .command-rule-editor__input {
+  .command-rule-editor__input,
+  .model-profile-form {
     grid-template-columns: minmax(0, 1fr);
   }
 
