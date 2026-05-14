@@ -708,7 +708,11 @@ export class LabrastroController implements vscode.Disposable {
     })
     try {
       const prompt = buildToolchainIngestPrompt(input)
-      const start = await this.client.startChat(prompt)
+      const startupModel = await this.resolveConfiguredDefaultChatModel()
+      if (!startupModel) {
+        throw new Error("新增能力 Agent 需要先在设置页配置默认会话模型。")
+      }
+      const start = await this.client.startChat(prompt, undefined, startupModel)
       chatId = String(start.chat_id || "")
       if (!chatId) {
         throw new Error("toolchain_ingest_chat_id_missing")
@@ -1165,6 +1169,11 @@ export class LabrastroController implements vscode.Disposable {
     } = {}
   ): Promise<void> {
     try {
+      const modelError = chatStartupModelError(options)
+      if (modelError) {
+        post({ type: "chat.error", message: modelError })
+        return
+      }
       this.chatRunCoordinator.setActiveDraftSessionId(options.draftSessionId)
       const preparedSession = await this.sessionCoordinator.prepareChatSession(
         requestedSessionId,
@@ -1309,6 +1318,15 @@ export class LabrastroController implements vscode.Disposable {
     }
   }
 
+  private async resolveConfiguredDefaultChatModel(): Promise<{
+    providerId: string
+    modelId: string
+    parameters?: Record<string, unknown>
+  } | undefined> {
+    const adminState = await this.client.adminStatus()
+    return defaultChatModelFromAdminState(adminState)
+  }
+
   private async cancelChat(chatId: string | undefined, post: PostMessage): Promise<void> {
     const targetChatId = chatId || this.chatRunCoordinator.activeChatId
     if (!targetChatId) {
@@ -1414,6 +1432,92 @@ function booleanValue(value: unknown): boolean | undefined {
 
 function objectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {}
+}
+
+function chatStartupModelError(options: {
+  providerId?: string
+  modelId?: string
+}): string {
+  const providerId = stringValue(options.providerId)?.trim() || ""
+  const modelId = stringValue(options.modelId)?.trim() || ""
+  if (providerId && modelId) return ""
+  if (providerId || modelId) return "模型选择不完整，请重新选择会话模型。"
+  return "请选择会话模型后再发送。"
+}
+
+function defaultChatModelFromAdminState(adminState: Record<string, unknown>): {
+  providerId: string
+  modelId: string
+  parameters?: Record<string, unknown>
+} | undefined {
+  const activeAgentModel = chatModelFromRecord(objectValue(adminState.active_agent_model))
+  if (activeAgentModel) return activeAgentModel
+
+  const activeMain = stringValue(adminState.active_main)?.trim() || ""
+  const profiles = arrayOfRecords(adminState.model_profiles)
+  if (activeMain) {
+    const profile = profiles.find((item) =>
+      [item.id, item.name, item.profile_id].some((value) => stringValue(value)?.trim() === activeMain)
+    )
+    const profileModel = chatModelFromRecord(profile)
+    if (profileModel) return profileModel
+  }
+
+  const catalogDefault = arrayOfRecords(adminState.provider_model_catalog)
+    .find((item) => item.active_default === true)
+  return chatModelFromRecord(catalogDefault)
+}
+
+function chatModelFromRecord(record: Record<string, unknown> | undefined): {
+  providerId: string
+  modelId: string
+  parameters?: Record<string, unknown>
+} | undefined {
+  if (!record) return undefined
+  const providerId = (
+    stringValue(record.provider) ||
+    stringValue(record.provider_id) ||
+    stringValue(record.providerId) ||
+    ""
+  ).trim()
+  const modelId = (
+    stringValue(record.model) ||
+    stringValue(record.model_id) ||
+    stringValue(record.modelId) ||
+    ""
+  ).trim()
+  if (!providerId || !modelId) return undefined
+  const parameters = modelParametersFromRecord(record)
+  return {
+    providerId,
+    modelId,
+    ...(Object.keys(parameters).length ? { parameters } : {}),
+  }
+}
+
+function arrayOfRecords(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is Record<string, unknown> =>
+      Boolean(item && typeof item === "object" && !Array.isArray(item))
+    )
+    : []
+}
+
+function modelParametersFromRecord(record: Record<string, unknown>): Record<string, unknown> {
+  const parameters = { ...objectValue(record.parameters) }
+  assignNumberParameter(parameters, "max_tokens", record.max_tokens)
+  assignNumberParameter(parameters, "max_context_tokens", record.max_context_tokens)
+  assignNumberParameter(parameters, "temperature", record.temperature)
+  const reasoningEffort = stringValue(record.reasoning_effort)?.trim()
+  if (reasoningEffort) parameters.reasoning_effort = reasoningEffort
+  const thinkingEnabled = booleanValue(record.thinking_enabled)
+  if (thinkingEnabled !== undefined) parameters.thinking_enabled = thinkingEnabled
+  return parameters
+}
+
+function assignNumberParameter(parameters: Record<string, unknown>, key: string, value: unknown): void {
+  const parsed = numberValue(value)
+  if (parsed !== undefined) parameters[key] = parsed
 }
 
 function delay(ms: number): Promise<void> {
