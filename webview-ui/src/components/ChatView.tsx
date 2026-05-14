@@ -123,6 +123,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const [activeChatId, setActiveChatId] = createSignal<string | undefined>()
   const [activeRunSessionId, setActiveRunSessionId] = createSignal("")
   const [chatStatus, setChatStatus] = createSignal<"idle" | "running" | "stopping" | "cancelled" | "done" | "error">("idle")
+  const [chatRunSawError, setChatRunSawError] = createSignal(false)
+  const [chatRunSawTerminal, setChatRunSawTerminal] = createSignal(false)
   const [pendingCancel, setPendingCancel] = createSignal(false)
   const [environmentRunQueue, setEnvironmentRunQueue] = createSignal<EnvironmentQueueItem[]>([])
   const [lastEnvironmentRunRequestId, setLastEnvironmentRunRequestId] = createSignal("")
@@ -159,6 +161,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const [modelSwitchRequestId, setModelSwitchRequestId] = createSignal("")
   const [pendingModelProfile, setPendingModelProfile] = createSignal("")
   const [taskflowId, setTaskflowId] = createSignal("")
+  const renderedEventKeys = new Set<string>()
 
   const hasMessages = () => trace.turns().length > 0
   const taskflowAvailable = createMemo(() => canUseTaskflow(server.backendFeatures()))
@@ -369,6 +372,17 @@ const ChatView: Component<ChatViewProps> = (props) => {
     }
   }
 
+  const resetChatRunTerminalState = () => {
+    setChatRunSawError(false)
+    setChatRunSawTerminal(false)
+  }
+
+  const doneStatusFromCurrentRun = (): "cancelled" | "done" | "error" => {
+    if (chatStatus() === "cancelled") return "cancelled"
+    if (chatStatus() === "error" || chatRunSawError()) return "error"
+    return "done"
+  }
+
   const currentRunSessionMatches = () => {
     const sessionId = trace.currentSessionId()
     const runSessionId = activeRunSessionId()
@@ -421,10 +435,54 @@ const ChatView: Component<ChatViewProps> = (props) => {
     trace.replaceLastAssistantMessages([next])
   }
 
+  type EventRenderMeta = { eventKey?: string; sessionEventSeq?: number }
+
+  const eventRenderMeta = (
+    event: Record<string, unknown>,
+    type: string,
+    payload: Record<string, unknown>,
+  ): EventRenderMeta => {
+    const sessionEventSeq = numberValue(event.session_event_seq) ?? numberValue(event.sessionEventSeq)
+    const chatSeq = numberValue(event.chat_seq) ?? numberValue(event.seq)
+    const chatId = stringValue(event.chat_id) || activeChatId()
+    const eventSessionId =
+      stringValue(event.session_id) ||
+      stringValue(payload.session_id) ||
+      activeRunSessionId() ||
+      trace.currentSessionId()
+    const toolCallId = stringValue(payload.tool_call_id)
+    const eventKey = sessionEventSeq !== undefined
+      ? `session:${eventSessionId || "unknown"}:${sessionEventSeq}`
+      : chatId && chatSeq !== undefined
+        ? `chat:${chatId}:${chatSeq}:${type}${toolCallId ? `:${toolCallId}` : ""}`
+        : undefined
+    return { eventKey, sessionEventSeq }
+  }
+
+  const bundleHasEventKey = (eventKey: string): boolean =>
+    trace.turns().some((turn) =>
+      [turn.userMessage, ...turn.assistantMessages].some((message) =>
+        message.parts.some((part) => part.eventKey === eventKey)
+      )
+    )
+
+  const shouldSkipEvent = (meta: EventRenderMeta): boolean =>
+    Boolean(meta.eventKey && (renderedEventKeys.has(meta.eventKey) || bundleHasEventKey(meta.eventKey)))
+
+  const markRenderedEvent = (meta: EventRenderMeta) => {
+    if (meta.eventKey) renderedEventKeys.add(meta.eventKey)
+  }
+
+  const withEventMeta = (part: MockPart, meta?: EventRenderMeta): MockPart => ({
+    ...part,
+    ...(meta?.eventKey ? { eventKey: meta.eventKey } : {}),
+    ...(meta?.sessionEventSeq !== undefined ? { sessionEventSeq: meta.sessionEventSeq } : {}),
+  })
+
   const appendTextPart = (
     text: string,
     prefix = "text",
-    options: { format?: "plain" | "markdown"; merge?: boolean; trim?: boolean } = {},
+    options: { format?: "plain" | "markdown"; merge?: boolean; trim?: boolean; meta?: EventRenderMeta } = {},
   ) => {
     const clean = stripAnsi(text)
     const content = options.trim === false ? clean : clean.trim()
@@ -443,21 +501,21 @@ const ChatView: Component<ChatViewProps> = (props) => {
       }
       return [
         ...parts,
-        {
+        withEventMeta({
           id: `${prefix}-${Date.now()}-${parts.length}`,
           type: "text",
           text: content,
           textFormat: options.format || "plain",
           textStreamKey: prefix,
-        },
+        }, options.meta),
       ]
     })
   }
 
-  const appendRemoteStatusPart = (payload: Record<string, unknown>) => {
+  const appendRemoteStatusPart = (payload: Record<string, unknown>, meta?: EventRenderMeta) => {
     updateAssistantParts((parts) => [
       ...parts,
-      {
+      withEventMeta({
         id: `remote-${Date.now()}-${parts.length}`,
         type: "remote_status",
         remotePeerId: String(payload.peer_id || ""),
@@ -466,66 +524,66 @@ const ChatView: Component<ChatViewProps> = (props) => {
         remoteMode: String(payload.mode || ""),
         remoteModel: String(payload.model || ""),
         remoteWorkspaceRoot: String(payload.workspace_root || ""),
-      },
+      }, meta),
     ])
   }
 
-  const appendTerminalPart = (content: string, title = "终端输出") => {
+  const appendTerminalPart = (content: string, title = "终端输出", meta?: EventRenderMeta) => {
     const clean = stripAnsi(content).trim()
     if (!clean) return
     const parsed = parseTerminalTuiCards(clean)
     updateAssistantParts((parts) => {
-      if (parsed.length) return [...parts, ...parsed.map((part, index) => ({ ...part, id: `${part.id}-${Date.now()}-${parts.length + index}` }))]
+      if (parsed.length) return [...parts, ...parsed.map((part, index) => withEventMeta({ ...part, id: `${part.id}-${Date.now()}-${parts.length + index}` }, meta))]
       return [
         ...parts,
-        {
+        withEventMeta({
           id: `terminal-${Date.now()}-${parts.length}`,
           type: "terminal",
           terminalTitle: title,
           terminalContent: clean,
-        },
+        }, meta),
       ]
     })
   }
 
-  const appendViewPart = (payload: Record<string, unknown>) => {
+  const appendViewPart = (payload: Record<string, unknown>, meta?: EventRenderMeta) => {
     const nestedPayload = objectValue(payload.payload)
     updateAssistantParts((parts) => [
       ...parts,
-      {
+      withEventMeta({
         id: `view-${Date.now()}-${parts.length}`,
         type: "view",
         viewTitle: String(payload.title || payload.message || "结构化视图"),
         viewType: String(payload.view_type || payload.kind || "view"),
         viewLevel: String(payload.level || "info"),
         viewPayload: Object.keys(nestedPayload).length ? nestedPayload : payload,
-      },
+      }, meta),
     ])
   }
 
-  const appendContextEventPart = (payload: Record<string, unknown>) => {
+  const appendContextEventPart = (payload: Record<string, unknown>, meta?: EventRenderMeta) => {
     updateAssistantParts((parts) => [
       ...parts,
-      {
+      withEventMeta({
         id: `context-${Date.now()}-${parts.length}`,
         type: "context_event",
         contextTitle: String(payload.message || payload.phase || "上下文事件"),
         contextPayload: payload,
-      },
+      }, meta),
     ])
   }
 
-  const appendUiEventPart = (eventType: string, payload: Record<string, unknown>) => {
+  const appendUiEventPart = (eventType: string, payload: Record<string, unknown>, meta?: EventRenderMeta) => {
     updateAssistantParts((parts) => [
       ...parts,
-      {
+      withEventMeta({
         id: `${eventType}-${Date.now()}-${parts.length}`,
         type: "ui_event",
         uiEventKind: String(payload.kind || eventType.replace("_event", "")),
         uiEventLevel: String(payload.level || "info"),
         uiEventTitle: String(payload.title || payload.message || uiEventTitle(eventType)),
         uiEventPayload: payload,
-      },
+      }, meta),
     ])
   }
 
@@ -544,13 +602,17 @@ const ChatView: Component<ChatViewProps> = (props) => {
     toolName: string,
     patch: Partial<MockPart>,
     fallbackId?: string,
-    options?: { matchReturn?: boolean },
+    options?: { matchReturn?: boolean; meta?: EventRenderMeta },
   ) => {
     updateAssistantParts((parts) =>
       upsertToolPartInParts(parts, toolName, patch, {
         fallbackId,
         matchReturn: options?.matchReturn,
-      })
+      }).map((part) => (
+        part.toolCallId === (patch.toolCallId || fallbackId)
+          ? withEventMeta(part, options?.meta)
+          : part
+      ))
     )
   }
 
@@ -585,7 +647,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     )
   }
 
-  const applyRuntimeStatusEvent = (payload: Record<string, unknown>) => {
+  const applyRuntimeStatusEvent = (payload: Record<string, unknown>, meta?: EventRenderMeta) => {
     const action = resolveRuntimeStatusUiAction(payload)
     if (action.kind === "shell_tool_update") {
       const parts = ensureAssistantMessage().parts
@@ -614,17 +676,17 @@ const ChatView: Component<ChatViewProps> = (props) => {
         toolOutputChunks: nextChunks,
         toolOutputTruncated: nextTruncated,
         toolOutputFormat: "terminal",
-      }, action.toolCallId)
+      }, action.toolCallId, { meta })
       return
     }
     if (action.kind === "append_text") {
-      appendTextPart(t(action.textKey), action.prefix)
+      appendTextPart(t(action.textKey), action.prefix, { meta })
       return
     }
     if (action.kind === "ignore") {
       return
     }
-    appendViewPart(payload)
+    appendViewPart(payload, meta)
   }
 
   const applyUsageUpdate = (payload: Record<string, unknown>) => {
@@ -650,6 +712,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const handleRemoteEvent = (event: Record<string, unknown>) => {
     const type = String(event.type || "")
     const payload = (event.payload && typeof event.payload === "object" ? event.payload : {}) as Record<string, unknown>
+    const eventMeta = eventRenderMeta(event, type, payload)
+    if (shouldSkipEvent(eventMeta)) return
     if (typeof event.chat_id === "string") {
       setActiveChatId(event.chat_id)
       if (pendingCancel()) {
@@ -658,7 +722,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       }
     }
     if (type === "events_lost") {
-      appendTextPart("连接恢复后发现部分流式事件已过期，正在刷新会话状态。", "events-lost")
+      appendTextPart("连接恢复后发现部分流式事件已过期，正在刷新会话状态。", "events-lost", { meta: eventMeta })
       const sessionId = remoteSessionIdForMutation(trace.currentSessionId())
       if (sessionId) trace.loadSession(sessionId)
     } else if (type === "taskflow_started") {
@@ -686,12 +750,13 @@ const ChatView: Component<ChatViewProps> = (props) => {
         remoteSessionId !== currentSessionId &&
         !isLocalDraftSessionId(currentSessionId)
       ) {
-        appendTextPart(`会话绑定异常：远端返回 ${remoteSessionId}，当前会话是 ${currentSessionId}`, "error")
+        appendTextPart(`会话绑定异常：远端返回 ${remoteSessionId}，当前会话是 ${currentSessionId}`, "error", { meta: eventMeta })
         setIsWorking(false)
         setActiveRunSessionId("")
         setPendingApprovals([])
         setSelectedApproval(undefined)
         stopTimer()
+        markRenderedEvent(eventMeta)
         return
       }
       trace.patchStats({
@@ -699,38 +764,40 @@ const ChatView: Component<ChatViewProps> = (props) => {
         mode: stringValue(payload.mode) || trace.stats().mode,
         runStatus: chatStatus(),
       })
-      appendRemoteStatusPart(payload)
+      appendRemoteStatusPart(payload, eventMeta)
     } else if (type === "assistant_delta") {
       appendTextPart(String(payload.content || ""), "assistant-stream", {
         format: "markdown",
         merge: true,
         trim: false,
+        meta: eventMeta,
       })
     } else if (type === "assistant_message") {
-      appendTextPart(String(payload.content || ""), "assistant-message", { format: "markdown" })
+      appendTextPart(String(payload.content || ""), "assistant-message", { format: "markdown", meta: eventMeta })
     } else if (type === "output") {
       const format = String(payload.format || "plain")
       if (format === "terminal") {
-        appendTerminalPart(String(payload.content || ""))
+        appendTerminalPart(String(payload.content || ""), "终端输出", eventMeta)
       } else {
         appendTextPart(String(payload.content || ""), "output", {
           format: format === "markdown" ? "markdown" : "plain",
+          meta: eventMeta,
         })
       }
     } else if (type === "view") {
-      appendViewPart(payload)
+      appendViewPart(payload, eventMeta)
     } else if (type === "runtime_status") {
-      applyRuntimeStatusEvent(payload)
+      applyRuntimeStatusEvent(payload, eventMeta)
     } else if (type === "context_event") {
-      appendContextEventPart(payload)
+      appendContextEventPart(payload, eventMeta)
     } else if (isStructuredUiEventType(type)) {
-      appendUiEventPart(type, payload)
+      appendUiEventPart(type, payload, eventMeta)
     } else if (type === "delegated_run_completed") {
       appendViewPart({
         title: "委托运行完成",
         kind: "delegated_run",
         payload,
-      })
+      }, eventMeta)
     } else if (type === "usage_update" || type === "run_stats") {
       applyUsageUpdate(payload)
     } else if (type === "tool_call_start") {
@@ -743,7 +810,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         toolSource: stringValue(payload.tool_source),
         toolStartedAt: numberValue(payload.started_at),
         toolInput: (payload.tool_args || {}) as Record<string, unknown>,
-      }, toolCallId)
+      }, toolCallId, { meta: eventMeta })
     } else if (type === "tool_call_stream") {
       const toolName = String(payload.tool_name || "tool")
       const toolCallId = requiredToolCallId(payload)
@@ -768,7 +835,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         toolOutput: shellOutput ? buildShellOutputText(shellOutput.chunks) : `${existing?.toolOutput || ""}${chunk}`,
         toolOutputChunks: shellOutput?.chunks,
         toolOutputTruncated: shellOutput?.truncated || existing?.toolOutputTruncated,
-      }, toolCallId)
+      }, toolCallId, { meta: eventMeta })
     } else if (type === "tool_call_protocol_error") {
       const toolName = String(payload.tool_name || "tool")
       const toolCallId = requiredToolCallId(payload)
@@ -776,16 +843,16 @@ const ChatView: Component<ChatViewProps> = (props) => {
       const code = stringValue(payload.code)
       const message = String(payload.message || code || "Remote tool protocol error")
       const output = code ? `[${code}] ${message}` : message
-      const meta: Record<string, unknown> = {}
-      if (code) meta.code = code
-      if (message) meta.message = message
+      const resultMeta: Record<string, unknown> = {}
+      if (code) resultMeta.code = code
+      if (message) resultMeta.message = message
       upsertToolPart(toolName, {
         status: "protocol_error",
         toolCallId,
         toolOutput: output,
         toolOutputFormat: "plain",
-        toolResultMeta: meta,
-      }, toolCallId)
+        toolResultMeta: resultMeta,
+      }, toolCallId, { meta: eventMeta })
     } else if (type === "tool_call_end") {
       const toolName = String(payload.tool_name || "tool")
       const toolCallId = requiredToolCallId(payload)
@@ -817,7 +884,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         toolResultMeta: objectValue(payload.meta),
       }
       if (toolCallId) patch.toolCallId = toolCallId
-      upsertToolPart(toolName, patch, toolCallId, { matchReturn: true })
+      upsertToolPart(toolName, patch, toolCallId, { matchReturn: true, meta: eventMeta })
     } else if (type === "approval_request") {
       const next: PendingApproval = {
         ...approvalFromPayload(payload),
@@ -834,13 +901,15 @@ const ChatView: Component<ChatViewProps> = (props) => {
         approvalContent: next.content,
         approvalSections: next.sections as Record<string, unknown>[],
         approvalDecision: autoDecision.decision === "allow" ? "auto_approved" : autoDecision.decision === "deny" ? "auto_denied" : undefined,
-      }, next.toolCallId)
+      }, next.toolCallId, { meta: eventMeta })
       if (autoDecision.decision === "allow") {
         sendApprovalDecision(next, "allow_once", autoDecision.replyReason)
+        markRenderedEvent(eventMeta)
         return
       }
       if (autoDecision.decision === "deny") {
         sendApprovalDecision(next, "deny_once", autoDecision.replyReason)
+        markRenderedEvent(eventMeta)
         return
       }
       setPendingApprovals((items) => upsertPendingApproval(items, {
@@ -861,6 +930,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
           if (!toolCallId && part.approvalId !== approvalId) return part
           return {
             ...part,
+            ...withEventMeta(part, eventMeta),
             approvalDecision: approvalDecisionAfterResolution(part.approvalDecision, decision),
             approvalResultReason: reason || part.approvalResultReason,
             status: approvalStatusAfterResolution(decision, part.status),
@@ -872,22 +942,37 @@ const ChatView: Component<ChatViewProps> = (props) => {
       setWorkingText("正在停止")
       trace.patchStats({ runStatus: "stopping" })
     } else if (type === "chat_cancelled") {
+      setChatRunSawTerminal(true)
       setPendingCancel(false)
       setPendingApprovals([])
       setSelectedApproval(undefined)
       markActiveToolsCancelled()
       finishChatRun("cancelled")
     } else if (type === "error") {
+      setChatRunSawError(true)
       setChatStatus("error")
       trace.patchStats({ runStatus: "error" })
-      appendTextPart(`错误：${payload.message || "unknown error"}`, "error")
-    } else if (type === "chat_end") {
-      if (payload.response && payload.response_rendered !== true) {
-        appendTextPart(String(payload.response), "final", { format: "markdown" })
+      appendTextPart(`错误：${payload.message || "unknown error"}`, "error", { meta: eventMeta })
+    } else if (type === "chat_failed") {
+      const alreadyHadError = chatRunSawError()
+      setChatRunSawError(true)
+      setChatRunSawTerminal(true)
+      setChatStatus("error")
+      trace.patchStats({ runStatus: "error" })
+      if (!alreadyHadError) {
+        appendTextPart(`错误：${payload.message || "unknown error"}`, "error", { meta: eventMeta })
       }
       trace.saveCurrentSnapshot()
-      finishChatRun(chatStatus() === "cancelled" ? "cancelled" : "done")
+      finishChatRun("error")
+    } else if (type === "chat_end") {
+      setChatRunSawTerminal(true)
+      if (payload.response && payload.response_rendered !== true) {
+        appendTextPart(String(payload.response), "final", { format: "markdown", meta: eventMeta })
+      }
+      trace.saveCurrentSnapshot()
+      finishChatRun(doneStatusFromCurrentRun())
     }
+    markRenderedEvent(eventMeta)
   }
 
   const handleToggleApproveOption = (key: string, value: boolean) => {
@@ -1184,6 +1269,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     setPendingCancel(false)
     setActiveChatId(undefined)
     setChatStatus("running")
+    resetChatRunTerminalState()
     setWorkingText("正在分析请求")
     setPendingApprovals([])
     setSelectedApproval(undefined)
@@ -1265,6 +1351,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     setPendingCancel(false)
     setActiveChatId(undefined)
     setChatStatus("running")
+    resetChatRunTerminalState()
     setWorkingText(item.mode === "check" ? "正在检查能力环境" : "正在配置能力环境")
     setPendingApprovals([])
     setSelectedApproval(undefined)
@@ -1599,10 +1686,13 @@ const ChatView: Component<ChatViewProps> = (props) => {
         if (nextTaskflowId) setTaskflowId(nextTaskflowId)
       }
       if (msg.type === "chat.done") {
-        finishChatRun(chatStatus() === "cancelled" ? "cancelled" : "done", { startNextEnvironment: true })
+        if (chatRunSawError() && !chatRunSawTerminal()) {
+          trace.saveCurrentSnapshot()
+        }
+        finishChatRun(doneStatusFromCurrentRun(), { startNextEnvironment: true })
       }
       if (msg.type === "environment.run.completed" && isWorking()) {
-        finishChatRun(chatStatus() === "cancelled" ? "cancelled" : "done", { startNextEnvironment: true })
+        finishChatRun(doneStatusFromCurrentRun(), { startNextEnvironment: true })
       }
       if (msg.type === "chat.cancelled") {
         markActiveToolsCancelled()
