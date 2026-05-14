@@ -43,6 +43,7 @@ import { filterSessionHistory, sessionKindBadge, type SessionHistorySort } from 
 import {
   approvalDecisionAfterResolution,
   approvalStatusAfterResolution,
+  requiredToolCallId,
   resolveActiveToolPartIndex,
   resolveToolPartIndexForReturn,
   statusAfterToolReturn,
@@ -734,7 +735,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
       applyUsageUpdate(payload)
     } else if (type === "tool_call_start") {
       const toolName = String(payload.tool_name || "tool")
-      const toolCallId = String(payload.tool_call_id || "") || `legacy-${event.chat_id || activeChatId() || "chat"}-${event.seq || Date.now()}`
+      const toolCallId = requiredToolCallId(payload)
+      if (!toolCallId) return
       upsertToolPart(toolName, {
         status: "running",
         toolCallId,
@@ -744,7 +746,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
       }, toolCallId)
     } else if (type === "tool_call_stream") {
       const toolName = String(payload.tool_name || "tool")
-      const toolCallId = stringValue(payload.tool_call_id)
+      const toolCallId = requiredToolCallId(payload)
+      if (!toolCallId) return
       const chunk = String(payload.content || "")
       const outputFormat = stringValue(payload.format) || stringValue(payload.output_format) || stringValue(payload.tool_output_format)
       const toolSource = stringValue(payload.tool_source)
@@ -768,7 +771,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
       }, toolCallId)
     } else if (type === "tool_call_protocol_error") {
       const toolName = String(payload.tool_name || "tool")
-      const toolCallId = stringValue(payload.tool_call_id)
+      const toolCallId = requiredToolCallId(payload)
+      if (!toolCallId) return
       const code = stringValue(payload.code)
       const message = String(payload.message || code || "Remote tool protocol error")
       const output = code ? `[${code}] ${message}` : message
@@ -784,7 +788,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
       }, toolCallId)
     } else if (type === "tool_call_end") {
       const toolName = String(payload.tool_name || "tool")
-      const toolCallId = stringValue(payload.tool_call_id)
+      const toolCallId = requiredToolCallId(payload)
+      if (!toolCallId) return
       const outputFormat = stringValue(payload.format) || stringValue(payload.output_format) || stringValue(payload.tool_output_format) || stringValue(payload.tool_result_format)
       const toolSource = stringValue(payload.tool_source)
       const finalOutput = String(payload.tool_result || "")
@@ -2216,31 +2221,7 @@ function parseTerminalTuiCards(content: string): MockPart[] {
     ]
   }
 
-  if (title === "TOOL CALL") {
-    const callText = bodyLines.join("\n")
-    const toolName = callText.match(/^([A-Za-z0-9_.-]+)\(/)?.[1] || "tool"
-    return [
-      {
-        id: "legacy-tool-tui",
-        type: "view",
-        viewTitle: `工具调用：${toolName}`,
-        viewType: "legacy_tool_call",
-        viewLevel: "info",
-        viewPayload: { content: callText },
-      },
-    ]
-  }
-
-  return [
-    {
-      id: "legacy-tui",
-      type: "view",
-      viewTitle: title,
-      viewType: "legacy_tui",
-      viewLevel: "info",
-      viewPayload: { content: bodyLines.join("\n") || content },
-    },
-  ]
+  return []
 }
 
 function parseColonFields(lines: string[]): Record<string, string> {

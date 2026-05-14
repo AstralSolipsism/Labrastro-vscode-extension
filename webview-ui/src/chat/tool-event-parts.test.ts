@@ -3,6 +3,7 @@ import type { MockPart } from "../components/chat/mock-data"
 import {
   approvalDecisionAfterResolution,
   approvalStatusAfterResolution,
+  requiredToolCallId,
   resolveToolPartIndexForReturn,
   statusAfterToolReturn,
   upsertToolPartInParts,
@@ -55,13 +56,13 @@ describe("tool event part state helpers", () => {
     expect(parts[0].toolOutput).toBe("denied by operator")
   })
 
-  it("can attach a legacy final result to the latest denied tool card", () => {
+  it("does not attach an unidentified final result to another tool card", () => {
     const parts = [
       toolPart({ id: "tool-old", status: "returned" }),
       toolPart({ id: "tool-denied", status: "denied" }),
     ]
 
-    expect(resolveToolPartIndexForReturn(parts, "shell")).toBe(1)
+    expect(resolveToolPartIndexForReturn(parts, "shell")).toBe(-1)
   })
 
   it("keeps cancelled tools cancelled when a late tool result arrives", () => {
@@ -90,13 +91,13 @@ describe("tool event part state helpers", () => {
     expect(statusAfterToolReturn(parts[0].status)).toBe("protocol_error")
   })
 
-  it("can attach a late final result to the latest protocol-error tool card", () => {
+  it("does not attach an unidentified late final result to a protocol-error tool card", () => {
     const parts = [
       toolPart({ id: "tool-old", status: "returned" }),
       toolPart({ id: "tool-protocol-error", status: "protocol_error" }),
     ]
 
-    expect(resolveToolPartIndexForReturn(parts, "shell")).toBe(1)
+    expect(resolveToolPartIndexForReturn(parts, "shell")).toBe(-1)
   })
 
   it("marks approved tools returned when their final tool result arrives", () => {
@@ -108,6 +109,12 @@ describe("tool event part state helpers", () => {
     expect(approvalDecisionAfterResolution("auto_denied", "deny_once")).toBe("auto_denied")
     expect(approvalDecisionAfterResolution("auto_approved", "allow_once")).toBe("auto_approved")
     expect(approvalDecisionAfterResolution(undefined, "deny_once")).toBe("deny_once")
+  })
+
+  it("requires structured tool events to carry a tool call id", () => {
+    expect(requiredToolCallId({ tool_call_id: "call-1" })).toBe("call-1")
+    expect(requiredToolCallId({ tool_call_id: "  " })).toBeUndefined()
+    expect(requiredToolCallId({ tool_name: "shell" })).toBeUndefined()
   })
 
   it("maps approval resolution to lifecycle status only for known decisions", () => {

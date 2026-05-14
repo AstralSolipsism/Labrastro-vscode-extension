@@ -1,53 +1,37 @@
 import type { MockPart } from "../components/chat/mock-data"
 import type { ToolExecutionStatus } from "../types/trace"
 
-const ACTIVE_TOOL_STATUSES = new Set(["pending", "running", "awaiting_approval", "approved"])
-const RETURN_MERGE_TOOL_STATUSES = new Set([
-  "pending",
-  "running",
-  "awaiting_approval",
-  "approved",
-  "denied",
-  "cancelled",
-  "protocol_error",
-])
 const PRESERVED_AFTER_RETURN = new Set(["denied", "cancelled", "protocol_error"])
 const AUTO_APPROVAL_DECISIONS = new Set(["auto_denied", "auto_approved"])
 
+export function requiredToolCallId(payload: Record<string, unknown>): string | undefined {
+  const value = payload.tool_call_id
+  if (typeof value === "string") {
+    const trimmed = value.trim()
+    return trimmed || undefined
+  }
+  if (typeof value === "number" && Number.isFinite(value)) return String(value)
+  return undefined
+}
+
 export function resolveToolPartIndexForReturn(
   parts: readonly MockPart[],
-  toolName: string,
+  _toolName: string,
   toolCallId?: string,
 ): number {
-  if (toolCallId) {
-    const index = parts.findIndex((part) => part.type === "tool" && part.toolCallId === toolCallId)
-    if (index >= 0) return index
-  }
-  for (let index = parts.length - 1; index >= 0; index -= 1) {
-    const part = parts[index]
-    if (part.type === "tool" && part.tool === toolName && RETURN_MERGE_TOOL_STATUSES.has(part.status || "")) {
-      return index
-    }
-  }
-  return -1
+  if (!toolCallId) return -1
+  const index = parts.findIndex((part) => part.type === "tool" && part.toolCallId === toolCallId)
+  return index >= 0 ? index : -1
 }
 
 export function resolveActiveToolPartIndex(
   parts: readonly MockPart[],
-  toolName: string,
+  _toolName: string,
   toolCallId?: string,
 ): number {
-  if (toolCallId) {
-    const index = parts.findIndex((part) => part.type === "tool" && part.toolCallId === toolCallId)
-    if (index >= 0) return index
-  }
-  for (let index = parts.length - 1; index >= 0; index -= 1) {
-    const part = parts[index]
-    if (part.type === "tool" && part.tool === toolName && ACTIVE_TOOL_STATUSES.has(part.status || "")) {
-      return index
-    }
-  }
-  return -1
+  if (!toolCallId) return -1
+  const index = parts.findIndex((part) => part.type === "tool" && part.toolCallId === toolCallId)
+  return index >= 0 ? index : -1
 }
 
 export function upsertToolPartInParts(
@@ -57,6 +41,7 @@ export function upsertToolPartInParts(
   options: { fallbackId?: string; matchReturn?: boolean; now?: number } = {},
 ): MockPart[] {
   const toolCallId = patch.toolCallId || options.fallbackId
+  if (!toolCallId) return [...parts]
   const index = options.matchReturn
     ? resolveToolPartIndexForReturn(parts, toolName, toolCallId)
     : resolveActiveToolPartIndex(parts, toolName, toolCallId)
