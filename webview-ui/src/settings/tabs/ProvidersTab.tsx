@@ -1,5 +1,6 @@
 import { Component, For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { t } from "../../i18n"
+import { DialogSurface } from "../../components/common/interaction"
 import { RefreshButton } from "../../components/common/RefreshButton"
 import { StatusBadge } from "../components/StatusBadge"
 import type { SettingsController } from "../useSettingsController"
@@ -82,6 +83,22 @@ export const ProvidersTab: Component<TabProps> = (props) => {
     setCustomModelDraft,
     setFetchedModels,
     testProvider,
+    modelDetailOpen,
+    closeModelDetail,
+    openModelDetail,
+    profileProvider,
+    profileModel,
+    maxTokens,
+    setMaxTokens,
+    maxContextTokens,
+    setMaxContextTokens,
+    temperature,
+    setTemperature,
+    reasoningEffort,
+    setReasoningEffort,
+    thinkingEnabled,
+    setThinkingEnabled,
+    saveModelPreset,
   } = props.controller
 
   const [draftProviderActive, setDraftProviderActive] = createSignal(false)
@@ -133,6 +150,18 @@ export const ProvidersTab: Component<TabProps> = (props) => {
     if (id === "__error__") return "当前环境不能直接访问剪贴板。"
     return `已复制 ${id}`
   })
+  const updatePositiveInteger = (value: string, setter: (next: number) => void) => {
+    const parsed = Number(value)
+    setter(Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 1)
+  }
+  const updateNumber = (value: string, setter: (next: number) => void) => {
+    const parsed = Number(value)
+    setter(Number.isFinite(parsed) ? parsed : 0)
+  }
+  const saveModelParameters = () => {
+    saveModelPreset()
+    closeModelDetail()
+  }
 
   const applyProviderKind = (kindId: ProviderKind) => {
     const kind = PROVIDER_KIND_REGISTRY.find((item) => item.id === kindId)
@@ -656,6 +685,15 @@ export const ProvidersTab: Component<TabProps> = (props) => {
                             <span class="codicon codicon-beaker" aria-hidden="true" />
                             测试
                           </button>
+                          <button
+                            class="btn btn-secondary btn--compact"
+                            type="button"
+                            onClick={() => openModelDetail(model.id, custom ? "custom" : "fetched")}
+                            disabled={!selectedProvider() || !adminUsable()}
+                          >
+                            <span class="codicon codicon-settings-gear" aria-hidden="true" />
+                            配置参数
+                          </button>
                           <button class="ez-icon-button" type="button" title="复制模型名" onClick={() => void copyModelId(model.id)}>
                             <span class="codicon codicon-copy" aria-hidden="true" />
                           </button>
@@ -696,6 +734,91 @@ export const ProvidersTab: Component<TabProps> = (props) => {
           </div>
         </section>
       </div>
+      <Show when={modelDetailOpen()}>
+        <DialogSurface
+          ariaLabel="模型参数配置"
+          backdropClass="settings-overlay settings-overlay--center"
+          surfaceClass="settings-modal model-profile-modal"
+          initialFocusSelector=".model-profile-modal input"
+          onClose={closeModelDetail}
+        >
+          <div class="settings-modal__header">
+            <div>
+              <h3>模型参数配置</h3>
+              <p>{profileProvider() || providerId()} · {profileModel()}</p>
+            </div>
+            <button class="ez-icon-button" type="button" title="关闭" onClick={closeModelDetail}>
+              <span class="codicon codicon-close" aria-hidden="true" />
+            </button>
+          </div>
+          <div class="model-profile-form">
+            <label class="field-label">
+              <span>模型</span>
+              <input class="setting-input" value={profileModel()} readOnly />
+            </label>
+            <label class="field-label">
+              <span>最大上下文 tokens</span>
+              <input
+                class="setting-input"
+                type="number"
+                min="1"
+                step="1"
+                value={maxContextTokens()}
+                onInput={(event) => updatePositiveInteger(event.currentTarget.value, setMaxContextTokens)}
+              />
+              <small>1M 上下文填写 1000000。</small>
+            </label>
+            <label class="field-label">
+              <span>最大输出 tokens</span>
+              <input
+                class="setting-input"
+                type="number"
+                min="1"
+                step="1"
+                value={maxTokens()}
+                onInput={(event) => updatePositiveInteger(event.currentTarget.value, setMaxTokens)}
+              />
+            </label>
+            <label class="field-label">
+              <span>Temperature</span>
+              <input
+                class="setting-input"
+                type="number"
+                min="0"
+                step="0.1"
+                value={temperature()}
+                onInput={(event) => updateNumber(event.currentTarget.value, setTemperature)}
+              />
+            </label>
+            <label class="field-label">
+              <span>Reasoning effort</span>
+              <input
+                class="setting-input"
+                value={reasoningEffort()}
+                placeholder="low / medium / high / max"
+                onInput={(event) => setReasoningEffort(event.currentTarget.value)}
+              />
+            </label>
+            <label class="model-profile-toggle">
+              <input
+                type="checkbox"
+                checked={thinkingEnabled()}
+                onChange={(event) => setThinkingEnabled(event.currentTarget.checked)}
+              />
+              <span>启用 thinking</span>
+            </label>
+          </div>
+          <div class="settings-actions settings-actions--right">
+            <button class="btn btn-secondary" type="button" onClick={closeModelDetail}>
+              取消
+            </button>
+            <button class="btn btn-primary" type="button" onClick={saveModelParameters} disabled={!profileModel().trim() || !adminUsable()}>
+              <span class="codicon codicon-save" aria-hidden="true" />
+              保存参数
+            </button>
+          </div>
+        </DialogSurface>
+      </Show>
     </div>
   )
 }
