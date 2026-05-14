@@ -869,7 +869,9 @@ describe("LabrastroRemoteClient chat start", () => {
     peerProcess.kill = vi.fn()
     ;(client as unknown as { peerProcess: typeof peerProcess }).peerProcess = peerProcess
 
-    await expect(client.switchSessionMainModel("session-1", "deepseek", "V4PRO")).resolves.toMatchObject({
+    await expect(client.switchSessionMainModel("session-1", "deepseek", "V4PRO", {
+      max_context_tokens: 1000000,
+    })).resolves.toMatchObject({
       ok: true,
       active_model: { provider_id: "deepseek", model_id: "V4PRO" },
     })
@@ -880,6 +882,7 @@ describe("LabrastroRemoteClient chat start", () => {
       session_id: "session-1",
       provider_id: "deepseek",
       model_id: "V4PRO",
+      parameters: { max_context_tokens: 1000000 },
     })
   })
 

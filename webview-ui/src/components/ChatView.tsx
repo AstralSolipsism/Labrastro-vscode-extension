@@ -317,6 +317,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       sessionId: remoteSessionId,
       providerId: option.providerId,
       modelId: option.modelId,
+      parameters: option.parameters,
       requestId,
     })
     return true
