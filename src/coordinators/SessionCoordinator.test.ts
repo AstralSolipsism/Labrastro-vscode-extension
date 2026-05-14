@@ -255,4 +255,177 @@ describe("SessionCoordinator", () => {
       ],
     })
   })
+
+  it("keeps message history turns that are missing from an older snapshot", async () => {
+    const { emitSessionMessage, subject } = await coordinator({
+      loadSession: vi.fn(async () => ({
+        metadata: { id: "remote-5", saved_at: "2026-05-10T00:00:00.000Z" },
+        snapshot: {
+          session: { id: "remote-5", title: "Remote" },
+          turns: [
+            {
+              userMessage: { text: "first question", parts: [] },
+              assistantMessages: [
+                {
+                  id: "assistant-1",
+                  role: "assistant",
+                  parts: [{ id: "part-1", type: "text", text: "first answer", textFormat: "markdown" }],
+                },
+              ],
+            },
+          ],
+        },
+        runtime_state: {},
+        messages: [
+          { role: "user", content: "first question" },
+          { role: "assistant", content: "first answer" },
+          { role: "user", content: "write the file" },
+          { role: "assistant", content: "Now writing the comprehensive synthesis document." },
+          {
+            role: "tool",
+            tool_call_id: "call-write",
+            content: "Error: bad arguments for write_file",
+          },
+        ],
+      })),
+    } as Partial<LabrastroRemoteClient>)
+    const post = vi.fn()
+
+    await subject.loadSession("remote-5", post, { suppressListRefresh: true })
+
+    const loaded = emitSessionMessage.mock.calls.find(([message]) => message.type === "session.loaded")?.[0]
+    expect(loaded?.bundle).toMatchObject({
+      turns: [
+        { userMessage: { text: "first question" } },
+        {
+          userMessage: { text: "write the file" },
+          assistantMessages: [
+            {
+              parts: [{ text: "Now writing the comprehensive synthesis document." }],
+            },
+            {
+              parts: [{ type: "tool", toolOutput: "Error: bad arguments for write_file" }],
+            },
+          ],
+        },
+      ],
+    })
+  })
+
+  it("replays session events after the snapshot checkpoint into structured cards", async () => {
+    const { emitSessionMessage, subject } = await coordinator({
+      loadSession: vi.fn(async () => ({
+        metadata: { id: "remote-6", saved_at: "2026-05-10T00:00:00.000Z" },
+        snapshot: {
+          session: { id: "remote-6", title: "Remote" },
+          eventSeq: 1,
+          turns: [
+            {
+              userMessage: { id: "u1", role: "user", text: "run", parts: [], timestamp: 0 },
+              assistantMessages: [
+                { id: "a1", role: "assistant", text: "Working", parts: [{ id: "p1", type: "text", text: "Working" }], timestamp: 1 },
+              ],
+            },
+          ],
+        },
+        snapshot_event_seq: 1,
+        latest_event_seq: 4,
+        events_after_snapshot: [
+          {
+            session_event_seq: 2,
+            type: "context_event",
+            payload: { phase: "before", message: "压缩前" },
+          },
+          {
+            session_event_seq: 3,
+            type: "tool_call_start",
+            payload: { tool_name: "write_file", tool_call_id: "call-1", tool_args: { file_path: "a.md" } },
+          },
+          {
+            session_event_seq: 4,
+            type: "tool_call_end",
+            payload: { tool_name: "write_file", tool_call_id: "call-1", tool_result: "ok" },
+          },
+        ],
+        runtime_state: {},
+        messages: [
+          { role: "user", content: "run" },
+          { role: "assistant", content: "Working" },
+        ],
+      })),
+    } as Partial<LabrastroRemoteClient>)
+
+    await subject.loadSession("remote-6", vi.fn(), { suppressListRefresh: true })
+
+    const loaded = emitSessionMessage.mock.calls.find(([message]) => message.type === "session.loaded")?.[0]
+    const parts = loaded?.bundle.turns[0].assistantMessages[0].parts
+    expect(parts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "context_event",
+          contextTitle: "压缩前",
+          eventKey: "session:remote-6:2",
+          sessionEventSeq: 2,
+        }),
+        expect.objectContaining({
+          type: "tool",
+          tool: "write_file",
+          toolCallId: "call-1",
+          status: "returned",
+          toolOutput: "ok",
+          eventKey: "session:remote-6:4",
+          sessionEventSeq: 4,
+        }),
+      ])
+    )
+  })
+
+  it("does not duplicate replayed event parts already present in the snapshot", async () => {
+    const { emitSessionMessage, subject } = await coordinator({
+      loadSession: vi.fn(async () => ({
+        metadata: { id: "remote-7", saved_at: "2026-05-10T00:00:00.000Z" },
+        snapshot: {
+          session: { id: "remote-7", title: "Remote" },
+          turns: [
+            {
+              userMessage: { id: "u1", role: "user", text: "run", parts: [], timestamp: 0 },
+              assistantMessages: [
+                {
+                  id: "a1",
+                  role: "assistant",
+                  text: "",
+                  parts: [
+                    {
+                      id: "context-2",
+                      type: "context_event",
+                      eventKey: "session:remote-7:2",
+                      sessionEventSeq: 2,
+                      contextTitle: "已存在",
+                    },
+                  ],
+                  timestamp: 1,
+                },
+              ],
+            },
+          ],
+        },
+        events_after_snapshot: [
+          {
+            session_event_seq: 2,
+            type: "context_event",
+            payload: { message: "重复" },
+          },
+        ],
+        runtime_state: {},
+        messages: [{ role: "user", content: "run" }],
+      })),
+    } as Partial<LabrastroRemoteClient>)
+
+    await subject.loadSession("remote-7", vi.fn(), { suppressListRefresh: true })
+
+    const loaded = emitSessionMessage.mock.calls.find(([message]) => message.type === "session.loaded")?.[0]
+    const parts = loaded?.bundle.turns[0].assistantMessages[0].parts
+    expect(parts.filter((part: Record<string, unknown>) => part.type === "context_event")).toHaveLength(1)
+    expect(parts[0]).toMatchObject({ contextTitle: "已存在" })
+  })
 })

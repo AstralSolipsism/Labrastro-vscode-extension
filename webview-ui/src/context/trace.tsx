@@ -223,6 +223,7 @@ function buildSessionSnapshot(
   return {
     version: 1,
     sessionId,
+    eventSeq: maxSessionEventSeq(bundle),
     updatedAt,
     session: bundle.session,
     stats: bundle.stats,
@@ -240,6 +241,19 @@ function buildSessionSnapshotDigestPayload(
   const snapshot = buildSessionSnapshot(sessionId, bundle, "")
   delete snapshot.updatedAt
   return snapshot
+}
+
+function maxSessionEventSeq(bundle: MockSessionBundle): number {
+  let max = 0
+  for (const turn of bundle.turns) {
+    for (const message of [turn.userMessage, ...turn.assistantMessages]) {
+      for (const part of message.parts) {
+        const value = typeof part.sessionEventSeq === "number" ? part.sessionEventSeq : 0
+        if (value > max) max = value
+      }
+    }
+  }
+  return max
 }
 
 function mergeRemoteBundleWithDraft(

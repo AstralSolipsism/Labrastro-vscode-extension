@@ -15,6 +15,8 @@ export type MockSessionState = "active" | "success" | "streaming" | "abandoned" 
 export interface MockPart {
   id: string
   type: "text" | "tool" | "trace" | "session" | "remote_status" | "terminal" | "view" | "context_event" | "ui_event" | "parallel_tools" | "parallel_sessions"
+  eventKey?: string
+  sessionEventSeq?: number
   historyCutIndex?: number
   text?: string
   textFormat?: "plain" | "markdown"

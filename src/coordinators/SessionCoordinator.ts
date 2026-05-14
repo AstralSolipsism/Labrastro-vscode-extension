@@ -1010,6 +1010,12 @@ function buildSessionBundle(
   const turns = Array.isArray(snapshot.turns)
     ? mergeSnapshotTurnsWithMessageHistory(snapshot.turns, messages, arrayValue(fallback.turns))
     : arrayValue(fallback.turns)
+  const historyMappedTurns = enrichTurnsWithHistoryMapping(turns, messages)
+  const replayedTurns = replaySessionEventsIntoTurns(
+    historyMappedTurns,
+    arrayValue(payload.events_after_snapshot),
+    metadata.id
+  )
   const fallbackStats = objectValue(fallback.stats)
   return {
     session,
@@ -1035,7 +1041,7 @@ function buildSessionBundle(
         numberValue(fallbackStats.maxOutputTokens) ||
         0,
     },
-    turns: enrichTurnsWithHistoryMapping(turns, messages),
+    turns: replayedTurns,
     traceNodes: Array.isArray(snapshot.traceNodes)
       ? snapshot.traceNodes
       : fallback.traceNodes,
@@ -1054,6 +1060,356 @@ function buildSessionBundle(
   }
 }
 
+function replaySessionEventsIntoTurns(
+  turns: unknown[],
+  events: unknown[],
+  sessionId: string
+): unknown[] {
+  const conversation = cloneArray(turns)
+  const hasChatFailed = events.some((event) => stringValue(objectValue(event).type) === "chat_failed")
+  for (const rawEvent of events) {
+    const event = objectValue(rawEvent)
+    const type = stringValue(event.type) || ""
+    const payload = objectValue(event.payload)
+    const meta = sessionEventMeta(event, type, payload, sessionId)
+    if (meta.eventKey && bundleHasEventKey(conversation, meta.eventKey)) {
+      continue
+    }
+    if (type === "remote_peer_ready") {
+      appendReplayPart(conversation, {
+        id: replayPartId("remote", meta),
+        type: "remote_status",
+        remotePeerId: stringValue(payload.peer_id) || "",
+        remoteSessionId: stringValue(payload.session_id) || "",
+        remoteFingerprint: stringValue(payload.fingerprint) || "",
+        remoteMode: stringValue(payload.mode) || "",
+        remoteModel: stringValue(payload.model) || "",
+        remoteWorkspaceRoot: stringValue(payload.workspace_root) || "",
+      }, meta)
+    } else if (type === "context_event") {
+      appendReplayPart(conversation, {
+        id: replayPartId("context", meta),
+        type: "context_event",
+        contextTitle: stringValue(payload.message) || stringValue(payload.phase) || "上下文事件",
+        contextPayload: payload,
+      }, meta)
+    } else if (type === "view") {
+      appendReplayPart(conversation, replayViewPart(payload, meta), meta)
+    } else if (isReplayStructuredUiEvent(type)) {
+      appendReplayPart(conversation, {
+        id: replayPartId(type, meta),
+        type: "ui_event",
+        uiEventKind: stringValue(payload.kind) || type.replace("_event", ""),
+        uiEventLevel: stringValue(payload.level) || "info",
+        uiEventTitle: stringValue(payload.title) || stringValue(payload.message) || replayUiEventTitle(type),
+        uiEventPayload: payload,
+      }, meta)
+    } else if (type === "runtime_status") {
+      appendReplayPart(conversation, replayViewPart({
+        title: stringValue(payload.title) || stringValue(payload.message) || "运行状态",
+        kind: "runtime_status",
+        payload,
+      }, meta), meta)
+    } else if (type === "output") {
+      appendReplayPart(conversation, {
+        id: replayPartId("terminal", meta),
+        type: stringValue(payload.format) === "terminal" ? "terminal" : "text",
+        terminalTitle: "终端输出",
+        terminalContent: stringValue(payload.content) || "",
+        text: stringValue(payload.content) || "",
+        textFormat: stringValue(payload.format) === "markdown" ? "markdown" : "plain",
+      }, meta)
+    } else if (type === "tool_call_start") {
+      replayUpsertToolPart(conversation, stringValue(payload.tool_name) || "tool", {
+        status: "running",
+        toolCallId: requiredReplayToolCallId(payload),
+        toolSource: stringValue(payload.tool_source),
+        toolStartedAt: numberValue(payload.started_at),
+        toolInput: objectValue(payload.tool_args),
+      }, meta)
+    } else if (type === "tool_call_stream") {
+      const toolCallId = requiredReplayToolCallId(payload)
+      const current = findReplayToolPart(conversation, toolCallId)
+      replayUpsertToolPart(conversation, stringValue(payload.tool_name) || "tool", {
+        status: "running",
+        toolCallId,
+        toolSource: stringValue(payload.tool_source),
+        toolStream: stringValue(payload.stream) || "stdout",
+        toolOutputFormat: "plain",
+        toolOutput: `${stringValue(current?.toolOutput) || ""}${stringValue(payload.content) || ""}`,
+      }, meta)
+    } else if (type === "tool_call_protocol_error") {
+      const code = stringValue(payload.code)
+      const message = stringValue(payload.message) || code || "Remote tool protocol error"
+      replayUpsertToolPart(conversation, stringValue(payload.tool_name) || "tool", {
+        status: "protocol_error",
+        toolCallId: requiredReplayToolCallId(payload),
+        toolOutput: code ? `[${code}] ${message}` : message,
+        toolOutputFormat: "plain",
+        toolResultMeta: { code, message },
+      }, meta)
+    } else if (type === "tool_call_end") {
+      replayUpsertToolPart(conversation, stringValue(payload.tool_name) || "tool", {
+        status: "returned",
+        toolCallId: requiredReplayToolCallId(payload),
+        toolSource: stringValue(payload.tool_source),
+        toolEndedAt: numberValue(payload.ended_at),
+        toolOutput: stringValue(payload.tool_result) || "",
+        toolOutputFormat: "plain",
+        toolResultMeta: objectValue(payload.meta),
+      }, meta)
+    } else if (type === "approval_request") {
+      replayUpsertToolPart(conversation, stringValue(payload.tool_name) || "tool", {
+        status: "awaiting_approval",
+        approvalId: stringValue(payload.approval_id),
+        approvalReason: stringValue(payload.reason),
+        approvalSections: arrayValue(payload.sections),
+        approvalContent: stringValue(payload.content),
+        toolCallId: requiredReplayToolCallId(payload),
+        toolSource: stringValue(payload.tool_source),
+        toolInput: objectValue(payload.tool_args),
+      }, meta)
+    } else if (type === "approval_resolved") {
+      replayPatchToolPart(conversation, requiredReplayToolCallId(payload), stringValue(payload.approval_id), {
+        approvalDecision: stringValue(payload.decision),
+        approvalResultReason: stringValue(payload.reason),
+        status: stringValue(payload.decision) === "allow_once" ? "approved" : "denied",
+      }, meta)
+    } else if (type === "chat_failed" || (type === "error" && !hasChatFailed)) {
+      appendReplayPart(conversation, {
+        id: replayPartId("error", meta),
+        type: "text",
+        text: `错误：${stringValue(payload.message) || "unknown error"}`,
+        textFormat: "plain",
+        textStreamKey: "error",
+      }, meta)
+    } else if (type === "chat_cancelled") {
+      appendReplayPart(conversation, {
+        id: replayPartId("cancelled", meta),
+        type: "text",
+        text: "已取消当前请求。",
+        textFormat: "plain",
+        textStreamKey: "cancelled",
+      }, meta)
+    }
+  }
+  return conversation
+}
+
+function sessionEventMeta(
+  event: Record<string, unknown>,
+  type: string,
+  payload: Record<string, unknown>,
+  fallbackSessionId: string
+): { eventKey?: string; sessionEventSeq?: number } {
+  const sessionEventSeq = numberValue(event.session_event_seq) ?? numberValue(event.sessionEventSeq)
+  const chatSeq = numberValue(event.chat_seq) ?? numberValue(event.seq)
+  const chatId = stringValue(event.chat_id)
+  const eventSessionId = stringValue(event.session_id) || stringValue(payload.session_id) || fallbackSessionId
+  const toolCallId = stringValue(payload.tool_call_id)
+  const eventKey = sessionEventSeq !== undefined
+    ? `session:${eventSessionId || "unknown"}:${sessionEventSeq}`
+    : chatId && chatSeq !== undefined
+      ? `chat:${chatId}:${chatSeq}:${type}${toolCallId ? `:${toolCallId}` : ""}`
+      : undefined
+  return { eventKey, sessionEventSeq }
+}
+
+function replayPartId(prefix: string, meta: { eventKey?: string; sessionEventSeq?: number }): string {
+  return `${prefix}-${meta.sessionEventSeq ?? meta.eventKey ?? Date.now()}`
+}
+
+function withReplayEventMeta<T extends Record<string, unknown>>(
+  part: T,
+  meta: { eventKey?: string; sessionEventSeq?: number }
+): T {
+  return {
+    ...part,
+    ...(meta.eventKey ? { eventKey: meta.eventKey } : {}),
+    ...(meta.sessionEventSeq !== undefined ? { sessionEventSeq: meta.sessionEventSeq } : {}),
+  }
+}
+
+function bundleHasEventKey(turns: unknown[], eventKey: string): boolean {
+  return turns.some((rawTurn) => {
+    const turn = objectValue(rawTurn)
+    return [turn.userMessage, ...arrayValue(turn.assistantMessages)].some((rawMessage) =>
+      arrayValue(objectValue(rawMessage).parts).some((rawPart) =>
+        stringValue(objectValue(rawPart).eventKey) === eventKey
+      )
+    )
+  })
+}
+
+function appendReplayPart(
+  turns: unknown[],
+  part: Record<string, unknown>,
+  meta: { eventKey?: string; sessionEventSeq?: number }
+): void {
+  const assistant = ensureReplayAssistantMessage(turns)
+  assistant.parts = [...arrayValue(assistant.parts), withReplayEventMeta(part, meta)]
+}
+
+function ensureReplayAssistantMessage(turns: unknown[]): Record<string, unknown> {
+  if (!turns.length) {
+    turns.push({
+      userMessage: {
+        id: "replay-user-0",
+        role: "user",
+        text: "",
+        parts: [],
+        timestamp: Date.now(),
+      },
+      assistantMessages: [],
+    })
+  }
+  const turnIndex = turns.length - 1
+  const turn = objectValue(turns[turnIndex])
+  const assistantMessages = cloneArray(arrayValue(turn.assistantMessages))
+  if (!assistantMessages.length) {
+    assistantMessages.push({
+      id: `replay-assistant-${turnIndex}`,
+      role: "assistant",
+      text: "",
+      parts: [],
+      timestamp: Date.now(),
+    })
+  }
+  const messageIndex = assistantMessages.length - 1
+  const message = objectValue(assistantMessages[messageIndex])
+  message.parts = arrayValue(message.parts)
+  assistantMessages[messageIndex] = message
+  turn.assistantMessages = assistantMessages
+  turns[turnIndex] = turn
+  return message
+}
+
+function replayViewPart(
+  payload: Record<string, unknown>,
+  meta: { eventKey?: string; sessionEventSeq?: number }
+): Record<string, unknown> {
+  const nestedPayload = objectValue(payload.payload)
+  return withReplayEventMeta({
+    id: replayPartId("view", meta),
+    type: "view",
+    viewTitle: stringValue(payload.title) || stringValue(payload.message) || "结构化视图",
+    viewType: stringValue(payload.view_type) || stringValue(payload.kind) || "view",
+    viewLevel: stringValue(payload.level) || "info",
+    viewPayload: Object.keys(nestedPayload).length ? nestedPayload : payload,
+  }, meta)
+}
+
+function replayUpsertToolPart(
+  turns: unknown[],
+  toolName: string,
+  patch: Record<string, unknown>,
+  meta: { eventKey?: string; sessionEventSeq?: number }
+): void {
+  const toolCallId = stringValue(patch.toolCallId)
+  if (!toolCallId) return
+  const assistant = ensureReplayAssistantMessage(turns)
+  const parts = cloneArray(arrayValue(assistant.parts))
+  const index = parts.findIndex((rawPart) => {
+    const part = objectValue(rawPart)
+    return stringValue(part.type) === "tool" && stringValue(part.toolCallId) === toolCallId
+  })
+  const current = index >= 0 ? objectValue(parts[index]) : {
+    id: `tool-${toolCallId}`,
+    type: "tool",
+    tool: toolName,
+    toolCallId,
+    status: "running",
+    toolOutput: "",
+  }
+  const next = withReplayEventMeta({
+    ...current,
+    ...definedRecord(patch),
+    id: stringValue(current.id) || `tool-${toolCallId}`,
+    type: "tool",
+    tool: toolName,
+    toolCallId,
+  }, meta)
+  if (index >= 0) {
+    parts[index] = next
+  } else {
+    parts.push(next)
+  }
+  assistant.parts = parts
+}
+
+function replayPatchToolPart(
+  turns: unknown[],
+  toolCallId: string | undefined,
+  approvalId: string | undefined,
+  patch: Record<string, unknown>,
+  meta: { eventKey?: string; sessionEventSeq?: number }
+): void {
+  const assistant = ensureReplayAssistantMessage(turns)
+  assistant.parts = arrayValue(assistant.parts).map((rawPart) => {
+    const part = objectValue(rawPart)
+    if (stringValue(part.type) !== "tool") return rawPart
+    if (toolCallId && stringValue(part.toolCallId) !== toolCallId) return rawPart
+    if (!toolCallId && approvalId && stringValue(part.approvalId) !== approvalId) return rawPart
+    return withReplayEventMeta({ ...part, ...definedRecord(patch) }, meta)
+  })
+}
+
+function findReplayToolPart(
+  turns: unknown[],
+  toolCallId: string | undefined
+): Record<string, unknown> | undefined {
+  if (!toolCallId) return undefined
+  for (const rawTurn of turns) {
+    const turn = objectValue(rawTurn)
+    for (const rawMessage of arrayValue(turn.assistantMessages)) {
+      for (const rawPart of arrayValue(objectValue(rawMessage).parts)) {
+        const part = objectValue(rawPart)
+        if (stringValue(part.type) === "tool" && stringValue(part.toolCallId) === toolCallId) {
+          return part
+        }
+      }
+    }
+  }
+  return undefined
+}
+
+function requiredReplayToolCallId(payload: Record<string, unknown>): string | undefined {
+  return stringValue(payload.tool_call_id) || stringValue(payload.toolCallId)
+}
+
+function definedRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined))
+}
+
+function isReplayStructuredUiEvent(type: string): boolean {
+  return [
+    "remote_event",
+    "mcp_event",
+    "model_event",
+    "session_event",
+    "command_event",
+    "approval_event",
+    "system_event",
+    "agent_event",
+    "ui_event",
+  ].includes(type)
+}
+
+function replayUiEventTitle(type: string): string {
+  const labels: Record<string, string> = {
+    remote_event: "远程事件",
+    mcp_event: "MCP 事件",
+    model_event: "模型事件",
+    session_event: "会话事件",
+    command_event: "命令事件",
+    approval_event: "审批事件",
+    system_event: "系统事件",
+    agent_event: "智能体事件",
+    ui_event: "运行事件",
+  }
+  return labels[type] || "运行事件"
+}
+
 function mergeSnapshotTurnsWithMessageHistory(
   snapshotTurns: unknown[],
   messages: unknown[],
@@ -1061,12 +1417,15 @@ function mergeSnapshotTurnsWithMessageHistory(
 ): unknown[] {
   const turns = cloneArray(snapshotTurns)
   const assistantGroups = assistantContentsByTurn(messages)
-  if (!assistantGroups.length) return turns
 
   for (let turnIndex = 0; turnIndex < turns.length && turnIndex < assistantGroups.length; turnIndex += 1) {
     const authoritativeFinal = assistantGroups[turnIndex][assistantGroups[turnIndex].length - 1]
     if (!authoritativeFinal) continue
     turns[turnIndex] = patchTurnFinalAssistantText(turns[turnIndex], authoritativeFinal, turnIndex)
+  }
+
+  if (turns.length < fallbackTurns.length) {
+    turns.push(...cloneArray(fallbackTurns.slice(turns.length)))
   }
 
   if (assistantTextLength(turns) === 0 && assistantTextLength(fallbackTurns) > 0) {
@@ -1194,6 +1553,22 @@ function buildBundleFromMessages(
   const turns: Record<string, unknown>[] = []
   let pendingTurn: Record<string, unknown> | undefined
   let displayIndex = 0
+  const ensurePendingTurn = () => {
+    if (!pendingTurn) {
+      pendingTurn = {
+        userMessage: {
+          id: `${metadata.id}-user-${displayIndex}`,
+          role: "user",
+          text: "",
+          parts: [],
+          timestamp: Date.parse(metadata.savedAt) || Date.now(),
+        },
+        assistantMessages: [],
+      }
+      turns.push(pendingTurn)
+    }
+    return pendingTurn
+  }
   for (const raw of messages) {
     const message = objectValue(raw)
     const role = stringValue(message.role)
@@ -1213,19 +1588,7 @@ function buildBundleFromMessages(
       turns.push(pendingTurn)
       displayIndex += 1
     } else if (role === "assistant") {
-      if (!pendingTurn) {
-        pendingTurn = {
-          userMessage: {
-            id: `${metadata.id}-user-${displayIndex}`,
-            role: "user",
-            text: "",
-            parts: [],
-            timestamp: Date.parse(metadata.savedAt) || Date.now(),
-          },
-          assistantMessages: [],
-        }
-        turns.push(pendingTurn)
-      }
+      pendingTurn = ensurePendingTurn()
       const assistantMessages = arrayValue(pendingTurn.assistantMessages)
       assistantMessages.push({
         id: `${metadata.id}-assistant-${displayIndex}`,
@@ -1237,6 +1600,28 @@ function buildBundleFromMessages(
             type: "text",
             text: content,
             textFormat: "markdown",
+          },
+        ],
+        timestamp: Date.parse(metadata.savedAt) || Date.now(),
+      })
+      pendingTurn.assistantMessages = assistantMessages
+      displayIndex += 1
+    } else if (role === "tool") {
+      pendingTurn = ensurePendingTurn()
+      const assistantMessages = arrayValue(pendingTurn.assistantMessages)
+      assistantMessages.push({
+        id: `${metadata.id}-tool-result-${displayIndex}`,
+        role: "assistant",
+        text: "",
+        parts: [
+          {
+            id: `${metadata.id}-tool-result-part-${displayIndex}`,
+            type: "tool",
+            tool: stringValue(message.name) || "tool",
+            toolCallId: stringValue(message.tool_call_id),
+            status: "returned",
+            toolOutput: content,
+            toolOutputFormat: "plain",
           },
         ],
         timestamp: Date.parse(metadata.savedAt) || Date.now(),

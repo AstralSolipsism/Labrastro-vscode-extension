@@ -144,6 +144,66 @@ describe("session history", () => {
       historyCutIndex: 2,
     })
   })
+
+  it("preserves local turns when a remote bundle is older but still non-empty", () => {
+    const local = bundle([
+      {
+        userMessage: {
+          id: "u1",
+          role: "user",
+          text: "first",
+          parts: [],
+          timestamp: 0,
+        },
+        assistantMessages: [],
+      },
+      {
+        userMessage: {
+          id: "u2",
+          role: "user",
+          text: "write the file",
+          parts: [],
+          timestamp: 1,
+        },
+        assistantMessages: [
+          {
+            id: "a2",
+            role: "assistant",
+            text: "Now writing the comprehensive synthesis document.",
+            parts: [
+              {
+                id: "p2",
+                type: "text",
+                text: "Now writing the comprehensive synthesis document.",
+              },
+            ],
+            timestamp: 2,
+          },
+        ],
+      },
+    ])
+    const remote = bundle([
+      {
+        userMessage: {
+          id: "ru1",
+          role: "user",
+          text: "first",
+          parts: [],
+          timestamp: 0,
+        },
+        assistantMessages: [],
+      },
+    ])
+
+    expect(shouldPreserveExistingSessionContent(remote, local)).toBe(true)
+
+    const merged = mergeRemoteBundlePreservingLocalContent(remote, local)
+    expect(merged.turns).toHaveLength(2)
+    expect(merged.turns[1].userMessage.text).toBe("write the file")
+    expect(merged.turns[1].assistantMessages[0].text).toBe(
+      "Now writing the comprehensive synthesis document."
+    )
+  })
 })
 
 describe("initial session load guard", () => {

@@ -88,7 +88,8 @@ export function shouldPreserveExistingSessionContent(
     existingBundle &&
       (
         (sessionBundleHasContent(existingBundle) && !sessionBundleHasContent(incomingBundle)) ||
-        (bundleHasStructuredContent(existingBundle) && !bundleHasStructuredContent(incomingBundle))
+        (bundleHasStructuredContent(existingBundle) && !bundleHasStructuredContent(incomingBundle)) ||
+        (sessionBundleHasContent(existingBundle) && incomingBundle.turns.length < existingBundle.turns.length)
       )
   )
 }
@@ -110,7 +111,11 @@ export function mergeRemoteBundlePreservingLocalContent(
       ...cloneValue(remoteBundle.stats),
       taskText: remoteBundle.stats.taskText || localBundle.stats.taskText,
     },
-    turns: localBundle.turns.map((turn, index) => applyRemoteHistoryMapping(remoteBundle.turns[index], turn)),
+    turns: Array.from({ length: Math.max(localBundle.turns.length, remoteBundle.turns.length) }, (_, index) => {
+      const localTurn = localBundle.turns[index]
+      if (localTurn) return applyRemoteHistoryMapping(remoteBundle.turns[index], localTurn)
+      return cloneValue(remoteBundle.turns[index])
+    }).filter(Boolean),
     traceNodes: remoteBundle.traceNodes.length ? cloneValue(remoteBundle.traceNodes) : cloneValue(localBundle.traceNodes),
     traceEdges: remoteBundle.traceEdges.length ? cloneValue(remoteBundle.traceEdges) : cloneValue(localBundle.traceEdges),
     traceUI: {
