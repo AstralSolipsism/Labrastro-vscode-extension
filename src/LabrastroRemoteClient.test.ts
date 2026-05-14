@@ -840,7 +840,6 @@ describe("LabrastroRemoteClient chat start", () => {
       model_id: "V4FLASH",
       parameters: { max_context_tokens: 1000000 },
     })
-    expect(postedBody).not.toHaveProperty("taskflow_goal_id")
   })
 
   it("switches the current session main model through the peer session endpoint", async () => {
@@ -1048,26 +1047,10 @@ describe("LabrastroRemoteClient chat start", () => {
     })
     await client.getTaskflowState("taskflow-1")
     await client.getTaskflowComplexity("taskflow-1")
-    await client.getTaskflowReviewCards("taskflow-1")
     await client.getTaskflowRuntime("taskflow-1")
     await client.recordTaskflowDiscoveryTurn("taskflow-1", {
       actor: "agent",
       work_item_candidates: [{ id: "candidate-1" }],
-    })
-    await client.answerTaskflowQuestion("taskflow-1", "question-1", {
-      answer: "No migration.",
-      actor: "user",
-    })
-    await client.answerTaskflowDecision("taskflow-1", "decision-1", {
-      selectedOptionId: "brief",
-      answer: "Use brief confirmation.",
-      rationale: "Explicit boundary.",
-      actor: "user",
-    })
-    await client.answerTaskflowReviewCard("taskflow-1", "card-1", {
-      action: "accept_recommendation",
-      value: "brief",
-      actor: "user",
     })
     await client.compileTaskflowBrief("taskflow-1", { actor: "agent" })
     await client.markTaskflowBriefReady("taskflow-1", { version: 2, actor: "agent" })
@@ -1109,7 +1092,7 @@ describe("LabrastroRemoteClient chat start", () => {
         goal_id: "goal-1",
       },
     })
-    expect(calls.slice(1, 5)).toMatchObject([
+    expect(calls.slice(1, 4)).toMatchObject([
       {
         method: "GET",
         url: "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1?peer_token=peer-token-1",
@@ -1120,14 +1103,10 @@ describe("LabrastroRemoteClient chat start", () => {
       },
       {
         method: "GET",
-        url: "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/review-cards?peer_token=peer-token-1",
-      },
-      {
-        method: "GET",
         url: "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/runtime?peer_token=peer-token-1",
       },
     ])
-    expect(calls.slice(5, 19)).toMatchObject([
+    expect(calls.slice(4, 15)).toMatchObject([
       {
         method: "POST",
         url: "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/discovery-turn",
@@ -1135,36 +1114,6 @@ describe("LabrastroRemoteClient chat start", () => {
           peer_token: "peer-token-1",
           actor: "agent",
           work_item_candidates: [{ id: "candidate-1" }],
-        },
-      },
-      {
-        method: "POST",
-        url: "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/questions/question-1/answer",
-        body: {
-          peer_token: "peer-token-1",
-          answer: "No migration.",
-          actor: "user",
-        },
-      },
-      {
-        method: "POST",
-        url: "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/decisions/decision-1/answer",
-        body: {
-          peer_token: "peer-token-1",
-          selected_option_id: "brief",
-          answer: "Use brief confirmation.",
-          rationale: "Explicit boundary.",
-          actor: "user",
-        },
-      },
-      {
-        method: "POST",
-        url: "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/review-cards/card-1/answer",
-        body: {
-          peer_token: "peer-token-1",
-          action: "accept_recommendation",
-          value: "brief",
-          actor: "user",
         },
       },
       {
@@ -1237,7 +1186,7 @@ describe("LabrastroRemoteClient chat start", () => {
         },
       },
     ])
-    expect(calls[19]).toMatchObject({
+    expect(calls[15]).toMatchObject({
       method: "POST",
       url: "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/complexity/override",
       body: {
@@ -1246,6 +1195,90 @@ describe("LabrastroRemoteClient chat start", () => {
         reason: "Architectural governance required.",
         actor: "architect",
       },
+    })
+  })
+
+  it("calls taskflow v1 workspace peer endpoints", async () => {
+    vscodeMock.labrastroValue = "http://127.0.0.1:8765"
+    const context = {
+      secrets: {
+        get: vi.fn(async () => undefined),
+      },
+    }
+    const calls: Array<{ method: string; url: string; body: Record<string, unknown> }> = []
+    const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
+      calls.push({
+        method: String(init?.method || "GET"),
+        url: String(input),
+        body: init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {},
+      })
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { "Content-Type": "application/json" },
+      })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    const client = new LabrastroRemoteClient(context as never)
+    ;(client as unknown as { peerInfo: { peer_id: string; peer_token: string } }).peerInfo = {
+      peer_id: "peer-1",
+      peer_token: "peer-token-1",
+    }
+    const peerProcess = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter
+      stderr: EventEmitter
+      exitCode: number | null
+      kill: ReturnType<typeof vi.fn>
+    }
+    peerProcess.stdout = new EventEmitter()
+    peerProcess.stderr = new EventEmitter()
+    peerProcess.exitCode = null
+    peerProcess.kill = vi.fn()
+    ;(client as unknown as { peerProcess: typeof peerProcess }).peerProcess = peerProcess
+
+    await client.getTaskflowWorkspace("taskflow-1")
+    await client.getTaskflowReviewCardsV1("taskflow-1")
+    await client.getTaskflowProjectMemory("taskflow-1")
+    await client.getTaskflowProjectorPreview("taskflow-1", "speckit")
+    await client.answerTaskflowReviewCardV1("taskflow-1", "card-1", {
+      action: "accept",
+      actor: "user",
+    })
+    await client.previewTaskflowProjectMemoryPatch("taskflow-1", {
+      actor: "user",
+      reason: "Align term.",
+      source: "workspace",
+      operations: [{ type: "upsert_term", term: "CompilerDecision", definition: "Reviewable choice." }],
+    })
+    await client.applyTaskflowProjectMemoryPatch("taskflow-1", "patch-1", {
+      actor: "user",
+      reason: "Align term.",
+      source: "workspace",
+      operations: [{ type: "upsert_term", term: "CompilerDecision", definition: "Reviewable choice." }],
+    })
+    await client.reviewTaskflowCompilerDecision("taskflow-1", "compiler-decision-1", {
+      action: "force_create",
+      actor: "user",
+      reason: "Separate boundary.",
+    })
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/workspace?peer_token=peer-token-1",
+      "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/review-cards-v1?peer_token=peer-token-1",
+      "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/project-memory?peer_token=peer-token-1",
+      "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/projector-preview?target=speckit&peer_token=peer-token-1",
+      "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/review-cards-v1/card-1/actions",
+      "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/project-memory/patches/preview",
+      "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/project-memory/patches/patch-1/apply",
+      "http://127.0.0.1:8765/remote/taskflow/taskflows/taskflow-1/compiler-decisions/compiler-decision-1/review",
+    ])
+    expect(calls[4].body).toMatchObject({
+      peer_token: "peer-token-1",
+      action: "accept",
+      actor: "user",
+    })
+    expect(calls[7].body).toMatchObject({
+      peer_token: "peer-token-1",
+      action: "force_create",
+      reason: "Separate boundary.",
     })
   })
 })
