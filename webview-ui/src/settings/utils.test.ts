@@ -91,13 +91,14 @@ describe("settings utils", () => {
       provider: "deepseek",
       model: "deepseek-chat",
       maxTokens: 4096,
-      maxContextTokens: 128000,
+      maxContextTokens: 1000000,
       temperature: 0,
       reasoningEffort: "",
       thinkingEnabled: true,
     })).toMatchObject({
       profile_id: "deepseek-main",
       model: "deepseek-chat",
+      max_context_tokens: 1000000,
       reasoning_effort: undefined,
       thinking_enabled: true,
     })

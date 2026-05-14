@@ -24,6 +24,12 @@ export interface HostTargetSummary {
   tone: "ready" | "warning" | "error" | "muted"
 }
 
+export interface RequiredChatModelSelection {
+  ok: boolean
+  model?: ChatModelOption
+  message: string
+}
+
 export const FALLBACK_CHAT_MODE_OPTIONS: ChatModeOption[] = [
   {
     id: "coder",
@@ -125,6 +131,7 @@ export function normalizeModelOptions(
   runtimeState?: Record<string, unknown>,
 ): ChatModelOption[] {
   return uniqueModels([
+    ...modelOptionsFromProfiles(adminState.model_profiles, adminState.active_main),
     ...modelOptionsFromCatalog(adminState.provider_model_catalog),
     ...modelOptionsFromProviders(adminState.providers),
     ...modelOptionsFromRuntime(runtimeState),
@@ -144,6 +151,33 @@ export function resolveModelSelection(
   if (activeModelId && options.some((option) => option.id === activeModelId)) return activeModelId
   const active = options.find((option) => option.activeSession || option.activeDefault)
   return active?.id || options[0]?.id || current || ""
+}
+
+export function resolveRequiredChatModelSelection(
+  current: string,
+  options: ChatModelOption[],
+): RequiredChatModelSelection {
+  if (!options.length) {
+    return {
+      ok: false,
+      message: "模型列表未加载或没有可用模型，请先在设置中配置服务商模型。",
+    }
+  }
+  const selected = current.trim()
+  if (!selected) {
+    return {
+      ok: false,
+      message: "请选择会话模型后再发送。",
+    }
+  }
+  const model = options.find((option) => option.id === selected)
+  if (!model) {
+    return {
+      ok: false,
+      message: "当前选择的模型不可用，请刷新模型列表或重新选择模型。",
+    }
+  }
+  return { ok: true, model, message: "" }
 }
 
 export function modelLabel(profileId: string, options: ChatModelOption[], fallbackModel = ""): string {
@@ -225,26 +259,51 @@ function uniqueModes(items: ChatModeOption[]): ChatModeOption[] {
 }
 
 function uniqueModels(items: ChatModelOption[]): ChatModelOption[] {
-  const seen = new Set<string>()
+  const byId = new Map<string, ChatModelOption>()
   const result: ChatModelOption[] = []
   for (const item of items) {
-    if (!item.id || !item.providerId || !item.modelId || seen.has(item.id)) continue
-    seen.add(item.id)
-    result.push(item)
-    continue
-  }
-  for (const item of items) {
-    if (!item.id) continue
-    const existing = result.find((candidate) => candidate.id === item.id)
-    if (!existing) continue
+    if (!item.id || !item.providerId || !item.modelId) continue
+    const existing = byId.get(item.id)
+    if (!existing) {
+      byId.set(item.id, item)
+      result.push(item)
+      continue
+    }
     existing.activeDefault = existing.activeDefault || item.activeDefault
     existing.activeSession = existing.activeSession || item.activeSession
+    if (!existing.description && item.description) existing.description = item.description
+    if (!existing.parameters && item.parameters) existing.parameters = item.parameters
   }
   return result
 }
 
 export function modelOptionId(providerId: string, modelId: string): string {
   return `${providerId.trim()}::${modelId.trim()}`
+}
+
+function modelOptionsFromProfiles(value: unknown, activeMain: unknown): ChatModelOption[] {
+  if (!Array.isArray(value)) return []
+  const mainId = stringValue(activeMain)
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+    .map((item) => {
+      const providerId = stringValue(item.provider) || stringValue(item.provider_id) || stringValue(item.providerId)
+      const modelId = stringValue(item.model) || stringValue(item.model_id) || stringValue(item.modelId)
+      const profileId = stringValue(item.id) || stringValue(item.profile_id) || stringValue(item.name)
+      const parameters = modelParametersFromRecord(item)
+      return {
+        id: modelOptionId(providerId, modelId),
+        providerId,
+        modelId,
+        label: modelDisplayLabel(providerId, modelId),
+        model: modelId,
+        provider: providerId,
+        description: modelProfileDescription(parameters),
+        activeDefault: Boolean(profileId && profileId === mainId),
+        activeSession: false,
+        ...(Object.keys(parameters).length ? { parameters } : {}),
+      }
+    })
 }
 
 function modelOptionsFromCatalog(value: unknown): ChatModelOption[] {
@@ -372,6 +431,55 @@ function objectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {}
+}
+
+function modelParametersFromRecord(record: Record<string, unknown>): Record<string, unknown> {
+  const parameters = { ...objectValue(record.parameters) }
+  assignNumberParameter(parameters, "max_tokens", record.max_tokens)
+  assignNumberParameter(parameters, "max_context_tokens", record.max_context_tokens)
+  assignNumberParameter(parameters, "temperature", record.temperature)
+  const reasoningEffort = stringValue(record.reasoning_effort)
+  if (reasoningEffort) parameters.reasoning_effort = reasoningEffort
+  if (typeof record.thinking_enabled === "boolean") parameters.thinking_enabled = record.thinking_enabled
+  return parameters
+}
+
+function assignNumberParameter(parameters: Record<string, unknown>, key: string, value: unknown): void {
+  const parsed = numberValue(value)
+  if (parsed !== undefined) parameters[key] = parsed
+}
+
+function modelProfileDescription(
+  parameters: Record<string, unknown>,
+): string {
+  const parts: string[] = []
+  const contextTokens = numberValue(parameters.max_context_tokens)
+  const maxTokens = numberValue(parameters.max_tokens)
+  if (contextTokens !== undefined) parts.push(`上下文 ${formatTokenCount(contextTokens)}`)
+  if (maxTokens !== undefined) parts.push(`输出 ${formatTokenCount(maxTokens)}`)
+  if (typeof parameters.thinking_enabled === "boolean") {
+    parts.push(parameters.thinking_enabled ? "Thinking" : "No thinking")
+  }
+  return parts.join(" · ")
+}
+
+function formatTokenCount(value: number): string {
+  if (value >= 1000000) return `${trimNumber(value / 1000000)}M`
+  if (value >= 1000) return `${trimNumber(value / 1000)}K`
+  return String(value)
+}
+
+function trimNumber(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(/\.0$/, "")
+}
+
+function numberValue(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return undefined
 }
 
 function executorEngineLabel(engine?: string): string {

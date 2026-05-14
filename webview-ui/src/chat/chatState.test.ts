@@ -11,6 +11,7 @@ import {
   resolveChatModeOptions,
   resolveHostTargetSummary,
   resolveModelSelection,
+  resolveRequiredChatModelSelection,
   resolveModeSelection,
   shouldAcceptModelSwitchResponse,
 } from "./chatState"
@@ -31,7 +32,7 @@ describe("chat messages", () => {
     })
   })
 
-  it("keeps legacy chat.send shape when optional routing is absent", () => {
+  it("omits optional routing fields when chat mode does not need them", () => {
     expect(buildChatSendMessage({ text: "hello", workflowMode: "chat" })).toEqual({
       type: "chat.send",
       text: "hello",
@@ -71,12 +72,14 @@ describe("chat messages", () => {
       sessionId: "session-1",
       providerId: "  deepseek  ",
       modelId: "  V4PRO  ",
+      parameters: { max_context_tokens: 1000000 },
       requestId: "req-1",
     })).toEqual({
       type: "session.model.switch",
       sessionId: "session-1",
       providerId: "deepseek",
       modelId: "V4PRO",
+      parameters: { max_context_tokens: 1000000 },
       requestId: "req-1",
     })
   })
@@ -207,6 +210,43 @@ describe("chat state", () => {
     expect(modelLabel("deepseek::V4PRO", options)).toBe("deepseek：V4 Pro")
   })
 
+  it("uses saved model profile parameters before raw catalog entries", () => {
+    const options = normalizeModelOptions({
+      active_main: "deepseek-chat-profile",
+      model_profiles: [
+        {
+          id: "deepseek-chat-profile",
+          provider: "deepseek",
+          model: "deepseek-chat",
+          max_tokens: 8192,
+          max_context_tokens: 1000000,
+          temperature: 0.2,
+          reasoning_effort: "high",
+          thinking_enabled: true,
+        },
+      ],
+      provider_model_catalog: [
+        { provider_id: "deepseek", model_id: "deepseek-chat", label: "DeepSeek Chat" },
+      ],
+    })
+
+    expect(options).toHaveLength(1)
+    expect(options[0]).toMatchObject({
+      id: "deepseek::deepseek-chat",
+      providerId: "deepseek",
+      modelId: "deepseek-chat",
+      activeDefault: true,
+      parameters: {
+        max_tokens: 8192,
+        max_context_tokens: 1000000,
+        temperature: 0.2,
+        reasoning_effort: "high",
+        thinking_enabled: true,
+      },
+    })
+    expect(modelDescription("deepseek::deepseek-chat", options)).toContain("上下文 1M")
+  })
+
   it("keeps the active runtime model available when provider catalog is absent", () => {
     const options = normalizeModelOptions({}, {
       active_model_provider: "deepseek",
@@ -241,6 +281,28 @@ describe("chat state", () => {
     expect(resolveModelSelection("", options, {}, { active_model_provider: "anthropic", active_model: "claude-sonnet" })).toBe("anthropic::claude-sonnet")
     expect(resolveModelSelection("", options, { active_agent_model: { provider: "openai", model: "gpt-5.4" } })).toBe("openai::gpt-5.4")
     expect(resolveModelSelection("", [options[1]], {})).toBe("anthropic::claude-sonnet")
+  })
+
+  it("requires a resolved model before chat can start", () => {
+    const options = normalizeModelOptions({
+      provider_model_catalog: [
+        { provider_id: "deepseek", model_id: "V4FLASH" },
+      ],
+    })
+
+    expect(resolveRequiredChatModelSelection("", []).ok).toBe(false)
+    expect(resolveRequiredChatModelSelection("", options)).toMatchObject({
+      ok: false,
+      message: "请选择会话模型后再发送。",
+    })
+    expect(resolveRequiredChatModelSelection("missing::model", options)).toMatchObject({
+      ok: false,
+      message: "当前选择的模型不可用，请刷新模型列表或重新选择模型。",
+    })
+    expect(resolveRequiredChatModelSelection("deepseek::V4FLASH", options)).toMatchObject({
+      ok: true,
+      model: { providerId: "deepseek", modelId: "V4FLASH" },
+    })
   })
 
   it("routes model selection to immediate switch or queued switch", () => {
