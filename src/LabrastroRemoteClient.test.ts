@@ -824,6 +824,9 @@ describe("LabrastroRemoteClient chat start", () => {
       mode: "taskflow",
       workflowMode: "taskflow",
       taskflowId: "taskflow-1",
+      providerId: "deepseek",
+      modelId: "V4FLASH",
+      parameters: { max_context_tokens: 1000000 },
     })).resolves.toMatchObject({ chat_id: "chat-1" })
 
     expect(postedBody).toMatchObject({
@@ -833,6 +836,9 @@ describe("LabrastroRemoteClient chat start", () => {
       mode: "taskflow",
       workflow_mode: "taskflow",
       taskflow_id: "taskflow-1",
+      provider_id: "deepseek",
+      model_id: "V4FLASH",
+      parameters: { max_context_tokens: 1000000 },
     })
     expect(postedBody).not.toHaveProperty("taskflow_goal_id")
   })
