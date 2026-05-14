@@ -152,10 +152,6 @@ export const settingsMessages = {
     port.postMessage({ type: "modelProfile.save", payload })
   },
 
-  saveAndActivateModelProfile(port: SettingsMessagePort, target: string, payload: Record<string, unknown>): void {
-    port.postMessage({ type: "modelProfile.saveAndActivate", target, payload })
-  },
-
   replyApproval(
     port: SettingsMessagePort,
     input: { chatId?: string; approvalId: string; decision: string },

@@ -66,9 +66,8 @@ function executorLocationLabel(location: ExecutorLocation): string {
 function executorEngineLabel(engine: ExecutorEngine): string {
   return EXECUTOR_ENGINES.find((e) => e.id === engine)?.label || engine
 }
-type ModelTarget = "main" | "sub" | "both"
-type ModelDetailMode = "fetched" | "custom"
-type ModelActionIntent = "" | "savePreset" | "activateMain" | "activateSub" | "activateBoth"
+type ModelDetailMode = "fetched" | "custom"
+type ModelActionIntent = "" | "savePreset"
 type EnvironmentEntryKind = "cli" | "mcp" | "skill"
 type ToolchainKind = EnvironmentEntryKind
 type ToolchainKindFilter = "all" | ToolchainKind
@@ -1070,13 +1069,7 @@ function profileMatches(profile: Record<string, unknown>, providerId: string, mo
   return stringValue(profile.provider) === providerId && stringValue(profile.model) === modelId
 }
 
-function targetLabel(target: ModelTarget): string {
-  if (target === "main") return "主模型"
-  if (target === "sub") return "副模型"
-  return "主+副模型"
-}
-
-function environmentStatusLabel(status: EnvironmentEntryStatus): string {
+function environmentStatusLabel(status: EnvironmentEntryStatus): string {
   switch (status) {
     case "checking":
       return "检查中"
@@ -1290,7 +1283,6 @@ function summarizeEnvironmentEntries(entries: EnvironmentEntryState[]) {
 function formatActionResult(
   result: Record<string, unknown> | undefined,
   intent: ModelActionIntent,
-  modelName: string,
 ): string | undefined {
   if (!result) return undefined
 
@@ -1321,24 +1313,11 @@ function formatActionResult(
   if (modelProfile && typeof modelProfile === "object") {
     const profile = modelProfile as Record<string, unknown>
     const presetId = stringValue(profile.id, stringValue(result.profile_id))
-    const resolvedModelName = stringValue(profile.model, modelName)
-    if (intent === "savePreset") {
+    if (intent === "savePreset") {
       return presetId ? `预设 ${presetId} 已保存。` : "模型预设已保存。"
     }
-    if (intent === "activateMain") {
-      return resolvedModelName ? `${resolvedModelName} 已设为主模型。` : "主模型已更新。"
-    }
-    if (intent === "activateSub") {
-      return resolvedModelName ? `${resolvedModelName} 已设为副模型。` : "副模型已更新。"
-    }
-    if (intent === "activateBoth") {
-      return resolvedModelName ? `${resolvedModelName} 已设为主+副模型。` : "主/副模型已更新。"
-    }
-  }
-  if (result.profile_id && result.target) {
-    return `预设 ${String(result.profile_id)} 已设为 ${targetLabel(result.target as ModelTarget)}。`
-  }
-  if (result.ok === true) {
+  }
+  if (result.ok === true) {
     return "操作已完成。"
   }
   return undefined
@@ -1479,18 +1458,11 @@ export function createSettingsController(props: SettingsViewProps) {
     const items = server.adminState().providers
     return Array.isArray(items) ? items as Record<string, unknown>[] : []
   })
-  const profiles = createMemo(() => {
-    const items = server.adminState().model_profiles
-    return Array.isArray(items) ? items as Record<string, unknown>[] : []
-  })
-  const activeMain = createMemo(() => stringValue(server.adminState().active_main, "-"))
-  const activeSub = createMemo(() => stringValue(server.adminState().active_sub, "-"))
-  const activeMainProfile = createMemo(() => profiles().find((profile) => stringValue(profile.id) === activeMain()))
-  const activeSubProfile = createMemo(() => profiles().find((profile) => stringValue(profile.id) === activeSub()))
-  const selectedProviderProfiles = createMemo(() =>
-    profiles().filter((profile) => stringValue(profile.provider) === providerId())
-  )
-  const selectedProvider = createMemo(() =>
+  const profiles = createMemo(() => {
+    const items = server.adminState().model_profiles
+    return Array.isArray(items) ? items as Record<string, unknown>[] : []
+  })
+  const selectedProvider = createMemo(() =>
     providers().find((provider) => stringValue(provider.id) === providerId())
   )
   const filteredFetchedModels = createMemo(() => {
@@ -1498,9 +1470,9 @@ export function createSettingsController(props: SettingsViewProps) {
     if (!query) return fetchedModels()
     return fetchedModels().filter((model) => model.id.toLowerCase().includes(query))
   })
-  const actionFeedback = createMemo(() =>
-    formatActionResult(server.actionResult(), actionIntent(), profileModel())
-  )
+  const actionFeedback = createMemo(() =>
+    formatActionResult(server.actionResult(), actionIntent())
+  )
   const providerErrorMessage = createMemo(() => {
     const message = server.adminError()
     if (!message) return undefined
@@ -1553,20 +1525,7 @@ export function createSettingsController(props: SettingsViewProps) {
     const host = currentHostUrl()
     return !hostUrlConfigured() && (host === "http://127.0.0.1:8765" || host === "http://localhost:8765")
   })
-  const currentDetailHasSavedPreset = createMemo(() =>
-    selectedProviderProfiles().some((profile) => profileMatches(profile, profileProvider(), profileModel()))
-  )
-  const currentDetailIsMain = createMemo(() =>
-    selectedProviderProfiles().some((profile) =>
-      profileMatches(profile, profileProvider(), profileModel()) && stringValue(profile.id) === activeMain()
-    )
-  )
-  const currentDetailIsSub = createMemo(() =>
-    selectedProviderProfiles().some((profile) =>
-      profileMatches(profile, profileProvider(), profileModel()) && stringValue(profile.id) === activeSub()
-    )
-  )
-  const showCustomModelFallback = createMemo(() => fetchedModels().length === 0)
+  const showCustomModelFallback = createMemo(() => fetchedModels().length === 0)
   const emptyModelListMessage = createMemo(() => {
     if (showCustomModelFallback()) {
       return modelFetchMessage() || "当前服务商无法自动提供模型列表，请使用“自定义模型名”。"
@@ -1815,10 +1774,7 @@ export function createSettingsController(props: SettingsViewProps) {
     }
   })
 
-  const modelProfilesFor = (modelId: string) =>
-    selectedProviderProfiles().filter((profile) => profileMatches(profile, providerId(), modelId))
-
-  const openModelDetail = (modelId: string, mode: ModelDetailMode) => {
+  const openModelDetail = (modelId: string, mode: ModelDetailMode) => {
     const existing = profiles().find((profile) => profileMatches(profile, providerId(), modelId))
     setModelDetailMode(mode)
     setProviderModel(modelId)
@@ -1845,24 +1801,7 @@ export function createSettingsController(props: SettingsViewProps) {
     setCustomModelDialogOpen(false)
   }
 
-  const openSavedPreset = (profile: Record<string, unknown>) => {
-    const modelId = stringValue(profile.model)
-    const hasFetchedModel = fetchedModels().some((item) => item.id === modelId)
-    setModelDetailMode(hasFetchedModel ? "fetched" : "custom")
-    setProviderModel(modelId)
-    setProfileId(stringValue(profile.id))
-    setProfileProvider(stringValue(profile.provider))
-    setProfileModel(modelId)
-    setMaxTokens(numberValue(profile.max_tokens, 4096))
-    setMaxContextTokens(numberValue(profile.max_context_tokens, 128000))
-    setTemperature(numberValue(profile.temperature, 0))
-    setReasoningEffort(stringValue(profile.reasoning_effort))
-    setThinkingEnabled(profile.thinking_enabled !== false)
-    setModelDetailOpen(true)
-    setCustomModelDialogOpen(false)
-  }
-
-  const openCustomModelDialog = () => {
+  const openCustomModelDialog = () => {
     setCustomModelDraft(profileModel() || providerModel() || "")
     setCustomModelDialogOpen(true)
   }
@@ -2674,33 +2613,7 @@ const refreshAdmin = () => {
     })
   }
 
-  const activateModelPreset = (target: ModelTarget) => {
-    const provider = profileProvider() || providerId()
-    const model = profileModel().trim()
-    if (!provider || !model) return
-    const existing = profiles().find((profile) => profileMatches(profile, provider, model))
-    const nextProfileId = stringValue(existing?.id, profileId().trim() || makeProfileId(provider, model))
-    setProfileId(nextProfileId)
-    setProfileProvider(provider)
-    setProfileModel(model)
-    setActionIntent(target === "main" ? "activateMain" : target === "sub" ? "activateSub" : "activateBoth")
-    vscode.postMessage({
-      type: "modelProfile.saveAndActivate",
-      target,
-      payload: {
-        profile_id: nextProfileId,
-        provider,
-        model,
-        max_tokens: numberValue(existing?.max_tokens, maxTokens()),
-        max_context_tokens: numberValue(existing?.max_context_tokens, maxContextTokens()),
-        temperature: numberValue(existing?.temperature, temperature()),
-        reasoning_effort: stringValue(existing?.reasoning_effort, reasoningEffort()) || undefined,
-        thinking_enabled: existing?.thinking_enabled === undefined ? thinkingEnabled() : existing.thinking_enabled !== false,
-      },
-    })
-  }
-
-  createEffect(() => {
+  createEffect(() => {
     const tab = normalizeSettingsTab(props.targetTab)
     if (tab) {
       setActiveTab(tab)
@@ -3051,11 +2964,6 @@ const refreshAdmin = () => {
     setThinkingEnabled,
     providers,
     profiles,
-    activeMain,
-    activeSub,
-    activeMainProfile,
-    activeSubProfile,
-    selectedProviderProfiles,
     selectedProvider,
     filteredFetchedModels,
     actionFeedback,
@@ -3079,9 +2987,6 @@ const refreshAdmin = () => {
     authAuditEvents,
     hostUrlDraftDiffers,
     isDefaultLocalHost,
-    currentDetailHasSavedPreset,
-    currentDetailIsMain,
-    currentDetailIsSub,
     showCustomModelFallback,
     emptyModelListMessage,
     environmentManifest,
@@ -3124,9 +3029,7 @@ const refreshAdmin = () => {
     toolchainIngestLogs,
     toolchainIngestDuplicates,
     hasToolchainIngestDuplicates,
-    modelProfilesFor,
     openModelDetail,
-    openSavedPreset,
     openCustomModelDialog,
     closeCustomModelDialog,
     confirmCustomModelDialog,
@@ -3189,7 +3092,6 @@ const refreshAdmin = () => {
     deleteProvider,
     toggleProviderEnabled,
     saveModelPreset,
-    activateModelPreset,
     executorLocationLabel,
     executorEngineLabel,
     environmentStatusLabel,
