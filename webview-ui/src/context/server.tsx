@@ -33,6 +33,8 @@ interface ServerContextValue {
   actionResult: () => Record<string, unknown> | undefined
   serverSettingsState: () => Record<string, unknown> | undefined
   serverSettingsError: () => string | undefined
+  diagnosticsState: () => Record<string, unknown> | undefined
+  diagnosticsError: () => string | undefined
   backendFeatures: () => Record<string, unknown>
   authUsersState: () => Record<string, unknown> | undefined
   authDevicesState: () => Record<string, unknown> | undefined
@@ -107,6 +109,8 @@ export const ServerProvider: ParentComponent = (props) => {
   const [actionResult, setActionResult] = createSignal<Record<string, unknown> | undefined>()
   const [serverSettingsState, setServerSettingsState] = createSignal<Record<string, unknown> | undefined>()
   const [serverSettingsError, setServerSettingsError] = createSignal<string | undefined>()
+  const [diagnosticsState, setDiagnosticsState] = createSignal<Record<string, unknown> | undefined>()
+  const [diagnosticsError, setDiagnosticsError] = createSignal<string | undefined>()
   const [backendFeatures, setBackendFeatures] = createSignal<Record<string, unknown>>({})
   const [authUsersState, setAuthUsersState] = createSignal<Record<string, unknown> | undefined>()
   const [authDevicesState, setAuthDevicesState] = createSignal<Record<string, unknown> | undefined>()
@@ -169,6 +173,13 @@ export const ServerProvider: ParentComponent = (props) => {
       }
       if (msg.type === "serverSettings.error") {
         setServerSettingsError(typeof msg.message === "string" ? msg.message : "Server settings request failed")
+      }
+      if (msg.type === "diagnostics.toolArguments.state" && typeof msg.payload === "object" && msg.payload) {
+        setDiagnosticsState(msg.payload as Record<string, unknown>)
+        setDiagnosticsError(undefined)
+      }
+      if (msg.type === "diagnostics.toolArguments.error") {
+        setDiagnosticsError(typeof msg.message === "string" ? msg.message : "Diagnostics request failed")
       }
       if (msg.type === "backend.features" && typeof msg.payload === "object" && msg.payload) {
         setBackendFeatures(msg.payload as Record<string, unknown>)
@@ -293,6 +304,8 @@ export const ServerProvider: ParentComponent = (props) => {
     actionResult,
     serverSettingsState,
     serverSettingsError,
+    diagnosticsState,
+    diagnosticsError,
     backendFeatures,
     authUsersState,
     authDevicesState,

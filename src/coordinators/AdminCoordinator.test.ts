@@ -19,6 +19,7 @@ function coordinator() {
       authAuditList: vi.fn(),
       serverSettingsRead: vi.fn(),
       serverSettingsUpdate: vi.fn(),
+      toolArgumentDiagnosticsStats: vi.fn(),
       providerRecord: vi.fn(),
       providerTest: vi.fn(),
       providerDelete: vi.fn(),
@@ -96,5 +97,24 @@ describe("AdminCoordinator", () => {
     await subject.handleMessage({ type: "openFile", path: "src/index.ts", line: 2, column: 3 }, vi.fn())
 
     expect(options.openFileTarget).toHaveBeenCalledWith("src/index.ts", 2, 3)
+  })
+
+  it("loads tool argument diagnostics stats", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    options.client.toolArgumentDiagnosticsStats.mockResolvedValue({
+      ok: true,
+      tool_argument_validation: { totals: { events: 1 } },
+    })
+
+    await expect(subject.handleMessage({ type: "diagnostics.toolArguments.stats" }, post)).resolves.toBe(true)
+
+    expect(post).toHaveBeenCalledWith({
+      type: "diagnostics.toolArguments.state",
+      payload: {
+        ok: true,
+        tool_argument_validation: { totals: { events: 1 } },
+      },
+    })
   })
 })

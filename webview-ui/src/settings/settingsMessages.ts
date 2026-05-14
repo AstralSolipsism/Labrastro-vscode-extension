@@ -48,6 +48,10 @@ export const settingsMessages = {
     port.postMessage({ type: "serverSettings.update", payload })
   },
 
+  readToolArgumentDiagnosticsStats(port: SettingsMessagePort): void {
+    port.postMessage({ type: "diagnostics.toolArguments.stats" })
+  },
+
   runToolchainIngest(port: SettingsMessagePort, payload: Record<string, unknown>): void {
     port.postMessage({ type: "toolchain.ingest.run", payload })
   },

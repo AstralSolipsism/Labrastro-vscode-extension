@@ -50,6 +50,8 @@ export type HostToWebviewMessageType =
   | "chat.started"
   | "connection.result"
   | "connection.state"
+  | "diagnostics.toolArguments.error"
+  | "diagnostics.toolArguments.state"
   | "environment.manifest"
   | "environment.run.completed"
   | "environment.run.error"
@@ -123,6 +125,7 @@ export type WebviewToHostMessageType =
   | "connection.host.save"
   | "connection.login"
   | "connection.logout"
+  | "diagnostics.toolArguments.stats"
   | "environment.cancel"
   | "environment.refreshManifest"
   | "environment.run"
@@ -218,6 +221,8 @@ const HOST_TO_WEBVIEW_TYPES = new Set<HostToWebviewMessageType>([
   "chat.started",
   "connection.result",
   "connection.state",
+  "diagnostics.toolArguments.error",
+  "diagnostics.toolArguments.state",
   "environment.manifest",
   "environment.run.completed",
   "environment.run.error",
@@ -286,6 +291,7 @@ const WEBVIEW_TO_HOST_TYPES = new Set<WebviewToHostMessageType>([
   "connection.host.save",
   "connection.login",
   "connection.logout",
+  "diagnostics.toolArguments.stats",
   "environment.cancel",
   "environment.refreshManifest",
   "environment.run",

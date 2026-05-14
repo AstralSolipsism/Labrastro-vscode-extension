@@ -356,6 +356,10 @@ export class LabrastroRemoteClient {
     return this.authenticatedPost("/remote/admin/server-settings/update", payload)
   }
 
+  async toolArgumentDiagnosticsStats(): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/diagnostics/tool-arguments/stats", {})
+  }
+
   async agentRunSubmit(payload: JsonObject): Promise<JsonObject> {
     return this.authenticatedPost("/remote/admin/agent-runs/submit", payload)
   }

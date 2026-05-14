@@ -199,6 +199,16 @@ export class AdminCoordinator {
           post({ type: "serverSettings.error", message: errorMessage(error) })
         }
         return true
+      case "diagnostics.toolArguments.stats":
+        try {
+          post({
+            type: "diagnostics.toolArguments.state",
+            payload: await this.options.client.toolArgumentDiagnosticsStats(),
+          })
+        } catch (error) {
+          post({ type: "diagnostics.toolArguments.error", message: errorMessage(error) })
+        }
+        return true
       case "openFile":
         await this.options.openFileTarget(
           stringValue(message.path) || "",
