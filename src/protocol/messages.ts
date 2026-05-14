@@ -85,8 +85,11 @@ export type HostToWebviewMessageType =
   | "toolchain.state"
   | "taskflow.complexity"
   | "taskflow.complexity.error"
+  | "taskflow.workspace"
   | "taskflow.state"
-  | "taskflow.reviewCards"
+  | "taskflow.projectMemory"
+  | "taskflow.projectMemory.patchPreview"
+  | "taskflow.projectorPreview"
   | "taskflow.runtime"
   | "taskflow.action.error"
   | "taskflow.focusChatInteraction"
@@ -160,11 +163,14 @@ export type WebviewToHostMessageType =
   | "settingsTabChanged"
   | "showInfo"
   | "taskflow.state.get"
+  | "taskflow.workspace.get"
   | "taskflow.runtime.get"
-  | "taskflow.reviewCards.get"
-  | "taskflow.question.answer"
-  | "taskflow.decision.answer"
-  | "taskflow.reviewCard.answer"
+  | "taskflow.reviewCardV1.action"
+  | "taskflow.projectMemory.get"
+  | "taskflow.projectMemory.patch.preview"
+  | "taskflow.projectMemory.patch.apply"
+  | "taskflow.compilerDecision.review"
+  | "taskflow.projectorPreview.get"
   | "taskflow.brief.compile"
   | "taskflow.brief.ready"
   | "taskflow.brief.confirm"
@@ -247,8 +253,11 @@ const HOST_TO_WEBVIEW_TYPES = new Set<HostToWebviewMessageType>([
   "toolchain.state",
   "taskflow.complexity",
   "taskflow.complexity.error",
+  "taskflow.workspace",
   "taskflow.state",
-  "taskflow.reviewCards",
+  "taskflow.projectMemory",
+  "taskflow.projectMemory.patchPreview",
+  "taskflow.projectorPreview",
   "taskflow.runtime",
   "taskflow.action.error",
   "taskflow.focusChatInteraction",
@@ -317,11 +326,14 @@ const WEBVIEW_TO_HOST_TYPES = new Set<WebviewToHostMessageType>([
   "settingsTabChanged",
   "showInfo",
   "taskflow.state.get",
+  "taskflow.workspace.get",
   "taskflow.runtime.get",
-  "taskflow.reviewCards.get",
-  "taskflow.question.answer",
-  "taskflow.decision.answer",
-  "taskflow.reviewCard.answer",
+  "taskflow.reviewCardV1.action",
+  "taskflow.projectMemory.get",
+  "taskflow.projectMemory.patch.preview",
+  "taskflow.projectMemory.patch.apply",
+  "taskflow.compilerDecision.review",
+  "taskflow.projectorPreview.get",
   "taskflow.brief.compile",
   "taskflow.brief.ready",
   "taskflow.brief.confirm",
