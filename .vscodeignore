@@ -1,9 +1,13 @@
 .vscode/**
 .github/**
+.claude/**
+.gitnexus/**
 src/**
 webview-ui/**
 node_modules/**
 scripts/**
+AGENTS.md
+CLAUDE.md
 *.ts
 *.vsix
 !dist/**

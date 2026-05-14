@@ -21,3 +21,7 @@ pnpm-debug.log*
 
 .DS_Store
 Thumbs.db
+.gitnexus/
+.claude/
+AGENTS.md
+CLAUDE.md
