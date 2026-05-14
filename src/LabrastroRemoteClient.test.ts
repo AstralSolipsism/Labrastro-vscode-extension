@@ -1486,11 +1486,11 @@ describe("LabrastroRemoteClient peer startup", () => {
     expect(childProcessMock.spawn.mock.calls[0][0]).toBe(expectedPeerBinaryPath(storagePath))
   })
 
-  it("reuses an existing versioned peer binary without downloading the artifact", async () => {
+  it("reuses an existing versioned peer binary after matching the host artifact", async () => {
     const storagePath = await makeTempStorage()
     const binaryPath = expectedPeerBinaryPath(storagePath)
     await fs.mkdir(path.dirname(binaryPath), { recursive: true })
-    await fs.writeFile(binaryPath, "cached-binary")
+    await fs.writeFile(binaryPath, "peer-binary")
     const context = makePeerContext(storagePath)
     const fetchMock = mockPeerFetch()
     mockPeerSpawn()
@@ -1498,7 +1498,26 @@ describe("LabrastroRemoteClient peer startup", () => {
     const client = new LabrastroRemoteClient(context as never)
     await client.environmentManifest()
 
-    expect(fetchPathCount(fetchMock, `/remote/artifacts/${peerTarget().os}/${peerTarget().arch}/rcoder-peer`)).toBe(0)
+    expect(fetchPathCount(fetchMock, `/remote/artifacts/${peerTarget().os}/${peerTarget().arch}/rcoder-peer`)).toBe(1)
+    expect(childProcessMock.spawn).toHaveBeenCalledTimes(1)
+    expect(childProcessMock.spawn.mock.calls[0][0]).toBe(binaryPath)
+  })
+
+  it("replaces a stale versioned peer binary when the host artifact changed", async () => {
+    const storagePath = await makeTempStorage()
+    const binaryPath = expectedPeerBinaryPath(storagePath)
+    await fs.mkdir(path.dirname(binaryPath), { recursive: true })
+    await fs.writeFile(binaryPath, "stale-peer-binary")
+    const artifactContent = Buffer.from("fresh-peer-binary")
+    const context = makePeerContext(storagePath)
+    const fetchMock = mockPeerFetch(artifactContent)
+    mockPeerSpawn()
+
+    const client = new LabrastroRemoteClient(context as never)
+    await client.environmentManifest()
+
+    expect(fetchPathCount(fetchMock, `/remote/artifacts/${peerTarget().os}/${peerTarget().arch}/rcoder-peer`)).toBe(1)
+    expect(await fs.readFile(binaryPath)).toEqual(artifactContent)
     expect(childProcessMock.spawn).toHaveBeenCalledTimes(1)
     expect(childProcessMock.spawn.mock.calls[0][0]).toBe(binaryPath)
   })
@@ -1517,6 +1536,54 @@ describe("LabrastroRemoteClient peer startup", () => {
     expect(await fs.readFile(binaryPath)).toEqual(artifactContent)
     expect(childProcessMock.spawn).toHaveBeenCalledTimes(1)
     expect(childProcessMock.spawn.mock.calls[0][0]).toBe(binaryPath)
+  })
+
+  it("reports peer stderr when registration exits before writing peer info", async () => {
+    const storagePath = await makeTempStorage()
+    const context = makePeerContext(storagePath)
+    mockPeerFetch()
+    childProcessMock.spawn.mockImplementation(() => {
+      const peerProcess = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter
+        stderr: EventEmitter
+        exitCode: number | null
+        signalCode: NodeJS.Signals | null
+        kill: ReturnType<typeof vi.fn>
+      }
+      peerProcess.stdout = new EventEmitter()
+      peerProcess.stderr = new EventEmitter()
+      peerProcess.exitCode = null
+      peerProcess.signalCode = null
+      peerProcess.kill = vi.fn(() => {
+        peerProcess.exitCode = 0
+        peerProcess.emit("exit", 0, null)
+        return true
+      })
+      queueMicrotask(() => {
+        peerProcess.stderr.emit(
+          "data",
+          Buffer.from(
+            'agent exited with error: register failed: http 400: {"error":"invalid_peer_runtime_context","details":{"missing":["host_info_min.shell"]}}'
+          )
+        )
+        peerProcess.exitCode = 1
+        peerProcess.emit("exit", 1, null)
+      })
+      return peerProcess
+    })
+
+    const client = new LabrastroRemoteClient(context as never)
+    let message = ""
+    try {
+      await client.environmentManifest()
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error)
+    }
+
+    expect(message).toContain("Peer exited before reporting registration info")
+    expect(message).toContain("invalid_peer_runtime_context")
+    expect(message).toContain("host_info_min.shell")
+    expect(message).not.toContain("ENOENT")
   })
 
   it("reports local peer binary file locks as a local remediation error", async () => {

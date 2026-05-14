@@ -103,6 +103,11 @@ interface PeerInfo {
   peer_token: string
 }
 
+interface PeerStartupOutput {
+  stdout: string[]
+  stderr: string[]
+}
+
 export class LabrastroRemoteClient {
   private peerProcess: ChildProcessWithoutNullStreams | undefined
   private peerInfo: PeerInfo | undefined
@@ -1085,8 +1090,17 @@ export class LabrastroRemoteClient {
       throw new Error("Peer startup was cancelled.")
     }
     this.peerProcess = peerProcess
-    peerProcess.stdout.on("data", (chunk) => console.log(`[labrastro peer] ${chunk}`))
-    peerProcess.stderr.on("data", (chunk) => console.warn(`[labrastro peer] ${chunk}`))
+    const peerOutput: PeerStartupOutput = { stdout: [], stderr: [] }
+    peerProcess.stdout.on("data", (chunk) => {
+      const text = String(chunk)
+      appendPeerOutput(peerOutput.stdout, text)
+      console.log(`[labrastro peer] ${text}`)
+    })
+    peerProcess.stderr.on("data", (chunk) => {
+      const text = String(chunk)
+      appendPeerOutput(peerOutput.stderr, text)
+      console.warn(`[labrastro peer] ${text}`)
+    })
     peerProcess.on("exit", () => {
       if (this.peerProcess === peerProcess) {
         this.peerProcess = undefined
@@ -1094,7 +1108,7 @@ export class LabrastroRemoteClient {
       }
     })
 
-    const peerInfo = await waitForPeerInfo(peerInfoPath)
+    const peerInfo = await waitForPeerInfo(peerInfoPath, peerProcess, peerOutput)
     if (this.peerStartupGeneration !== generation) {
       if (peerProcess.exitCode === null) {
         peerProcess.kill()
@@ -1155,20 +1169,25 @@ export class LabrastroRemoteClient {
       version,
       filename
     )
+    const artifactPath = `/remote/artifacts/${platform.os}/${platform.arch}/rcoder-peer`
+    const content = await this.requestBuffer(artifactPath)
     try {
       await fs.mkdir(path.dirname(binaryPath), { recursive: true })
       if (await isUsableFile(binaryPath)) {
-        await this.ensurePeerBinaryExecutable(binaryPath)
-        return binaryPath
+        const existing = await fs.readFile(binaryPath)
+        if (existing.equals(content)) {
+          await this.ensurePeerBinaryExecutable(binaryPath)
+          return binaryPath
+        }
+        return await this.installPeerBinary(binaryPath, content, true)
       }
       await removeEmptyFile(binaryPath)
     } catch (error) {
       throw peerBinaryAccessError(error, binaryPath)
     }
 
-    const content = await this.requestBuffer(`/remote/artifacts/${platform.os}/${platform.arch}/rcoder-peer`)
     try {
-      return await this.installPeerBinary(binaryPath, content)
+      return await this.installPeerBinary(binaryPath, content, false)
     } catch (error) {
       throw peerBinaryAccessError(error, binaryPath)
     }
@@ -1184,13 +1203,18 @@ export class LabrastroRemoteClient {
     }
   }
 
-  private async installPeerBinary(binaryPath: string, content: Buffer): Promise<string> {
+  private async installPeerBinary(binaryPath: string, content: Buffer, replaceExisting: boolean): Promise<string> {
     const tempPath = path.join(
       path.dirname(binaryPath),
       `${path.basename(binaryPath)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`
     )
     try {
       await fs.writeFile(tempPath, content, { flag: "wx" })
+      if (replaceExisting) {
+        await fs.rename(tempPath, binaryPath)
+        await this.ensurePeerBinaryExecutable(binaryPath)
+        return binaryPath
+      }
       try {
         await fs.copyFile(tempPath, binaryPath, fsConstants.COPYFILE_EXCL)
       } catch (error) {
@@ -1434,7 +1458,11 @@ async function removeEmptyFile(filePath: string): Promise<void> {
 }
 
 
-async function waitForPeerInfo(peerInfoPath: string): Promise<PeerInfo> {
+async function waitForPeerInfo(
+  peerInfoPath: string,
+  peerProcess: ChildProcessWithoutNullStreams,
+  output: PeerStartupOutput
+): Promise<PeerInfo> {
   const deadline = Date.now() + 15000
   let lastError: unknown
   while (Date.now() < deadline) {
@@ -1447,7 +1475,46 @@ async function waitForPeerInfo(peerInfoPath: string): Promise<PeerInfo> {
     } catch (error) {
       lastError = error
     }
+    if (peerProcessExited(peerProcess)) {
+      throw new Error(peerStartupFailureMessage(peerInfoPath, peerProcess, output, lastError, false))
+    }
     await new Promise((resolve) => setTimeout(resolve, 200))
   }
-  throw new Error(`Peer did not report registration info in time: ${String(lastError)}`)
+  throw new Error(peerStartupFailureMessage(peerInfoPath, peerProcess, output, lastError, true))
+}
+
+function peerProcessExited(peerProcess: ChildProcessWithoutNullStreams): boolean {
+  return peerProcess.exitCode !== null || peerProcess.signalCode != null
+}
+
+function appendPeerOutput(target: string[], text: string): void {
+  target.push(text)
+  while (target.join("").length > 4000) {
+    target.shift()
+  }
+}
+
+function peerStartupFailureMessage(
+  peerInfoPath: string,
+  peerProcess: ChildProcessWithoutNullStreams,
+  output: PeerStartupOutput,
+  lastError: unknown,
+  timedOut: boolean
+): string {
+  const reason = timedOut
+    ? "Peer did not report registration info in time"
+    : `Peer exited before reporting registration info (exit=${peerProcess.exitCode ?? "null"}, signal=${peerProcess.signalCode ?? "null"})`
+  const hasPeerOutput = output.stderr.length > 0 || output.stdout.length > 0
+  const details = [
+    peerOutputDetail("stderr", output.stderr),
+    peerOutputDetail("stdout", output.stdout),
+    lastError && !hasPeerOutput ? `last file read error: ${errorMessage(lastError)}` : "",
+    `peer info path: ${peerInfoPath}`,
+  ].filter(Boolean)
+  return `${reason}. ${details.join(" ")}`
+}
+
+function peerOutputDetail(label: string, chunks: string[]): string {
+  const text = chunks.join("").trim()
+  return text ? `${label}: ${text}` : ""
 }
