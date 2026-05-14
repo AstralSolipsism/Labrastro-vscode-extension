@@ -107,8 +107,8 @@ export class ChatRunCoordinator {
             post({
               type: "chat.error",
               message: providerId || modelId
-                ? "??????????????????"
-                : "????????????",
+                ? "模型选择不完整，请重新选择会话模型。"
+                : "请选择会话模型后再发送。",
             })
             return true
           }
@@ -154,51 +154,71 @@ export class ChatRunCoordinator {
         return this.handleTaskflowAction(message, post, "taskflow.state", message.type, (taskflowId) =>
           this.options.client.getTaskflowState(taskflowId)
         )
-      case "taskflow.reviewCards.get":
-        return this.handleTaskflowAction(message, post, "taskflow.reviewCards", message.type, (taskflowId) =>
-          this.options.client.getTaskflowReviewCards(taskflowId)
+      case "taskflow.workspace.get":
+        return this.handleTaskflowAction(message, post, "taskflow.workspace", message.type, (taskflowId) =>
+          this.options.client.getTaskflowWorkspace(taskflowId)
+        )
+      case "taskflow.projectMemory.get":
+        return this.handleTaskflowAction(message, post, "taskflow.projectMemory", message.type, (taskflowId) =>
+          this.options.client.getTaskflowProjectMemory(taskflowId)
         )
       case "taskflow.runtime.get":
         return this.handleTaskflowAction(message, post, "taskflow.runtime", message.type, (taskflowId) =>
           this.options.client.getTaskflowRuntime(taskflowId)
         )
-      case "taskflow.question.answer":
-        return this.handleTaskflowAction(message, post, "taskflow.state", message.type, (taskflowId) =>
-          this.options.client.answerTaskflowQuestion(
+      case "taskflow.reviewCardV1.action":
+        return this.handleTaskflowAction(message, post, "taskflow.workspace", message.type, (taskflowId) =>
+          this.options.client.answerTaskflowReviewCardV1(
             taskflowId,
-            stringValue(message.questionId) || stringValue(message.question_id) || "",
-            {
-              answer: stringValue(message.answer) || "",
-              actor: stringValue(message.actor),
-              rationale: stringValue(message.rationale),
-              confidence: numberValue(message.confidence),
-            }
-          )
-        )
-      case "taskflow.decision.answer":
-        return this.handleTaskflowAction(message, post, "taskflow.state", message.type, (taskflowId) =>
-          this.options.client.answerTaskflowDecision(
-            taskflowId,
-            stringValue(message.decisionId) || stringValue(message.decision_id) || "",
-            {
-              selectedOptionId: stringValue(message.selectedOptionId) || stringValue(message.selected_option_id),
-              answer: stringValue(message.answer),
-              rationale: stringValue(message.rationale),
-              actor: stringValue(message.actor),
-            }
-          )
-        )
-      case "taskflow.reviewCard.answer":
-        return this.handleTaskflowAction(message, post, "taskflow.state", message.type, (taskflowId) =>
-          this.options.client.answerTaskflowReviewCard(
-            taskflowId,
-            stringValue(message.cardId) || stringValue(message.card_id) || "",
+            stringValue(message.cardId) || "",
             {
               action: stringValue(message.action) || "",
               value: message.value,
               actor: stringValue(message.actor),
-              comment: stringValue(message.comment),
+              comment: stringValue(message.comment) || stringValue(message.reason),
             }
+          )
+        )
+      case "taskflow.projectMemory.patch.preview":
+        return this.handleTaskflowAction(message, post, "taskflow.projectMemory.patchPreview", message.type, (taskflowId) =>
+          this.options.client.previewTaskflowProjectMemoryPatch(taskflowId, {
+            actor: stringValue(message.actor),
+            reason: stringValue(message.reason),
+            source: stringValue(message.source),
+            operations: arrayValue(message.operations),
+          })
+        )
+      case "taskflow.projectMemory.patch.apply":
+        return this.handleTaskflowAction(message, post, "taskflow.workspace", message.type, (taskflowId) =>
+          this.options.client.applyTaskflowProjectMemoryPatch(
+            taskflowId,
+            stringValue(message.proposalId) || "",
+            {
+              actor: stringValue(message.actor),
+              reason: stringValue(message.reason),
+              source: stringValue(message.source),
+              operations: arrayValue(message.operations),
+            }
+          )
+        )
+      case "taskflow.compilerDecision.review":
+        return this.handleTaskflowAction(message, post, "taskflow.workspace", message.type, (taskflowId) =>
+          this.options.client.reviewTaskflowCompilerDecision(
+            taskflowId,
+            stringValue(message.decisionId) || "",
+            {
+              action: stringValue(message.action),
+              actor: stringValue(message.actor),
+              reason: stringValue(message.reason),
+              value: message.value,
+            }
+          )
+        )
+      case "taskflow.projectorPreview.get":
+        return this.handleTaskflowAction(message, post, "taskflow.projectorPreview", message.type, (taskflowId) =>
+          this.options.client.getTaskflowProjectorPreview(
+            taskflowId,
+            stringValue(message.target) || "openspec"
           )
         )
       case "taskflow.brief.compile":
@@ -226,7 +246,7 @@ export class ChatRunCoordinator {
       case "taskflow.dispatch.request":
         return this.handleTaskflowAction(message, post, "taskflow.state", message.type, (taskflowId) =>
           this.options.client.requestTaskflowDispatch(taskflowId, {
-            workItemIds: stringList(message.workItemIds) || stringList(message.work_item_ids),
+            workItemIds: stringList(message.workItemIds),
             actor: stringValue(message.actor),
             rationale: stringValue(message.rationale),
             metadata: message.metadata ? objectValue(message.metadata) : undefined,
@@ -236,7 +256,7 @@ export class ChatRunCoordinator {
         return this.handleTaskflowAction(message, post, "taskflow.state", message.type, (taskflowId) =>
           this.options.client.confirmTaskflowDispatch(
             taskflowId,
-            stringValue(message.decisionId) || stringValue(message.decision_id) || "",
+            stringValue(message.decisionId) || "",
             { actor: stringValue(message.actor) }
           )
         )
@@ -244,7 +264,7 @@ export class ChatRunCoordinator {
         return this.handleTaskflowAction(message, post, "taskflow.state", message.type, (taskflowId) =>
           this.options.client.rejectTaskflowDispatch(
             taskflowId,
-            stringValue(message.decisionId) || stringValue(message.decision_id) || "",
+            stringValue(message.decisionId) || "",
             { actor: stringValue(message.actor) }
           )
         )
@@ -252,16 +272,16 @@ export class ChatRunCoordinator {
         return this.handleTaskflowAction(message, post, "taskflow.state", message.type, (taskflowId) =>
           this.options.client.dispatchTaskflowWorkItem(
             taskflowId,
-            stringValue(message.workItemId) || stringValue(message.work_item_id) || "",
+            stringValue(message.workItemId) || "",
             {
-              dispatchDecisionId: stringValue(message.dispatchDecisionId) || stringValue(message.dispatch_decision_id),
-              executorHint: stringValue(message.executorHint) || stringValue(message.executor_hint),
+              dispatchDecisionId: stringValue(message.dispatchDecisionId),
+              executorHint: stringValue(message.executorHint),
               metadata: message.metadata ? objectValue(message.metadata) : undefined,
             }
           )
         )
       case "taskflow.complexity.get": {
-        const taskflowId = stringValue(message.taskflowId) || stringValue(message.taskflow_id)
+        const taskflowId = stringValue(message.taskflowId)
         if (!taskflowId) return true
         try {
           const payload = await this.options.client.getTaskflowComplexity(taskflowId)
@@ -273,12 +293,12 @@ export class ChatRunCoordinator {
         return true
       }
       case "taskflow.complexity.scan": {
-        const taskflowId = stringValue(message.taskflowId) || stringValue(message.taskflow_id)
+        const taskflowId = stringValue(message.taskflowId)
         if (!taskflowId) return true
         try {
           const payload = await this.options.client.scanTaskflowRepoComplexity(taskflowId, {
-            workspacePath: stringValue(message.workspacePath) || stringValue(message.workspace_path),
-            repositoryId: stringValue(message.repositoryId) || stringValue(message.repository_id),
+            workspacePath: stringValue(message.workspacePath),
+            repositoryId: stringValue(message.repositoryId),
           })
           post({ type: "taskflow.complexity", taskflowId, payload })
         } catch (error) {
@@ -295,11 +315,11 @@ export class ChatRunCoordinator {
   private async handleTaskflowAction(
     message: WebviewToHostMessage,
     post: PostMessage,
-    responseType: "taskflow.state" | "taskflow.reviewCards" | "taskflow.runtime",
+    responseType: "taskflow.state" | "taskflow.workspace" | "taskflow.projectMemory" | "taskflow.projectMemory.patchPreview" | "taskflow.projectorPreview" | "taskflow.runtime",
     action: string,
     invoke: (taskflowId: string) => Promise<Record<string, unknown>>
   ): Promise<boolean> {
-    const taskflowId = stringValue(message.taskflowId) || stringValue(message.taskflow_id)
+    const taskflowId = stringValue(message.taskflowId)
     if (!taskflowId) return true
     try {
       const payload = await invoke(taskflowId)
@@ -350,4 +370,8 @@ function stringList(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined
   const values = value.map((item) => String(item)).filter((item) => item.trim())
   return values.length ? values : undefined
+}
+
+function arrayValue(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : []
 }

@@ -6,11 +6,14 @@ function coordinator() {
     client: {
       approvalReply: vi.fn(),
       getTaskflowState: vi.fn(async () => ({ ok: true, taskflow: { id: "taskflow-1" } })),
+      getTaskflowWorkspace: vi.fn(async () => ({ ok: true, schema_version: "taskflow.workspace.v1" })),
       getTaskflowRuntime: vi.fn(async () => ({ ok: true, task_runs: [] })),
-      getTaskflowReviewCards: vi.fn(async () => ({ ok: true, review_cards: [] })),
-      answerTaskflowQuestion: vi.fn(async () => ({ ok: true, taskflow: { id: "taskflow-1" } })),
-      answerTaskflowDecision: vi.fn(async () => ({ ok: true, taskflow: { id: "taskflow-1" } })),
-      answerTaskflowReviewCard: vi.fn(async () => ({ ok: true, taskflow: { id: "taskflow-1" } })),
+      getTaskflowProjectMemory: vi.fn(async () => ({ ok: true, project_memory: { project_id: "project-1" } })),
+      getTaskflowProjectorPreview: vi.fn(async () => ({ ok: true, projector_preview: { target: "openspec" } })),
+      answerTaskflowReviewCardV1: vi.fn(async () => ({ ok: true, taskflow: { id: "taskflow-1" } })),
+      previewTaskflowProjectMemoryPatch: vi.fn(async () => ({ ok: true, proposal: { id: "patch-1" } })),
+      applyTaskflowProjectMemoryPatch: vi.fn(async () => ({ ok: true, taskflow: { id: "taskflow-1" } })),
+      reviewTaskflowCompilerDecision: vi.fn(async () => ({ ok: true, compiler_decision: { id: "compiler-decision-1" } })),
       compileTaskflowBrief: vi.fn(async () => ({ ok: true, taskflow: { id: "taskflow-1" } })),
       markTaskflowBriefReady: vi.fn(async () => ({ ok: true, taskflow: { id: "taskflow-1" } })),
       confirmTaskflowBrief: vi.fn(async () => ({ ok: true, taskflow: { id: "taskflow-1" } })),
@@ -81,7 +84,7 @@ describe("ChatRunCoordinator", () => {
     expect(options.startChat).not.toHaveBeenCalled()
     expect(post).toHaveBeenCalledWith({
       type: "chat.error",
-      message: "????????????",
+      message: "请选择会话模型后再发送。",
     })
   })
 
@@ -149,31 +152,46 @@ describe("ChatRunCoordinator", () => {
     const client = options.client as Record<string, ReturnType<typeof vi.fn>>
 
     await expect(subject.handleMessage({ type: "taskflow.state.get", taskflowId: "taskflow-1" }, post)).resolves.toBe(true)
-    await expect(subject.handleMessage({ type: "taskflow.reviewCards.get", taskflowId: "taskflow-1" }, post)).resolves.toBe(true)
+    await expect(subject.handleMessage({ type: "taskflow.workspace.get", taskflowId: "taskflow-1" }, post)).resolves.toBe(true)
+    await expect(subject.handleMessage({ type: "taskflow.projectMemory.get", taskflowId: "taskflow-1" }, post)).resolves.toBe(true)
     await expect(subject.handleMessage({ type: "taskflow.runtime.get", taskflowId: "taskflow-1" }, post)).resolves.toBe(true)
     await expect(subject.handleMessage({
-      type: "taskflow.question.answer",
+      type: "taskflow.reviewCardV1.action",
       taskflowId: "taskflow-1",
-      questionId: "question-1",
-      answer: "No migration.",
+      cardId: "taskflow-1:question:question-1",
+      action: "skip",
       actor: "user",
+      reason: "Known risk.",
     }, post)).resolves.toBe(true)
     await expect(subject.handleMessage({
-      type: "taskflow.decision.answer",
+      type: "taskflow.projectMemory.patch.preview",
       taskflowId: "taskflow-1",
-      decisionId: "decision-1",
-      selectedOptionId: "brief",
-      answer: "Use brief.",
-      rationale: "Explicit boundary.",
       actor: "user",
+      reason: "Align term.",
+      source: "workspace",
+      operations: [{ type: "upsert_term", term: "CompilerDecision", definition: "Reviewable choice." }],
     }, post)).resolves.toBe(true)
     await expect(subject.handleMessage({
-      type: "taskflow.reviewCard.answer",
+      type: "taskflow.projectMemory.patch.apply",
       taskflowId: "taskflow-1",
-      cardId: "card-1",
-      action: "accept_recommendation",
-      value: "brief",
+      proposalId: "patch-1",
       actor: "user",
+      reason: "Align term.",
+      source: "workspace",
+      operations: [{ type: "upsert_term", term: "CompilerDecision", definition: "Reviewable choice." }],
+    }, post)).resolves.toBe(true)
+    await expect(subject.handleMessage({
+      type: "taskflow.compilerDecision.review",
+      taskflowId: "taskflow-1",
+      decisionId: "compiler-decision-1",
+      action: "force_create",
+      actor: "user",
+      reason: "Separate boundary.",
+    }, post)).resolves.toBe(true)
+    await expect(subject.handleMessage({
+      type: "taskflow.projectorPreview.get",
+      taskflowId: "taskflow-1",
+      target: "speckit",
     }, post)).resolves.toBe(true)
     await expect(subject.handleMessage({
       type: "taskflow.brief.compile",
@@ -221,24 +239,34 @@ describe("ChatRunCoordinator", () => {
     }, post)).resolves.toBe(true)
 
     expect(client.getTaskflowState).toHaveBeenCalledWith("taskflow-1")
-    expect(client.getTaskflowReviewCards).toHaveBeenCalledWith("taskflow-1")
+    expect(client.getTaskflowWorkspace).toHaveBeenCalledWith("taskflow-1")
+    expect(client.getTaskflowProjectMemory).toHaveBeenCalledWith("taskflow-1")
     expect(client.getTaskflowRuntime).toHaveBeenCalledWith("taskflow-1")
-    expect(client.answerTaskflowQuestion).toHaveBeenCalledWith("taskflow-1", "question-1", {
-      answer: "No migration.",
+    expect(client.answerTaskflowReviewCardV1).toHaveBeenCalledWith("taskflow-1", "taskflow-1:question:question-1", {
+      action: "skip",
+      value: undefined,
       actor: "user",
+      comment: "Known risk.",
     })
-    expect(client.answerTaskflowDecision).toHaveBeenCalledWith("taskflow-1", "decision-1", {
-      selectedOptionId: "brief",
-      answer: "Use brief.",
-      rationale: "Explicit boundary.",
+    expect(client.previewTaskflowProjectMemoryPatch).toHaveBeenCalledWith("taskflow-1", {
       actor: "user",
+      reason: "Align term.",
+      source: "workspace",
+      operations: [{ type: "upsert_term", term: "CompilerDecision", definition: "Reviewable choice." }],
     })
-    expect(client.answerTaskflowReviewCard).toHaveBeenCalledWith("taskflow-1", "card-1", {
-      action: "accept_recommendation",
-      value: "brief",
+    expect(client.applyTaskflowProjectMemoryPatch).toHaveBeenCalledWith("taskflow-1", "patch-1", {
       actor: "user",
-      comment: undefined,
+      reason: "Align term.",
+      source: "workspace",
+      operations: [{ type: "upsert_term", term: "CompilerDecision", definition: "Reviewable choice." }],
     })
+    expect(client.reviewTaskflowCompilerDecision).toHaveBeenCalledWith("taskflow-1", "compiler-decision-1", {
+      action: "force_create",
+      actor: "user",
+      reason: "Separate boundary.",
+      value: undefined,
+    })
+    expect(client.getTaskflowProjectorPreview).toHaveBeenCalledWith("taskflow-1", "speckit")
     expect(client.compileTaskflowBrief).toHaveBeenCalledWith("taskflow-1", { actor: "agent" })
     expect(client.markTaskflowBriefReady).toHaveBeenCalledWith("taskflow-1", { version: 2, actor: "agent" })
     expect(client.confirmTaskflowBrief).toHaveBeenCalledWith("taskflow-1", { version: 2, actor: "user" })
@@ -263,9 +291,9 @@ describe("ChatRunCoordinator", () => {
       payload: { ok: true, taskflow: { id: "taskflow-1" } },
     })
     expect(post).toHaveBeenCalledWith({
-      type: "taskflow.reviewCards",
+      type: "taskflow.workspace",
       taskflowId: "taskflow-1",
-      payload: { ok: true, review_cards: [] },
+      payload: { ok: true, schema_version: "taskflow.workspace.v1" },
     })
     expect(post).toHaveBeenCalledWith({
       type: "taskflow.runtime",
