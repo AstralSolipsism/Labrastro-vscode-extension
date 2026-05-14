@@ -8,8 +8,14 @@ export interface TaskflowWorkspaceState {
   gates: TaskflowGate[]
   questions: TaskflowQuestion[]
   decisions: TaskflowDecision[]
-  reviewCards: TaskflowReviewCard[]
+  reviewCardsV1: ReviewCardV1[]
+  projectMemory: ProjectMemoryView
+  compilerDecisions: CompilerDecision[]
+  compilerReviewStale: boolean
+  projectorPreviews: ProjectorPreview[]
+  traceLinks: TaskflowTraceLink[]
   latestBrief: TaskflowBrief | undefined
+  briefConfirmed: boolean
   workItems: TaskflowWorkItem[]
   dispatchDecisions: TaskflowDispatchDecision[]
   taskRuns: TaskflowRuntimeRow[]
@@ -42,12 +48,84 @@ export interface TaskflowDecision {
   options: Array<{ id: string; label: string }>
 }
 
-export interface TaskflowReviewCard {
+export interface ReviewCardV1 {
   id: string
   kind: string
   title: string
+  prompt: string
+  whyNeeded: string
+  recommendedAnswer: string
+  risk: string
+  skipConsequence: string
   status: string
-  recommendedAction: string
+  sourceRefs: string[]
+  actions: ReviewCardActionV1[]
+}
+
+export interface ReviewCardActionV1 {
+  id: "accept" | "edit" | "skip" | "reopen" | "discuss" | string
+  label: string
+  requiresValue: boolean
+  requiresReason: boolean
+}
+
+export interface ProjectMemoryView {
+  projectId: string
+  terms: Array<{ term: string; definition: string }>
+  decisions: Array<{ id: string; topic: string; status: string; rationale: string }>
+  constraints: Array<{ id: string; statement: string; severity: string; source: string }>
+  workItems: Array<{ id: string; title: string; status: string; type: string }>
+  traceLinks: TaskflowTraceLink[]
+  patchProposals: ProjectMemoryPatchProposal[]
+}
+
+export interface ProjectMemoryPatchProposal {
+  id: string
+  status: string
+  actor: string
+  reason: string
+  source: string
+  operations: unknown[]
+  diff: Array<{ operation: string; path: string; before: unknown; after: unknown }>
+}
+
+export interface CompilerDecision {
+  id: string
+  candidateId: string
+  workItemId: string
+  title: string
+  action: string
+  dedupeKey: string
+  reason: string
+  status: string
+  stale: boolean
+  override: unknown
+  derivedFrom: string
+  dependsOn: string[]
+  traceRefs: string[]
+  acceptanceBoundaryDiff: {
+    candidateRefs: string[]
+    reusedRefs: string[]
+    added: string[]
+    missing: string[]
+  }
+}
+
+export interface ProjectorPreview {
+  target: string
+  status: string
+  readOnly: boolean
+  truthSource: string
+  sections: Array<{ id: string; title: string; itemCount: number }>
+}
+
+export interface TaskflowTraceLink {
+  id: string
+  sourceType: string
+  sourceId: string
+  targetType: string
+  targetId: string
+  relationType: string
 }
 
 export interface TaskflowBrief {
@@ -73,6 +151,7 @@ export interface TaskflowDispatchDecision {
   briefVersion: number | undefined
   workItemIds: string[]
   rationale: string
+  stale: boolean
 }
 
 export interface TaskflowRuntimeRow {
@@ -88,13 +167,14 @@ export interface TaskflowRuntimeRow {
 }
 
 export function normalizeTaskflowWorkspace(input: {
+  workspacePayload?: unknown
   taskflowPayload?: unknown
-  reviewCardsPayload?: unknown
   runtimePayload?: unknown
   complexityPayload?: unknown
 }): TaskflowWorkspaceState {
+  const workspacePayload = objectValue(input.workspacePayload)
   const taskflowPayload = objectValue(input.taskflowPayload)
-  const taskflow = objectValue(taskflowPayload.taskflow || input.taskflowPayload)
+  const taskflow = objectValue(workspacePayload.taskflow || taskflowPayload.taskflow || input.taskflowPayload)
   const meta = objectValue(taskflow.meta)
   const intent = objectValue(taskflow.intent)
   const compiler = objectValue(taskflow.compiler)
@@ -107,8 +187,10 @@ export function normalizeTaskflowWorkspace(input: {
       || objectValue(complexityPayload.complexity).estimate
       || objectValue(compiler.complexity_estimate)
   )
-  const runtimePayload = objectValue(input.runtimePayload)
+  const runtimePayload = objectValue(workspacePayload.dispatch_runtime || input.runtimePayload)
   const summary = objectValue(runtimePayload.liveness_summary)
+  const compilerReview = objectValue(workspacePayload.compiler_review)
+  const traceabilityIndex = objectValue(compiler.traceability_index)
 
   return {
     taskflowId: stringValue(meta.taskflow_id) || stringValue(meta.id),
@@ -120,8 +202,14 @@ export function normalizeTaskflowWorkspace(input: {
     gates: arrayValue(compiler.readiness_gates).map(normalizeGate),
     questions: arrayValue(clarification.open_questions).map(normalizeQuestion),
     decisions: arrayValue(design.local_decisions).map(normalizeDecision),
-    reviewCards: normalizeReviewCards(input.reviewCardsPayload),
+    reviewCardsV1: normalizeReviewCardsV1(workspacePayload.review_cards),
+    projectMemory: normalizeProjectMemory(workspacePayload.project_memory),
+    compilerDecisions: normalizeCompilerDecisions(compilerReview.decisions),
+    compilerReviewStale: compilerReview.stale === true || traceabilityIndex.compiler_review_stale === true,
+    projectorPreviews: normalizeProjectorPreviews(workspacePayload.projector_previews),
+    traceLinks: arrayValue(objectValue(workspacePayload.trace).links).map(normalizeTraceLink),
     latestBrief: normalizeLatestBrief(outputs.brief_versions),
+    briefConfirmed: outputs.current_brief_version != null && outputs.current_brief_version === outputs.confirmed_brief_version,
     workItems: normalizeWorkItems(outputs),
     dispatchDecisions: arrayValue(outputs.dispatch_decisions).map(normalizeDispatchDecision),
     taskRuns: arrayValue(runtimePayload.task_runs).map(normalizeRuntimeRow),
@@ -170,18 +258,190 @@ function normalizeDecision(value: unknown): TaskflowDecision {
   }
 }
 
-function normalizeReviewCards(value: unknown): TaskflowReviewCard[] {
+function normalizeReviewCardsV1(value: unknown): ReviewCardV1[] {
   const payload = objectValue(value)
   return arrayValue(payload.review_cards || value).map((raw) => {
     const item = objectValue(raw)
     return {
-      id: stringValue(item.id),
-      kind: stringValue(item.kind) || stringValue(item.type),
-      title: stringValue(item.title) || stringValue(item.question),
+      id: stringValue(item.id) || stringValue(item.card_id),
+      kind: stringValue(item.kind) || stringValue(item.card_type),
+      title: stringValue(item.title) || stringValue(item.prompt),
+      prompt: stringValue(item.prompt) || stringValue(item.title),
+      whyNeeded: stringValue(item.why_needed) || stringValue(item.summary),
+      recommendedAnswer: stringValue(item.recommended_answer) || stringValue(item.recommended),
+      risk: stringValue(item.risk) || "medium",
+      skipConsequence: stringValue(item.skip_consequence),
       status: stringValue(item.status) || "open",
-      recommendedAction: stringValue(item.recommended_action) || stringValue(item.action),
+      sourceRefs: stringArray(item.source_refs),
+      actions: arrayValue(item.actions).map(normalizeReviewCardAction),
+    }
+  }).filter((item) => item.id || item.title)
+}
+
+function normalizeReviewCardAction(value: unknown): ReviewCardActionV1 {
+  if (typeof value === "string") {
+    return {
+      id: value,
+      label: value,
+      requiresValue: false,
+      requiresReason: false,
+    }
+  }
+  const item = objectValue(value)
+  return {
+    id: stringValue(item.id),
+    label: stringValue(item.label) || stringValue(item.id),
+    requiresValue: item.requires_value === true || item.requiresValue === true,
+    requiresReason: item.requires_reason === true || item.requiresReason === true,
+  }
+}
+
+function normalizeProjectMemory(value: unknown): ProjectMemoryView {
+  const item = objectValue(value)
+  return {
+    projectId: stringValue(item.project_id) || stringValue(item.projectId),
+    terms: arrayValue(item.terms).map((raw) => {
+      const term = objectValue(raw)
+      return {
+        term: stringValue(term.term),
+        definition: stringValue(term.definition),
+      }
+    }).filter((term) => term.term),
+    decisions: arrayValue(item.decisions).map((raw) => {
+      const decision = objectValue(raw)
+      return {
+        id: stringValue(decision.id),
+        topic: stringValue(decision.topic),
+        status: stringValue(decision.status),
+        rationale: stringValue(decision.rationale),
+      }
+    }),
+    constraints: arrayValue(item.constraints).map((raw) => {
+      const constraint = objectValue(raw)
+      return {
+        id: stringValue(constraint.id),
+        statement: stringValue(constraint.statement),
+        severity: stringValue(constraint.severity),
+        source: stringValue(constraint.source),
+      }
+    }),
+    workItems: arrayValue(item.work_items || item.workItems).map((raw) => {
+      const workItem = objectValue(raw)
+      return {
+        id: stringValue(workItem.id),
+        title: stringValue(workItem.title),
+        status: stringValue(workItem.status),
+        type: stringValue(workItem.type),
+      }
+    }),
+    traceLinks: arrayValue(item.trace_links || item.traceLinks).map(normalizeTraceLink),
+    patchProposals: arrayValue(item.patch_proposals || item.patchProposals).map(normalizePatchProposal),
+  }
+}
+
+function normalizePatchProposal(value: unknown): ProjectMemoryPatchProposal {
+  const item = objectValue(value)
+  return {
+    id: stringValue(item.id),
+    status: stringValue(item.status),
+    actor: stringValue(item.actor),
+    reason: stringValue(item.reason),
+    source: stringValue(item.source),
+    operations: arrayValue(item.operations),
+    diff: arrayValue(item.diff).map((raw) => {
+      const diff = objectValue(raw)
+      return {
+        operation: stringValue(diff.operation),
+        path: stringValue(diff.path),
+        before: diff.before,
+        after: diff.after,
+      }
+    }),
+  }
+}
+
+function normalizeCompilerDecisions(value: unknown): CompilerDecision[] {
+  return arrayValue(value).map((raw) => {
+    const item = objectValue(raw)
+    const diff = objectValue(item.acceptance_boundary_diff)
+    return {
+      id: stringValue(item.id),
+      candidateId: stringValue(item.candidate_id),
+      workItemId: stringValue(item.work_item_id),
+      title: stringValue(item.title),
+      action: stringValue(item.action),
+      dedupeKey: stringValue(item.dedupe_key),
+      reason: stringValue(item.reason),
+      status: stringValue(item.status),
+      stale: item.stale === true || item.status === "stale",
+      override: item.override,
+      derivedFrom: stringValue(item.derived_from),
+      dependsOn: stringArray(item.depends_on),
+      traceRefs: stringArray(item.trace_refs),
+      acceptanceBoundaryDiff: {
+        candidateRefs: stringArray(diff.candidate_refs),
+        reusedRefs: stringArray(diff.reused_refs),
+        added: stringArray(diff.added),
+        missing: stringArray(diff.missing),
+      },
     }
   })
+}
+
+function normalizeProjectorPreviews(value: unknown): ProjectorPreview[] {
+  return arrayValue(value).map((raw) => {
+    const item = objectValue(raw)
+    return {
+      target: stringValue(item.target),
+      status: stringValue(item.status),
+      readOnly: item.read_only === true || item.readOnly === true,
+      truthSource: stringValue(item.truth_source),
+      sections: arrayValue(item.sections).map((sectionRaw) => {
+        const section = objectValue(sectionRaw)
+        return {
+          id: stringValue(section.id),
+          title: stringValue(section.title),
+          itemCount: numberValue(section.item_count) ?? numberValue(section.itemCount) ?? 0,
+        }
+      }),
+    }
+  })
+}
+
+function normalizeTraceLink(value: unknown): TaskflowTraceLink {
+  const item = objectValue(value)
+  return {
+    id: stringValue(item.id),
+    sourceType: stringValue(item.source_type) || stringValue(item.sourceType),
+    sourceId: stringValue(item.source_id) || stringValue(item.sourceId),
+    targetType: stringValue(item.target_type) || stringValue(item.targetType),
+    targetId: stringValue(item.target_id) || stringValue(item.targetId),
+    relationType: stringValue(item.relation_type) || stringValue(item.relationType),
+  }
+}
+
+export function reduceReviewCardV1(
+  card: ReviewCardV1,
+  action: string
+): ReviewCardV1 {
+  if (action === "accept") return { ...card, status: "accepted" }
+  if (action === "skip") return { ...card, status: "skipped" }
+  if (action === "reopen") return { ...card, status: "open" }
+  return card
+}
+
+export function canRequestDispatch(workspace: TaskflowWorkspaceState): boolean {
+  return workspace.workItems.length > 0 && workspace.briefConfirmed && !workspace.compilerReviewStale
+}
+
+export function latestConfirmedDispatchDecision(
+  workspace: TaskflowWorkspaceState
+): TaskflowDispatchDecision | undefined {
+  for (let index = workspace.dispatchDecisions.length - 1; index >= 0; index -= 1) {
+    const decision = workspace.dispatchDecisions[index]
+    if (decision.status === "confirmed" && !decision.stale) return decision
+  }
+  return undefined
 }
 
 function normalizeLatestBrief(value: unknown): TaskflowBrief | undefined {
@@ -218,12 +478,14 @@ function normalizeWorkItems(outputs: Record<string, unknown>): TaskflowWorkItem[
 
 function normalizeDispatchDecision(value: unknown): TaskflowDispatchDecision {
   const item = objectValue(value)
+  const metadata = objectValue(item.metadata)
   return {
     id: stringValue(item.id),
     status: stringValue(item.status) || "requested",
     briefVersion: numberValue(item.brief_version),
     workItemIds: stringArray(item.work_item_ids),
     rationale: stringValue(item.rationale),
+    stale: item.stale === true || metadata.stale === true,
   }
 }
 
