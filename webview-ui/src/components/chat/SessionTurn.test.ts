@@ -29,4 +29,20 @@ describe("SessionTurn source order", () => {
     expect(toolOutputIndex).toBeLessThan(toolActionIndex)
     expect(shellTerminalIndex).toBeLessThan(shellActionIndex)
   })
+
+  it("renders reasoning parts through a collapsible card", () => {
+    expect(source).toContain("const ReasoningPart")
+    expect(source).toContain('class="reasoning-card"')
+    expect(source).toContain('props.part.type === "reasoning"')
+    expect(source).toContain("props.defaultReasoningOpen === true")
+    expect(source).toContain('<MarkdownBlock text={reasoningText()} class="reasoning-card__markdown" />')
+  })
+
+  it("renders memory context parts through a dedicated collapsible card", () => {
+    expect(source).toContain("const MemoryContextPart")
+    expect(source).toContain('class="memory-context-card"')
+    expect(source).toContain('props.part.type === "memory_context"')
+    expect(source).toContain("renderedContext()")
+    expect(source).toContain("memoryContext.renderedContext")
+  })
 })

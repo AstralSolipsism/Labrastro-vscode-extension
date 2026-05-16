@@ -61,6 +61,7 @@ describe("conversation interactions", () => {
 
   it("serializes assistant messages and shell cards for copying", () => {
     const message = assistant([
+      { id: "reasoning-1", type: "reasoning", reasoningText: "I should inspect first." },
       { id: "text-1", type: "text", text: "Result body" },
       {
         id: "tool-1",
@@ -75,9 +76,10 @@ describe("conversation interactions", () => {
       },
     ])
 
+    expect(copyTextForMessage(message)).toContain("Reasoning:\nI should inspect first.")
     expect(copyTextForMessage(message)).toContain("Result body")
-    expect(copyTextForToolCommand(message.parts[1])).toBe("npm test")
-    expect(copyTextForToolOutput(message.parts[1])).toContain("PASS a.test.ts")
+    expect(copyTextForToolCommand(message.parts[2])).toBe("npm test")
+    expect(copyTextForToolOutput(message.parts[2])).toContain("PASS a.test.ts")
   })
 
   it("serializes the whole transcript in conversation order", () => {

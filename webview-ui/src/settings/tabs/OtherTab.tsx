@@ -48,8 +48,12 @@ export const OtherTab: Component<TabProps> = (props) => {
   const modelRows = createMemo(() => arrayOfRecords(toolArgumentStats().by_model).slice(0, 8))
   const issueRows = createMemo(() => arrayOfRecords(toolArgumentStats().issues).slice(0, 8))
   const repairRows = createMemo(() => arrayOfRecords(toolArgumentStats().repairs).slice(0, 8))
+  const reasoningDefaultOpen = createMemo(() => server.reasoningDisplayState().defaultOpen === true)
 
   const refreshDiagnostics = () => settingsMessages.readToolArgumentDiagnosticsStats(vscode)
+  const updateReasoningDefaultOpen = (defaultOpen: boolean) => {
+    settingsMessages.saveReasoningDisplay(vscode, defaultOpen)
+  }
   const updateToolArgumentTelemetry = (enabled: boolean) => {
     settingsMessages.updateServerSettings(vscode, {
       settings: {
@@ -65,6 +69,7 @@ export const OtherTab: Component<TabProps> = (props) => {
 
   onMount(() => {
     settingsMessages.readServerSettings(vscode)
+    settingsMessages.getReasoningDisplay(vscode)
   })
 
   return (
@@ -100,6 +105,22 @@ export const OtherTab: Component<TabProps> = (props) => {
             )}
           </For>
         </div>
+      </section>
+
+      <section class="settings-section settings-section--flat reasoning-display-section">
+        <div class="settings-section-heading">
+          <span class="codicon codicon-comment-discussion" aria-hidden="true" />
+          <span>{t("other.reasoning.title")}</span>
+        </div>
+        <label class="field-label field-label--checkbox">
+          <input
+            type="checkbox"
+            checked={reasoningDefaultOpen()}
+            onChange={(event) => updateReasoningDefaultOpen(event.currentTarget.checked)}
+          />
+          <span>{t("other.reasoning.defaultOpen")}</span>
+        </label>
+        <p class="settings-empty-note">{t("other.reasoning.desc")}</p>
       </section>
 
       <section class="settings-section settings-section--flat diagnostics-section">

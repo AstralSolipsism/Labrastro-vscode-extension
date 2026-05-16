@@ -512,6 +512,49 @@ const ChatView: Component<ChatViewProps> = (props) => {
     })
   }
 
+  const appendReasoningPart = (
+    text: string,
+    prefix = "reasoning-stream",
+    options: { format?: "plain" | "markdown"; merge?: boolean; trim?: boolean; meta?: EventRenderMeta } = {},
+  ) => {
+    const clean = stripAnsi(text)
+    const content = options.trim === false ? clean : clean.trim()
+    if (!content) return
+    updateAssistantParts((parts) => {
+      const reasoningIndex = options.merge
+        ? parts.findIndex((part) => part.type === "reasoning" && part.reasoningStreamKey === prefix)
+        : -1
+      if (reasoningIndex >= 0) {
+        const updated = [...parts]
+        const current = updated[reasoningIndex]
+        updated[reasoningIndex] = {
+          ...current,
+          reasoningText: `${current.reasoningText || ""}${content}`,
+          reasoningFormat: options.format || current.reasoningFormat || "markdown",
+        }
+        return updated
+      }
+
+      const next = withEventMeta({
+        id: `${prefix}-${Date.now()}-${parts.length}`,
+        type: "reasoning",
+        reasoningText: content,
+        reasoningFormat: options.format || "markdown",
+        reasoningStreamKey: prefix,
+      }, options.meta)
+      const firstAssistantTextIndex = parts.findIndex((part) =>
+        part.type === "text" &&
+        ["assistant-stream", "assistant-message", "final"].includes(part.textStreamKey || "")
+      )
+      if (firstAssistantTextIndex < 0) return [...parts, next]
+      return [
+        ...parts.slice(0, firstAssistantTextIndex),
+        next,
+        ...parts.slice(firstAssistantTextIndex),
+      ]
+    })
+  }
+
   const appendRemoteStatusPart = (payload: Record<string, unknown>, meta?: EventRenderMeta) => {
     updateAssistantParts((parts) => [
       ...parts,
@@ -569,6 +612,18 @@ const ChatView: Component<ChatViewProps> = (props) => {
         type: "context_event",
         contextTitle: String(payload.message || payload.phase || "上下文事件"),
         contextPayload: payload,
+      }, meta),
+    ])
+  }
+
+  const appendMemoryContextPart = (payload: Record<string, unknown>, meta?: EventRenderMeta) => {
+    updateAssistantParts((parts) => [
+      ...parts,
+      withEventMeta({
+        id: `memory-${Date.now()}-${parts.length}`,
+        type: "memory_context",
+        memoryTitle: String(payload.title || t("memoryContext.title")),
+        memoryPayload: payload,
       }, meta),
     ])
   }
@@ -765,6 +820,13 @@ const ChatView: Component<ChatViewProps> = (props) => {
         runStatus: chatStatus(),
       })
       appendRemoteStatusPart(payload, eventMeta)
+    } else if (type === "reasoning_delta") {
+      appendReasoningPart(String(payload.content || ""), "reasoning-stream", {
+        format: stringValue(payload.format) === "plain" ? "plain" : "markdown",
+        merge: true,
+        trim: false,
+        meta: eventMeta,
+      })
     } else if (type === "assistant_delta") {
       appendTextPart(String(payload.content || ""), "assistant-stream", {
         format: "markdown",
@@ -789,7 +851,13 @@ const ChatView: Component<ChatViewProps> = (props) => {
     } else if (type === "runtime_status") {
       applyRuntimeStatusEvent(payload, eventMeta)
     } else if (type === "context_event") {
-      appendContextEventPart(payload, eventMeta)
+      if (isMemoryContextPayload(payload)) {
+        appendMemoryContextPart(payload, eventMeta)
+      } else {
+        appendContextEventPart(payload, eventMeta)
+      }
+    } else if (type === "memory_context") {
+      appendMemoryContextPart(payload, eventMeta)
     } else if (isStructuredUiEventType(type)) {
       appendUiEventPart(type, payload, eventMeta)
     } else if (type === "delegated_run_completed") {
@@ -1810,6 +1878,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
           turns={trace.turns()}
           recentSessions={trace.recentSessions()}
           isWorking={visibleIsWorking()}
+          defaultReasoningOpen={server.reasoningDisplayState().defaultOpen === true}
           workingText={workingText()}
           workingElapsed={workingElapsed()}
           selectedTraceNodeId={trace.selectedTraceNodeId()}
@@ -2266,6 +2335,10 @@ function isStructuredUiEventType(value: string): boolean {
     "agent_event",
     "ui_event",
   ].includes(value)
+}
+
+function isMemoryContextPayload(payload: Record<string, unknown>): boolean {
+  return payload.schema === "memory_context.v1" || payload.context_kind === "memory_injection"
 }
 
 function uiEventTitle(type: string): string {

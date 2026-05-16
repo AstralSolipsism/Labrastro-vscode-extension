@@ -117,4 +117,23 @@ describe("AdminCoordinator", () => {
       },
     })
   })
+
+  it("persists reasoning display defaults in workspace state", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+
+    await expect(subject.handleMessage({ type: "reasoningDisplay.save", defaultOpen: true }, post)).resolves.toBe(true)
+
+    expect(options.context.workspaceState.update).toHaveBeenCalledWith("labrastro.reasoningDefaultOpen", true)
+    expect(options.broadcastState).toHaveBeenCalledWith({
+      type: "reasoningDisplay.state",
+      payload: { defaultOpen: false },
+    })
+
+    await expect(subject.handleMessage({ type: "reasoningDisplay.get" }, post)).resolves.toBe(true)
+    expect(post).toHaveBeenCalledWith({
+      type: "reasoningDisplay.state",
+      payload: { defaultOpen: false },
+    })
+  })
 })

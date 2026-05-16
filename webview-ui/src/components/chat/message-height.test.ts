@@ -95,6 +95,66 @@ describe("message height estimation", () => {
     expect(long).toBeGreaterThan(short)
   })
 
+  it("invalidates the height cache when reasoning content changes", () => {
+    const sample = turn("hello", "answer")
+    sample.assistantMessages[0].parts.unshift({
+      id: "reasoning-1",
+      type: "reasoning",
+      reasoningText: "short plan",
+      reasoningFormat: "markdown",
+    })
+    const changed = turn("hello", "answer")
+    changed.assistantMessages[0].parts.unshift({
+      id: "reasoning-1",
+      type: "reasoning",
+      reasoningText: "short plan\n\nwith more detail",
+      reasoningFormat: "markdown",
+    })
+
+    estimateTurnHeight(sample, 420)
+    estimateTurnHeight(changed, 420)
+
+    expect(getTurnHeightCacheStats()).toMatchObject({
+      entries: 2,
+      hits: 0,
+      misses: 2,
+    })
+  })
+
+  it("invalidates the height cache when memory context payload changes", () => {
+    const sample = turn("hello", "answer")
+    sample.assistantMessages[0].parts.unshift({
+      id: "memory-1",
+      type: "memory_context",
+      memoryTitle: "注入记忆",
+      memoryPayload: {
+        schema: "memory_context.v1",
+        provided_items: 1,
+        rendered_context: "## Private Agent Memory\n- [project] short",
+      },
+    })
+    const changed = turn("hello", "answer")
+    changed.assistantMessages[0].parts.unshift({
+      id: "memory-1",
+      type: "memory_context",
+      memoryTitle: "注入记忆",
+      memoryPayload: {
+        schema: "memory_context.v1",
+        provided_items: 2,
+        rendered_context: "## Private Agent Memory\n- [project] short\n- [preference] more detail",
+      },
+    })
+
+    estimateTurnHeight(sample, 420)
+    estimateTurnHeight(changed, 420)
+
+    expect(getTurnHeightCacheStats()).toMatchObject({
+      entries: 2,
+      hits: 0,
+      misses: 2,
+    })
+  })
+
   it("accounts for expanded tool cards in the turn height estimate", () => {
     const plain = turn("short", "done")
     const withTool: MockTurn = {

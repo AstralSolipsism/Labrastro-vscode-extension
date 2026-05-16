@@ -10,9 +10,25 @@ describe("ChatView context events", () => {
     expect(source).toContain("appendContextEventPart(payload, eventMeta)")
   })
 
+  it("routes memory context events into dedicated memory parts", () => {
+    expect(source).toContain("const appendMemoryContextPart =")
+    expect(source).toContain('type: "memory_context"')
+    expect(source).toContain('} else if (type === "memory_context") {')
+    expect(source).toContain("isMemoryContextPayload(payload)")
+  })
+
   it("keeps usage_update wired to context progress stats", () => {
     expect(source).toContain("contextTokens: numberValue(payload.context_tokens)")
     expect(source).toContain("contextWindow: numberValue(payload.context_window)")
     expect(source).toContain('} else if (type === "usage_update" || type === "run_stats") {')
+  })
+
+  it("routes reasoning deltas into a merged reasoning part before assistant text", () => {
+    expect(source).toContain("const appendReasoningPart =")
+    expect(source).toContain('} else if (type === "reasoning_delta") {')
+    expect(source).toContain('type: "reasoning"')
+    expect(source).toContain('part.type === "text" &&')
+    expect(source).toContain('["assistant-stream", "assistant-message", "final"].includes')
+    expect(source).toContain("merge: true")
   })
 })

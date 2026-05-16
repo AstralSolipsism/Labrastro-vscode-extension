@@ -112,6 +112,7 @@ interface SessionTurnProps {
   onCopyToolCommand?: (part: MockPart) => Promise<void> | void
   onCopyToolOutput?: (part: MockPart) => Promise<void> | void
   onForkPart?: (part: MockPart) => void
+  defaultReasoningOpen?: boolean
 }
 
 interface MessageMarkerProps {
@@ -138,6 +139,7 @@ interface PartProps {
   onCopyToolCommand?: (part: MockPart) => Promise<void> | void
   onCopyToolOutput?: (part: MockPart) => Promise<void> | void
   onForkPart?: (part: MockPart) => void
+  defaultReasoningOpen?: boolean
 }
 
 const ToolPart: Component<PartProps> = (props) => {
@@ -617,6 +619,49 @@ const MarkdownText: Component<{ text?: string; format?: "plain" | "markdown" }> 
   </Show>
 )
 
+const ReasoningPart: Component<PartProps> = (props) => {
+  const [open, setOpen] = createSignal(initialCardOpenState(props.part.id, props.defaultReasoningOpen === true))
+  createEffect(() => {
+    CARD_OPEN_STATE.set(props.part.id, open())
+  })
+  const reasoningText = () => props.part.reasoningText || ""
+  const countLabel = () => t("chat.reasoningChars", { n: String(reasoningText().length) })
+
+  return (
+    <div class="reasoning-card" onClick={(event) => event.stopPropagation()}>
+      <button
+        type="button"
+        class="reasoning-card__header"
+        onClick={(event) => {
+          event.stopPropagation()
+          setOpen((value) => {
+            const next = !value
+            CARD_OPEN_STATE.set(props.part.id, next)
+            return next
+          })
+        }}
+      >
+        <span class="codicon codicon-comment-discussion" aria-hidden="true" />
+        <span class="reasoning-card__body">
+          <span class="reasoning-card__title">{t("chat.reasoning")}</span>
+          <span class="reasoning-card__meta">{countLabel()}</span>
+        </span>
+        <span class={`codicon codicon-chevron-${open() ? "down" : "right"}`} aria-hidden="true" />
+      </button>
+      <Show when={open()}>
+        <div class="reasoning-card__content">
+          <Show
+            when={props.part.reasoningFormat !== "plain"}
+            fallback={<div class="assistant-text-part reasoning-card__plain">{reasoningText()}</div>}
+          >
+            <MarkdownBlock text={reasoningText()} class="reasoning-card__markdown" />
+          </Show>
+        </div>
+      </Show>
+    </div>
+  )
+}
+
 const RemoteStatusPart: Component<PartProps> = (props) => {
   const [open, setOpen] = createSignal(initialCardOpenState(props.part.id, false))
   createEffect(() => {
@@ -776,6 +821,82 @@ const ContextEventPart: Component<PartProps> = (props) => {
   )
 }
 
+const MemoryContextPart: Component<PartProps> = (props) => {
+  const [open, setOpen] = createSignal(initialCardOpenState(props.part.id, false))
+  createEffect(() => {
+    CARD_OPEN_STATE.set(props.part.id, open())
+  })
+  const payload = () => props.part.memoryPayload || {}
+  const scope = () => recordPayload(payload().scope)
+  const items = () => arrayRecordPayload(payload().items)
+  const count = () => Number(payload().provided_items || items().length || 0)
+  const renderedContext = () => stringPayload(payload().rendered_context)
+  const scopeLabel = () => {
+    const owner = stringPayload(scope().owner_agent_id)
+    const namespace = stringPayload(scope().memory_namespace)
+    if (owner && namespace && owner !== namespace) return `${owner}/${namespace}`
+    return namespace || owner || "-"
+  }
+  const meta = () => {
+    const version = payload().scope_version
+    const versionLabel = version !== undefined && version !== null ? `v${String(version)}` : ""
+    return [t("memoryContext.itemCount", { n: String(count()) }), scopeLabel(), versionLabel]
+      .filter(Boolean)
+      .join(" · ")
+  }
+
+  return (
+    <div class="memory-context-card" onClick={(event) => event.stopPropagation()}>
+      <button
+        type="button"
+        class="memory-context-card__header"
+        onClick={(event) => {
+          event.stopPropagation()
+          setOpen((value) => {
+            const next = !value
+            CARD_OPEN_STATE.set(props.part.id, next)
+            return next
+          })
+        }}
+      >
+        <span class="codicon codicon-database" aria-hidden="true" />
+        <span class="memory-context-card__body">
+          <span class="memory-context-card__title">{props.part.memoryTitle || t("memoryContext.title")}</span>
+          <span class="memory-context-card__meta">{meta()}</span>
+        </span>
+        <span class={`codicon codicon-chevron-${open() ? "down" : "right"}`} aria-hidden="true" />
+      </button>
+      <Show when={open()}>
+        <div class="memory-context-card__content">
+          <Show when={items().length}>
+            <div class="memory-context-card__items">
+              <For each={items()}>
+                {(item) => (
+                  <div class="memory-context-card__item">
+                    <div class="memory-context-card__item-head">
+                      <span class="memory-context-card__type">{stringPayload(item.type) || "note"}</span>
+                      <span class="memory-context-card__abstract">
+                        {stringPayload(item.abstract) || stringPayload(item.id) || t("memoryContext.item")}
+                      </span>
+                    </div>
+                    <Show when={stringPayload(item.content)}>
+                      <div class="memory-context-card__item-content">{stringPayload(item.content)}</div>
+                    </Show>
+                  </div>
+                )}
+              </For>
+            </div>
+          </Show>
+          <Show when={renderedContext()}>
+            <div class="memory-context-card__prompt-title">{t("memoryContext.renderedContext")}</div>
+            <pre class="structured-card__json">{renderedContext()}</pre>
+          </Show>
+        </div>
+      </Show>
+    </div>
+  )
+}
+
 function getUiEventLabel(kind: string): string {
   const labels: Record<string, string> = {
     remote: t("uiEvent.remote"),
@@ -860,6 +981,7 @@ const PartView: Component<PartProps> = (props) => {
                 onCopyToolCommand={props.onCopyToolCommand}
                 onCopyToolOutput={props.onCopyToolOutput}
                 onForkPart={props.onForkPart}
+                defaultReasoningOpen={props.defaultReasoningOpen}
               />
             )}
           </For>
@@ -868,6 +990,9 @@ const PartView: Component<PartProps> = (props) => {
     >
       <Match when={props.part.type === "text"}>
         <MarkdownText text={props.part.text} format={props.part.textFormat} />
+      </Match>
+      <Match when={props.part.type === "reasoning"}>
+        <ReasoningPart {...props} />
       </Match>
       <Match when={props.part.type === "tool" && isShellToolName(props.part.tool, props.part.toolSource)}>
         <ShellToolPart {...props} />
@@ -892,6 +1017,9 @@ const PartView: Component<PartProps> = (props) => {
       </Match>
       <Match when={props.part.type === "context_event"}>
         <ContextEventPart {...props} />
+      </Match>
+      <Match when={props.part.type === "memory_context"}>
+        <MemoryContextPart {...props} />
       </Match>
       <Match when={props.part.type === "ui_event"}>
         <UiEventPart {...props} />
@@ -963,6 +1091,7 @@ export const SessionTurn: Component<SessionTurnProps> = (props) => {
                       onCopyToolCommand={props.onCopyToolCommand}
                       onCopyToolOutput={props.onCopyToolOutput}
                       onForkPart={props.onForkPart}
+                      defaultReasoningOpen={props.defaultReasoningOpen}
                     />
                   )}
                 </For>
@@ -1023,6 +1152,19 @@ function markdownSummary(payload: Record<string, unknown>): string {
   if (content) return content
   const message = stringPayload(payload.message)
   return message
+}
+
+function recordPayload(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+function arrayRecordPayload(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map(recordPayload)
+    .filter((item) => Object.keys(item).length > 0)
 }
 
 function stringPayload(value: unknown): string {

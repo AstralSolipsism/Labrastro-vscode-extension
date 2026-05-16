@@ -11,6 +11,7 @@ interface MessageListProps {
   turns: MockTurn[]
   recentSessions: MockSession[]
   isWorking: boolean
+  defaultReasoningOpen?: boolean
   workingText?: string
   workingElapsed?: string
   selectedTraceNodeId?: string | null
@@ -65,6 +66,7 @@ export const MessageList: Component<MessageListProps> = (props) => {
                     onCopyToolCommand={props.onCopyToolCommand}
                     onCopyToolOutput={props.onCopyToolOutput}
                     onForkPart={props.onForkPart}
+                    defaultReasoningOpen={props.defaultReasoningOpen}
                   />
                 )}
               </Index>
@@ -123,6 +125,7 @@ const VirtualMessageRow: Component<VirtualMessageRowProps> = (props) => {
         onCopyToolCommand={props.onCopyToolCommand}
         onCopyToolOutput={props.onCopyToolOutput}
         onForkPart={props.onForkPart}
+        defaultReasoningOpen={props.defaultReasoningOpen}
       />
     </div>
   )

@@ -59,6 +59,7 @@ export type HostToWebviewMessageType =
   | "environment.snapshot"
   | "executorType.state"
   | "locale.state"
+  | "reasoningDisplay.state"
   | "agentRun.cancelled"
   | "agentRun.error"
   | "agentRun.events"
@@ -132,6 +133,8 @@ export type WebviewToHostMessageType =
   | "executorType.get"
   | "executorType.save"
   | "locale.save"
+  | "reasoningDisplay.get"
+  | "reasoningDisplay.save"
   | "modelProfile.activate"
   | "modelProfile.save"
   | "modelProfile.saveAndActivate"
@@ -230,6 +233,7 @@ const HOST_TO_WEBVIEW_TYPES = new Set<HostToWebviewMessageType>([
   "environment.snapshot",
   "executorType.state",
   "locale.state",
+  "reasoningDisplay.state",
   "agentRun.cancelled",
   "agentRun.error",
   "agentRun.events",
@@ -298,6 +302,8 @@ const WEBVIEW_TO_HOST_TYPES = new Set<WebviewToHostMessageType>([
   "executorType.get",
   "executorType.save",
   "locale.save",
+  "reasoningDisplay.get",
+  "reasoningDisplay.save",
   "modelProfile.activate",
   "modelProfile.save",
   "modelProfile.saveAndActivate",

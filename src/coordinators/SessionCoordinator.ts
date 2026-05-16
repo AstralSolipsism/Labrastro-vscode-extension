@@ -1086,6 +1086,13 @@ function replaySessionEventsIntoTurns(
         remoteModel: stringValue(payload.model) || "",
         remoteWorkspaceRoot: stringValue(payload.workspace_root) || "",
       }, meta)
+    } else if (type === "memory_context" || (type === "context_event" && isMemoryContextPayload(payload))) {
+      appendReplayPart(conversation, {
+        id: replayPartId("memory", meta),
+        type: "memory_context",
+        memoryTitle: stringValue(payload.title) || "注入记忆",
+        memoryPayload: payload,
+      }, meta)
     } else if (type === "context_event") {
       appendReplayPart(conversation, {
         id: replayPartId("context", meta),
@@ -1110,6 +1117,13 @@ function replaySessionEventsIntoTurns(
         kind: "runtime_status",
         payload,
       }, meta), meta)
+    } else if (type === "reasoning_delta" || type === "reasoning_message") {
+      replayUpsertReasoningPart(
+        conversation,
+        stringValue(payload.content) || "",
+        stringValue(payload.format) === "plain" ? "plain" : "markdown",
+        meta
+      )
     } else if (type === "output") {
       appendReplayPart(conversation, {
         id: replayPartId("terminal", meta),
@@ -1248,6 +1262,54 @@ function appendReplayPart(
 ): void {
   const assistant = ensureReplayAssistantMessage(turns)
   assistant.parts = [...arrayValue(assistant.parts), withReplayEventMeta(part, meta)]
+}
+
+function replayUpsertReasoningPart(
+  turns: unknown[],
+  content: string,
+  format: "plain" | "markdown",
+  meta: { eventKey?: string; sessionEventSeq?: number }
+): void {
+  if (!content) return
+  const assistant = ensureReplayAssistantMessage(turns)
+  const parts = cloneArray(arrayValue(assistant.parts))
+  const streamKey = "reasoning-stream"
+  const streamIndex = parts.findIndex((rawPart) => {
+    const part = objectValue(rawPart)
+    return stringValue(part.type) === "reasoning" &&
+      (stringValue(part.reasoningStreamKey) || streamKey) === streamKey
+  })
+  const existingReasoningIndex = parts.findIndex((rawPart) => stringValue(objectValue(rawPart).type) === "reasoning")
+  const index = streamIndex >= 0 ? streamIndex : existingReasoningIndex
+  if (index >= 0) {
+    const current = objectValue(parts[index])
+    const currentText = textValue(current.reasoningText)
+    if (currentText.includes(content)) {
+      assistant.parts = parts
+      return
+    }
+    parts[index] = withReplayEventMeta({
+      ...current,
+      type: "reasoning",
+      reasoningText: `${currentText}${content}`,
+      reasoningFormat: stringValue(current.reasoningFormat) || format,
+      reasoningStreamKey: stringValue(current.reasoningStreamKey) || streamKey,
+    }, meta)
+    assistant.parts = parts
+    return
+  }
+
+  const next = withReplayEventMeta({
+    id: replayPartId("reasoning", meta),
+    type: "reasoning",
+    reasoningText: content,
+    reasoningFormat: format,
+    reasoningStreamKey: streamKey,
+  }, meta)
+  const firstTextIndex = parts.findIndex((rawPart) => stringValue(objectValue(rawPart).type) === "text")
+  assistant.parts = firstTextIndex < 0
+    ? [...parts, next]
+    : [...parts.slice(0, firstTextIndex), next, ...parts.slice(firstTextIndex)]
 }
 
 function ensureReplayAssistantMessage(turns: unknown[]): Record<string, unknown> {
@@ -1416,12 +1478,12 @@ function mergeSnapshotTurnsWithMessageHistory(
   fallbackTurns: unknown[]
 ): unknown[] {
   const turns = cloneArray(snapshotTurns)
-  const assistantGroups = assistantContentsByTurn(messages)
+  const assistantGroups = assistantMessagesByTurn(messages)
 
   for (let turnIndex = 0; turnIndex < turns.length && turnIndex < assistantGroups.length; turnIndex += 1) {
     const authoritativeFinal = assistantGroups[turnIndex][assistantGroups[turnIndex].length - 1]
     if (!authoritativeFinal) continue
-    turns[turnIndex] = patchTurnFinalAssistantText(turns[turnIndex], authoritativeFinal, turnIndex)
+    turns[turnIndex] = patchTurnFinalAssistantMessage(turns[turnIndex], authoritativeFinal, turnIndex)
   }
 
   if (turns.length < fallbackTurns.length) {
@@ -1434,8 +1496,13 @@ function mergeSnapshotTurnsWithMessageHistory(
   return turns
 }
 
-function assistantContentsByTurn(messages: unknown[]): string[][] {
-  const groups: string[][] = []
+interface AssistantHistoryMessage {
+  content: string
+  reasoning: string
+}
+
+function assistantMessagesByTurn(messages: unknown[]): AssistantHistoryMessage[][] {
+  const groups: AssistantHistoryMessage[][] = []
   let currentTurnIndex = -1
   for (const raw of messages) {
     const message = objectValue(raw)
@@ -1447,19 +1514,20 @@ function assistantContentsByTurn(messages: unknown[]): string[][] {
     }
     if (role !== "assistant") continue
     const content = messageContent(message.content)
-    if (!content) continue
+    const reasoning = messageReasoningContent(message)
+    if (!content && !reasoning) continue
     if (currentTurnIndex < 0) {
       groups.push([])
       currentTurnIndex = 0
     }
-    groups[currentTurnIndex].push(content)
+    groups[currentTurnIndex].push({ content, reasoning })
   }
   return groups
 }
 
-function patchTurnFinalAssistantText(
+function patchTurnFinalAssistantMessage(
   rawTurn: unknown,
-  authoritativeFinal: string,
+  authoritativeFinal: AssistantHistoryMessage,
   turnIndex: number
 ): Record<string, unknown> {
   const turn = objectValue(rawTurn)
@@ -1473,9 +1541,15 @@ function patchTurnFinalAssistantText(
       parts: [],
     })
   }
-  assistantMessages[targetIndex] = patchAssistantMessageFinalText(
+  const withText = patchAssistantMessageFinalText(
     assistantMessages[targetIndex],
-    authoritativeFinal,
+    authoritativeFinal.content,
+    turnIndex,
+    targetIndex
+  )
+  assistantMessages[targetIndex] = patchAssistantMessageFinalReasoning(
+    withText,
+    authoritativeFinal.reasoning,
     turnIndex,
     targetIndex
   )
@@ -1525,6 +1599,49 @@ function patchAssistantMessageFinalText(
   }
 }
 
+function patchAssistantMessageFinalReasoning(
+  rawMessage: unknown,
+  reasoning: string,
+  turnIndex: number,
+  messageIndex: number
+): Record<string, unknown> {
+  const message = objectValue(rawMessage)
+  if (!reasoning) return message
+  const parts = cloneArray(arrayValue(message.parts))
+  const reasoningIndex = parts.findIndex((rawPart) => stringValue(objectValue(rawPart).type) === "reasoning")
+  if (reasoningIndex >= 0) {
+    const current = objectValue(parts[reasoningIndex])
+    if (reasoning.length <= textValue(current.reasoningText).length) return message
+    parts[reasoningIndex] = {
+      ...current,
+      type: "reasoning",
+      reasoningText: reasoning,
+      reasoningFormat: stringValue(current.reasoningFormat) || "markdown",
+      reasoningStreamKey: stringValue(current.reasoningStreamKey) || "reasoning-history",
+    }
+    return {
+      ...message,
+      parts,
+    }
+  }
+
+  const nextPart = {
+    id: `assistant-reasoning-part-${turnIndex}-${messageIndex}`,
+    type: "reasoning",
+    reasoningText: reasoning,
+    reasoningFormat: "markdown",
+    reasoningStreamKey: "reasoning-history",
+  }
+  const firstTextIndex = parts.findIndex((rawPart) => stringValue(objectValue(rawPart).type) === "text")
+  const nextParts = firstTextIndex < 0
+    ? [nextPart, ...parts]
+    : [...parts.slice(0, firstTextIndex), nextPart, ...parts.slice(firstTextIndex)]
+  return {
+    ...message,
+    parts: nextParts,
+  }
+}
+
 function findLastTextPartIndex(parts: unknown[]): number {
   for (let index = parts.length - 1; index >= 0; index -= 1) {
     if (stringValue(objectValue(parts[index]).type) === "text") return index
@@ -1539,7 +1656,7 @@ function assistantTextLength(turns: unknown[]): number {
       const message = objectValue(rawMessage)
       const partTextLength = arrayValue(message.parts).reduce<number>((partSum, rawPart) => {
         const part = objectValue(rawPart)
-        return partSum + textValue(part.text).length
+        return partSum + textValue(part.text).length + textValue(part.reasoningText).length
       }, 0)
       return messageSum + Math.max(textValue(message.text).length, partTextLength)
     }, 0)
@@ -1573,7 +1690,8 @@ function buildBundleFromMessages(
     const message = objectValue(raw)
     const role = stringValue(message.role)
     const content = messageContent(message.content)
-    if (!content || role === "system") continue
+    const reasoning = role === "assistant" ? messageReasoningContent(message) : ""
+    if ((!content && !reasoning) || role === "system") continue
     if (role === "user") {
       pendingTurn = {
         userMessage: {
@@ -1590,18 +1708,29 @@ function buildBundleFromMessages(
     } else if (role === "assistant") {
       pendingTurn = ensurePendingTurn()
       const assistantMessages = arrayValue(pendingTurn.assistantMessages)
+      const parts: Record<string, unknown>[] = []
+      if (reasoning) {
+        parts.push({
+          id: `${metadata.id}-assistant-reasoning-part-${displayIndex}`,
+          type: "reasoning",
+          reasoningText: reasoning,
+          reasoningFormat: "markdown",
+          reasoningStreamKey: "reasoning-history",
+        })
+      }
+      if (content) {
+        parts.push({
+          id: `${metadata.id}-assistant-part-${displayIndex}`,
+          type: "text",
+          text: content,
+          textFormat: "markdown",
+        })
+      }
       assistantMessages.push({
         id: `${metadata.id}-assistant-${displayIndex}`,
         role: "assistant",
         text: content,
-        parts: [
-          {
-            id: `${metadata.id}-assistant-part-${displayIndex}`,
-            type: "text",
-            text: content,
-            textFormat: "markdown",
-          },
-        ],
+        parts,
         timestamp: Date.parse(metadata.savedAt) || Date.now(),
       })
       pendingTurn.assistantMessages = assistantMessages
@@ -1727,6 +1856,7 @@ function isConversationMessage(message: Record<string, unknown>): boolean {
     return false
   }
   if (messageContent(message.content)) return true
+  if (messageReasoningContent(message)) return true
   if (arrayValue(message.parts).length > 0) return true
   if (arrayValue(message.tool_calls).length > 0) return true
   return role === "tool"
@@ -1745,6 +1875,25 @@ function messageContent(value: unknown): string {
       .join("\n")
   }
   return ""
+}
+
+function messageReasoningContent(message: Record<string, unknown>): string {
+  const direct = stringValue(message.reasoning_content) || ""
+  const detailText = arrayValue(message.reasoning_details)
+    .map((rawDetail) => {
+      const detail = objectValue(rawDetail)
+      return stringValue(detail.text) || stringValue(detail.content) || ""
+    })
+    .filter(Boolean)
+    .join("")
+  if (direct && detailText && !direct.includes(detailText)) {
+    return `${direct}\n\n${detailText}`
+  }
+  return direct || detailText
+}
+
+function isMemoryContextPayload(payload: Record<string, unknown>): boolean {
+  return payload.schema === "memory_context.v1" || payload.context_kind === "memory_injection"
 }
 
 function stringValue(value: unknown): string | undefined {

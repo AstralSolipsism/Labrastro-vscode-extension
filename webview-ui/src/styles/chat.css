@@ -1145,8 +1145,10 @@
 .session-card,
 .remote-status-card,
 .terminal-card,
+.reasoning-card,
 .view-card,
 .context-event-card,
+.memory-context-card,
 .ui-event-card,
 .parallel-card {
   border: 1px solid var(--ez-border);
@@ -1171,8 +1173,10 @@
 .tool-card__header,
 .remote-status-card__header,
 .terminal-card__header,
+.reasoning-card__header,
 .view-card__header,
 .context-event-card__header,
+.memory-context-card__header,
 .ui-event-card__header,
 .trace-event,
 .session-card {
@@ -1192,8 +1196,10 @@
 .tool-card__header:hover,
 .remote-status-card__header:hover,
 .terminal-card__header:hover,
+.reasoning-card__header:hover,
 .view-card__header:hover,
 .context-event-card__header:hover,
+.memory-context-card__header:hover,
 .ui-event-card__header:hover,
 .trace-event:hover,
 .session-card:hover {
@@ -1207,8 +1213,10 @@
 
 .tool-card__body,
 .remote-status-card__body,
+.reasoning-card__body,
 .view-card__body,
 .context-event-card__body,
+.memory-context-card__body,
 .ui-event-card__body,
 .trace-event__body,
 .session-card__body {
@@ -1221,8 +1229,10 @@
 
 .tool-card__title,
 .remote-status-card__title,
+.reasoning-card__title,
 .view-card__title,
 .context-event-card__title,
+.memory-context-card__title,
 .ui-event-card__title,
 .trace-event__title,
 .session-card__title {
@@ -1234,8 +1244,10 @@
 
 .tool-card__subtitle,
 .remote-status-card__meta,
+.reasoning-card__meta,
 .view-card__meta,
 .context-event-card__meta,
+.memory-context-card__meta,
 .ui-event-card__meta,
 .trace-event__meta,
 .trace-event__text,
@@ -1250,8 +1262,10 @@
 
 .remote-status-card__header .codicon,
 .terminal-card__header .codicon,
+.reasoning-card__header .codicon,
 .view-card__header .codicon,
 .context-event-card__header .codicon,
+.memory-context-card__header .codicon,
 .ui-event-card__header .codicon {
   flex: 0 0 auto;
   color: var(--ez-muted);
@@ -1279,10 +1293,30 @@
 }
 
 .terminal-card__header,
+.reasoning-card__header,
 .view-card__header,
 .context-event-card__header,
+.memory-context-card__header,
 .ui-event-card__header {
   justify-content: flex-start;
+}
+
+.reasoning-card {
+  border-color: color-mix(in srgb, var(--ez-warning) 30%, var(--ez-border));
+  background: color-mix(in srgb, var(--ez-warning) 5%, var(--ez-surface-soft));
+}
+
+.reasoning-card__content {
+  max-height: 360px;
+  overflow: auto;
+  padding: 8px 9px;
+  border-top: 1px solid color-mix(in srgb, var(--ez-warning) 22%, var(--ez-border));
+}
+
+.reasoning-card__markdown,
+.reasoning-card__plain {
+  color: color-mix(in srgb, var(--ez-fg) 82%, var(--ez-muted));
+  font-size: 12px;
 }
 
 .terminal-card__header span:nth-child(2) {
@@ -1589,6 +1623,7 @@
 
 .view-card__content,
 .context-event-card__content,
+.memory-context-card__content,
 .ui-event-card__content {
   margin: 0;
   padding: 8px;
@@ -1618,9 +1653,71 @@
 
 .view-card__content,
 .context-event-card__content,
+.memory-context-card__content,
 .ui-event-card__content {
   border-width: 1px 0 0;
   border-radius: 0 0 var(--ez-radius) var(--ez-radius);
+}
+
+.memory-context-card {
+  border-color: color-mix(in srgb, var(--vscode-charts-green, #89d185) 26%, var(--ez-border));
+}
+
+.memory-context-card__items {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.memory-context-card__item {
+  padding: 7px 8px;
+  border: 1px solid color-mix(in srgb, var(--vscode-charts-green, #89d185) 18%, var(--ez-border));
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--vscode-charts-green, #89d185) 4%, transparent);
+}
+
+.memory-context-card__item-head {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.memory-context-card__type {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--vscode-badge-foreground, var(--ez-fg));
+  background: color-mix(in srgb, var(--vscode-badge-background, var(--ez-muted)) 60%, transparent);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.memory-context-card__abstract {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ez-fg);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-context-card__item-content {
+  color: color-mix(in srgb, var(--ez-fg) 82%, var(--ez-muted));
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.memory-context-card__prompt-title {
+  margin: 8px 0 5px;
+  color: var(--ez-muted);
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .structured-card__markdown {

@@ -14,13 +14,16 @@ export type MockSessionState = "active" | "success" | "streaming" | "abandoned" 
 
 export interface MockPart {
   id: string
-  type: "text" | "tool" | "trace" | "session" | "remote_status" | "terminal" | "view" | "context_event" | "ui_event" | "parallel_tools" | "parallel_sessions"
+  type: "text" | "reasoning" | "tool" | "trace" | "session" | "remote_status" | "terminal" | "view" | "context_event" | "memory_context" | "ui_event" | "parallel_tools" | "parallel_sessions"
   eventKey?: string
   sessionEventSeq?: number
   historyCutIndex?: number
   text?: string
   textFormat?: "plain" | "markdown"
   textStreamKey?: string
+  reasoningText?: string
+  reasoningFormat?: "plain" | "markdown"
+  reasoningStreamKey?: string
   tool?: string
   toolCallId?: string
   toolSource?: string
@@ -55,6 +58,8 @@ export interface MockPart {
   viewPayload?: Record<string, unknown>
   contextTitle?: string
   contextPayload?: Record<string, unknown>
+  memoryTitle?: string
+  memoryPayload?: Record<string, unknown>
   uiEventKind?: string
   uiEventLevel?: string
   uiEventTitle?: string

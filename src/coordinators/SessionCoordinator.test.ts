@@ -256,6 +256,52 @@ describe("SessionCoordinator", () => {
     })
   })
 
+  it("restores reasoning content from authoritative history messages before assistant text", async () => {
+    const fullAnswer = "final answer"
+    const reasoning = "Need file"
+    const { emitSessionMessage, subject } = await coordinator({
+      loadSession: vi.fn(async () => ({
+        metadata: { id: "remote-4b", saved_at: "2026-05-10T00:00:00.000Z" },
+        snapshot: {
+          session: { id: "remote-4b", title: "Remote" },
+          turns: [
+            {
+              userMessage: { text: "question", parts: [] },
+              assistantMessages: [
+                {
+                  id: "assistant-1",
+                  role: "assistant",
+                  parts: [{ id: "part-1", type: "text", text: "final", textFormat: "markdown" }],
+                },
+              ],
+            },
+          ],
+        },
+        events_after_snapshot: [
+          { session_event_seq: 2, type: "reasoning_delta", payload: { format: "markdown", content: "Need " } },
+          { session_event_seq: 3, type: "reasoning_delta", payload: { format: "markdown", content: "file" } },
+        ],
+        runtime_state: {},
+        messages: [
+          { role: "user", content: "question" },
+          { role: "assistant", content: fullAnswer, reasoning_content: reasoning },
+        ],
+      })),
+    } as Partial<LabrastroRemoteClient>)
+
+    await subject.loadSession("remote-4b", vi.fn(), { suppressListRefresh: true })
+
+    const loaded = emitSessionMessage.mock.calls.find(([message]) => message.type === "session.loaded")?.[0]
+    const parts = loaded?.bundle.turns[0].assistantMessages[0].parts
+    expect(parts.filter((part: Record<string, unknown>) => part.type === "reasoning")).toHaveLength(1)
+    expect(parts[0]).toMatchObject({
+      type: "reasoning",
+      reasoningText: reasoning,
+      reasoningFormat: "markdown",
+    })
+    expect(parts[1]).toMatchObject({ type: "text", text: fullAnswer })
+  })
+
   it("keeps message history turns that are missing from an older snapshot", async () => {
     const { emitSessionMessage, subject } = await coordinator({
       loadSession: vi.fn(async () => ({
@@ -380,6 +426,104 @@ describe("SessionCoordinator", () => {
     )
   })
 
+  it("replays reasoning deltas into one reasoning part", async () => {
+    const { emitSessionMessage, subject } = await coordinator({
+      loadSession: vi.fn(async () => ({
+        metadata: { id: "remote-6b", saved_at: "2026-05-10T00:00:00.000Z" },
+        snapshot: {
+          session: { id: "remote-6b", title: "Remote" },
+          turns: [
+            {
+              userMessage: { id: "u1", role: "user", text: "run", parts: [], timestamp: 0 },
+              assistantMessages: [
+                { id: "a1", role: "assistant", text: "", parts: [], timestamp: 1 },
+              ],
+            },
+          ],
+        },
+        events_after_snapshot: [
+          {
+            session_event_seq: 2,
+            type: "reasoning_delta",
+            payload: { format: "markdown", content: "Need " },
+          },
+          {
+            session_event_seq: 3,
+            type: "reasoning_delta",
+            payload: { format: "markdown", content: "file" },
+          },
+        ],
+        runtime_state: {},
+        messages: [{ role: "user", content: "run" }],
+      })),
+    } as Partial<LabrastroRemoteClient>)
+
+    await subject.loadSession("remote-6b", vi.fn(), { suppressListRefresh: true })
+
+    const loaded = emitSessionMessage.mock.calls.find(([message]) => message.type === "session.loaded")?.[0]
+    const parts = loaded?.bundle.turns[0].assistantMessages[0].parts
+    expect(parts.filter((part: Record<string, unknown>) => part.type === "reasoning")).toHaveLength(1)
+    expect(parts[0]).toMatchObject({
+      type: "reasoning",
+      reasoningText: "Need file",
+      reasoningFormat: "markdown",
+    })
+  })
+
+  it("replays memory context events into dedicated memory parts", async () => {
+    const { emitSessionMessage, subject } = await coordinator({
+      loadSession: vi.fn(async () => ({
+        metadata: { id: "remote-memory", saved_at: "2026-05-10T00:00:00.000Z" },
+        snapshot: {
+          session: { id: "remote-memory", title: "Remote" },
+          turns: [
+            {
+              userMessage: { id: "u1", role: "user", text: "run", parts: [], timestamp: 0 },
+              assistantMessages: [
+                { id: "a1", role: "assistant", text: "", parts: [], timestamp: 1 },
+              ],
+            },
+          ],
+        },
+        events_after_snapshot: [
+          {
+            session_event_seq: 2,
+            type: "memory_context",
+            payload: {
+              schema: "memory_context.v1",
+              context_kind: "memory_injection",
+              message: "Injected private memory context.",
+              provided_items: 1,
+              rendered_context: "## Private Agent Memory\n- [project] use pytest",
+              items: [{ id: "mem-1", type: "project", content: "use pytest" }],
+            },
+          },
+        ],
+        runtime_state: {},
+        messages: [{ role: "user", content: "run" }],
+      })),
+    } as Partial<LabrastroRemoteClient>)
+
+    await subject.loadSession("remote-memory", vi.fn(), { suppressListRefresh: true })
+
+    const loaded = emitSessionMessage.mock.calls.find(([message]) => message.type === "session.loaded")?.[0]
+    const parts = loaded?.bundle.turns[0].assistantMessages[0].parts
+    expect(parts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "memory_context",
+          memoryTitle: "注入记忆",
+          eventKey: "session:remote-memory:2",
+          sessionEventSeq: 2,
+          memoryPayload: expect.objectContaining({
+            schema: "memory_context.v1",
+            rendered_context: "## Private Agent Memory\n- [project] use pytest",
+          }),
+        }),
+      ])
+    )
+  })
+
   it("does not duplicate replayed event parts already present in the snapshot", async () => {
     const { emitSessionMessage, subject } = await coordinator({
       loadSession: vi.fn(async () => ({
@@ -427,5 +571,54 @@ describe("SessionCoordinator", () => {
     const parts = loaded?.bundle.turns[0].assistantMessages[0].parts
     expect(parts.filter((part: Record<string, unknown>) => part.type === "context_event")).toHaveLength(1)
     expect(parts[0]).toMatchObject({ contextTitle: "已存在" })
+  })
+
+  it("does not duplicate replayed memory context parts already present in the snapshot", async () => {
+    const { emitSessionMessage, subject } = await coordinator({
+      loadSession: vi.fn(async () => ({
+        metadata: { id: "remote-memory-existing", saved_at: "2026-05-10T00:00:00.000Z" },
+        snapshot: {
+          session: { id: "remote-memory-existing", title: "Remote" },
+          turns: [
+            {
+              userMessage: { id: "u1", role: "user", text: "run", parts: [], timestamp: 0 },
+              assistantMessages: [
+                {
+                  id: "a1",
+                  role: "assistant",
+                  text: "",
+                  parts: [
+                    {
+                      id: "memory-2",
+                      type: "memory_context",
+                      eventKey: "session:remote-memory-existing:2",
+                      sessionEventSeq: 2,
+                      memoryTitle: "已存在",
+                    },
+                  ],
+                  timestamp: 1,
+                },
+              ],
+            },
+          ],
+        },
+        events_after_snapshot: [
+          {
+            session_event_seq: 2,
+            type: "memory_context",
+            payload: { schema: "memory_context.v1", rendered_context: "duplicate" },
+          },
+        ],
+        runtime_state: {},
+        messages: [{ role: "user", content: "run" }],
+      })),
+    } as Partial<LabrastroRemoteClient>)
+
+    await subject.loadSession("remote-memory-existing", vi.fn(), { suppressListRefresh: true })
+
+    const loaded = emitSessionMessage.mock.calls.find(([message]) => message.type === "session.loaded")?.[0]
+    const parts = loaded?.bundle.turns[0].assistantMessages[0].parts
+    expect(parts.filter((part: Record<string, unknown>) => part.type === "memory_context")).toHaveLength(1)
+    expect(parts[0]).toMatchObject({ memoryTitle: "已存在" })
   })
 })

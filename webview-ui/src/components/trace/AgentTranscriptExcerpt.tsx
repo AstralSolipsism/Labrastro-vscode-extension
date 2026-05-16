@@ -44,6 +44,13 @@ function summarizeAssistantMessage(message: MockMessage): string {
     return truncate(textParts.join("\n\n"))
   }
 
+  const reasoningParts = message.parts
+    .filter(part => part.type === "reasoning" && part.reasoningText)
+    .map(part => part.reasoningText as string)
+  if (reasoningParts.length > 0) {
+    return truncate(reasoningParts.join("\n\n"))
+  }
+
   const toolParts = message.parts.filter(part => part.type === "tool")
   if (toolParts.length > 0) {
     return `包含 ${toolParts.length} 个工具步骤`
@@ -94,6 +101,16 @@ function buildPartExcerpt(part: MockPart): TranscriptExcerpt {
       text: truncate(part.text),
       traceKindLabel: part.traceNodeKind ? getTraceNodeKindLabel(part.traceNodeKind) : undefined,
       traceStatusLabel: part.traceNodeStatus ? getTraceStatusLabel(part.traceNodeStatus) : undefined,
+    }
+  }
+
+  if (part.type === "reasoning") {
+    return {
+      anchorId: part.id,
+      title: "思考过程",
+      label: "思考摘录",
+      text: truncate(part.reasoningText),
+      traceKindLabel: "思考摘要",
     }
   }
 

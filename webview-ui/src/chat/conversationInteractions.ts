@@ -74,6 +74,9 @@ function serializePartForCopy(part: MockPart): string[] {
   if (part.type === "text") {
     return nonEmpty([part.text])
   }
+  if (part.type === "reasoning") {
+    return nonEmpty([part.reasoningText ? `Reasoning:\n${part.reasoningText}` : undefined])
+  }
   if (part.type === "tool") {
     const title = part.tool || "tool"
     const command = copyTextForToolCommand(part)

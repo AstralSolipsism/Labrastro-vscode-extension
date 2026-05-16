@@ -14,7 +14,12 @@ interface AutoApprovalState {
   platform: NodeJS.Platform
 }
 
+interface ReasoningDisplayState {
+  defaultOpen: boolean
+}
+
 const AUTO_APPROVAL_STATE_KEY = "labrastro.autoApproval"
+const REASONING_DISPLAY_STATE_KEY = "labrastro.reasoningDefaultOpen"
 const DEFAULT_AUTO_APPROVAL_OPTIONS: Record<AutoApprovalOptionKey, boolean> = {
   readOnly: false,
   write: false,
@@ -51,6 +56,12 @@ export class AdminCoordinator {
       allowedCommands: sanitizeCommandRules(stored.allowedCommands),
       deniedCommands: sanitizeCommandRules(stored.deniedCommands),
       platform: process.platform,
+    }
+  }
+
+  getReasoningDisplayState(): ReasoningDisplayState {
+    return {
+      defaultOpen: this.options.context.workspaceState.get(REASONING_DISPLAY_STATE_KEY) === true,
     }
   }
 
@@ -177,6 +188,13 @@ export class AdminCoordinator {
       case "autoApproval.update":
         await this.updateAutoApprovalState(message)
         this.broadcastAutoApprovalState()
+        return true
+      case "reasoningDisplay.get":
+        post({ type: "reasoningDisplay.state", payload: this.getReasoningDisplayState() })
+        return true
+      case "reasoningDisplay.save":
+        await this.options.context.workspaceState.update(REASONING_DISPLAY_STATE_KEY, message.defaultOpen === true)
+        this.broadcastReasoningDisplayState()
         return true
       case "admin.refresh":
         await this.options.postConnectionState(post)
@@ -313,6 +331,10 @@ export class AdminCoordinator {
 
   private broadcastAutoApprovalState(): void {
     this.options.broadcastState({ type: "autoApproval.state", payload: this.getAutoApprovalState() })
+  }
+
+  private broadcastReasoningDisplayState(): void {
+    this.options.broadcastState({ type: "reasoningDisplay.state", payload: this.getReasoningDisplayState() })
   }
 }
 

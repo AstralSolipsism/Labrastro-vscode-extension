@@ -111,6 +111,8 @@ function estimatePartHeight(part: MockPart, width: number, metrics: TurnHeightMe
   switch (part.type) {
     case "text":
       return estimateTextPartHeight(part, width, metrics)
+    case "reasoning":
+      return estimateReasoningPartHeight(part, width, metrics)
     case "tool":
       return estimateToolPartHeight(part, width, metrics)
     case "trace":
@@ -123,6 +125,7 @@ function estimatePartHeight(part: MockPart, width: number, metrics: TurnHeightMe
       return 34 + estimateCodeHeight(part.terminalContent || "", width, metrics, 88, 220)
     case "view":
     case "context_event":
+    case "memory_context":
     case "ui_event":
       return estimateStructuredCardHeight(part, width, metrics)
     case "parallel_tools":
@@ -143,6 +146,13 @@ function estimateTextPartHeight(part: MockPart, width: number, metrics: TurnHeig
     whiteSpace: "pre-wrap",
     minLines: 1,
   })
+}
+
+function estimateReasoningPartHeight(part: MockPart, width: number, metrics: TurnHeightMetrics): number {
+  const headerHeight = 38
+  const text = part.reasoningText || ""
+  if (!text) return headerHeight
+  return headerHeight + Math.min(220, estimateMarkdownTextHeight(text, width, metrics))
 }
 
 function estimateMarkdownTextHeight(text: string, width: number, metrics: TurnHeightMetrics): number {
@@ -198,6 +208,7 @@ function estimateShellToolHeight(part: MockPart, width: number, metrics: TurnHei
 function estimateStructuredCardHeight(part: MockPart, width: number, metrics: TurnHeightMetrics): number {
   const summary = stringPayload(part.viewPayload?.markdown || part.viewPayload?.content || part.viewPayload?.message) ||
     stringPayload(part.contextPayload?.markdown || part.contextPayload?.content || part.contextPayload?.message) ||
+    stringPayload(part.memoryPayload?.rendered_context || part.memoryPayload?.message) ||
     stringPayload(part.uiEventPayload?.markdown || part.uiEventPayload?.content || part.uiEventPayload?.message)
 
   return 38 + (summary ? estimateMarkdownTextHeight(summary, width, metrics) : 0)
@@ -278,6 +289,8 @@ function partDigestSource(part: MockPart): Record<string, unknown> {
     type: part.type,
     text: part.text,
     textFormat: part.textFormat,
+    reasoningText: part.reasoningText,
+    reasoningFormat: part.reasoningFormat,
     tool: part.tool,
     toolSource: part.toolSource,
     toolInput: part.toolInput,
@@ -289,6 +302,7 @@ function partDigestSource(part: MockPart): Record<string, unknown> {
     terminalContent: part.terminalContent,
     viewPayload: part.viewPayload,
     contextPayload: part.contextPayload,
+    memoryPayload: part.memoryPayload,
     uiEventPayload: part.uiEventPayload,
     parallelItems: part.parallelItems?.map(partDigestSource),
   }

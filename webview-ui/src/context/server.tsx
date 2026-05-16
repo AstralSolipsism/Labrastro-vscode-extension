@@ -48,6 +48,7 @@ interface ServerContextValue {
   environmentManifest: () => Record<string, unknown> | undefined
   environmentSnapshot: () => Record<string, unknown>
   environmentError: () => string | undefined
+  reasoningDisplayState: () => Record<string, unknown>
   /** 主执行器类型（位置 + 引擎） */
   executorType: () => { location: string; engine: string }
 }
@@ -128,6 +129,7 @@ export const ServerProvider: ParentComponent = (props) => {
   const [environmentManifest, setEnvironmentManifest] = createSignal<Record<string, unknown> | undefined>()
   const [environmentSnapshot, setEnvironmentSnapshot] = createSignal<Record<string, unknown>>({})
   const [environmentError, setEnvironmentError] = createSignal<string | undefined>()
+  const [reasoningDisplayState, setReasoningDisplayState] = createSignal<Record<string, unknown>>({ defaultOpen: false })
   const [executorType, setExecutorType] = createSignal<{ location: string; engine: string }>({
     location: "remote",
     engine: "labrastro",
@@ -284,6 +286,9 @@ export const ServerProvider: ParentComponent = (props) => {
       if (msg.type === "executorType.state" && typeof msg.payload === "object" && msg.payload) {
         setExecutorType(msg.payload as { location: string; engine: string })
       }
+      if (msg.type === "reasoningDisplay.state" && typeof msg.payload === "object" && msg.payload) {
+        setReasoningDisplayState(msg.payload as Record<string, unknown>)
+      }
       if (msg.type === "locale.state" && typeof msg.locale === "string") {
         setLocale(resolveLocale(msg.locale))
       }
@@ -322,6 +327,7 @@ export const ServerProvider: ParentComponent = (props) => {
     environmentManifest,
     environmentSnapshot,
     environmentError,
+    reasoningDisplayState,
     executorType,
   }
 

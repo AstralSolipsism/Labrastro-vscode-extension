@@ -24,6 +24,14 @@ export const settingsMessages = {
     port.postMessage({ type: "autoApproval.update", ...patch })
   },
 
+  getReasoningDisplay(port: SettingsMessagePort): void {
+    port.postMessage({ type: "reasoningDisplay.get" })
+  },
+
+  saveReasoningDisplay(port: SettingsMessagePort, defaultOpen: boolean): void {
+    port.postMessage({ type: "reasoningDisplay.save", defaultOpen })
+  },
+
   saveExecutorType(port: SettingsMessagePort, location: string, engine: string): void {
     port.postMessage({ type: "executorType.save", location, engine })
   },
