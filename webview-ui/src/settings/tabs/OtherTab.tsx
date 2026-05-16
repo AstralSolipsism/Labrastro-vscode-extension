@@ -38,6 +38,11 @@ export const OtherTab: Component<TabProps> = (props) => {
   const diagnosticsSettings = createMemo(() =>
     objectValue(objectValue(serverSettings().diagnostics).tool_argument_validation)
   )
+  const llmTraceSettings = createMemo(() =>
+    objectValue(objectValue(serverSettings().diagnostics).llm_trace)
+  )
+  const llmTraceEnabled = createMemo(() => llmTraceSettings().enabled === true)
+  const llmTraceRawChunks = createMemo(() => llmTraceSettings().raw_chunks === true)
   const toolArgumentTelemetryEnabled = createMemo(() =>
     diagnosticsSettings().enabled !== false
   )
@@ -49,10 +54,38 @@ export const OtherTab: Component<TabProps> = (props) => {
   const issueRows = createMemo(() => arrayOfRecords(toolArgumentStats().issues).slice(0, 8))
   const repairRows = createMemo(() => arrayOfRecords(toolArgumentStats().repairs).slice(0, 8))
   const reasoningDefaultOpen = createMemo(() => server.reasoningDisplayState().defaultOpen === true)
+  const peerDiagnosticsLogging = createMemo(() => objectValue(server.peerDiagnosticsLoggingState()))
+  const peerLoggingEnabled = createMemo(() => peerDiagnosticsLogging().enabled !== false)
+  const peerLoggingLifecycle = createMemo(() => peerDiagnosticsLogging().lifecycle !== false)
+  const peerLoggingProcessOutput = createMemo(() => peerDiagnosticsLogging().processOutput !== false)
+  const peerLoggingHttp = createMemo(() => peerDiagnosticsLogging().http !== false)
+  const peerLoggingPath = createMemo(() => stringValue(peerDiagnosticsLogging().logPath))
 
   const refreshDiagnostics = () => settingsMessages.readToolArgumentDiagnosticsStats(vscode)
   const updateReasoningDefaultOpen = (defaultOpen: boolean) => {
     settingsMessages.saveReasoningDisplay(vscode, defaultOpen)
+  }
+  const updatePeerDiagnosticsLogging = (patch: Record<string, boolean>) => {
+    settingsMessages.savePeerDiagnosticsLogging(vscode, {
+      enabled: peerLoggingEnabled(),
+      lifecycle: peerLoggingLifecycle(),
+      processOutput: peerLoggingProcessOutput(),
+      http: peerLoggingHttp(),
+      ...patch,
+    })
+  }
+  const updateLLMTrace = (patch: Record<string, boolean>) => {
+    settingsMessages.updateServerSettings(vscode, {
+      settings: {
+        diagnostics: {
+          llm_trace: {
+            enabled: llmTraceEnabled(),
+            raw_chunks: llmTraceRawChunks(),
+            ...patch,
+          },
+        },
+      },
+    })
   }
   const updateToolArgumentTelemetry = (enabled: boolean) => {
     settingsMessages.updateServerSettings(vscode, {
@@ -70,6 +103,7 @@ export const OtherTab: Component<TabProps> = (props) => {
   onMount(() => {
     settingsMessages.readServerSettings(vscode)
     settingsMessages.getReasoningDisplay(vscode)
+    settingsMessages.getPeerDiagnosticsLogging(vscode)
   })
 
   return (
@@ -121,6 +155,116 @@ export const OtherTab: Component<TabProps> = (props) => {
           <span>{t("other.reasoning.defaultOpen")}</span>
         </label>
         <p class="settings-empty-note">{t("other.reasoning.desc")}</p>
+      </section>
+
+      <section class="settings-section settings-section--flat peer-diagnostics-section">
+        <div class="settings-section-heading">
+          <span>
+            <span class="codicon codicon-output" aria-hidden="true" />
+            <span>{t("other.peerLogging.title")}</span>
+          </span>
+          <span class="settings-badge">{t("other.peerLogging.localOnly")}</span>
+        </div>
+        <label class="field-label field-label--checkbox">
+          <input
+            type="checkbox"
+            checked={peerLoggingEnabled()}
+            onChange={(event) => updatePeerDiagnosticsLogging({ enabled: event.currentTarget.checked })}
+          />
+          <span>{t("other.peerLogging.enabled")}</span>
+        </label>
+        <p class="settings-empty-note">{t("other.peerLogging.desc")}</p>
+        <details class="settings-details settings-details--embedded">
+          <summary>
+            <span class="codicon codicon-settings" aria-hidden="true" />
+            {t("other.peerLogging.advanced")}
+          </summary>
+          <div class="settings-form-grid">
+            <label class="field-label field-label--checkbox">
+              <input
+                type="checkbox"
+                disabled={!peerLoggingEnabled()}
+                checked={peerLoggingLifecycle()}
+                onChange={(event) => updatePeerDiagnosticsLogging({ lifecycle: event.currentTarget.checked })}
+              />
+              <span>{t("other.peerLogging.lifecycle")}</span>
+            </label>
+            <label class="field-label field-label--checkbox">
+              <input
+                type="checkbox"
+                disabled={!peerLoggingEnabled()}
+                checked={peerLoggingProcessOutput()}
+                onChange={(event) => updatePeerDiagnosticsLogging({ processOutput: event.currentTarget.checked })}
+              />
+              <span>{t("other.peerLogging.processOutput")}</span>
+            </label>
+            <label class="field-label field-label--checkbox">
+              <input
+                type="checkbox"
+                disabled={!peerLoggingEnabled()}
+                checked={peerLoggingHttp()}
+                onChange={(event) => updatePeerDiagnosticsLogging({ http: event.currentTarget.checked })}
+              />
+              <span>{t("other.peerLogging.http")}</span>
+            </label>
+          </div>
+        </details>
+        <div class="field-label">
+          <span>{t("other.peerLogging.path")}</span>
+          <pre class="settings-result peer-diagnostics-path">{peerLoggingPath() || t("other.peerLogging.emptyPath")}</pre>
+        </div>
+        <div class="settings-actions">
+          <button
+            type="button"
+            class="btn-secondary"
+            onClick={() => settingsMessages.openPeerDiagnosticsLog(vscode)}
+          >
+            <span class="codicon codicon-go-to-file" aria-hidden="true" />
+            {t("other.peerLogging.open")}
+          </button>
+          <button
+            type="button"
+            class="btn-secondary"
+            onClick={() => settingsMessages.clearPeerDiagnosticsLog(vscode)}
+          >
+            <span class="codicon codicon-trash" aria-hidden="true" />
+            {t("other.peerLogging.clear")}
+          </button>
+        </div>
+      </section>
+
+      <section class="settings-section settings-section--flat diagnostics-section">
+        <div class="settings-section-heading">
+          <span>
+            <span class="codicon codicon-symbol-event" aria-hidden="true" />
+            <span>{t("other.llmTrace.title")}</span>
+          </span>
+          <span class="settings-badge">{t("other.llmTrace.serverSide")}</span>
+        </div>
+        <label class="field-label field-label--checkbox">
+          <input
+            type="checkbox"
+            checked={llmTraceEnabled()}
+            onChange={(event) => updateLLMTrace({
+              enabled: event.currentTarget.checked,
+              raw_chunks: event.currentTarget.checked ? llmTraceRawChunks() : false,
+            })}
+          />
+          <span>{t("other.llmTrace.enabled")}</span>
+        </label>
+        <label class="field-label field-label--checkbox">
+          <input
+            type="checkbox"
+            disabled={!llmTraceEnabled()}
+            checked={llmTraceRawChunks()}
+            onChange={(event) => updateLLMTrace({
+              enabled: event.currentTarget.checked ? true : llmTraceEnabled(),
+              raw_chunks: event.currentTarget.checked,
+            })}
+          />
+          <span>{t("other.llmTrace.rawChunks")}</span>
+        </label>
+        <p class="settings-empty-note">{t("other.llmTrace.desc")}</p>
       </section>
 
       <section class="settings-section settings-section--flat diagnostics-section">

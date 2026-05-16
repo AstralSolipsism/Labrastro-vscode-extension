@@ -35,6 +35,8 @@ interface ServerContextValue {
   serverSettingsError: () => string | undefined
   diagnosticsState: () => Record<string, unknown> | undefined
   diagnosticsError: () => string | undefined
+  modelCapabilitiesState: () => Record<string, unknown> | undefined
+  modelCapabilitiesError: () => string | undefined
   backendFeatures: () => Record<string, unknown>
   authUsersState: () => Record<string, unknown> | undefined
   authDevicesState: () => Record<string, unknown> | undefined
@@ -49,6 +51,7 @@ interface ServerContextValue {
   environmentSnapshot: () => Record<string, unknown>
   environmentError: () => string | undefined
   reasoningDisplayState: () => Record<string, unknown>
+  peerDiagnosticsLoggingState: () => Record<string, unknown>
   /** 主执行器类型（位置 + 引擎） */
   executorType: () => { location: string; engine: string }
 }
@@ -112,6 +115,8 @@ export const ServerProvider: ParentComponent = (props) => {
   const [serverSettingsError, setServerSettingsError] = createSignal<string | undefined>()
   const [diagnosticsState, setDiagnosticsState] = createSignal<Record<string, unknown> | undefined>()
   const [diagnosticsError, setDiagnosticsError] = createSignal<string | undefined>()
+  const [modelCapabilitiesState, setModelCapabilitiesState] = createSignal<Record<string, unknown> | undefined>()
+  const [modelCapabilitiesError, setModelCapabilitiesError] = createSignal<string | undefined>()
   const [backendFeatures, setBackendFeatures] = createSignal<Record<string, unknown>>({})
   const [authUsersState, setAuthUsersState] = createSignal<Record<string, unknown> | undefined>()
   const [authDevicesState, setAuthDevicesState] = createSignal<Record<string, unknown> | undefined>()
@@ -130,6 +135,13 @@ export const ServerProvider: ParentComponent = (props) => {
   const [environmentSnapshot, setEnvironmentSnapshot] = createSignal<Record<string, unknown>>({})
   const [environmentError, setEnvironmentError] = createSignal<string | undefined>()
   const [reasoningDisplayState, setReasoningDisplayState] = createSignal<Record<string, unknown>>({ defaultOpen: false })
+  const [peerDiagnosticsLoggingState, setPeerDiagnosticsLoggingState] = createSignal<Record<string, unknown>>({
+    enabled: true,
+    lifecycle: true,
+    processOutput: true,
+    http: true,
+    logPath: "",
+  })
   const [executorType, setExecutorType] = createSignal<{ location: string; engine: string }>({
     location: "remote",
     engine: "labrastro",
@@ -182,6 +194,13 @@ export const ServerProvider: ParentComponent = (props) => {
       }
       if (msg.type === "diagnostics.toolArguments.error") {
         setDiagnosticsError(typeof msg.message === "string" ? msg.message : "Diagnostics request failed")
+      }
+      if (msg.type === "modelCapabilities.state" && typeof msg.payload === "object" && msg.payload) {
+        setModelCapabilitiesState(msg.payload as Record<string, unknown>)
+        setModelCapabilitiesError(undefined)
+      }
+      if (msg.type === "modelCapabilities.error") {
+        setModelCapabilitiesError(typeof msg.message === "string" ? msg.message : "Model capabilities request failed")
       }
       if (msg.type === "backend.features" && typeof msg.payload === "object" && msg.payload) {
         setBackendFeatures(msg.payload as Record<string, unknown>)
@@ -289,6 +308,9 @@ export const ServerProvider: ParentComponent = (props) => {
       if (msg.type === "reasoningDisplay.state" && typeof msg.payload === "object" && msg.payload) {
         setReasoningDisplayState(msg.payload as Record<string, unknown>)
       }
+      if (msg.type === "peerDiagnosticsLogging.state" && typeof msg.payload === "object" && msg.payload) {
+        setPeerDiagnosticsLoggingState(msg.payload as Record<string, unknown>)
+      }
       if (msg.type === "locale.state" && typeof msg.locale === "string") {
         setLocale(resolveLocale(msg.locale))
       }
@@ -311,6 +333,8 @@ export const ServerProvider: ParentComponent = (props) => {
     serverSettingsError,
     diagnosticsState,
     diagnosticsError,
+    modelCapabilitiesState,
+    modelCapabilitiesError,
     backendFeatures,
     authUsersState,
     authDevicesState,
@@ -328,6 +352,7 @@ export const ServerProvider: ParentComponent = (props) => {
     environmentSnapshot,
     environmentError,
     reasoningDisplayState,
+    peerDiagnosticsLoggingState,
     executorType,
   }
 

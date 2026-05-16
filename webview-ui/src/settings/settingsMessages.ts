@@ -32,6 +32,22 @@ export const settingsMessages = {
     port.postMessage({ type: "reasoningDisplay.save", defaultOpen })
   },
 
+  getPeerDiagnosticsLogging(port: SettingsMessagePort): void {
+    port.postMessage({ type: "peerDiagnosticsLogging.get" })
+  },
+
+  savePeerDiagnosticsLogging(port: SettingsMessagePort, payload: Record<string, unknown>): void {
+    port.postMessage({ type: "peerDiagnosticsLogging.save", payload })
+  },
+
+  openPeerDiagnosticsLog(port: SettingsMessagePort): void {
+    port.postMessage({ type: "peerDiagnosticsLogging.open" })
+  },
+
+  clearPeerDiagnosticsLog(port: SettingsMessagePort): void {
+    port.postMessage({ type: "peerDiagnosticsLogging.clear" })
+  },
+
   saveExecutorType(port: SettingsMessagePort, location: string, engine: string): void {
     port.postMessage({ type: "executorType.save", location, engine })
   },
