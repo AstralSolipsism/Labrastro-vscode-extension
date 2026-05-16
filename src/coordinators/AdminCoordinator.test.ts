@@ -2,6 +2,13 @@
 import { AdminCoordinator } from "./AdminCoordinator"
 
 function coordinator() {
+  let peerDiagnosticsState = {
+    enabled: true,
+    lifecycle: true,
+    processOutput: true,
+    http: true,
+    logPath: "G:/tmp/peer-diagnostics.log",
+  }
   const options = {
     client: {
       hostUrl: "http://127.0.0.1:8765",
@@ -20,6 +27,31 @@ function coordinator() {
       serverSettingsRead: vi.fn(),
       serverSettingsUpdate: vi.fn(),
       toolArgumentDiagnosticsStats: vi.fn(),
+      peerDiagnosticsLoggingState: vi.fn(() => peerDiagnosticsState),
+      savePeerDiagnosticsLoggingState: vi.fn(async (payload: Record<string, unknown>) => {
+        peerDiagnosticsState = {
+          ...peerDiagnosticsState,
+          ...(typeof payload.enabled === "boolean" ? { enabled: payload.enabled } : {}),
+          ...(typeof payload.lifecycle === "boolean" ? { lifecycle: payload.lifecycle } : {}),
+          ...(typeof payload.processOutput === "boolean" ? { processOutput: payload.processOutput } : {}),
+          ...(typeof payload.http === "boolean" ? { http: payload.http } : {}),
+        }
+        return peerDiagnosticsState
+      }),
+      openPeerDiagnosticsLog: vi.fn(async () => ({
+        enabled: true,
+        lifecycle: true,
+        processOutput: true,
+        http: true,
+        logPath: "G:/tmp/peer-diagnostics.log",
+      })),
+      clearPeerDiagnosticsLog: vi.fn(async () => ({
+        enabled: true,
+        lifecycle: true,
+        processOutput: true,
+        http: true,
+        logPath: "G:/tmp/peer-diagnostics.log",
+      })),
       providerRecord: vi.fn(),
       providerTest: vi.fn(),
       providerDelete: vi.fn(),
@@ -28,6 +60,22 @@ function coordinator() {
       providerModels: vi.fn(),
       modelProfileRecord: vi.fn(),
       modelProfileActivate: vi.fn(),
+      modelCapabilitiesStatus: vi.fn(async () => ({
+        ok: true,
+        model_capabilities: { enabled: true, model_count: 2 },
+      })),
+      modelCapabilitiesList: vi.fn(async () => ({
+        ok: true,
+        model_capabilities: { enabled: true, models: [] },
+      })),
+      modelCapabilitiesRefresh: vi.fn(async () => ({
+        ok: true,
+        model_capabilities: { enabled: true, model_count: 2 },
+      })),
+      modelCapabilitiesApply: vi.fn(async () => ({
+        ok: true,
+        model_profiles: [],
+      })),
     },
     context: {
       workspaceState: {

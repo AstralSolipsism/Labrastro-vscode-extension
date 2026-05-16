@@ -21,6 +21,10 @@ import {
   isRemoteError,
   retryInvalidPeerTokenOnce,
 } from "./remote-errors"
+import {
+  PeerDiagnosticsLogger,
+  type PeerDiagnosticsLoggingState,
+} from "./PeerDiagnosticsLogger"
 export {
   RemoteError,
   RemoteTransportError,
@@ -101,6 +105,7 @@ interface StoredAuthSession {
 interface PeerInfo {
   peer_id: string
   peer_token: string
+  heartbeat_interval_ms?: number
 }
 
 interface PeerStartupOutput {
@@ -113,11 +118,16 @@ export class LabrastroRemoteClient {
   private peerInfo: PeerInfo | undefined
   private peerStartupPromise: Promise<PeerInfo> | undefined
   private peerStartupGeneration = 0
+  private lastPeerStopCaller: string | undefined
+  private readonly peerStopCallers = new WeakMap<ChildProcessWithoutNullStreams, string>()
+  private readonly peerDiagnosticsLogger: PeerDiagnosticsLogger
   private accessToken: string | undefined
   private accessTokenExpiresAt = 0
   private refreshAccessTokenPromise: Promise<string> | undefined
 
-  constructor(private readonly context: vscode.ExtensionContext) {}
+  constructor(private readonly context: vscode.ExtensionContext) {
+    this.peerDiagnosticsLogger = new PeerDiagnosticsLogger(context)
+  }
 
   get hostUrl(): string {
     return this.hostUrlState().url
@@ -290,7 +300,7 @@ export class LabrastroRemoteClient {
       }
     }
     await this.clearAuthSession()
-    await this.stopPeer()
+    await this.stopPeer("logout")
     return this.connectionState()
   }
 
@@ -693,6 +703,24 @@ export class LabrastroRemoteClient {
     })
   }
 
+  peerDiagnosticsLoggingState(): PeerDiagnosticsLoggingState {
+    return this.peerDiagnosticsLogger.state()
+  }
+
+  async savePeerDiagnosticsLoggingState(
+    patch: Record<string, unknown>
+  ): Promise<PeerDiagnosticsLoggingState> {
+    return this.peerDiagnosticsLogger.save(patch)
+  }
+
+  async openPeerDiagnosticsLog(): Promise<PeerDiagnosticsLoggingState> {
+    return this.peerDiagnosticsLogger.open()
+  }
+
+  async clearPeerDiagnosticsLog(): Promise<PeerDiagnosticsLoggingState> {
+    return this.peerDiagnosticsLogger.clear()
+  }
+
   async confirmTaskflowDispatch(
     taskflowId: string,
     decisionId: string,
@@ -809,25 +837,59 @@ export class LabrastroRemoteClient {
     }))
   }
 
-  async stopPeer(): Promise<void> {
+  async stopPeer(caller = "unknown"): Promise<void> {
+    this.lastPeerStopCaller = caller
     this.peerStartupGeneration += 1
     this.peerStartupPromise = undefined
     const peer = this.peerInfo
+    const peerProcess = this.peerProcess
+    const pid = peerProcess?.pid
+    if (peerProcess) {
+      this.peerStopCallers.set(peerProcess, caller)
+    }
+    await this.peerDiagnosticsLogger.log("lifecycle", "peer.stop.request", "Local peer stop requested.", {
+      caller,
+      peerId: peer?.peer_id,
+      pid,
+      hasPeerInfo: Boolean(peer),
+      hasProcess: Boolean(this.peerProcess),
+    })
     if (peer) {
       try {
         await this.postJson("/remote/disconnect", {
           peer_token: peer.peer_token,
           reason: "peer_shutdown",
         })
-      } catch {
+        await this.peerDiagnosticsLogger.log("lifecycle", "peer.stop.disconnect.ok", "Remote peer disconnect acknowledged.", {
+          caller,
+          peerId: peer.peer_id,
+          pid,
+        })
+      } catch (error) {
+        await this.peerDiagnosticsLogger.log("lifecycle", "peer.stop.disconnect.failed", "Remote peer disconnect failed.", {
+          caller,
+          peerId: peer.peer_id,
+          pid,
+          error: errorDiagnostics(error),
+        }, "warn")
         // Ignore disconnect failures; killing the local peer process is still sufficient.
       }
     }
     if (this.peerProcess && this.peerProcess.exitCode === null) {
+      await this.peerDiagnosticsLogger.log("lifecycle", "peer.stop.kill", "Killing local peer process.", {
+        caller,
+        peerId: peer?.peer_id,
+        pid: this.peerProcess.pid,
+      })
       this.peerProcess.kill()
     }
     this.peerProcess = undefined
     this.peerInfo = undefined
+    await this.peerDiagnosticsLogger.log("lifecycle", "peer.stop.done", "Local peer stop completed.", {
+      caller,
+      peerId: peer?.peer_id,
+      pid,
+    })
   }
 
   private async authenticatedPost(pathname: string, payload: JsonObject): Promise<JsonObject> {
@@ -999,7 +1061,7 @@ export class LabrastroRemoteClient {
     return retryInvalidPeerTokenOnce(
       () => this.postJson(pathname, payload(peer), {}, options),
       async () => {
-        await this.stopPeer()
+        await this.stopPeer("invalid_peer_token_retry")
         peer = await this.ensurePeer()
       }
     )
@@ -1011,7 +1073,7 @@ export class LabrastroRemoteClient {
     return retryInvalidPeerTokenOnce(
       () => this.getJson(`${pathname}${separator}peer_token=${encodeURIComponent(peer.peer_token)}`),
       async () => {
-        await this.stopPeer()
+        await this.stopPeer("invalid_peer_token_retry")
         peer = await this.ensurePeer()
       }
     )
@@ -1054,6 +1116,11 @@ export class LabrastroRemoteClient {
 
   private async startPeer(generation: number): Promise<PeerInfo> {
     await fs.mkdir(this.context.globalStorageUri.fsPath, { recursive: true })
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd()
+    await this.peerDiagnosticsLogger.log("lifecycle", "peer.start.request", "Starting local peer process.", {
+      host: this.hostUrl,
+      workspaceRoot,
+    })
     const bootstrap = await this.authenticatedPost("/remote/auth/bootstrap-token", {})
     const token = stringValue(bootstrap.bootstrap_token)
     if (!token) {
@@ -1070,7 +1137,6 @@ export class LabrastroRemoteClient {
       throw new Error("Peer startup was cancelled.")
     }
 
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd()
     const peerProcess = spawn(
       binaryPath,
       [
@@ -1094,25 +1160,71 @@ export class LabrastroRemoteClient {
       throw new Error("Peer startup was cancelled.")
     }
     this.peerProcess = peerProcess
+    void this.peerDiagnosticsLogger.log("lifecycle", "peer.spawned", "Local peer process spawned.", {
+      binaryPath,
+      workspaceRoot,
+      host: this.hostUrl,
+      pid: peerProcess.pid,
+      peerInfoPath,
+    })
     const peerOutput: PeerStartupOutput = { stdout: [], stderr: [] }
     peerProcess.stdout.on("data", (chunk) => {
       const text = String(chunk)
       appendPeerOutput(peerOutput.stdout, text)
+      void this.peerDiagnosticsLogger.log("processOutput", "peer.stdout", "Local peer stdout.", {
+        pid: peerProcess.pid,
+        text,
+      })
       console.log(`[labrastro peer] ${text}`)
     })
     peerProcess.stderr.on("data", (chunk) => {
       const text = String(chunk)
       appendPeerOutput(peerOutput.stderr, text)
+      void this.peerDiagnosticsLogger.log("processOutput", "peer.stderr", "Local peer stderr.", {
+        pid: peerProcess.pid,
+        text,
+      }, "warn")
       console.warn(`[labrastro peer] ${text}`)
     })
-    peerProcess.on("exit", () => {
+    peerProcess.on("exit", (code, signal) => {
+      const stopCaller = this.peerStopCallers.get(peerProcess)
+      this.peerStopCallers.delete(peerProcess)
+      void this.peerDiagnosticsLogger.log(
+        "lifecycle",
+        "peer.exit",
+        "Local peer process exited.",
+        {
+          code,
+          signal,
+          pid: peerProcess.pid,
+          peerId: this.peerInfo?.peer_id,
+          stopCaller,
+          recentStopCaller: this.lastPeerStopCaller,
+          stoppedByPlugin: Boolean(stopCaller),
+        },
+        code === 0 ? "info" : "error"
+      )
       if (this.peerProcess === peerProcess) {
         this.peerProcess = undefined
         this.peerInfo = undefined
       }
     })
 
-    const peerInfo = await waitForPeerInfo(peerInfoPath, peerProcess, peerOutput)
+    let peerInfo: PeerInfo
+    try {
+      peerInfo = await waitForPeerInfo(peerInfoPath, peerProcess, peerOutput)
+    } catch (error) {
+      await this.peerDiagnosticsLogger.log("lifecycle", "peer.start.failed", "Local peer failed before registration.", {
+        binaryPath,
+        workspaceRoot,
+        host: this.hostUrl,
+        pid: peerProcess.pid,
+        exitCode: peerProcess.exitCode,
+        signalCode: peerProcess.signalCode,
+        error: errorDiagnostics(error),
+      }, "error")
+      throw error
+    }
     if (this.peerStartupGeneration !== generation) {
       if (peerProcess.exitCode === null) {
         peerProcess.kill()
@@ -1120,6 +1232,11 @@ export class LabrastroRemoteClient {
       throw new Error("Peer startup was cancelled.")
     }
     this.peerInfo = peerInfo
+    await this.peerDiagnosticsLogger.log("lifecycle", "peer.registered", "Local peer registered with host.", {
+      peerId: peerInfo.peer_id,
+      heartbeatIntervalMs: peerInfo.heartbeat_interval_ms,
+      pid: peerProcess.pid,
+    })
     return peerInfo
   }
 
@@ -1247,28 +1364,92 @@ export class LabrastroRemoteClient {
     headers: Record<string, string> = {},
     options: { timeoutMs?: number } = {}
   ): Promise<JsonObject> {
-    const response = await fetchWithTimeout(this.hostUrl + pathname, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...headers,
-      },
-      body: JSON.stringify(payload),
-    }, options.timeoutMs)
-    return parseJsonResponse(response)
+    const startedAt = Date.now()
+    let status: number | undefined
+    try {
+      const response = await fetchWithTimeout(this.hostUrl + pathname, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...headers,
+        },
+        body: JSON.stringify(payload),
+      }, options.timeoutMs)
+      status = response.status
+      const body = await parseJsonResponse(response)
+      await this.peerDiagnosticsLogger.log("http", "http.post.ok", "Extension HTTP request completed.", {
+        method: "POST",
+        pathname: diagnosticPathname(pathname),
+        status,
+        durationMs: Date.now() - startedAt,
+      })
+      return body
+    } catch (error) {
+      await this.peerDiagnosticsLogger.log("http", "http.post.error", "Extension HTTP request failed.", {
+        method: "POST",
+        pathname: diagnosticPathname(pathname),
+        status: remoteStatus(error, status),
+        durationMs: Date.now() - startedAt,
+        error: errorDiagnostics(error),
+      }, "warn")
+      throw error
+    }
   }
 
   private async getJson(pathname: string, headers: Record<string, string> = {}): Promise<JsonObject> {
-    const response = await fetchWithTimeout(this.hostUrl + pathname, { headers })
-    return parseJsonResponse(response)
+    const startedAt = Date.now()
+    let status: number | undefined
+    try {
+      const response = await fetchWithTimeout(this.hostUrl + pathname, { headers })
+      status = response.status
+      const body = await parseJsonResponse(response)
+      await this.peerDiagnosticsLogger.log("http", "http.get.ok", "Extension HTTP request completed.", {
+        method: "GET",
+        pathname: diagnosticPathname(pathname),
+        status,
+        durationMs: Date.now() - startedAt,
+      })
+      return body
+    } catch (error) {
+      await this.peerDiagnosticsLogger.log("http", "http.get.error", "Extension HTTP request failed.", {
+        method: "GET",
+        pathname: diagnosticPathname(pathname),
+        status: remoteStatus(error, status),
+        durationMs: Date.now() - startedAt,
+        error: errorDiagnostics(error),
+      }, "warn")
+      throw error
+    }
   }
 
   private async requestBuffer(pathname: string): Promise<Buffer> {
-    const response = await fetchWithTimeout(this.hostUrl + pathname)
-    if (!response.ok) {
-      throw new Error(`${response.status} ${await response.text()}`)
+    const startedAt = Date.now()
+    let status: number | undefined
+    try {
+      const response = await fetchWithTimeout(this.hostUrl + pathname)
+      status = response.status
+      if (!response.ok) {
+        throw new Error(`${response.status} ${await response.text()}`)
+      }
+      const buffer = Buffer.from(await response.arrayBuffer())
+      await this.peerDiagnosticsLogger.log("http", "http.get.buffer.ok", "Extension HTTP request completed.", {
+        method: "GET",
+        pathname: diagnosticPathname(pathname),
+        status,
+        durationMs: Date.now() - startedAt,
+        bytes: buffer.byteLength,
+      })
+      return buffer
+    } catch (error) {
+      await this.peerDiagnosticsLogger.log("http", "http.get.buffer.error", "Extension HTTP request failed.", {
+        method: "GET",
+        pathname: diagnosticPathname(pathname),
+        status: remoteStatus(error, status),
+        durationMs: Date.now() - startedAt,
+        error: errorDiagnostics(error),
+      }, "warn")
+      throw error
     }
-    return Buffer.from(await response.arrayBuffer())
   }
 }
 
@@ -1416,6 +1597,32 @@ function peerPlatform(): { os: string; arch: string } {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function diagnosticPathname(pathname: string): string {
+  try {
+    return new URL(pathname, DEFAULT_HOST_URL).pathname
+  } catch {
+    return pathname.split("?")[0] || pathname
+  }
+}
+
+function remoteStatus(error: unknown, fallback?: number): number | undefined {
+  return isRemoteError(error) ? error.status : fallback
+}
+
+function errorDiagnostics(error: unknown): JsonObject {
+  if (isRemoteError(error)) {
+    return {
+      status: error.status,
+      code: error.code,
+      message: error.message,
+    }
+  }
+  return {
+    code: errorCode(error) || undefined,
+    message: errorMessage(error),
+  }
 }
 
 function peerBinaryAccessError(error: unknown, binaryPath: string): Error {

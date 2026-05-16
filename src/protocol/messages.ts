@@ -59,6 +59,9 @@ export type HostToWebviewMessageType =
   | "environment.snapshot"
   | "executorType.state"
   | "locale.state"
+  | "modelCapabilities.error"
+  | "modelCapabilities.state"
+  | "peerDiagnosticsLogging.state"
   | "reasoningDisplay.state"
   | "agentRun.cancelled"
   | "agentRun.error"
@@ -133,6 +136,14 @@ export type WebviewToHostMessageType =
   | "executorType.get"
   | "executorType.save"
   | "locale.save"
+  | "modelCapabilities.apply"
+  | "modelCapabilities.list"
+  | "modelCapabilities.refresh"
+  | "modelCapabilities.status"
+  | "peerDiagnosticsLogging.clear"
+  | "peerDiagnosticsLogging.get"
+  | "peerDiagnosticsLogging.open"
+  | "peerDiagnosticsLogging.save"
   | "reasoningDisplay.get"
   | "reasoningDisplay.save"
   | "modelProfile.activate"
@@ -233,6 +244,9 @@ const HOST_TO_WEBVIEW_TYPES = new Set<HostToWebviewMessageType>([
   "environment.snapshot",
   "executorType.state",
   "locale.state",
+  "modelCapabilities.error",
+  "modelCapabilities.state",
+  "peerDiagnosticsLogging.state",
   "reasoningDisplay.state",
   "agentRun.cancelled",
   "agentRun.error",
@@ -302,6 +316,14 @@ const WEBVIEW_TO_HOST_TYPES = new Set<WebviewToHostMessageType>([
   "executorType.get",
   "executorType.save",
   "locale.save",
+  "modelCapabilities.apply",
+  "modelCapabilities.list",
+  "modelCapabilities.refresh",
+  "modelCapabilities.status",
+  "peerDiagnosticsLogging.clear",
+  "peerDiagnosticsLogging.get",
+  "peerDiagnosticsLogging.open",
+  "peerDiagnosticsLogging.save",
   "reasoningDisplay.get",
   "reasoningDisplay.save",
   "modelProfile.activate",

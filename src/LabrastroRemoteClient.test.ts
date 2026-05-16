@@ -73,6 +73,7 @@ import {
   parseJsonResponse,
   retryInvalidPeerTokenOnce,
 } from "./LabrastroRemoteClient"
+import { PEER_DIAGNOSTICS_LOGGING_STATE_KEY } from "./PeerDiagnosticsLogger"
 
 beforeEach(() => {
   vscodeMock.labrastroInspect = undefined
@@ -107,7 +108,7 @@ async function makeTempStorage(): Promise<string> {
   return dir
 }
 
-function makePeerContext(storagePath: string) {
+function makePeerContext(storagePath: string, peerDiagnosticsLogging?: Record<string, unknown>) {
   const authSession = JSON.stringify({
     hostUrl: DEFAULT_TEST_HOST_URL,
     username: "admin",
@@ -122,6 +123,14 @@ function makePeerContext(storagePath: string) {
       delete: vi.fn(async () => undefined),
     },
     globalStorageUri: { fsPath: storagePath },
+    workspaceState: {
+      get: vi.fn((key: string) => key === PEER_DIAGNOSTICS_LOGGING_STATE_KEY ? peerDiagnosticsLogging : undefined),
+      update: vi.fn(async (key: string, value: Record<string, unknown>) => {
+        if (key === PEER_DIAGNOSTICS_LOGGING_STATE_KEY) {
+          peerDiagnosticsLogging = value
+        }
+      }),
+    },
   }
 }
 
@@ -139,11 +148,13 @@ function mockPeerSpawn(): void {
       stdout: EventEmitter
       stderr: EventEmitter
       exitCode: number | null
+      pid: number
       kill: ReturnType<typeof vi.fn>
     }
     peerProcess.stdout = new EventEmitter()
     peerProcess.stderr = new EventEmitter()
     peerProcess.exitCode = null
+    peerProcess.pid = 4242
     peerProcess.kill = vi.fn(() => {
       peerProcess.exitCode = 0
       peerProcess.emit("exit", 0, null)
@@ -224,6 +235,28 @@ function mockPeerFetch(artifactContent = Buffer.from("peer-binary"), serverVersi
 
 function fetchPathCount(fetchMock: ReturnType<typeof vi.fn>, pathname: string): number {
   return fetchMock.mock.calls.filter(([input]) => String(input).endsWith(pathname)).length
+}
+
+async function readPeerDiagnosticRecords(storagePath: string): Promise<Array<Record<string, unknown>>> {
+  const logPath = path.join(storagePath, "logs", "peer-diagnostics.log")
+  const raw = await fs.readFile(logPath, "utf-8").catch(() => "")
+  return raw
+    .trim()
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+}
+
+async function waitForPeerDiagnosticRecords(
+  storagePath: string,
+  predicate: (records: Array<Record<string, unknown>>) => boolean
+): Promise<Array<Record<string, unknown>>> {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const records = await readPeerDiagnosticRecords(storagePath)
+    if (predicate(records)) return records
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  return readPeerDiagnosticRecords(storagePath)
 }
 
 function remoteContractFixtures(): Array<{
@@ -1463,12 +1496,167 @@ describe("LabrastroRemoteClient peer retry strategy", () => {
         reason: "peer_shutdown",
       },
     ])
+    const diagnostics = await waitForPeerDiagnosticRecords(storagePath, (records) =>
+      records.some((record) => record.event === "peer.stop.request")
+    )
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      category: "lifecycle",
+      event: "peer.stop.request",
+      details: expect.objectContaining({
+        caller: "invalid_peer_token_retry",
+        peerId: "peer-stale",
+      }),
+    }))
     expect(staleProcess.kill).toHaveBeenCalledTimes(1)
     expect(childProcessMock.spawn).toHaveBeenCalledTimes(1)
   })
 })
 
+describe("LabrastroRemoteClient peer diagnostics settings", () => {
+  it("defaults peer diagnostics logging to enabled and persists saved settings", async () => {
+    const storagePath = await makeTempStorage()
+    const context = makePeerContext(storagePath)
+    const client = new LabrastroRemoteClient(context as never)
+
+    expect(client.peerDiagnosticsLoggingState()).toEqual({
+      enabled: true,
+      lifecycle: true,
+      processOutput: true,
+      http: true,
+      logPath: path.join(storagePath, "logs", "peer-diagnostics.log"),
+    })
+
+    await expect(client.savePeerDiagnosticsLoggingState({
+      enabled: false,
+      lifecycle: false,
+      processOutput: true,
+      http: false,
+    })).resolves.toMatchObject({
+      enabled: false,
+      lifecycle: false,
+      processOutput: true,
+      http: false,
+    })
+    expect(context.workspaceState.update).toHaveBeenCalledWith(
+      PEER_DIAGNOSTICS_LOGGING_STATE_KEY,
+      {
+        enabled: false,
+        lifecycle: false,
+        processOutput: true,
+        http: false,
+      }
+    )
+    expect(client.peerDiagnosticsLoggingState()).toMatchObject({
+      enabled: false,
+      lifecycle: false,
+      processOutput: true,
+      http: false,
+    })
+  })
+})
+
 describe("LabrastroRemoteClient peer startup", () => {
+  it("records peer stdout, stderr, and exit diagnostics with redaction", async () => {
+    const storagePath = await makeTempStorage()
+    const context = makePeerContext(storagePath)
+    mockPeerFetch()
+    let spawned: (EventEmitter & {
+      stdout: EventEmitter
+      stderr: EventEmitter
+      exitCode: number | null
+      signalCode: NodeJS.Signals | null
+      pid: number
+      kill: ReturnType<typeof vi.fn>
+    }) | undefined
+    childProcessMock.spawn.mockImplementation((_binaryPath: string, args: string[]) => {
+      const peerInfoIndex = args.indexOf("--peer-info-file")
+      const peerInfoPath = String(args[peerInfoIndex + 1])
+      fsSync.writeFileSync(
+        peerInfoPath,
+        JSON.stringify({ peer_id: "peer-1", peer_token: "peer-token-1", heartbeat_interval_ms: 3000 }),
+        "utf-8"
+      )
+
+      const peerProcess = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter
+        stderr: EventEmitter
+        exitCode: number | null
+        signalCode: NodeJS.Signals | null
+        pid: number
+        kill: ReturnType<typeof vi.fn>
+      }
+      peerProcess.stdout = new EventEmitter()
+      peerProcess.stderr = new EventEmitter()
+      peerProcess.exitCode = null
+      peerProcess.signalCode = null
+      peerProcess.pid = 4343
+      peerProcess.kill = vi.fn(() => {
+        peerProcess.exitCode = 0
+        peerProcess.emit("exit", 0, null)
+        return true
+      })
+      spawned = peerProcess
+      return peerProcess
+    })
+
+    const client = new LabrastroRemoteClient(context as never)
+    await client.environmentManifest()
+    spawned?.stdout.emit("data", Buffer.from("started peer_token=peer-secret access_token=access-secret"))
+    spawned?.stderr.emit("data", Buffer.from('register failed Authorization: Bearer bearer-secret bootstrap-token="bootstrap-secret"'))
+    if (spawned) {
+      spawned.exitCode = 7
+      spawned.signalCode = "SIGTERM"
+      spawned.emit("exit", 7, "SIGTERM")
+    }
+
+    const records = await waitForPeerDiagnosticRecords(storagePath, (items) =>
+      items.some((record) => record.event === "peer.stdout") &&
+      items.some((record) => record.event === "peer.stderr") &&
+      items.some((record) => record.event === "peer.exit")
+    )
+    expect(records).toContainEqual(expect.objectContaining({
+      category: "lifecycle",
+      event: "peer.registered",
+      details: expect.objectContaining({
+        peerId: "peer-1",
+        heartbeatIntervalMs: 3000,
+        pid: 4343,
+      }),
+    }))
+    expect(records).toContainEqual(expect.objectContaining({
+      category: "lifecycle",
+      event: "peer.exit",
+      details: expect.objectContaining({
+        code: 7,
+        signal: "SIGTERM",
+        pid: 4343,
+        stoppedByPlugin: false,
+      }),
+    }))
+    const serialized = JSON.stringify(records)
+    expect(serialized).not.toContain("peer-secret")
+    expect(serialized).not.toContain("access-secret")
+    expect(serialized).not.toContain("bearer-secret")
+    expect(serialized).not.toContain("bootstrap-secret")
+  })
+
+  it("does not write peer diagnostics when the master switch is disabled", async () => {
+    const storagePath = await makeTempStorage()
+    const context = makePeerContext(storagePath, {
+      enabled: false,
+      lifecycle: true,
+      processOutput: true,
+      http: true,
+    })
+    mockPeerFetch()
+    mockPeerSpawn()
+
+    const client = new LabrastroRemoteClient(context as never)
+    await client.environmentManifest()
+
+    expect(await readPeerDiagnosticRecords(storagePath)).toEqual([])
+  })
+
   it("shares concurrent environment manifest startup across one peer process and one artifact download", async () => {
     const storagePath = await makeTempStorage()
     const context = makePeerContext(storagePath)

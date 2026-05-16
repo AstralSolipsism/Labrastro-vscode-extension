@@ -196,6 +196,31 @@ export class AdminCoordinator {
         await this.options.context.workspaceState.update(REASONING_DISPLAY_STATE_KEY, message.defaultOpen === true)
         this.broadcastReasoningDisplayState()
         return true
+      case "peerDiagnosticsLogging.get":
+        post({ type: "peerDiagnosticsLogging.state", payload: this.options.client.peerDiagnosticsLoggingState() })
+        return true
+      case "peerDiagnosticsLogging.save":
+        await this.options.client.savePeerDiagnosticsLoggingState(objectValue(message.payload))
+        this.broadcastPeerDiagnosticsLoggingState()
+        return true
+      case "peerDiagnosticsLogging.open":
+        try {
+          const payload = await this.options.client.openPeerDiagnosticsLog()
+          post({ type: "peerDiagnosticsLogging.state", payload })
+          post({ type: "admin.actionResult", payload: { ok: true, action: "peerDiagnosticsLogging.open" } })
+        } catch (error) {
+          post({ type: "admin.error", message: errorMessage(error) })
+        }
+        return true
+      case "peerDiagnosticsLogging.clear":
+        try {
+          const payload = await this.options.client.clearPeerDiagnosticsLog()
+          post({ type: "peerDiagnosticsLogging.state", payload })
+          post({ type: "admin.actionResult", payload: { ok: true, action: "peerDiagnosticsLogging.clear" } })
+        } catch (error) {
+          post({ type: "admin.error", message: errorMessage(error) })
+        }
+        return true
       case "admin.refresh":
         await this.options.postConnectionState(post)
         await this.options.postAdminState(post)
@@ -335,6 +360,13 @@ export class AdminCoordinator {
 
   private broadcastReasoningDisplayState(): void {
     this.options.broadcastState({ type: "reasoningDisplay.state", payload: this.getReasoningDisplayState() })
+  }
+
+  private broadcastPeerDiagnosticsLoggingState(): void {
+    this.options.broadcastState({
+      type: "peerDiagnosticsLogging.state",
+      payload: this.options.client.peerDiagnosticsLoggingState(),
+    })
   }
 }
 
