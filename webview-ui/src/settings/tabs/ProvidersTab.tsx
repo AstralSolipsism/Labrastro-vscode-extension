@@ -54,6 +54,8 @@ export const ProvidersTab: Component<TabProps> = (props) => {
     providerId,
     selectProvider,
     stringValue,
+    numberValue,
+    formatTimestamp,
     providerBaseUrl,
     providerEnabled,
     selectedProvider,
@@ -87,6 +89,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
     closeModelDetail,
     openModelDetail,
     profileProvider,
+    profileId,
     profileModel,
     maxTokens,
     setMaxTokens,
@@ -98,6 +101,10 @@ export const ProvidersTab: Component<TabProps> = (props) => {
     setReasoningEffort,
     thinkingEnabled,
     setThinkingEnabled,
+    modelCapabilitiesStatus,
+    refreshModelCapabilities,
+    modelCapabilityRecommendation,
+    applyModelCapabilityRecommendation,
     saveModelPreset,
   } = props.controller
 
@@ -150,6 +157,34 @@ export const ProvidersTab: Component<TabProps> = (props) => {
     if (id === "__error__") return "当前环境不能直接访问剪贴板。"
     return `已复制 ${id}`
   })
+  const capabilityStatus = createMemo(() => modelCapabilitiesStatus ? modelCapabilitiesStatus() : {})
+  const capabilityUpdatedAt = createMemo(() => stringValue(capabilityStatus().updated_at))
+  const capabilitySources = createMemo(() => {
+    const raw = capabilityStatus().sources
+    if (!Array.isArray(raw)) return []
+    return raw
+      .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+      .map((item) => stringValue(item.source))
+      .filter(Boolean)
+  })
+  const capabilityError = createMemo(() => stringValue(server.modelCapabilitiesError?.()))
+  const recommendation = createMemo(() => modelCapabilityRecommendation ? modelCapabilityRecommendation() : {})
+  const recommendationAvailable = createMemo(() => Object.keys(recommendation()).length > 0)
+  const modelCapabilityFlags = (model: {
+    supports_tools?: unknown
+    supports_reasoning?: unknown
+    supports_structured_outputs?: unknown
+    supports_json_output?: unknown
+    supports_vision?: unknown
+    supports_parallel_tool_calls?: unknown
+  }) => [
+    model.supports_tools === true ? "Tools" : "",
+    model.supports_reasoning === true ? "Reasoning" : "",
+    model.supports_structured_outputs === true ? "Structured" : "",
+    model.supports_json_output === true ? "JSON" : "",
+    model.supports_vision === true ? "Vision" : "",
+    model.supports_parallel_tool_calls === true ? "Parallel tools" : "",
+  ].filter(Boolean)
   const updatePositiveInteger = (value: string, setter: (next: number) => void) => {
     const parsed = Number(value)
     setter(Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 1)
@@ -614,6 +649,28 @@ export const ProvidersTab: Component<TabProps> = (props) => {
                 </RefreshButton>
               </div>
             </div>
+            <div class="model-capability-sync">
+              <div class="model-capability-sync__meta">
+                <span>模型能力同步</span>
+                <small>
+                  {numberValue(capabilityStatus().model_count, 0)} 个模型 · 最近同步 {formatTimestamp(capabilityUpdatedAt())}
+                </small>
+                <Show when={capabilitySources().length}>
+                  <small>来源：{capabilitySources().join(" / ")}</small>
+                </Show>
+              </div>
+              <RefreshButton
+                class="btn-secondary"
+                icon="sync"
+                onClick={() => refreshModelCapabilities()}
+                disabled={!adminUsable()}
+              >
+                同步能力表
+              </RefreshButton>
+            </div>
+            <Show when={capabilityError()}>
+              <p class="settings-empty-note settings-empty-note--error">{capabilityError()}</p>
+            </Show>
             <Show when={customModelInlineOpen()}>
               <div id="provider-custom-model-form" class="settings-inline-form provider-custom-model-inline">
                 <input
@@ -672,13 +729,25 @@ export const ProvidersTab: Component<TabProps> = (props) => {
             }>
               <div class="provider-model-list">
                 <For each={filteredFetchedModels()}>
-                  {(model: { id: string; owned_by?: string; created?: number }) => {
+                  {(model) => {
                     const custom = model.owned_by === "custom"
+                    const flags = modelCapabilityFlags(model)
                     return (
                       <div class={`provider-model-row ${custom ? "provider-model-row--custom" : ""}`}>
                         <span class="provider-model-row__body">
                           <strong>{model.id}</strong>
                           <small>{custom ? "自定义模型名" : model.owned_by || "provider model"}</small>
+                          <Show when={model.max_tokens || model.max_context_tokens}>
+                            <small>上下文 {model.max_context_tokens || "-"} · 输出 {model.max_tokens || "-"}</small>
+                          </Show>
+                          <Show when={stringValue(model.capability_source)}>
+                            <small>来源 {stringValue(model.capability_source)}</small>
+                          </Show>
+                          <Show when={flags.length}>
+                            <span class="settings-badge-group provider-model-row__flags">
+                              <For each={flags}>{(flag) => <StatusBadge tone="muted">{flag}</StatusBadge>}</For>
+                            </span>
+                          </Show>
                         </span>
                         <span class="provider-model-row__actions">
                           <button class="btn btn-secondary btn--compact" type="button" onClick={() => testProvider(model.id)} disabled={!selectedProvider() || !adminUsable()}>
@@ -808,6 +877,24 @@ export const ProvidersTab: Component<TabProps> = (props) => {
               <span>启用 thinking</span>
             </label>
           </div>
+          <Show when={recommendationAvailable()}>
+            <div class="model-capability-recommendation">
+              <div>
+                <strong>能力目录推荐值</strong>
+                <small>{stringValue(recommendation().source, "catalog")}</small>
+              </div>
+              <div class="model-capability-recommendation__grid">
+                <span>当前上下文 {numberValue(recommendation().current_max_context_tokens, maxContextTokens())}</span>
+                <span>推荐上下文 {numberValue(recommendation().max_context_tokens, maxContextTokens())}</span>
+                <span>当前输出 {numberValue(recommendation().current_max_tokens, maxTokens())}</span>
+                <span>推荐输出 {numberValue(recommendation().max_tokens, maxTokens())}</span>
+              </div>
+              <button class="btn btn-secondary" type="button" onClick={() => applyModelCapabilityRecommendation(profileId())} disabled={!profileId() || !adminUsable()}>
+                <span class="codicon codicon-check" aria-hidden="true" />
+                一键应用推荐值
+              </button>
+            </div>
+          </Show>
           <div class="settings-actions settings-actions--right">
             <button class="btn btn-secondary" type="button" onClick={closeModelDetail}>
               取消

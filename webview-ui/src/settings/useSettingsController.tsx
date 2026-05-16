@@ -102,10 +102,46 @@ interface EnvironmentRunLaunchRequest {
 interface ProviderModelEntry {
   id: string
   owned_by?: string
-  created?: number
-}
+  created?: number
+
+  max_tokens?: number
+
+  max_context_tokens?: number
+
+  capability_source?: string
+
+  capability?: Record<string, unknown>
+
+  supports_tools?: boolean
+
+  supports_structured_outputs?: boolean
+
+  supports_json_output?: boolean
+
+  supports_reasoning?: boolean
+
+  supports_vision?: boolean
+
+  supports_parallel_tool_calls?: boolean
+}
 
-interface EnvironmentEntryState {
+function knownModelCapabilityDefaults(
+  provider: string,
+  model: string,
+): Pick<ProviderModelEntry, "max_tokens" | "max_context_tokens" | "capability_source"> {
+  const providerText = provider.trim().toLowerCase()
+  const modelText = model.trim().toLowerCase()
+  if (providerText === "deepseek" && (modelText === "deepseek-v4-flash" || modelText === "deepseek-v4-pro")) {
+    return {
+      max_context_tokens: 1_000_000,
+      max_tokens: 384_000,
+      capability_source: "DeepSeek API Docs / Models & Pricing",
+    }
+  }
+  return {}
+}
+
+interface EnvironmentEntryState {
   id: string
   kind: EnvironmentEntryKind
   name: string
@@ -1452,7 +1488,13 @@ export function createSettingsController(props: SettingsViewProps) {
   const [maxContextTokens, setMaxContextTokens] = createSignal(128000)
   const [temperature, setTemperature] = createSignal(0)
   const [reasoningEffort, setReasoningEffort] = createSignal("")
-  const [thinkingEnabled, setThinkingEnabled] = createSignal(true)
+  const [thinkingEnabled, setThinkingEnabled] = createSignal(true)
+
+  const [modelCapabilityRecommendation, setModelCapabilityRecommendation] = createSignal<Record<string, unknown>>({})
+
+  const [modelCapabilityDefaultMaxTokens, setModelCapabilityDefaultMaxTokens] = createSignal(0)
+
+  const [modelCapabilityDefaultMaxContextTokens, setModelCapabilityDefaultMaxContextTokens] = createSignal(0)
 
   const providers = createMemo(() => {
     const items = server.adminState().providers
@@ -1624,7 +1666,18 @@ export function createSettingsController(props: SettingsViewProps) {
   const agentRunsState = createMemo(() =>
     objectValue(serverSettingsPayload().runtime || server.adminState().agent_runs)
 
-  )  /* ── Agent 配置 computed ── */
+  )
+  const modelCapabilitiesStatus = createMemo(() => {
+    const direct = objectValue(server.modelCapabilitiesState()?.model_capabilities)
+    if (Object.keys(direct).length) return direct
+    const admin = objectValue(server.adminState().model_capabilities)
+    if (Object.keys(admin).length) return admin
+    const settings = objectValue(serverSettingsPayload().settings)
+    const modelCapabilities = objectValue(settings.model_capabilities)
+    return objectValue(modelCapabilities.status)
+  })
+
+  /* ── Agent 配置 computed ── */
   const executorFeatures = createMemo<Record<string, ExecutorFeatureView>>(() => {
     const agentRuns = objectValue(server.backendFeatures().agentRuns)
     const raw = objectValue(agentRuns.executorFeatures)
@@ -1785,18 +1838,34 @@ export function createSettingsController(props: SettingsViewProps) {
       setMaxTokens(numberValue(existing.max_tokens, 4096))
       setMaxContextTokens(numberValue(existing.max_context_tokens, 128000))
       setTemperature(numberValue(existing.temperature, 0))
-      setReasoningEffort(stringValue(existing.reasoning_effort))
-      setThinkingEnabled(existing.thinking_enabled !== false)
-    } else {
-      setProfileId(makeProfileId(providerId(), modelId))
-      setProfileProvider(providerId())
-      setProfileModel(modelId)
-      setMaxTokens(4096)
-      setMaxContextTokens(128000)
-      setTemperature(0)
-      setReasoningEffort("")
-      setThinkingEnabled(true)
-    }
+      setReasoningEffort(stringValue(existing.reasoning_effort))
+      setThinkingEnabled(existing.thinking_enabled !== false)
+      const recommendation = objectValue(existing.capability_recommendation)
+      setModelCapabilityRecommendation(Object.keys(recommendation).length ? recommendation : {})
+      setModelCapabilityDefaultMaxTokens(0)
+      setModelCapabilityDefaultMaxContextTokens(0)
+    } else {
+      const fetched = fetchedModels().find((model) => model.id === modelId)
+      const defaults = {
+        ...knownModelCapabilityDefaults(providerId(), modelId),
+        ...(fetched ? {
+          max_tokens: numberValue(fetched.max_tokens, 0) || undefined,
+          max_context_tokens: numberValue(fetched.max_context_tokens, 0) || undefined,
+          capability_source: fetched.capability_source,
+        } : {}),
+      }
+      setProfileId(makeProfileId(providerId(), modelId))
+      setProfileProvider(providerId())
+      setProfileModel(modelId)
+      setMaxTokens(numberValue(defaults.max_tokens, 4096))
+      setMaxContextTokens(numberValue(defaults.max_context_tokens, 128000))
+      setModelCapabilityDefaultMaxTokens(numberValue(defaults.max_tokens, 0))
+      setModelCapabilityDefaultMaxContextTokens(numberValue(defaults.max_context_tokens, 0))
+      setTemperature(0)
+      setReasoningEffort("")
+      setThinkingEnabled(true)
+      setModelCapabilityRecommendation({})
+    }
     setModelDetailOpen(true)
     setCustomModelDialogOpen(false)
   }
@@ -2314,6 +2383,12 @@ const refreshAdmin = () => {
     setServerSettingsBootstrapped(true)
     settingsMessages.readServerSettings(vscode)
   }
+  const refreshModelCapabilities = () => settingsMessages.modelCapabilitiesRefresh(vscode)
+  const applyModelCapabilityRecommendation = (targetProfileId = profileId()) => {
+    const id = targetProfileId.trim()
+    if (!id) return
+    settingsMessages.modelCapabilitiesApply(vscode, id)
+  }
   const saveServerSettings = () => {
     const maxAgents = Math.max(1, Math.floor(serverMaxRunningAgents()))
     const maxShells = Math.max(1, Math.floor(serverMaxShellsPerAgent()))
@@ -2591,10 +2666,18 @@ const refreshAdmin = () => {
 
   const saveModelPreset = () => {
     const provider = profileProvider() || providerId()
-    const model = profileModel().trim()
-    if (!provider || !model) return
-    const nextProfileId = profileId().trim() || makeProfileId(provider, model)
-    setProfileId(nextProfileId)
+    const model = profileModel().trim()
+    if (!provider || !model) return
+    const nextProfileId = profileId().trim() || makeProfileId(provider, model)
+    const existing = profiles().find((profile) => profileMatches(profile, provider, model))
+    const defaultMaxTokens = modelCapabilityDefaultMaxTokens()
+    const defaultMaxContextTokens = modelCapabilityDefaultMaxContextTokens()
+    const usesCapabilityDefaults = !existing
+      && defaultMaxTokens > 0
+      && defaultMaxContextTokens > 0
+      && maxTokens() === defaultMaxTokens
+      && maxContextTokens() === defaultMaxContextTokens
+    setProfileId(nextProfileId)
     setProfileProvider(provider)
     setProfileModel(model)
     setActionIntent("savePreset")
@@ -2606,12 +2689,13 @@ const refreshAdmin = () => {
         model,
         max_tokens: maxTokens(),
         max_context_tokens: maxContextTokens(),
-        temperature: temperature(),
-        reasoning_effort: reasoningEffort() || undefined,
-        thinking_enabled: thinkingEnabled(),
-      },
-    })
-  }
+        temperature: temperature(),
+        reasoning_effort: reasoningEffort() || undefined,
+        thinking_enabled: thinkingEnabled(),
+        capability_user_configured: !usesCapabilityDefaults,
+      },
+    })
+  }
 
   createEffect(() => {
     const tab = normalizeSettingsTab(props.targetTab)
@@ -2738,11 +2822,21 @@ const refreshAdmin = () => {
         const model = item as Record<string, unknown>
         const id = stringValue(model.id)
         if (!id) continue
-        models.push({
-          id,
-          owned_by: stringValue(model.owned_by),
-          created: numberValue(model.created, 0),
-        })
+        models.push({
+          id,
+          owned_by: stringValue(model.owned_by),
+          created: numberValue(model.created, 0),
+          max_tokens: numberValue(model.max_tokens, 0) || undefined,
+          max_context_tokens: numberValue(model.max_context_tokens, 0) || undefined,
+          capability_source: stringValue(model.capability_source),
+          capability: objectValue(model.capability),
+          supports_tools: model.supports_tools === true,
+          supports_structured_outputs: model.supports_structured_outputs === true,
+          supports_json_output: model.supports_json_output === true,
+          supports_reasoning: model.supports_reasoning === true,
+          supports_vision: model.supports_vision === true,
+          supports_parallel_tool_calls: model.supports_parallel_tool_calls === true,
+        })
       }
       setFetchedModels(models)
       setModelFetchMessage(
@@ -2759,7 +2853,8 @@ const refreshAdmin = () => {
 
   onMount(() => {
     settingsMessages.refreshAdmin(vscode)
-    settingsMessages.getAutoApproval(vscode)
+    settingsMessages.modelCapabilitiesStatus(vscode)
+    settingsMessages.getAutoApproval(vscode)
     const unsubscribe = vscode.onMessage((msg) => {
       if (msg.type !== "autoApproval.state") return
       const payload = objectValue(msg.payload)
@@ -2962,6 +3057,7 @@ const refreshAdmin = () => {
     setReasoningEffort,
     thinkingEnabled,
     setThinkingEnabled,
+    modelCapabilityRecommendation,
     providers,
     profiles,
     selectedProvider,
@@ -3004,6 +3100,7 @@ const refreshAdmin = () => {
     serverSettingsPayload,
     agentRunsSettings,
     agentRunsState,
+    modelCapabilitiesStatus,
     executorFeatures,
     agentRunsProfiles,
     agentRunsAgents,
@@ -3064,6 +3161,8 @@ const refreshAdmin = () => {
     runEnvironment,
     stopEnvironmentRun,
     refreshServerSettings,
+    refreshModelCapabilities,
+    applyModelCapabilityRecommendation,
     saveServerSettings,
     runToolchainIngest,
     cancelToolchainIngest,
