@@ -46,6 +46,9 @@ export const OtherTab: Component<TabProps> = (props) => {
   const toolArgumentTelemetryEnabled = createMemo(() =>
     diagnosticsSettings().enabled !== false
   )
+  const toolArgumentRecordClean = createMemo(() =>
+    diagnosticsSettings().record_clean === true
+  )
   const toolArgumentStats = createMemo(() =>
     objectValue(objectValue(server.diagnosticsState()).tool_argument_validation)
   )
@@ -87,13 +90,14 @@ export const OtherTab: Component<TabProps> = (props) => {
       },
     })
   }
-  const updateToolArgumentTelemetry = (enabled: boolean) => {
+  const updateToolArgumentTelemetry = (patch: Record<string, boolean>) => {
     settingsMessages.updateServerSettings(vscode, {
       settings: {
         diagnostics: {
           tool_argument_validation: {
-            enabled,
-            record_clean: false,
+            enabled: toolArgumentTelemetryEnabled(),
+            record_clean: toolArgumentRecordClean(),
+            ...patch,
           },
         },
       },
@@ -279,9 +283,18 @@ export const OtherTab: Component<TabProps> = (props) => {
           <input
             type="checkbox"
             checked={toolArgumentTelemetryEnabled()}
-            onChange={(event) => updateToolArgumentTelemetry(event.currentTarget.checked)}
+            onChange={(event) => updateToolArgumentTelemetry({ enabled: event.currentTarget.checked })}
           />
           <span>{t("other.toolArgs.enabled")}</span>
+        </label>
+        <label class="field-label field-label--checkbox">
+          <input
+            type="checkbox"
+            disabled={!toolArgumentTelemetryEnabled()}
+            checked={toolArgumentRecordClean()}
+            onChange={(event) => updateToolArgumentTelemetry({ record_clean: event.currentTarget.checked })}
+          />
+          <span>记录正常校验事件</span>
         </label>
         <p class="settings-empty-note">{t("other.toolArgs.desc")}</p>
         <details

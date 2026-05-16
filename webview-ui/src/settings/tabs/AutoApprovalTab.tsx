@@ -1,4 +1,4 @@
-import { Component, For, Show } from "solid-js"
+import { Component, For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js"
 import { t } from "../../i18n"
 import { RefreshButton } from "../../components/common/RefreshButton"
 import { StatusBadge } from "../components/StatusBadge"
@@ -6,6 +6,23 @@ import { settingsMessages } from "../settingsMessages"
 import type { SettingsController } from "../useSettingsController"
 
 interface TabProps { controller: SettingsController & Record<string, any> }
+
+const SERVER_APPROVAL_ACTIONS = ["allow", "warn", "require_approval", "deny"]
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? value as Record<string, unknown> : {}
+}
+
+function stringValue(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback
+}
+
+function approvalActionLabel(value: string): string {
+  if (value === "allow") return "允许"
+  if (value === "warn") return "警告"
+  if (value === "deny") return "拒绝"
+  return "需要批准"
+}
 
 export const AutoApprovalTab: Component<TabProps> = (props) => {
   const {
@@ -20,7 +37,78 @@ export const AutoApprovalTab: Component<TabProps> = (props) => {
     setDeniedCommandInput,
     addCommandRule,
     removeCommandRule,
+    server,
   } = props.controller
+  const [serverApprovalDirty, setServerApprovalDirty] = createSignal(false)
+  const [serverApprovalSaved, setServerApprovalSaved] = createSignal(false)
+  const [serverApprovalDefaultMode, setServerApprovalDefaultMode] = createSignal("require_approval")
+  const [serverApprovalRules, setServerApprovalRules] = createSignal<Record<string, string>[]>([])
+
+  const serverSettings = createMemo(() => {
+    const direct = objectValue(server.serverSettingsState()?.settings)
+    if (Object.keys(direct).length > 0) return direct
+    return objectValue(server.adminState().server_settings)
+  })
+  const serverApprovalSettings = createMemo(() => objectValue(serverSettings().approval))
+
+  const markServerApprovalDirty = () => {
+    setServerApprovalDirty(true)
+    setServerApprovalSaved(false)
+  }
+
+  createEffect(() => {
+    if (serverApprovalDirty()) return
+    const approval = serverApprovalSettings()
+    const rawRules = Array.isArray(approval.rules) ? approval.rules : []
+    setServerApprovalDefaultMode(stringValue(approval.default_mode, "require_approval"))
+    setServerApprovalRules(rawRules
+      .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+      .map((item) => ({
+        tool_name: stringValue(item.tool_name),
+        tool_source: stringValue(item.tool_source),
+        mcp_server: stringValue(item.mcp_server),
+        effect_class: stringValue(item.effect_class),
+        profile: stringValue(item.profile),
+        action: stringValue(item.action, "require_approval"),
+      })))
+  })
+
+  onMount(() => settingsMessages.readServerSettings(vscode))
+
+  const addServerRule = () => {
+    setServerApprovalRules((rules) => [...rules, { action: "require_approval" }])
+    markServerApprovalDirty()
+  }
+
+  const updateServerRule = (index: number, field: string, value: string) => {
+    setServerApprovalRules((rules) => rules.map((rule, i) => i === index ? { ...rule, [field]: value } : rule))
+    markServerApprovalDirty()
+  }
+
+  const removeServerRule = (index: number) => {
+    setServerApprovalRules((rules) => rules.filter((_, i) => i !== index))
+    markServerApprovalDirty()
+  }
+
+  const saveServerApproval = () => {
+    const rules = serverApprovalRules().map((rule) => {
+      const next: Record<string, string> = { action: rule.action || "require_approval" }
+      for (const field of ["tool_name", "tool_source", "mcp_server", "effect_class", "profile"]) {
+        if (rule[field]?.trim()) next[field] = rule[field].trim()
+      }
+      return next
+    })
+    settingsMessages.updateServerSettings(vscode, {
+      settings: {
+        approval: {
+          default_mode: serverApprovalDefaultMode(),
+          rules,
+        },
+      },
+    })
+    setServerApprovalDirty(false)
+    setServerApprovalSaved(true)
+  }
 
   const renderCommandRuleEditor = (
     kind: "allow" | "deny",
@@ -123,6 +211,64 @@ export const AutoApprovalTab: Component<TabProps> = (props) => {
           <div class="settings-warning">
             <span class="codicon codicon-warning" aria-hidden="true" />
             <span>{t("autoApproval.emptyAllowListWarning")}</span>
+          </div>
+        </Show>
+      </section>
+
+      <section class="settings-section settings-section--flat command-approval-section">
+        <div class="settings-section-heading">
+          <span>服务端审批策略</span>
+          <div class="settings-badge-group">
+            <StatusBadge tone="muted">server</StatusBadge>
+            <StatusBadge>{approvalActionLabel(serverApprovalDefaultMode())}</StatusBadge>
+          </div>
+        </div>
+        <div class="settings-form-grid settings-form-grid--two">
+          <label class="field-label"><span>默认动作</span>
+            <select value={serverApprovalDefaultMode()} onChange={(event) => { setServerApprovalDefaultMode(event.currentTarget.value); markServerApprovalDirty() }}>
+              <For each={SERVER_APPROVAL_ACTIONS}>
+                {(action) => <option value={action}>{approvalActionLabel(action)}</option>}
+              </For>
+            </select>
+          </label>
+        </div>
+        <div class="settings-actions">
+          <button class="btn btn-secondary" type="button" onClick={addServerRule}>
+            <span class="codicon codicon-add" aria-hidden="true" />
+            新增规则
+          </button>
+          <button class="btn btn-primary" type="button" disabled={!serverApprovalDirty()} onClick={saveServerApproval}>
+            <span class="codicon codicon-save" aria-hidden="true" />
+            保存服务端策略
+          </button>
+        </div>
+        <Show when={serverApprovalSaved() && !serverApprovalDirty()}>
+          <div class="settings-success">服务端审批策略已保存并重载。</div>
+        </Show>
+        <Show when={server.serverSettingsError()}>
+          <div class="settings-error">{server.serverSettingsError()}</div>
+        </Show>
+        <Show when={serverApprovalRules().length} fallback={<p class="settings-empty-note">暂无服务端审批规则，将使用默认动作。</p>}>
+          <div class="settings-rule-table">
+            <For each={serverApprovalRules()}>
+              {(rule, index) => (
+                <div class="settings-rule-row">
+                  <input value={rule.tool_name || ""} placeholder="tool_name" onInput={(event) => updateServerRule(index(), "tool_name", event.currentTarget.value)} />
+                  <input value={rule.tool_source || ""} placeholder="tool_source" onInput={(event) => updateServerRule(index(), "tool_source", event.currentTarget.value)} />
+                  <input value={rule.mcp_server || ""} placeholder="mcp_server" onInput={(event) => updateServerRule(index(), "mcp_server", event.currentTarget.value)} />
+                  <input value={rule.effect_class || ""} placeholder="effect_class" onInput={(event) => updateServerRule(index(), "effect_class", event.currentTarget.value)} />
+                  <input value={rule.profile || ""} placeholder="profile" onInput={(event) => updateServerRule(index(), "profile", event.currentTarget.value)} />
+                  <select value={rule.action || "require_approval"} onChange={(event) => updateServerRule(index(), "action", event.currentTarget.value)}>
+                    <For each={SERVER_APPROVAL_ACTIONS}>
+                      {(action) => <option value={action}>{approvalActionLabel(action)}</option>}
+                    </For>
+                  </select>
+                  <button class="btn-icon" type="button" onClick={() => removeServerRule(index())} title="删除规则" aria-label="删除规则">
+                    <span class="codicon codicon-trash" aria-hidden="true" />
+                  </button>
+                </div>
+              )}
+            </For>
           </div>
         </Show>
       </section>

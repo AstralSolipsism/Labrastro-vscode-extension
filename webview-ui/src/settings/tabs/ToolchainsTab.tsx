@@ -1,4 +1,4 @@
-import { Component, For, Show } from "solid-js"
+import { Component, For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js"
 import { t } from "../../i18n"
 import {
   ApprovalDetailsDialog,
@@ -25,8 +25,36 @@ interface ToolchainRecord {
 interface ToolchainEditorState {
   [key: string]: any
 }
+interface CapabilityPackageDraft {
+  name: string
+  description: string
+  mcpServersText: string
+  skillsText: string
+  cliToolsText: string
+  permissionsText: string
+  source: string
+}
 
 interface TabProps { controller: SettingsController & Record<string, any> }
+
+function stringArrayValue(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => String(item).trim()).filter(Boolean)
+    : []
+}
+
+function parseListText(value: string): string[] {
+  return value
+    .split(/[\n,]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function makeCapabilityPackageId(existing: string[]): string {
+  let index = 1
+  while (existing.includes(`capability_${index}`)) index += 1
+  return `capability_${index}`
+}
 
 export const ToolchainsTab: Component<TabProps> = (props) => {
   const {
@@ -44,6 +72,7 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
     toolchainEditorFromRecord,
     toolchainPayloadFromEditor,
     stringValue,
+    server,
     runEnvironment,
     stopEnvironmentRun,
     environmentSnapshot,
@@ -97,6 +126,148 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
     numberValue,
     toolchainIngestLogs,
   } = props.controller
+
+  const [capabilityDirty, setCapabilityDirty] = createSignal(false)
+  const [capabilitySaved, setCapabilitySaved] = createSignal(false)
+  const [selectedCapabilityPackageId, setSelectedCapabilityPackageId] = createSignal("")
+  const [capabilityPackageDrafts, setCapabilityPackageDrafts] = createSignal<Record<string, CapabilityPackageDraft>>({})
+  const [skillsEnabled, setSkillsEnabled] = createSignal(true)
+  const [skillsScanProject, setSkillsScanProject] = createSignal(true)
+  const [skillsScanUser, setSkillsScanUser] = createSignal(true)
+  const [skillsDisabledText, setSkillsDisabledText] = createSignal("")
+
+  const serverSettings = createMemo(() => {
+    const direct = objectValue(server.serverSettingsState()?.settings)
+    if (Object.keys(direct).length > 0) return direct
+    return objectValue(server.adminState().server_settings)
+  })
+  const capabilityPackageIds = createMemo(() => Object.keys(capabilityPackageDrafts()).sort())
+  const currentCapabilityPackage = createMemo(() => {
+    const id = selectedCapabilityPackageId()
+    return id ? capabilityPackageDrafts()[id] : undefined
+  })
+  const registeredCliNames = createMemo(() => (environmentEntriesByKind().cli || []).map((item: any) => stringValue(item.name)).filter(Boolean))
+  const registeredMcpNames = createMemo(() => (environmentEntriesByKind().mcp || []).map((item: any) => stringValue(item.name)).filter(Boolean))
+  const registeredSkillNames = createMemo(() => (environmentEntriesByKind().skill || []).map((item: any) => stringValue(item.name)).filter(Boolean))
+
+  const markCapabilityDirty = () => {
+    setCapabilityDirty(true)
+    setCapabilitySaved(false)
+  }
+
+  createEffect(() => {
+    if (capabilityDirty()) return
+    const settings = serverSettings()
+    const packages = objectValue(settings.capability_packages)
+    const skills = objectValue(settings.skills)
+    const drafts: Record<string, CapabilityPackageDraft> = {}
+    for (const [id, raw] of Object.entries(packages)) {
+      const item = objectValue(raw)
+      drafts[id] = {
+        name: stringValue(item.name),
+        description: stringValue(item.description),
+        mcpServersText: stringArrayValue(item.mcp_servers).join("\n"),
+        skillsText: stringArrayValue(item.skills).join("\n"),
+        cliToolsText: stringArrayValue(item.cli_tools).join("\n"),
+        permissionsText: stringArrayValue(item.permissions).join("\n"),
+        source: stringValue(item.source),
+      }
+    }
+    setCapabilityPackageDrafts(drafts)
+    setSelectedCapabilityPackageId((current) => current && drafts[current] ? current : Object.keys(drafts).sort()[0] || "")
+    setSkillsEnabled(skills.enabled !== false)
+    setSkillsScanProject(skills.scan_project !== false)
+    setSkillsScanUser(skills.scan_user !== false)
+    setSkillsDisabledText(stringArrayValue(skills.disabled).join("\n"))
+  })
+
+  createEffect(() => {
+    const ids = capabilityPackageIds()
+    if (!selectedCapabilityPackageId() && ids.length) setSelectedCapabilityPackageId(ids[0])
+    if (selectedCapabilityPackageId() && !ids.includes(selectedCapabilityPackageId())) {
+      setSelectedCapabilityPackageId(ids[0] || "")
+    }
+  })
+
+  onMount(() => settingsMessages.readServerSettings(vscode))
+
+  const addCapabilityPackage = () => {
+    const id = makeCapabilityPackageId(capabilityPackageIds())
+    setCapabilityPackageDrafts((current) => ({
+      ...current,
+      [id]: {
+        name: id,
+        description: "",
+        mcpServersText: "",
+        skillsText: "",
+        cliToolsText: "",
+        permissionsText: "",
+        source: "local",
+      },
+    }))
+    setSelectedCapabilityPackageId(id)
+    markCapabilityDirty()
+  }
+
+  const renameCapabilityPackage = (nextId: string) => {
+    const oldId = selectedCapabilityPackageId()
+    const id = nextId.trim()
+    if (!oldId || !id || id === oldId || capabilityPackageDrafts()[id]) return
+    setCapabilityPackageDrafts((current) => {
+      const next = { ...current, [id]: current[oldId] }
+      delete next[oldId]
+      return next
+    })
+    setSelectedCapabilityPackageId(id)
+    markCapabilityDirty()
+  }
+
+  const updateCapabilityPackage = (patch: Partial<CapabilityPackageDraft>) => {
+    const id = selectedCapabilityPackageId()
+    if (!id) return
+    setCapabilityPackageDrafts((current) => ({
+      ...current,
+      [id]: { ...current[id], ...patch },
+    }))
+    markCapabilityDirty()
+  }
+
+  const deleteCapabilityPackage = (id: string) => {
+    setCapabilityPackageDrafts((current) => {
+      const next = { ...current }
+      delete next[id]
+      return next
+    })
+    markCapabilityDirty()
+  }
+
+  const saveCapabilityPackages = () => {
+    const packages: Record<string, unknown> = {}
+    for (const [id, draft] of Object.entries(capabilityPackageDrafts())) {
+      packages[id] = {
+        name: draft.name || id,
+        description: draft.description,
+        mcp_servers: parseListText(draft.mcpServersText),
+        skills: parseListText(draft.skillsText),
+        cli_tools: parseListText(draft.cliToolsText),
+        permissions: parseListText(draft.permissionsText),
+        source: draft.source || "local",
+      }
+    }
+    settingsMessages.updateServerSettings(vscode, {
+      settings: {
+        capability_packages: packages,
+        skills: {
+          enabled: skillsEnabled(),
+          scan_project: skillsScanProject(),
+          scan_user: skillsScanUser(),
+          disabled: parseListText(skillsDisabledText()),
+        },
+      },
+    })
+    setCapabilityDirty(false)
+    setCapabilitySaved(true)
+  }
 
   const quickRememberEnvironmentApprovalDecision = (
     approval: Parameters<typeof rememberEnvironmentApprovalDecision>[0],
@@ -1010,6 +1181,110 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
               )}
             </Show>
           </aside>
+        </section>
+
+        <section class="settings-section settings-section--flat">
+          <div class="settings-section-heading">
+            <span>能力包定义</span>
+            <div class="settings-actions settings-actions--right">
+              <button class="btn btn-secondary" type="button" onClick={addCapabilityPackage}>
+                <span class="codicon codicon-add" aria-hidden="true" />
+                新增能力包
+              </button>
+              <button class="btn btn-primary" type="button" disabled={!capabilityDirty()} onClick={saveCapabilityPackages}>
+                <span class="codicon codicon-save" aria-hidden="true" />
+                保存能力包
+              </button>
+            </div>
+          </div>
+          <Show when={server.serverSettingsError()}>
+            <div class="settings-error">{server.serverSettingsError()}</div>
+          </Show>
+          <Show when={capabilitySaved() && !capabilityDirty()}>
+            <div class="settings-success">能力包和 Skills 设置已保存并重载。</div>
+          </Show>
+          <div class="settings-master-detail">
+            <div class="settings-master-list">
+              <Show when={capabilityPackageIds().length} fallback={<p class="settings-empty-note">暂无能力包。</p>}>
+                <div class="selectable-list">
+                  <For each={capabilityPackageIds()}>
+                    {(id) => (
+                      <div class={`settings-master-item ${selectedCapabilityPackageId() === id ? "settings-master-item--active" : ""}`}>
+                        <button type="button" class="settings-master-item__select" onClick={() => setSelectedCapabilityPackageId(id)}>
+                          <span class="settings-master-item__info">
+                            <strong>{id}</strong>
+                            <small>{capabilityPackageDrafts()[id]?.name || "未命名"}</small>
+                          </span>
+                        </button>
+                        <button class="btn-icon" type="button" title="删除" onClick={() => deleteCapabilityPackage(id)}>
+                          <span class="codicon codicon-trash" aria-hidden="true" />
+                        </button>
+                      </div>
+                    )}
+                  </For>
+                </div>
+              </Show>
+            </div>
+            <div class="settings-detail-panel">
+              <Show when={currentCapabilityPackage()} fallback={<p class="settings-empty-note">选择一个能力包查看详情。</p>}>
+                {(pkg) => (
+                  <div class="settings-form-grid">
+                    <label class="field-label"><span>能力包 ID</span>
+                      <input value={selectedCapabilityPackageId()} onChange={(event) => renameCapabilityPackage(event.currentTarget.value)} />
+                    </label>
+                    <label class="field-label"><span>名称</span>
+                      <input value={pkg().name} onInput={(event) => updateCapabilityPackage({ name: event.currentTarget.value })} />
+                    </label>
+                    <label class="field-label field-label--full"><span>描述</span>
+                      <input value={pkg().description} onInput={(event) => updateCapabilityPackage({ description: event.currentTarget.value })} />
+                    </label>
+                    <label class="field-label field-label--full"><span>MCP Servers</span>
+                      <textarea rows={3} value={pkg().mcpServersText} placeholder={registeredMcpNames().join("\n") || "每行一个 MCP 名称"} onInput={(event) => updateCapabilityPackage({ mcpServersText: event.currentTarget.value })} />
+                      <small class="field-help">候选：{registeredMcpNames().join(", ") || "暂无"}</small>
+                    </label>
+                    <label class="field-label field-label--full"><span>Skills</span>
+                      <textarea rows={3} value={pkg().skillsText} placeholder={registeredSkillNames().join("\n") || "每行一个 Skill 名称"} onInput={(event) => updateCapabilityPackage({ skillsText: event.currentTarget.value })} />
+                      <small class="field-help">候选：{registeredSkillNames().join(", ") || "暂无"}</small>
+                    </label>
+                    <label class="field-label field-label--full"><span>CLI Tools</span>
+                      <textarea rows={3} value={pkg().cliToolsText} placeholder={registeredCliNames().join("\n") || "每行一个 CLI 名称"} onInput={(event) => updateCapabilityPackage({ cliToolsText: event.currentTarget.value })} />
+                      <small class="field-help">候选：{registeredCliNames().join(", ") || "暂无"}</small>
+                    </label>
+                    <label class="field-label field-label--full"><span>Permissions</span>
+                      <textarea rows={3} value={pkg().permissionsText} placeholder="每行一个权限名" onInput={(event) => updateCapabilityPackage({ permissionsText: event.currentTarget.value })} />
+                    </label>
+                    <label class="field-label"><span>Source</span>
+                      <input value={pkg().source} onInput={(event) => updateCapabilityPackage({ source: event.currentTarget.value })} />
+                    </label>
+                  </div>
+                )}
+              </Show>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-section settings-section--flat">
+          <div class="settings-section-heading">
+            <span>Skills 发现</span>
+            <StatusBadge tone={skillsEnabled() ? "success" : "muted"}>{skillsEnabled() ? "启用" : "关闭"}</StatusBadge>
+          </div>
+          <div class="settings-form-grid settings-form-grid--two">
+            <label class="field-label field-label--checkbox">
+              <input type="checkbox" checked={skillsEnabled()} onChange={(event) => { setSkillsEnabled(event.currentTarget.checked); markCapabilityDirty() }} />
+              <span>启用 Skills</span>
+            </label>
+            <label class="field-label field-label--checkbox">
+              <input type="checkbox" checked={skillsScanProject()} onChange={(event) => { setSkillsScanProject(event.currentTarget.checked); markCapabilityDirty() }} />
+              <span>扫描项目 Skills</span>
+            </label>
+            <label class="field-label field-label--checkbox">
+              <input type="checkbox" checked={skillsScanUser()} onChange={(event) => { setSkillsScanUser(event.currentTarget.checked); markCapabilityDirty() }} />
+              <span>扫描用户 Skills</span>
+            </label>
+            <label class="field-label field-label--full"><span>禁用 Skills</span>
+              <textarea rows={4} value={skillsDisabledText()} placeholder="每行一个 skill name" onInput={(event) => { setSkillsDisabledText(event.currentTarget.value); markCapabilityDirty() }} />
+            </label>
+          </div>
         </section>
 
         <Show when={selectedEnvironmentApproval()}>

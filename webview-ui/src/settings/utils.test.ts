@@ -86,22 +86,25 @@ describe("settings utils", () => {
   })
 
   it("builds model profile payloads", () => {
-    expect(modelProfilePayload({
+    const payload = modelProfilePayload({
       profileId: "deepseek-main",
       provider: "deepseek",
       model: "deepseek-chat",
-      maxTokens: 4096,
+      maxTokens: 384000,
       maxContextTokens: 1000000,
       temperature: 0,
       reasoningEffort: "",
       thinkingEnabled: true,
-    })).toMatchObject({
+    })
+    expect(payload).toMatchObject({
       profile_id: "deepseek-main",
       model: "deepseek-chat",
       max_context_tokens: 1000000,
       reasoning_effort: undefined,
       thinking_enabled: true,
     })
+    expect(payload).not.toHaveProperty("api_key")
+    expect(payload).not.toHaveProperty("base_url")
   })
 
   it("converts runtime profile drafts to agent runtime payloads", () => {

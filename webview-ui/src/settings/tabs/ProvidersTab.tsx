@@ -3,6 +3,7 @@ import { t } from "../../i18n"
 import { DialogSurface } from "../../components/common/interaction"
 import { RefreshButton } from "../../components/common/RefreshButton"
 import { StatusBadge } from "../components/StatusBadge"
+import { settingsMessages } from "../settingsMessages"
 import type { SettingsController } from "../useSettingsController"
 import {
   PROVIDER_COMPAT_OPTIONS,
@@ -42,6 +43,7 @@ function normalizeProviderCompat(value: unknown): ProviderCompat {
 
 export const ProvidersTab: Component<TabProps> = (props) => {
   const {
+    vscode,
     refreshAdmin,
     server,
     resetProviderForm,
@@ -54,6 +56,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
     providerId,
     selectProvider,
     stringValue,
+    objectValue,
     numberValue,
     formatTimestamp,
     providerBaseUrl,
@@ -116,6 +119,9 @@ export const ProvidersTab: Component<TabProps> = (props) => {
   const [copiedModelId, setCopiedModelId] = createSignal("")
   const [apiKeyDisplay, setApiKeyDisplay] = createSignal("")
   const [apiKeyDisplaySource, setApiKeyDisplaySource] = createSignal("")
+  const [capabilitySyncDirty, setCapabilitySyncDirty] = createSignal(false)
+  const [capabilitySyncEnabled, setCapabilitySyncEnabled] = createSignal(true)
+  const [capabilitySyncIntervalSec, setCapabilitySyncIntervalSec] = createSignal(86400)
   let kindSelectorRef: HTMLDivElement | undefined
   let kindSearchRef: HTMLInputElement | undefined
   let customModelInputRef: HTMLInputElement | undefined
@@ -158,6 +164,12 @@ export const ProvidersTab: Component<TabProps> = (props) => {
     return `已复制 ${id}`
   })
   const capabilityStatus = createMemo(() => modelCapabilitiesStatus ? modelCapabilitiesStatus() : {})
+  const serverSettings = createMemo(() => {
+    const direct = objectValue(server.serverSettingsState()?.settings)
+    if (Object.keys(direct).length > 0) return direct
+    return objectValue(server.adminState().server_settings)
+  })
+  const capabilitySettings = createMemo(() => objectValue(serverSettings().model_capabilities))
   const capabilityUpdatedAt = createMemo(() => stringValue(capabilityStatus().updated_at))
   const capabilitySources = createMemo(() => {
     const raw = capabilityStatus().sources
@@ -170,6 +182,31 @@ export const ProvidersTab: Component<TabProps> = (props) => {
   const capabilityError = createMemo(() => stringValue(server.modelCapabilitiesError?.()))
   const recommendation = createMemo(() => modelCapabilityRecommendation ? modelCapabilityRecommendation() : {})
   const recommendationAvailable = createMemo(() => Object.keys(recommendation()).length > 0)
+
+  createEffect(() => {
+    if (capabilitySyncDirty()) return
+    const settings = capabilitySettings()
+    setCapabilitySyncEnabled(settings.enabled !== false)
+    setCapabilitySyncIntervalSec(Math.max(60, Math.floor(numberValue(settings.interval_sec, 86400))))
+  })
+
+  const updateCapabilitySync = (patch: { enabled?: boolean; intervalSec?: number }) => {
+    if (patch.enabled !== undefined) setCapabilitySyncEnabled(patch.enabled)
+    if (patch.intervalSec !== undefined) setCapabilitySyncIntervalSec(Math.max(60, Math.floor(patch.intervalSec)))
+    setCapabilitySyncDirty(true)
+  }
+
+  const saveCapabilitySync = () => {
+    settingsMessages.updateServerSettings(vscode, {
+      settings: {
+        model_capabilities: {
+          enabled: capabilitySyncEnabled(),
+          interval_sec: Math.max(60, Math.floor(capabilitySyncIntervalSec())),
+        },
+      },
+    })
+    setCapabilitySyncDirty(false)
+  }
   const modelCapabilityFlags = (model: {
     supports_tools?: unknown
     supports_reasoning?: unknown
@@ -655,10 +692,34 @@ export const ProvidersTab: Component<TabProps> = (props) => {
                 <small>
                   {numberValue(capabilityStatus().model_count, 0)} 个模型 · 最近同步 {formatTimestamp(capabilityUpdatedAt())}
                 </small>
+                <small>
+                  后台同步：{capabilitySyncEnabled() ? "开启" : "关闭"} · 周期 {capabilitySyncIntervalSec()} 秒
+                </small>
                 <Show when={capabilitySources().length}>
                   <small>来源：{capabilitySources().join(" / ")}</small>
                 </Show>
               </div>
+              <label class="field-label field-label--checkbox">
+                <input
+                  type="checkbox"
+                  checked={capabilitySyncEnabled()}
+                  onChange={(event) => updateCapabilitySync({ enabled: event.currentTarget.checked })}
+                />
+                <span>每日后台同步</span>
+              </label>
+              <label class="field-label model-capability-sync__interval">
+                <span>周期秒</span>
+                <input
+                  type="number"
+                  min="60"
+                  value={capabilitySyncIntervalSec()}
+                  onInput={(event) => updateCapabilitySync({ intervalSec: Number(event.currentTarget.value) || 60 })}
+                />
+              </label>
+              <button class="btn btn-secondary" type="button" disabled={!capabilitySyncDirty()} onClick={saveCapabilitySync}>
+                <span class="codicon codicon-save" aria-hidden="true" />
+                保存同步设置
+              </button>
               <RefreshButton
                 class="btn-secondary"
                 icon="sync"
@@ -832,7 +893,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
                 type="number"
                 min="1"
                 step="1"
-                value={maxContextTokens()}
+                value={maxContextTokens() || ""}
                 onInput={(event) => updatePositiveInteger(event.currentTarget.value, setMaxContextTokens)}
               />
               <small>1M 上下文填写 1000000。</small>
@@ -844,7 +905,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
                 type="number"
                 min="1"
                 step="1"
-                value={maxTokens()}
+                value={maxTokens() || ""}
                 onInput={(event) => updatePositiveInteger(event.currentTarget.value, setMaxTokens)}
               />
             </label>
