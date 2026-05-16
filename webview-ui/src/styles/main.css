@@ -964,6 +964,55 @@ button {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.settings-two-column {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 12px;
+}
+
+.settings-list {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+}
+
+.settings-list-item {
+  min-height: var(--ez-hit-target-sm);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--ez-border);
+  border-radius: var(--ez-radius);
+  color: var(--ez-fg);
+  background: var(--ez-surface);
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-list-item--active {
+  border-color: color-mix(in srgb, var(--ez-focus) 45%, var(--ez-border));
+  background: color-mix(in srgb, var(--ez-focus) 10%, var(--ez-surface));
+}
+
+.settings-rule-table {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.settings-rule-row {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(90px, 1fr)) var(--ez-hit-target-sm);
+  gap: 6px;
+  align-items: center;
+}
+
+.model-capability-sync__interval {
+  min-width: 110px;
+}
+
 .settings-form-grid--bounded {
   max-width: 760px;
 }

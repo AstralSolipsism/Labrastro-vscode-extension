@@ -35,7 +35,7 @@ import {
 
 type ProviderType = "openai_chat" | "anthropic_messages" | "openai_responses"
 type ProviderCompat = "generic" | "deepseek" | "kimi" | "glm" | "qwen" | "zenmux"
-type SettingsTab = "executors" | "accounts" | "providers" | "toolchains" | "serverSettings" | "agentConfig" | "autoApproval" | "other"
+type SettingsTab = "executors" | "accounts" | "providers" | "toolchains" | "sessionPolicy" | "serverSettings" | "agentConfig" | "autoApproval" | "integrations" | "other"
 
 /** 主执行器运行位置 */
 type ExecutorLocation = "local" | "remote"
@@ -568,9 +568,11 @@ const settingsTabDefs: Array<{ id: SettingsTab; labelKey: string; icon: string }
   { id: "accounts", labelKey: "settings.tab.accounts", icon: "account" },
   { id: "providers", labelKey: "settings.tab.providers", icon: "server-process" },
   { id: "toolchains", labelKey: "settings.tab.toolchains", icon: "tools" },
+  { id: "sessionPolicy", labelKey: "settings.tab.sessionPolicy", icon: "settings" },
   { id: "serverSettings", labelKey: "settings.tab.serverSettings", icon: "server-environment" },
   { id: "agentConfig", labelKey: "settings.tab.agentConfig", icon: "hubot" },
   { id: "autoApproval", labelKey: "settings.tab.autoApproval", icon: "shield" },
+  { id: "integrations", labelKey: "settings.tab.integrations", icon: "plug" },
   { id: "other", labelKey: "settings.tab.other", icon: "settings" },
 ]
 
@@ -584,14 +586,18 @@ function normalizeSettingsTab(value: unknown): SettingsTab | undefined {
       return "accounts"
     case "toolchains":
       return "toolchains"
+    case "sessionPolicy":
+      return "sessionPolicy"
     case "serverSettings":
       return "serverSettings"
     case "agentConfig":
       return "agentConfig"
     case "autoApproval":
-      return "autoApproval"
-    case "other":
-      return "other"
+      return "autoApproval"
+    case "integrations":
+      return "integrations"
+    case "other":
+      return "other"
     default:
       return undefined
   }
@@ -1484,8 +1490,8 @@ export function createSettingsController(props: SettingsViewProps) {
   const [profileId, setProfileId] = createSignal("")
   const [profileProvider, setProfileProvider] = createSignal("deepseek")
   const [profileModel, setProfileModel] = createSignal("")
-  const [maxTokens, setMaxTokens] = createSignal(4096)
-  const [maxContextTokens, setMaxContextTokens] = createSignal(128000)
+  const [maxTokens, setMaxTokens] = createSignal(0)
+  const [maxContextTokens, setMaxContextTokens] = createSignal(0)
   const [temperature, setTemperature] = createSignal(0)
   const [reasoningEffort, setReasoningEffort] = createSignal("")
   const [thinkingEnabled, setThinkingEnabled] = createSignal(true)
@@ -1495,6 +1501,7 @@ export function createSettingsController(props: SettingsViewProps) {
   const [modelCapabilityDefaultMaxTokens, setModelCapabilityDefaultMaxTokens] = createSignal(0)
 
   const [modelCapabilityDefaultMaxContextTokens, setModelCapabilityDefaultMaxContextTokens] = createSignal(0)
+  const [providerValidationError, setProviderValidationError] = createSignal("")
 
   const providers = createMemo(() => {
     const items = server.adminState().providers
@@ -1516,7 +1523,10 @@ export function createSettingsController(props: SettingsViewProps) {
     formatActionResult(server.actionResult(), actionIntent())
   )
   const providerErrorMessage = createMemo(() => {
-    const message = server.adminError()
+    const localMessage = providerValidationError()
+    if (localMessage) return localMessage
+
+    const message = server.adminError()
     if (!message) return undefined
     if (message.includes("config_reload_failed")) {
       return `${message}。保存已回滚，host 配置未生效。`
@@ -1828,15 +1838,16 @@ export function createSettingsController(props: SettingsViewProps) {
   })
 
   const openModelDetail = (modelId: string, mode: ModelDetailMode) => {
-    const existing = profiles().find((profile) => profileMatches(profile, providerId(), modelId))
+    const existing = profiles().find((profile) => profileMatches(profile, providerId(), modelId))
+    setProviderValidationError("")
     setModelDetailMode(mode)
     setProviderModel(modelId)
     if (existing) {
       setProfileId(stringValue(existing.id))
       setProfileProvider(stringValue(existing.provider))
       setProfileModel(stringValue(existing.model))
-      setMaxTokens(numberValue(existing.max_tokens, 4096))
-      setMaxContextTokens(numberValue(existing.max_context_tokens, 128000))
+      setMaxTokens(numberValue(existing.max_tokens, 0))
+      setMaxContextTokens(numberValue(existing.max_context_tokens, 0))
       setTemperature(numberValue(existing.temperature, 0))
       setReasoningEffort(stringValue(existing.reasoning_effort))
       setThinkingEnabled(existing.thinking_enabled !== false)
@@ -1857,8 +1868,8 @@ export function createSettingsController(props: SettingsViewProps) {
       setProfileId(makeProfileId(providerId(), modelId))
       setProfileProvider(providerId())
       setProfileModel(modelId)
-      setMaxTokens(numberValue(defaults.max_tokens, 4096))
-      setMaxContextTokens(numberValue(defaults.max_context_tokens, 128000))
+      setMaxTokens(numberValue(defaults.max_tokens, 0))
+      setMaxContextTokens(numberValue(defaults.max_context_tokens, 0))
       setModelCapabilityDefaultMaxTokens(numberValue(defaults.max_tokens, 0))
       setModelCapabilityDefaultMaxContextTokens(numberValue(defaults.max_context_tokens, 0))
       setTemperature(0)
@@ -2487,7 +2498,8 @@ const refreshAdmin = () => {
     if (!id || !selectedProvider() || !adminUsable()) return
     setFetchedModels([])
     setModelFetchMessage(message)
-    setActionIntent("")
+    setProviderValidationError("")
+    setActionIntent("")
     vscode.postMessage({
       type: "provider.models",
       payload: { provider_id: id },
@@ -2603,7 +2615,7 @@ const refreshAdmin = () => {
   const saveProvider = () => {
     setActionIntent("")
     vscode.postMessage({
-      type: "provider.record",
+      type: "provider.record",
       payload: {
         provider_id: providerId(),
         type: providerType(),
@@ -2668,6 +2680,11 @@ const refreshAdmin = () => {
     const provider = profileProvider() || providerId()
     const model = profileModel().trim()
     if (!provider || !model) return
+    if (maxTokens() < 1 || maxContextTokens() < 1) {
+      setProviderValidationError("请先同步模型能力表，或手动填写最大输出 tokens 和最大上下文 tokens。")
+      return
+    }
+    setProviderValidationError("")
     const nextProfileId = profileId().trim() || makeProfileId(provider, model)
     const existing = profiles().find((profile) => profileMatches(profile, provider, model))
     const defaultMaxTokens = modelCapabilityDefaultMaxTokens()

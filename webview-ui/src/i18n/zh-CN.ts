@@ -15,9 +15,11 @@ const zhCN: Record<string, string> = {
   "settings.tab.accounts": "账号",
   "settings.tab.providers": "服务商",
   "settings.tab.toolchains": "能力组件",
+  "settings.tab.sessionPolicy": "会话策略",
   "settings.tab.serverSettings": "服务端",
   "settings.tab.agentConfig": "Agent 配置",
   "settings.tab.autoApproval": "自动批准",
+  "settings.tab.integrations": "集成",
   "settings.tab.other": "其他",
 
   // ── Auth ──

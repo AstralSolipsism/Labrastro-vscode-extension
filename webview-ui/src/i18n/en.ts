@@ -15,9 +15,11 @@ const en: Record<string, string> = {
   "settings.tab.accounts": "Accounts",
   "settings.tab.providers": "Providers",
   "settings.tab.toolchains": "Capability Components",
+  "settings.tab.sessionPolicy": "Session Policy",
   "settings.tab.serverSettings": "Server",
   "settings.tab.agentConfig": "Agent Config",
   "settings.tab.autoApproval": "Auto Approval",
+  "settings.tab.integrations": "Integrations",
   "settings.tab.other": "Other",
 
   // ── Auth ──
