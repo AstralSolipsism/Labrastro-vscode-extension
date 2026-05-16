@@ -370,6 +370,22 @@ export class LabrastroRemoteClient {
     return this.authenticatedPost("/remote/admin/diagnostics/tool-arguments/stats", {})
   }
 
+  async modelCapabilitiesStatus(): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/model-capabilities/status", {})
+  }
+
+  async modelCapabilitiesList(payload: JsonObject = {}): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/model-capabilities/list", payload)
+  }
+
+  async modelCapabilitiesRefresh(): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/model-capabilities/refresh", {})
+  }
+
+  async modelCapabilitiesApply(payload: JsonObject): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/model-capabilities/apply", payload)
+  }
+
   async agentRunSubmit(payload: JsonObject): Promise<JsonObject> {
     return this.authenticatedPost("/remote/admin/agent-runs/submit", payload)
   }

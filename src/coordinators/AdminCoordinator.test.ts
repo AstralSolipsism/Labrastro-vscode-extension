@@ -184,4 +184,100 @@ describe("AdminCoordinator", () => {
       payload: { defaultOpen: false },
     })
   })
+
+  it("returns peer diagnostics logging defaults as enabled", async () => {
+    const { coordinator: subject } = coordinator()
+    const post = vi.fn()
+
+    await expect(subject.handleMessage({ type: "peerDiagnosticsLogging.get" }, post)).resolves.toBe(true)
+
+    expect(post).toHaveBeenCalledWith({
+      type: "peerDiagnosticsLogging.state",
+      payload: {
+        enabled: true,
+        lifecycle: true,
+        processOutput: true,
+        http: true,
+        logPath: "G:/tmp/peer-diagnostics.log",
+      },
+    })
+  })
+
+  it("saves peer diagnostics logging settings and broadcasts state", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+
+    await expect(subject.handleMessage({
+      type: "peerDiagnosticsLogging.save",
+      payload: { enabled: false, processOutput: false },
+    }, post)).resolves.toBe(true)
+
+    expect(options.client.savePeerDiagnosticsLoggingState).toHaveBeenCalledWith({
+      enabled: false,
+      processOutput: false,
+    })
+    expect(options.broadcastState).toHaveBeenCalledWith({
+      type: "peerDiagnosticsLogging.state",
+      payload: {
+        enabled: false,
+        lifecycle: true,
+        processOutput: false,
+        http: true,
+        logPath: "G:/tmp/peer-diagnostics.log",
+      },
+    })
+  })
+
+  it("opens and clears peer diagnostics logs through host actions", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+
+    await expect(subject.handleMessage({ type: "peerDiagnosticsLogging.open" }, post)).resolves.toBe(true)
+    await expect(subject.handleMessage({ type: "peerDiagnosticsLogging.clear" }, post)).resolves.toBe(true)
+
+    expect(options.client.openPeerDiagnosticsLog).toHaveBeenCalled()
+    expect(options.client.clearPeerDiagnosticsLog).toHaveBeenCalled()
+    expect(post).toHaveBeenCalledWith({
+      type: "admin.actionResult",
+      payload: { ok: true, action: "peerDiagnosticsLogging.open" },
+    })
+    expect(post).toHaveBeenCalledWith({
+      type: "admin.actionResult",
+      payload: { ok: true, action: "peerDiagnosticsLogging.clear" },
+    })
+  })
+
+  it("loads and refreshes model capability catalog state", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+
+    await expect(subject.handleMessage({ type: "modelCapabilities.status" }, post)).resolves.toBe(true)
+    await expect(subject.handleMessage({ type: "modelCapabilities.refresh" }, post)).resolves.toBe(true)
+
+    expect(options.client.modelCapabilitiesStatus).toHaveBeenCalled()
+    expect(options.client.modelCapabilitiesRefresh).toHaveBeenCalled()
+    expect(post).toHaveBeenCalledWith({
+      type: "modelCapabilities.state",
+      payload: {
+        ok: true,
+        model_capabilities: { enabled: true, model_count: 2 },
+      },
+    })
+    expect(options.postAdminState).toHaveBeenCalled()
+  })
+
+  it("applies selected model capability recommendation through admin action", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+
+    await expect(subject.handleMessage({
+      type: "modelCapabilities.apply",
+      payload: { profile_id: "deepseek-v4-pro-main" },
+    }, post)).resolves.toBe(true)
+
+    expect(options.client.modelCapabilitiesApply).toHaveBeenCalledWith({
+      profile_id: "deepseek-v4-pro-main",
+    })
+    expect(options.postAdminState).toHaveBeenCalledWith(post)
+  })
 })

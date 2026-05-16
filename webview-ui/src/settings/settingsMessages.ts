@@ -76,6 +76,22 @@ export const settingsMessages = {
     port.postMessage({ type: "diagnostics.toolArguments.stats" })
   },
 
+  modelCapabilitiesStatus(port: SettingsMessagePort): void {
+    port.postMessage({ type: "modelCapabilities.status" })
+  },
+
+  modelCapabilitiesList(port: SettingsMessagePort, payload: Record<string, unknown> = {}): void {
+    port.postMessage({ type: "modelCapabilities.list", payload })
+  },
+
+  modelCapabilitiesRefresh(port: SettingsMessagePort): void {
+    port.postMessage({ type: "modelCapabilities.refresh" })
+  },
+
+  modelCapabilitiesApply(port: SettingsMessagePort, profileId: string): void {
+    port.postMessage({ type: "modelCapabilities.apply", payload: { profile_id: profileId } })
+  },
+
   runToolchainIngest(port: SettingsMessagePort, payload: Record<string, unknown>): void {
     port.postMessage({ type: "toolchain.ingest.run", payload })
   },

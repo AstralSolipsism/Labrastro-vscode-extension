@@ -252,6 +252,35 @@ export class AdminCoordinator {
           post({ type: "diagnostics.toolArguments.error", message: errorMessage(error) })
         }
         return true
+      case "modelCapabilities.status":
+        try {
+          post({ type: "modelCapabilities.state", payload: await this.options.client.modelCapabilitiesStatus() })
+        } catch (error) {
+          post({ type: "modelCapabilities.error", message: errorMessage(error) })
+        }
+        return true
+      case "modelCapabilities.list":
+        try {
+          post({ type: "modelCapabilities.state", payload: await this.options.client.modelCapabilitiesList(objectValue(message.payload)) })
+        } catch (error) {
+          post({ type: "modelCapabilities.error", message: errorMessage(error) })
+        }
+        return true
+      case "modelCapabilities.refresh":
+        try {
+          const payload = await this.options.client.modelCapabilitiesRefresh()
+          post({ type: "modelCapabilities.state", payload })
+          post({ type: "admin.actionResult", payload })
+          await this.options.postAdminState(post)
+        } catch (error) {
+          post({ type: "modelCapabilities.error", message: errorMessage(error) })
+        }
+        return true
+      case "modelCapabilities.apply":
+        if (await this.options.runAdminAction(post, () => this.options.client.modelCapabilitiesApply(objectValue(message.payload)))) {
+          await this.options.postAdminState(post)
+        }
+        return true
       case "openFile":
         await this.options.openFileTarget(
           stringValue(message.path) || "",
