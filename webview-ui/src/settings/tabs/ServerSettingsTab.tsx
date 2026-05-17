@@ -115,14 +115,15 @@ export const ServerSettingsTab: Component<TabProps> = (props) => {
         <div class="settings-page-header">
           <div>
             <h2>{t("serverSettings.title")}</h2>
+            <p class="setting-description">{t("serverSettings.desc")}</p>
           </div>
           <div class="settings-actions settings-actions--right">
             <RefreshButton class="btn-secondary" onClick={refreshServerSettings}>
-              刷新
+              {t("common.refresh")}
             </RefreshButton>
             <button class="btn btn-primary" onClick={saveServerSettings} disabled={!serverSettingsDirty()}>
               <span class="codicon codicon-save" aria-hidden="true" />
-              保存
+              {t("common.save")}
             </button>
           </div>
         </div>
@@ -137,7 +138,32 @@ export const ServerSettingsTab: Component<TabProps> = (props) => {
           <div class="settings-success">服务端运行环境设置已保存并重载。</div>
         </Show>
 
-        <section class="settings-section settings-section--flat">
+        <div class="settings-status-strip" aria-label={t("serverSettings.runtime")}>
+          <div class="settings-status-strip__title">
+            <span>{t("serverSettings.runtime")}</span>
+            <StatusBadge tone={numberValue(runtime.queued_agents, 0) > 0 ? "warning" : "success"}>
+              {numberValue(runtime.running_agents, 0)} / {numberValue(runtime.max_running_agents, serverMaxRunningAgents())}
+            </StatusBadge>
+          </div>
+          <div class="settings-status-metric">
+            <span>{t("serverSettings.runningAgents")}</span>
+            <strong>{String(numberValue(runtime.running_agents, 0))}</strong>
+          </div>
+          <div class="settings-status-metric">
+            <span>{t("serverSettings.queuedAgents")}</span>
+            <strong>{String(numberValue(runtime.queued_agents, 0))}</strong>
+          </div>
+          <div class="settings-status-metric">
+            <span>{t("serverSettings.shellUsage")}</span>
+            <strong>{String(Object.keys(objectValue(runtime.shell_usage)).length)}</strong>
+          </div>
+          <div class="settings-status-metric">
+            <span>{t("serverSettings.queuedShells")}</span>
+            <strong>{String(Object.values(objectValue(runtime.queued_shells)).reduce<number>((sum, item) => sum + numberValue(item, 0), 0))}</strong>
+          </div>
+        </div>
+
+        <section class="settings-section settings-section--plain">
           <div class="settings-section-heading">
             <span>Agent 运行限制</span>
             <StatusBadge tone="muted">全局</StatusBadge>
@@ -172,34 +198,7 @@ export const ServerSettingsTab: Component<TabProps> = (props) => {
           </div>
         </section>
 
-        <section class="settings-section settings-section--flat">
-          <div class="settings-section-heading">
-            <span>当前运行态</span>
-            <StatusBadge tone={numberValue(runtime.queued_agents, 0) > 0 ? "warning" : "success"}>
-              {numberValue(runtime.running_agents, 0)} / {numberValue(runtime.max_running_agents, serverMaxRunningAgents())}
-            </StatusBadge>
-          </div>
-          <div class="toolchain-detail-grid">
-            <div class="toolchain-detail-block">
-              <span>{t("serverSettings.runningAgents")}</span>
-              <strong>{String(numberValue(runtime.running_agents, 0))}</strong>
-            </div>
-            <div class="toolchain-detail-block">
-              <span>排队 Agent</span>
-              <strong>{String(numberValue(runtime.queued_agents, 0))}</strong>
-            </div>
-            <div class="toolchain-detail-block">
-              <span>shell 使用</span>
-              <strong>{String(Object.keys(objectValue(runtime.shell_usage)).length)}</strong>
-            </div>
-            <div class="toolchain-detail-block">
-              <span>shell 排队</span>
-              <strong>{String(Object.values(objectValue(runtime.queued_shells)).reduce<number>((sum, item) => sum + numberValue(item, 0), 0))}</strong>
-            </div>
-          </div>
-        </section>
-
-        <section class="settings-section settings-section--flat">
+        <section class="settings-section settings-section--plain">
           <div class="settings-section-heading">
             <span>Sandbox 执行环境</span>
             <StatusBadge tone={sandboxType() === "none" ? "muted" : "success"}>{sandboxType()}</StatusBadge>
@@ -237,7 +236,7 @@ export const ServerSettingsTab: Component<TabProps> = (props) => {
           </div>
         </section>
 
-        <section class="settings-section settings-section--flat">
+        <section class="settings-section settings-section--plain">
           <div class="settings-section-heading">
             <span>持久化策略</span>
             <StatusBadge tone="muted">{stringValue(persistenceSettings().backend, "auto")}</StatusBadge>
