@@ -1,4 +1,5 @@
-import { Component, For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js"
+import { Component, Show, createEffect, createMemo, createSignal, onMount } from "solid-js"
+import { t } from "../../i18n"
 import { RefreshButton } from "../../components/common/RefreshButton"
 import { StatusBadge } from "../components/StatusBadge"
 import { settingsMessages } from "../settingsMessages"
@@ -6,18 +7,8 @@ import type { SettingsController } from "../useSettingsController"
 
 interface TabProps { controller: SettingsController & Record<string, any> }
 
-interface ModeDraft {
-  description: string
-  toolsText: string
-  promptAppend: string
-}
-
 function objectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? value as Record<string, unknown> : {}
-}
-
-function stringValue(value: unknown, fallback = ""): string {
-  return typeof value === "string" ? value : fallback
 }
 
 function numberValue(value: unknown, fallback = 0): number {
@@ -28,23 +19,8 @@ function boolValue(value: unknown, fallback = false): boolean {
   return typeof value === "boolean" ? value : fallback
 }
 
-function stringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.map((item) => String(item).trim()).filter(Boolean)
-    : []
-}
-
-function parseListText(value: string): string[] {
-  return value
-    .split(/[\n,]+/)
-    .map((item) => item.trim())
-    .filter(Boolean)
-}
-
-function makeModeId(existing: string[]): string {
-  let index = 1
-  while (existing.includes(`custom_mode_${index}`)) index += 1
-  return `custom_mode_${index}`
+function stringValue(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback
 }
 
 export const SessionPolicyTab: Component<TabProps> = (props) => {
@@ -71,20 +47,10 @@ export const SessionPolicyTab: Component<TabProps> = (props) => {
   const [memoryNamespace, setMemoryNamespace] = createSignal("")
   const [memoryTokenBudget, setMemoryTokenBudget] = createSignal(800)
 
-  const [activeMode, setActiveMode] = createSignal("")
-  const [selectedMode, setSelectedMode] = createSignal("")
-  const [modeDrafts, setModeDrafts] = createSignal<Record<string, ModeDraft>>({})
-  const [globalSystemAppend, setGlobalSystemAppend] = createSignal("")
-
   const serverSettings = createMemo(() => {
     const direct = objectValue(server.serverSettingsState()?.settings)
     if (Object.keys(direct).length > 0) return direct
     return objectValue(server.adminState().server_settings)
-  })
-  const modeIds = createMemo(() => Object.keys(modeDrafts()).sort())
-  const currentMode = createMemo(() => {
-    const id = selectedMode()
-    return id ? modeDrafts()[id] : undefined
   })
 
   const markDirty = () => {
@@ -97,18 +63,6 @@ export const SessionPolicyTab: Component<TabProps> = (props) => {
     const toolOutput = objectValue(settings.tool_output)
     const context = objectValue(settings.context)
     const memory = objectValue(settings.memory)
-    const modes = objectValue(settings.modes)
-    const prompt = objectValue(settings.prompt)
-    const profiles = objectValue(modes.profiles)
-    const nextModes: Record<string, ModeDraft> = {}
-    for (const [id, item] of Object.entries(profiles)) {
-      const mode = objectValue(item)
-      nextModes[id] = {
-        description: stringValue(mode.description),
-        toolsText: stringArray(mode.tools).join("\n"),
-        promptAppend: stringValue(mode.prompt_append),
-      }
-    }
 
     setToolMaxChars(Math.max(1, Math.floor(numberValue(toolOutput.max_chars, 12000))))
     setToolMaxLines(Math.max(1, Math.floor(numberValue(toolOutput.max_lines, 120))))
@@ -126,10 +80,6 @@ export const SessionPolicyTab: Component<TabProps> = (props) => {
     setMemoryAgentId(stringValue(memory.default_agent_id, "core"))
     setMemoryNamespace(stringValue(memory.default_namespace))
     setMemoryTokenBudget(Math.max(1, Math.floor(numberValue(memory.token_budget, 800))))
-    setActiveMode(stringValue(modes.active))
-    setModeDrafts(nextModes)
-    setSelectedMode((current) => current && nextModes[current] ? current : Object.keys(nextModes).sort()[0] || "")
-    setGlobalSystemAppend(stringValue(prompt.system_append))
   }
 
   createEffect(() => {
@@ -137,74 +87,9 @@ export const SessionPolicyTab: Component<TabProps> = (props) => {
     syncFromSettings()
   })
 
-  createEffect(() => {
-    const ids = modeIds()
-    if (!selectedMode() && ids.length) setSelectedMode(ids[0])
-    if (selectedMode() && !ids.includes(selectedMode())) setSelectedMode(ids[0] || "")
-  })
-
   onMount(() => settingsMessages.readServerSettings(vscode))
 
-  const updateMode = (patch: Partial<ModeDraft>) => {
-    const id = selectedMode()
-    if (!id) return
-    setModeDrafts((current) => ({
-      ...current,
-      [id]: { ...current[id], ...patch },
-    }))
-    markDirty()
-  }
-
-  const renameMode = (nextId: string) => {
-    const oldId = selectedMode()
-    const id = nextId.trim()
-    if (!oldId || !id || id === oldId || modeDrafts()[id]) return
-    setModeDrafts((current) => {
-      const next = { ...current, [id]: current[oldId] }
-      delete next[oldId]
-      return next
-    })
-    if (activeMode() === oldId) setActiveMode(id)
-    setSelectedMode(id)
-    markDirty()
-  }
-
-  const addMode = () => {
-    const id = makeModeId(modeIds())
-    setModeDrafts((current) => ({
-      ...current,
-      [id]: { description: "", toolsText: "", promptAppend: "" },
-    }))
-    setSelectedMode(id)
-    if (!activeMode()) setActiveMode(id)
-    markDirty()
-  }
-
-  const deleteMode = (id: string) => {
-    const ids = modeIds()
-    if (ids.length <= 1) return
-    setModeDrafts((current) => {
-      const next = { ...current }
-      delete next[id]
-      return next
-    })
-    if (activeMode() === id) setActiveMode(ids.find((item) => item !== id) || "")
-    if (selectedMode() === id) setSelectedMode(ids.find((item) => item !== id) || "")
-    markDirty()
-  }
-
   const save = () => {
-    const profiles: Record<string, unknown> = {}
-    for (const [id, draft] of Object.entries(modeDrafts())) {
-      profiles[id] = {
-        description: draft.description,
-        tools: parseListText(draft.toolsText),
-        prompt_append: draft.promptAppend,
-      }
-    }
-    const active = activeMode() && profiles[activeMode()]
-      ? activeMode()
-      : Object.keys(profiles)[0]
     settingsMessages.updateServerSettings(vscode, {
       settings: {
         tool_output: {
@@ -229,8 +114,6 @@ export const SessionPolicyTab: Component<TabProps> = (props) => {
           default_namespace: memoryNamespace().trim(),
           token_budget: Math.max(1, Math.floor(memoryTokenBudget())),
         },
-        modes: { active, profiles },
-        prompt: { system_append: globalSystemAppend() },
       },
     })
     setDirty(false)
@@ -241,16 +124,16 @@ export const SessionPolicyTab: Component<TabProps> = (props) => {
     <div class="settings-page settings-page--wide">
       <div class="settings-page-header">
         <div>
-          <h2>会话策略</h2>
-          <p class="setting-description">控制工具输出、上下文压缩、记忆、模式和全局提示词。</p>
+          <h2>{t("sessionPolicy.title")}</h2>
+          <p class="setting-description">{t("sessionPolicy.desc")}</p>
         </div>
         <div class="settings-actions settings-actions--right">
           <RefreshButton class="btn-secondary" onClick={() => settingsMessages.readServerSettings(vscode)}>
-            刷新
+            {t("common.refresh")}
           </RefreshButton>
           <button class="btn btn-primary" type="button" disabled={!dirty()} onClick={save}>
             <span class="codicon codicon-save" aria-hidden="true" />
-            保存
+            {t("common.save")}
           </button>
         </div>
       </div>
@@ -259,10 +142,10 @@ export const SessionPolicyTab: Component<TabProps> = (props) => {
         <div class="settings-error">{server.serverSettingsError()}</div>
       </Show>
       <Show when={saved() && !dirty()}>
-        <div class="settings-success">会话策略已保存并重载。</div>
+        <div class="settings-success">{t("sessionPolicy.saved")}</div>
       </Show>
 
-      <section class="settings-section settings-section--flat">
+      <section class="settings-section settings-section--plain">
         <div class="settings-section-heading">
           <span>工具输出</span>
           <StatusBadge tone={toolStoreFull() ? "success" : "muted"}>{toolStoreFull() ? "保存完整输出" : "只保留截断输出"}</StatusBadge>
@@ -284,7 +167,7 @@ export const SessionPolicyTab: Component<TabProps> = (props) => {
         </div>
       </section>
 
-      <section class="settings-section settings-section--flat">
+      <section class="settings-section settings-section--plain">
         <div class="settings-section-heading"><span>上下文压缩</span></div>
         <div class="settings-form-grid settings-form-grid--two">
           <label class="field-label"><span>保留最近工具轮数</span>
@@ -305,7 +188,7 @@ export const SessionPolicyTab: Component<TabProps> = (props) => {
         </div>
       </section>
 
-      <section class="settings-section settings-section--flat">
+      <section class="settings-section settings-section--plain">
         <div class="settings-section-heading">
           <span>记忆</span>
           <StatusBadge tone={memoryEnabled() ? "success" : "muted"}>{memoryEnabled() ? "启用" : "关闭"}</StatusBadge>
@@ -341,60 +224,6 @@ export const SessionPolicyTab: Component<TabProps> = (props) => {
         </div>
       </section>
 
-      <section class="settings-section settings-section--flat">
-        <div class="settings-section-heading">
-          <span>模式</span>
-          <button class="btn btn-secondary" type="button" onClick={addMode}>
-            <span class="codicon codicon-add" aria-hidden="true" />
-            新增模式
-          </button>
-        </div>
-        <div class="settings-two-column">
-          <div class="settings-list">
-            <For each={modeIds()}>
-              {(id) => (
-                <button type="button" class={`settings-list-item ${selectedMode() === id ? "settings-list-item--active" : ""}`} onClick={() => setSelectedMode(id)}>
-                  <span>{id}</span>
-                  <Show when={activeMode() === id}><StatusBadge>active</StatusBadge></Show>
-                </button>
-              )}
-            </For>
-          </div>
-          <Show when={currentMode()} fallback={<p class="settings-empty-note">暂无模式。</p>}>
-            {(mode) => (
-              <div class="settings-form-grid">
-                <label class="field-label"><span>模式 ID</span>
-                  <input value={selectedMode()} onChange={(event) => renameMode(event.currentTarget.value)} />
-                </label>
-                <label class="field-label field-label--checkbox">
-                  <input type="checkbox" checked={activeMode() === selectedMode()} onChange={(event) => { if (event.currentTarget.checked) { setActiveMode(selectedMode()); markDirty() } }} />
-                  <span>设为当前模式</span>
-                </label>
-                <label class="field-label field-label--full"><span>描述</span>
-                  <input value={mode().description} onInput={(event) => updateMode({ description: event.currentTarget.value })} />
-                </label>
-                <label class="field-label field-label--full"><span>工具列表</span>
-                  <textarea rows={4} value={mode().toolsText} placeholder="每行一个工具名" onInput={(event) => updateMode({ toolsText: event.currentTarget.value })} />
-                </label>
-                <label class="field-label field-label--full"><span>模式提示词追加</span>
-                  <textarea rows={5} value={mode().promptAppend} onInput={(event) => updateMode({ promptAppend: event.currentTarget.value })} />
-                </label>
-                <button class="btn btn-secondary" type="button" disabled={modeIds().length <= 1} onClick={() => deleteMode(selectedMode())}>
-                  <span class="codicon codicon-trash" aria-hidden="true" />
-                  删除模式
-                </button>
-              </div>
-            )}
-          </Show>
-        </div>
-      </section>
-
-      <section class="settings-section settings-section--flat">
-        <div class="settings-section-heading"><span>全局系统提示词追加</span></div>
-        <label class="field-label field-label--full">
-          <textarea rows={7} value={globalSystemAppend()} onInput={(event) => { setGlobalSystemAppend(event.currentTarget.value); markDirty() }} />
-        </label>
-      </section>
     </div>
   )
 }

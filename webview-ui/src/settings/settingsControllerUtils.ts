@@ -1,4 +1,48 @@
-﻿import { DEFAULT_AUTO_APPROVE_OPTIONS } from "../components/chat/approval-details"
+import { DEFAULT_AUTO_APPROVE_OPTIONS } from "../components/chat/approval-details"
+
+export type SettingsTab =
+  | "executors"
+  | "accounts"
+  | "providers"
+  | "toolchains"
+  | "conversation"
+  | "sessionPolicy"
+  | "serverSettings"
+  | "agentConfig"
+  | "autoApproval"
+  | "integrations"
+  | "diagnostics"
+
+export function normalizeSettingsTab(value: unknown): SettingsTab | undefined {
+  switch (value) {
+    case "providers":
+      return "providers"
+    case "executors":
+      return "executors"
+    case "accounts":
+      return "accounts"
+    case "toolchains":
+      return "toolchains"
+    case "conversation":
+      return "conversation"
+    case "sessionPolicy":
+      return "sessionPolicy"
+    case "serverSettings":
+      return "serverSettings"
+    case "agentConfig":
+      return "agentConfig"
+    case "autoApproval":
+      return "autoApproval"
+    case "integrations":
+      return "integrations"
+    case "diagnostics":
+      return "diagnostics"
+    case "other":
+      return "conversation"
+    default:
+      return undefined
+  }
+}
 
 export function sanitizeAutoApproveOptions(value: unknown): Record<string, boolean> {
   const raw = objectValue(value)

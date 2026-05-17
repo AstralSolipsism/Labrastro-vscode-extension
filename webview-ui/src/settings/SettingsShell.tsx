@@ -10,7 +10,8 @@ import { ServerSettingsTab } from "./tabs/ServerSettingsTab"
 import { AgentConfigTab } from "./tabs/AgentConfigTab"
 import { AutoApprovalTab } from "./tabs/AutoApprovalTab"
 import { IntegrationsTab } from "./tabs/IntegrationsTab"
-import { OtherTab } from "./tabs/OtherTab"
+import { ConversationTab } from "./tabs/ConversationTab"
+import { DiagnosticsTab } from "./tabs/DiagnosticsTab"
 
 interface SettingsShellProps {
   controller: SettingsController
@@ -53,12 +54,13 @@ export const SettingsShell: Component<SettingsShellProps> = (props) => {
             <Match when={controller.activeTab() === "accounts"}><AccountsTab controller={controller} /></Match>
             <Match when={controller.activeTab() === "providers"}><ProvidersTab controller={controller} /></Match>
             <Match when={controller.activeTab() === "toolchains"}><ToolchainsTab controller={controller} /></Match>
+            <Match when={controller.activeTab() === "conversation"}><ConversationTab controller={controller} /></Match>
             <Match when={controller.activeTab() === "sessionPolicy"}><SessionPolicyTab controller={controller} /></Match>
             <Match when={controller.activeTab() === "serverSettings"}><ServerSettingsTab controller={controller} /></Match>
             <Match when={controller.activeTab() === "agentConfig"}><AgentConfigTab controller={controller} /></Match>
             <Match when={controller.activeTab() === "autoApproval"}><AutoApprovalTab controller={controller} /></Match>
             <Match when={controller.activeTab() === "integrations"}><IntegrationsTab controller={controller} /></Match>
-            <Match when={controller.activeTab() === "other"}><OtherTab controller={controller} /></Match>
+            <Match when={controller.activeTab() === "diagnostics"}><DiagnosticsTab controller={controller} /></Match>
           </Switch>
         </main>
       </div>

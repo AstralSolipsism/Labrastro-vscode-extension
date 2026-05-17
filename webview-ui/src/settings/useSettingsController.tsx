@@ -34,9 +34,9 @@ import {
 } from "../components/chat/ApprovalDetailsDialog"
 
 type ProviderType = "openai_chat" | "anthropic_messages" | "openai_responses"
-type ProviderCompat = "generic" | "deepseek" | "kimi" | "glm" | "qwen" | "zenmux"
-type SettingsTab = "executors" | "accounts" | "providers" | "toolchains" | "sessionPolicy" | "serverSettings" | "agentConfig" | "autoApproval" | "integrations" | "other"
+type ProviderCompat = "generic" | "deepseek" | "kimi" | "glm" | "qwen" | "zenmux"
 
+type SettingsTab = "executors" | "accounts" | "providers" | "toolchains" | "conversation" | "sessionPolicy" | "serverSettings" | "agentConfig" | "autoApproval" | "integrations" | "diagnostics"
 /** 主执行器运行位置 */
 type ExecutorLocation = "local" | "remote"
 
@@ -565,18 +565,19 @@ const compats: ProviderCompat[] = ["generic", "deepseek", "kimi", "glm", "qwen",
 
 const settingsTabDefs: Array<{ id: SettingsTab; labelKey: string; icon: string }> = [
   { id: "executors", labelKey: "settings.tab.executors", icon: "radio-tower" },
-  { id: "accounts", labelKey: "settings.tab.accounts", icon: "account" },
   { id: "providers", labelKey: "settings.tab.providers", icon: "server-process" },
-  { id: "toolchains", labelKey: "settings.tab.toolchains", icon: "tools" },
-  { id: "sessionPolicy", labelKey: "settings.tab.sessionPolicy", icon: "settings" },
-  { id: "serverSettings", labelKey: "settings.tab.serverSettings", icon: "server-environment" },
   { id: "agentConfig", labelKey: "settings.tab.agentConfig", icon: "hubot" },
+  { id: "toolchains", labelKey: "settings.tab.toolchains", icon: "tools" },
+  { id: "conversation", labelKey: "settings.tab.conversation", icon: "comment-discussion" },
+  { id: "sessionPolicy", labelKey: "settings.tab.sessionPolicy", icon: "layers" },
   { id: "autoApproval", labelKey: "settings.tab.autoApproval", icon: "shield" },
+  { id: "serverSettings", labelKey: "settings.tab.serverSettings", icon: "server-environment" },
   { id: "integrations", labelKey: "settings.tab.integrations", icon: "plug" },
-  { id: "other", labelKey: "settings.tab.other", icon: "settings" },
+  { id: "diagnostics", labelKey: "settings.tab.diagnostics", icon: "pulse" },
+  { id: "accounts", labelKey: "settings.tab.accounts", icon: "account" },
 ]
 
-function normalizeSettingsTab(value: unknown): SettingsTab | undefined {
+export function normalizeSettingsTab(value: unknown): SettingsTab | undefined {
   switch (value) {
     case "providers":
       return "providers"
@@ -586,6 +587,8 @@ function normalizeSettingsTab(value: unknown): SettingsTab | undefined {
       return "accounts"
     case "toolchains":
       return "toolchains"
+    case "conversation":
+      return "conversation"
     case "sessionPolicy":
       return "sessionPolicy"
     case "serverSettings":
@@ -596,8 +599,10 @@ function normalizeSettingsTab(value: unknown): SettingsTab | undefined {
       return "autoApproval"
     case "integrations":
       return "integrations"
+    case "diagnostics":
+      return "diagnostics"
     case "other":
-      return "other"
+      return "conversation"
     default:
       return undefined
   }

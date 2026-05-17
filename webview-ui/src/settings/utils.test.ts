@@ -15,6 +15,7 @@ import {
 } from "./utils"
 import {
   connectionSaveResultKey,
+  normalizeSettingsTab,
   sanitizeAutoApproveOptions,
   serverAgentRunSettingsPayload,
 } from "./settingsControllerUtils"
@@ -226,6 +227,13 @@ describe("settings utils", () => {
         max_shells_per_agent: 1,
       },
     })
+  })
+
+  it("normalizes settings tab ids with legacy other compatibility", () => {
+    expect(normalizeSettingsTab("conversation")).toBe("conversation")
+    expect(normalizeSettingsTab("diagnostics")).toBe("diagnostics")
+    expect(normalizeSettingsTab("other")).toBe("conversation")
+    expect(normalizeSettingsTab("unknown")).toBeUndefined()
   })
 
   it("does not render an extra notice for an authenticated ready connection", () => {
