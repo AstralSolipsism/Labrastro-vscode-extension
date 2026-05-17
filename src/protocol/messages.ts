@@ -46,6 +46,7 @@ export type HostToWebviewMessageType =
   | "chat.reconnected"
   | "chat.reconnecting"
   | "chat.resume"
+  | "chat.sendDuringRunMode.state"
   | "chat.session"
   | "chat.started"
   | "connection.result"
@@ -125,6 +126,8 @@ export type WebviewToHostMessageType =
   | "autoApproval.update"
   | "chat.cancel"
   | "chat.send"
+  | "chat.sendDuringRunMode.get"
+  | "chat.sendDuringRunMode.update"
   | "closePanel"
   | "connection.host.save"
   | "connection.login"
@@ -231,6 +234,7 @@ const HOST_TO_WEBVIEW_TYPES = new Set<HostToWebviewMessageType>([
   "chat.reconnected",
   "chat.reconnecting",
   "chat.resume",
+  "chat.sendDuringRunMode.state",
   "chat.session",
   "chat.started",
   "connection.result",
@@ -305,6 +309,8 @@ const WEBVIEW_TO_HOST_TYPES = new Set<WebviewToHostMessageType>([
   "autoApproval.update",
   "chat.cancel",
   "chat.send",
+  "chat.sendDuringRunMode.get",
+  "chat.sendDuringRunMode.update",
   "closePanel",
   "connection.host.save",
   "connection.login",

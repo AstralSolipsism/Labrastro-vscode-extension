@@ -18,8 +18,13 @@ interface ReasoningDisplayState {
   defaultOpen: boolean
 }
 
+interface SendDuringRunModeState {
+  mode: "guide" | "queue"
+}
+
 const AUTO_APPROVAL_STATE_KEY = "labrastro.autoApproval"
 const REASONING_DISPLAY_STATE_KEY = "labrastro.reasoningDefaultOpen"
+const SEND_DURING_RUN_MODE_KEY = "labrastro.chat.sendDuringRunMode"
 const DEFAULT_AUTO_APPROVAL_OPTIONS: Record<AutoApprovalOptionKey, boolean> = {
   readOnly: false,
   write: false,
@@ -62,6 +67,14 @@ export class AdminCoordinator {
   getReasoningDisplayState(): ReasoningDisplayState {
     return {
       defaultOpen: this.options.context.workspaceState.get(REASONING_DISPLAY_STATE_KEY) === true,
+    }
+  }
+
+  getSendDuringRunModeState(): SendDuringRunModeState {
+    return {
+      mode: normalizeSendDuringRunMode(
+        this.options.context.workspaceState.get(SEND_DURING_RUN_MODE_KEY)
+      ),
     }
   }
 
@@ -195,6 +208,16 @@ export class AdminCoordinator {
       case "reasoningDisplay.save":
         await this.options.context.workspaceState.update(REASONING_DISPLAY_STATE_KEY, message.defaultOpen === true)
         this.broadcastReasoningDisplayState()
+        return true
+      case "chat.sendDuringRunMode.get":
+        post({ type: "chat.sendDuringRunMode.state", payload: this.getSendDuringRunModeState() })
+        return true
+      case "chat.sendDuringRunMode.update":
+        await this.options.context.workspaceState.update(
+          SEND_DURING_RUN_MODE_KEY,
+          normalizeSendDuringRunMode(message.mode)
+        )
+        this.broadcastSendDuringRunModeState()
         return true
       case "peerDiagnosticsLogging.get":
         post({ type: "peerDiagnosticsLogging.state", payload: this.options.client.peerDiagnosticsLoggingState() })
@@ -391,12 +414,20 @@ export class AdminCoordinator {
     this.options.broadcastState({ type: "reasoningDisplay.state", payload: this.getReasoningDisplayState() })
   }
 
+  private broadcastSendDuringRunModeState(): void {
+    this.options.broadcastState({ type: "chat.sendDuringRunMode.state", payload: this.getSendDuringRunModeState() })
+  }
+
   private broadcastPeerDiagnosticsLoggingState(): void {
     this.options.broadcastState({
       type: "peerDiagnosticsLogging.state",
       payload: this.options.client.peerDiagnosticsLoggingState(),
     })
   }
+}
+
+function normalizeSendDuringRunMode(value: unknown): "guide" | "queue" {
+  return value === "queue" ? "queue" : "guide"
 }
 
 function sanitizeAutoApprovalOptions(value: unknown): Record<AutoApprovalOptionKey, boolean> {

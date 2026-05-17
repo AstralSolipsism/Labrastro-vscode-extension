@@ -260,6 +260,7 @@ export class LabrastroController implements vscode.Disposable {
     if (includeAdminState) {
       post({ type: "autoApproval.state", payload: this.adminCoordinator.getAutoApprovalState() })
       post({ type: "reasoningDisplay.state", payload: this.adminCoordinator.getReasoningDisplayState() })
+      post({ type: "chat.sendDuringRunMode.state", payload: this.adminCoordinator.getSendDuringRunModeState() })
       post({ type: "peerDiagnosticsLogging.state", payload: this.client.peerDiagnosticsLoggingState() })
       post({ type: "connection.state", payload: this.client.startupConnectionState() })
       post({ type: "environment.snapshot", payload: this.environmentSnapshot })

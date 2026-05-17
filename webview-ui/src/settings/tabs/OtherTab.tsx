@@ -57,6 +57,9 @@ export const OtherTab: Component<TabProps> = (props) => {
   const issueRows = createMemo(() => arrayOfRecords(toolArgumentStats().issues).slice(0, 8))
   const repairRows = createMemo(() => arrayOfRecords(toolArgumentStats().repairs).slice(0, 8))
   const reasoningDefaultOpen = createMemo(() => server.reasoningDisplayState().defaultOpen === true)
+  const sendDuringRunMode = createMemo(() =>
+    stringValue(server.chatSendDuringRunModeState().mode) === "queue" ? "queue" : "guide"
+  )
   const peerDiagnosticsLogging = createMemo(() => objectValue(server.peerDiagnosticsLoggingState()))
   const peerLoggingEnabled = createMemo(() => peerDiagnosticsLogging().enabled !== false)
   const peerLoggingLifecycle = createMemo(() => peerDiagnosticsLogging().lifecycle !== false)
@@ -67,6 +70,9 @@ export const OtherTab: Component<TabProps> = (props) => {
   const refreshDiagnostics = () => settingsMessages.readToolArgumentDiagnosticsStats(vscode)
   const updateReasoningDefaultOpen = (defaultOpen: boolean) => {
     settingsMessages.saveReasoningDisplay(vscode, defaultOpen)
+  }
+  const updateSendDuringRunMode = (mode: "guide" | "queue") => {
+    settingsMessages.updateChatSendDuringRunMode(vscode, mode)
   }
   const updatePeerDiagnosticsLogging = (patch: Record<string, boolean>) => {
     settingsMessages.savePeerDiagnosticsLogging(vscode, {
@@ -107,6 +113,7 @@ export const OtherTab: Component<TabProps> = (props) => {
   onMount(() => {
     settingsMessages.readServerSettings(vscode)
     settingsMessages.getReasoningDisplay(vscode)
+    settingsMessages.getChatSendDuringRunMode(vscode)
     settingsMessages.getPeerDiagnosticsLogging(vscode)
   })
 
@@ -143,6 +150,30 @@ export const OtherTab: Component<TabProps> = (props) => {
             )}
           </For>
         </div>
+      </section>
+
+      <section class="settings-section settings-section--flat send-during-run-section">
+        <div class="settings-section-heading">
+          <span class="codicon codicon-comment-discussion" aria-hidden="true" />
+          <span>输出中发送</span>
+        </div>
+        <div class="provider-segmented-list" role="group" aria-label="输出中发送默认行为">
+          <button
+            type="button"
+            class={`provider-segmented-choice ${sendDuringRunMode() === "guide" ? "provider-segmented-choice--active" : ""}`}
+            onClick={() => updateSendDuringRunMode("guide")}
+          >
+            引导当前任务
+          </button>
+          <button
+            type="button"
+            class={`provider-segmented-choice ${sendDuringRunMode() === "queue" ? "provider-segmented-choice--active" : ""}`}
+            onClick={() => updateSendDuringRunMode("queue")}
+          >
+            排队下一轮
+          </button>
+        </div>
+        <p class="settings-empty-note">控制 LLM 输出中点击发送时，新输入默认进入引导还是队列。</p>
       </section>
 
       <section class="settings-section settings-section--flat reasoning-display-section">

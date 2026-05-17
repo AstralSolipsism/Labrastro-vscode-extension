@@ -79,7 +79,7 @@ function coordinator() {
     },
     context: {
       workspaceState: {
-        get: vi.fn(() => ({})),
+        get: vi.fn((_key?: string) => ({})),
         update: vi.fn(),
       },
     },
@@ -182,6 +182,30 @@ describe("AdminCoordinator", () => {
     expect(post).toHaveBeenCalledWith({
       type: "reasoningDisplay.state",
       payload: { defaultOpen: false },
+    })
+  })
+
+  it("persists the output-time send mode in workspace state", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    options.context.workspaceState.get.mockImplementation((key?: string) =>
+      key === "labrastro.chat.sendDuringRunMode" ? "queue" : {}
+    )
+
+    await expect(subject.handleMessage({ type: "chat.sendDuringRunMode.get" }, post)).resolves.toBe(true)
+    await expect(subject.handleMessage({ type: "chat.sendDuringRunMode.update", mode: "queue" }, post)).resolves.toBe(true)
+
+    expect(post).toHaveBeenCalledWith({
+      type: "chat.sendDuringRunMode.state",
+      payload: { mode: "queue" },
+    })
+    expect(options.context.workspaceState.update).toHaveBeenCalledWith(
+      "labrastro.chat.sendDuringRunMode",
+      "queue"
+    )
+    expect(options.broadcastState).toHaveBeenCalledWith({
+      type: "chat.sendDuringRunMode.state",
+      payload: { mode: "queue" },
     })
   })
 
