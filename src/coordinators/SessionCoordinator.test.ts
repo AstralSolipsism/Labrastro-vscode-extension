@@ -1,7 +1,4 @@
-﻿import { describe, expect, it, vi } from "vitest"
-import * as fs from "fs/promises"
-import * as os from "os"
-import * as path from "path"
+import { describe, expect, it, vi } from "vitest"
 import type * as vscode from "vscode"
 import type { BackendFeatures, LabrastroRemoteClient } from "../LabrastroRemoteClient"
 import { SessionCoordinator } from "./SessionCoordinator"
@@ -21,13 +18,34 @@ const writableFeatures: BackendFeatures = {
   agentRuns: { executorFeatures: {} },
 }
 
+function documentFor(id: string, title = "Remote") {
+  return {
+    session: { id, title, updatedAt: "2026-05-10T00:00:00.000Z", state: "active" },
+    stats: { taskText: title, tokensIn: 12, tokensOut: 34 },
+    turns: [
+      {
+        userMessage: { id: "u1", role: "user", text: "hello", parts: [] },
+        assistantMessages: [
+          {
+            id: "a1",
+            role: "assistant",
+            text: "world",
+            parts: [{ id: "p1", type: "text", text: "world" }],
+          },
+        ],
+      },
+    ],
+    trace: { nodes: [], edges: [], ui: {} },
+    revision: 2,
+    last_event_seq: 5,
+  }
+}
+
 async function coordinator(
   clientOverrides: Partial<LabrastroRemoteClient> = {},
   features: BackendFeatures | null = writableFeatures
 ) {
-  const storageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "ezcode-session-coordinator-"))
   const context = {
-    globalStorageUri: { fsPath: storageRoot },
     workspaceState: {
       get: vi.fn(),
       update: vi.fn(),
@@ -37,19 +55,28 @@ async function coordinator(
     hostUrl: "http://localhost:8000",
     listSessions: vi.fn(async () => ({ sessions: [], fingerprint: "fp-1" })),
     newSession: vi.fn(async () => ({
-      metadata: { id: "remote-1", saved_at: "2026-05-10T00:00:00.000Z" },
-      snapshot: { session: { id: "remote-1", title: "Remote" }, turns: [] },
+      metadata: { id: "remote-1", saved_at: "2026-05-10T00:00:00.000Z", preview: "Remote" },
+      document: documentFor("remote-1"),
       runtime_state: {},
+      fingerprint: "fp-1",
     })),
     loadSession: vi.fn(async () => ({
-      metadata: { id: "remote-1", saved_at: "2026-05-10T00:00:00.000Z" },
-      snapshot: { session: { id: "remote-1", title: "Remote" }, turns: [] },
+      metadata: { id: "remote-1", saved_at: "2026-05-10T00:00:00.000Z", preview: "Remote" },
+      document: documentFor("remote-1"),
       runtime_state: {},
-      messages: [],
     })),
-    switchSessionMainModel: vi.fn(),
-    saveSessionSnapshot: vi.fn(async () => ({ snapshot_digest: "remote-digest" })),
-    forkSession: vi.fn(),
+    switchSessionMainModel: vi.fn(async () => ({
+      metadata: { id: "remote-1", saved_at: "2026-05-10T00:00:00.000Z", preview: "Remote" },
+      document: documentFor("remote-1"),
+      runtime_state: { active_model_provider: "p1", active_model: "m1" },
+      active_model: { provider_id: "p1", model_id: "m1" },
+    })),
+    forkSession: vi.fn(async () => ({
+      metadata: { id: "fork-1", saved_at: "2026-05-10T00:00:00.000Z", preview: "Fork" },
+      document: documentFor("fork-1", "Fork"),
+      runtime_state: {},
+      fingerprint: "fp-1",
+    })),
     deleteSession: vi.fn(),
     ...clientOverrides,
   } as unknown as LabrastroRemoteClient
@@ -77,66 +104,26 @@ describe("SessionCoordinator", () => {
     expect(loadSession).toHaveBeenCalledWith("s1", post)
   })
 
-  it("preserves fork metadata while routing fork requests", async () => {
-    const { subject } = await coordinator()
+  it("hydrates loaded sessions from server document", async () => {
+    const { emitSessionMessage, subject } = await coordinator()
     const post = vi.fn()
-    const forkSession = vi.spyOn(subject, "forkSession").mockResolvedValue()
 
-    await subject.handleMessage({
-      type: "session.fork",
-      sourceSessionId: "source-1",
-      keepThroughMessageIndex: 2,
-      snapshot: { session: { kind: "fork" } },
-      composeText: "continue",
-      composeMode: "edit",
-      sourceLabel: "User turn",
-      sourceMessageId: "msg-1",
-      sourceNodeId: "node-1",
-      sessionTitle: "Fork title",
-      sessionSummary: "Fork summary",
-      sessionKind: "fork",
-    }, post)
+    await subject.loadSession("remote-1", post, { suppressListRefresh: true })
 
-    expect(forkSession).toHaveBeenCalledWith({
-      sourceSessionId: "source-1",
-      keepThroughMessageIndex: 2,
-      snapshot: { session: { kind: "fork" } },
-      composeText: "continue",
-      composeMode: "edit",
-      sourceLabel: "User turn",
-      sourceMessageId: "msg-1",
-      sourceNodeId: "node-1",
-      sessionTitle: "Fork title",
-      sessionSummary: "Fork summary",
-      sessionKind: "fork",
-    }, post)
+    const loaded = emitSessionMessage.mock.calls.find(([message]) => message.type === "session.loaded")?.[0]
+    expect(loaded).toMatchObject({
+      type: "session.loaded",
+      sessionId: "remote-1",
+      document: { last_event_seq: 5 },
+      bundle: {
+        session: { id: "remote-1", title: "Remote" },
+        stats: { taskText: "Remote", tokensIn: 12, tokensOut: 34 },
+        turns: [{ userMessage: { text: "hello" } }],
+      },
+    })
   })
 
-  it("routes model switch requests with the existing request id", async () => {
-    const { subject } = await coordinator()
-    const post = vi.fn()
-    const switchSessionMainModel = vi.spyOn(subject, "switchSessionMainModel").mockResolvedValue()
-
-    await subject.handleMessage({
-      type: "session.model.switch",
-      sessionId: "s1",
-      providerId: "p1",
-      modelId: "m1",
-      parameters: { temperature: 0 },
-      requestId: "req-1",
-    }, post)
-
-    expect(switchSessionMainModel).toHaveBeenCalledWith(
-      "s1",
-      "p1",
-      "m1",
-      { temperature: 0 },
-      "req-1",
-      post
-    )
-  })
-
-  it("creates a remote session before chat when backend needs a session hint", async () => {
+  it("creates a server session before chat when no session exists", async () => {
     const { client, context, emitSessionMessage, subject } = await coordinator()
 
     const result = await subject.prepareChatSession(undefined, vi.fn(), {})
@@ -145,480 +132,92 @@ describe("SessionCoordinator", () => {
     expect(client.newSession).toHaveBeenCalled()
     expect(context.workspaceState.update).toHaveBeenCalledWith("labrastro.currentSessionId", "remote-1")
     expect(emitSessionMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "session.created", sessionId: "remote-1" }),
+      expect.objectContaining({ type: "session.created", sessionId: "remote-1", document: expect.any(Object) }),
       expect.any(Function)
     )
   })
 
-  it("adopts a local draft when the remote peer reports the real session id", async () => {
-    const { emitSessionMessage, subject } = await coordinator(undefined, {
-      ...writableFeatures,
-      sessionHistoryWritable: false,
-    })
+  it("forks by document anchor without sending a local snapshot", async () => {
+    const { client, emitSessionMessage, subject } = await coordinator()
     const post = vi.fn()
-    await subject.saveSessionSnapshot(
-      "session-local",
-      {
-        session: { id: "session-local", title: "Draft" },
-        turns: [{ userMessage: { text: "draft", parts: [] }, assistantMessages: [] }],
-      },
-      "draft-digest",
+
+    await subject.handleMessage({
+      type: "session.fork",
+      sourceSessionId: "source-1",
+      keepThroughMessageIndex: 2,
+      composeText: "continue",
+      composeMode: "edit",
+      sourceLabel: "User turn",
+      sourceMessageId: "msg-1",
+      sourceNodeId: "node-1",
+      sessionTitle: "Fork title",
+      sessionSummary: "Fork summary",
+      sessionKind: "fork",
+    }, post)
+
+    expect(client.forkSession).toHaveBeenCalledWith("source-1", 2)
+    expect(emitSessionMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "session.forked", sessionId: "fork-1", document: expect.any(Object) }),
       post
     )
+  })
 
-    const sessionId = await subject.adoptRemoteSession("remote-2", undefined, "session-local", post)
+  it("adopts the remote session id without queueing local document writes", async () => {
+    const { emitSessionMessage, subject } = await coordinator()
+    const post = vi.fn()
+
+    const sessionId = await subject.adoptRemoteSession("remote-2", undefined, "draft-1", post)
 
     expect(sessionId).toBe("remote-2")
     expect(emitSessionMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "session.adopted", sessionId: "remote-2", previousSessionId: "session-local" }),
+      expect.objectContaining({ type: "session.adopted", sessionId: "remote-2" }),
       post
     )
+    expect(emitSessionMessage.mock.calls.map(([message]) => message.type)).toEqual(["session.adopted"])
+  })
+
+  it("only refreshes the session list after chat completion", async () => {
+    const { client, emitSessionMessage, subject } = await coordinator({
+      listSessions: vi.fn(async () => ({
+        sessions: [{ id: "remote-1", saved_at: "2026-05-10T00:00:00.000Z", preview: "Remote" }],
+        fingerprint: "fp-1",
+      })),
+    } as Partial<LabrastroRemoteClient>)
+    const post = vi.fn()
+
+    await subject.reloadCurrentAfterChatDone(post)
+
+    expect(client.loadSession).not.toHaveBeenCalled()
     expect(emitSessionMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "session.snapshotStored", sessionId: "remote-2", status: "pending" }),
+      expect.objectContaining({ type: "session.list", sessions: [expect.objectContaining({ id: "remote-1" })] }),
       post
     )
   })
 
-  it("does not let an empty remote bundle overwrite local snapshot content", async () => {
-    const { emitSessionMessage, subject } = await coordinator({
-      loadSession: vi.fn(async () => ({
-        metadata: { id: "remote-3", saved_at: "2026-05-10T00:00:00.000Z" },
-        snapshot: { session: { id: "remote-3", title: "Remote" }, turns: [] },
-        runtime_state: {},
-        messages: [],
-      })),
-    } as Partial<LabrastroRemoteClient>, {
-      ...writableFeatures,
-      sessionHistoryWritable: false,
-    })
-    const post = vi.fn()
-    await subject.saveSessionSnapshot(
-      "remote-3",
-      {
-        session: { id: "remote-3", title: "Local", updatedAt: "2026-05-10T00:00:00.000Z" },
-        turns: [{ userMessage: { text: "keep local", parts: [] }, assistantMessages: [] }],
-      },
-      "local-digest",
-      post
-    )
-
-    await subject.loadSession("remote-3", post, { suppressListRefresh: true })
-
-    const loaded = emitSessionMessage.mock.calls.find(([message]) => message.type === "session.loaded")?.[0]
-    expect(loaded?.bundle).toMatchObject({
-      turns: [{ userMessage: { text: "keep local" } }],
-    })
-  })
-
-  it("repairs stale snapshot assistant text from authoritative history messages", async () => {
-    const fullAnswer = "partial answer with the complete final section"
-    const { emitSessionMessage, subject } = await coordinator({
-      loadSession: vi.fn(async () => ({
-        metadata: { id: "remote-4", saved_at: "2026-05-10T00:00:00.000Z" },
-        snapshot: {
-          session: { id: "remote-4", title: "Remote" },
-          turns: [
-            {
-              userMessage: { text: "question", parts: [] },
-              assistantMessages: [
-                {
-                  id: "assistant-1",
-                  role: "assistant",
-                  parts: [{ id: "part-1", type: "text", text: "partial answer", textFormat: "markdown" }],
-                },
-              ],
-            },
-          ],
-        },
-        runtime_state: {},
-        messages: [
-          { role: "user", content: "question" },
-          { role: "assistant", content: fullAnswer },
-        ],
-      })),
-    } as Partial<LabrastroRemoteClient>)
+  it("routes model switch requests with the existing request id", async () => {
+    const { client, subject } = await coordinator()
     const post = vi.fn()
 
-    await subject.loadSession("remote-4", post, { suppressListRefresh: true })
+    await subject.handleMessage({
+      type: "session.model.switch",
+      sessionId: "remote-1",
+      providerId: "p1",
+      modelId: "m1",
+      parameters: { temperature: 0 },
+      requestId: "req-1",
+    }, post)
 
-    const loaded = emitSessionMessage.mock.calls.find(([message]) => message.type === "session.loaded")?.[0]
-    expect(loaded?.bundle).toMatchObject({
-      turns: [
-        {
-          assistantMessages: [
-            {
-              text: fullAnswer,
-              parts: [{ text: fullAnswer }],
-            },
-          ],
-        },
-      ],
-    })
-  })
-
-  it("restores reasoning content from authoritative history messages before assistant text", async () => {
-    const fullAnswer = "final answer"
-    const reasoning = "Need file"
-    const { emitSessionMessage, subject } = await coordinator({
-      loadSession: vi.fn(async () => ({
-        metadata: { id: "remote-4b", saved_at: "2026-05-10T00:00:00.000Z" },
-        snapshot: {
-          session: { id: "remote-4b", title: "Remote" },
-          turns: [
-            {
-              userMessage: { text: "question", parts: [] },
-              assistantMessages: [
-                {
-                  id: "assistant-1",
-                  role: "assistant",
-                  parts: [{ id: "part-1", type: "text", text: "final", textFormat: "markdown" }],
-                },
-              ],
-            },
-          ],
-        },
-        events_after_snapshot: [
-          { session_event_seq: 2, type: "reasoning_delta", payload: { format: "markdown", content: "Need " } },
-          { session_event_seq: 3, type: "reasoning_delta", payload: { format: "markdown", content: "file" } },
-        ],
-        runtime_state: {},
-        messages: [
-          { role: "user", content: "question" },
-          { role: "assistant", content: fullAnswer, reasoning_content: reasoning },
-        ],
-      })),
-    } as Partial<LabrastroRemoteClient>)
-
-    await subject.loadSession("remote-4b", vi.fn(), { suppressListRefresh: true })
-
-    const loaded = emitSessionMessage.mock.calls.find(([message]) => message.type === "session.loaded")?.[0]
-    const parts = loaded?.bundle.turns[0].assistantMessages[0].parts
-    expect(parts.filter((part: Record<string, unknown>) => part.type === "reasoning")).toHaveLength(1)
-    expect(parts[0]).toMatchObject({
-      type: "reasoning",
-      reasoningText: reasoning,
-      reasoningFormat: "markdown",
-    })
-    expect(parts[1]).toMatchObject({ type: "text", text: fullAnswer })
-  })
-
-  it("keeps message history turns that are missing from an older snapshot", async () => {
-    const { emitSessionMessage, subject } = await coordinator({
-      loadSession: vi.fn(async () => ({
-        metadata: { id: "remote-5", saved_at: "2026-05-10T00:00:00.000Z" },
-        snapshot: {
-          session: { id: "remote-5", title: "Remote" },
-          turns: [
-            {
-              userMessage: { text: "first question", parts: [] },
-              assistantMessages: [
-                {
-                  id: "assistant-1",
-                  role: "assistant",
-                  parts: [{ id: "part-1", type: "text", text: "first answer", textFormat: "markdown" }],
-                },
-              ],
-            },
-          ],
-        },
-        runtime_state: {},
-        messages: [
-          { role: "user", content: "first question" },
-          { role: "assistant", content: "first answer" },
-          { role: "user", content: "write the file" },
-          { role: "assistant", content: "Now writing the comprehensive synthesis document." },
-          {
-            role: "tool",
-            tool_call_id: "call-write",
-            content: "Error: bad arguments for write_file",
-          },
-        ],
-      })),
-    } as Partial<LabrastroRemoteClient>)
-    const post = vi.fn()
-
-    await subject.loadSession("remote-5", post, { suppressListRefresh: true })
-
-    const loaded = emitSessionMessage.mock.calls.find(([message]) => message.type === "session.loaded")?.[0]
-    expect(loaded?.bundle).toMatchObject({
-      turns: [
-        { userMessage: { text: "first question" } },
-        {
-          userMessage: { text: "write the file" },
-          assistantMessages: [
-            {
-              parts: [{ text: "Now writing the comprehensive synthesis document." }],
-            },
-            {
-              parts: [{ type: "tool", toolOutput: "Error: bad arguments for write_file" }],
-            },
-          ],
-        },
-      ],
-    })
-  })
-
-  it("replays session events after the snapshot checkpoint into structured cards", async () => {
-    const { emitSessionMessage, subject } = await coordinator({
-      loadSession: vi.fn(async () => ({
-        metadata: { id: "remote-6", saved_at: "2026-05-10T00:00:00.000Z" },
-        snapshot: {
-          session: { id: "remote-6", title: "Remote" },
-          eventSeq: 1,
-          turns: [
-            {
-              userMessage: { id: "u1", role: "user", text: "run", parts: [], timestamp: 0 },
-              assistantMessages: [
-                { id: "a1", role: "assistant", text: "Working", parts: [{ id: "p1", type: "text", text: "Working" }], timestamp: 1 },
-              ],
-            },
-          ],
-        },
-        snapshot_event_seq: 1,
-        latest_event_seq: 4,
-        events_after_snapshot: [
-          {
-            session_event_seq: 2,
-            type: "context_event",
-            payload: { phase: "before", message: "压缩前" },
-          },
-          {
-            session_event_seq: 3,
-            type: "tool_call_start",
-            payload: { tool_name: "write_file", tool_call_id: "call-1", tool_args: { file_path: "a.md" } },
-          },
-          {
-            session_event_seq: 4,
-            type: "tool_call_end",
-            payload: { tool_name: "write_file", tool_call_id: "call-1", tool_result: "ok" },
-          },
-        ],
-        runtime_state: {},
-        messages: [
-          { role: "user", content: "run" },
-          { role: "assistant", content: "Working" },
-        ],
-      })),
-    } as Partial<LabrastroRemoteClient>)
-
-    await subject.loadSession("remote-6", vi.fn(), { suppressListRefresh: true })
-
-    const loaded = emitSessionMessage.mock.calls.find(([message]) => message.type === "session.loaded")?.[0]
-    const parts = loaded?.bundle.turns[0].assistantMessages[0].parts
-    expect(parts).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "context_event",
-          contextTitle: "压缩前",
-          eventKey: "session:remote-6:2",
-          sessionEventSeq: 2,
-        }),
-        expect.objectContaining({
-          type: "tool",
-          tool: "write_file",
-          toolCallId: "call-1",
-          status: "returned",
-          toolOutput: "ok",
-          eventKey: "session:remote-6:4",
-          sessionEventSeq: 4,
-        }),
-      ])
+    expect(client.switchSessionMainModel).toHaveBeenCalledWith(
+      "remote-1",
+      "p1",
+      "m1",
+      { temperature: 0 }
     )
-  })
-
-  it("replays reasoning deltas into one reasoning part", async () => {
-    const { emitSessionMessage, subject } = await coordinator({
-      loadSession: vi.fn(async () => ({
-        metadata: { id: "remote-6b", saved_at: "2026-05-10T00:00:00.000Z" },
-        snapshot: {
-          session: { id: "remote-6b", title: "Remote" },
-          turns: [
-            {
-              userMessage: { id: "u1", role: "user", text: "run", parts: [], timestamp: 0 },
-              assistantMessages: [
-                { id: "a1", role: "assistant", text: "", parts: [], timestamp: 1 },
-              ],
-            },
-          ],
-        },
-        events_after_snapshot: [
-          {
-            session_event_seq: 2,
-            type: "reasoning_delta",
-            payload: { format: "markdown", content: "Need " },
-          },
-          {
-            session_event_seq: 3,
-            type: "reasoning_delta",
-            payload: { format: "markdown", content: "file" },
-          },
-        ],
-        runtime_state: {},
-        messages: [{ role: "user", content: "run" }],
-      })),
-    } as Partial<LabrastroRemoteClient>)
-
-    await subject.loadSession("remote-6b", vi.fn(), { suppressListRefresh: true })
-
-    const loaded = emitSessionMessage.mock.calls.find(([message]) => message.type === "session.loaded")?.[0]
-    const parts = loaded?.bundle.turns[0].assistantMessages[0].parts
-    expect(parts.filter((part: Record<string, unknown>) => part.type === "reasoning")).toHaveLength(1)
-    expect(parts[0]).toMatchObject({
-      type: "reasoning",
-      reasoningText: "Need file",
-      reasoningFormat: "markdown",
-    })
-  })
-
-  it("replays memory context events into dedicated memory parts", async () => {
-    const { emitSessionMessage, subject } = await coordinator({
-      loadSession: vi.fn(async () => ({
-        metadata: { id: "remote-memory", saved_at: "2026-05-10T00:00:00.000Z" },
-        snapshot: {
-          session: { id: "remote-memory", title: "Remote" },
-          turns: [
-            {
-              userMessage: { id: "u1", role: "user", text: "run", parts: [], timestamp: 0 },
-              assistantMessages: [
-                { id: "a1", role: "assistant", text: "", parts: [], timestamp: 1 },
-              ],
-            },
-          ],
-        },
-        events_after_snapshot: [
-          {
-            session_event_seq: 2,
-            type: "memory_context",
-            payload: {
-              schema: "memory_context.v1",
-              context_kind: "memory_injection",
-              message: "Injected private memory context.",
-              provided_items: 1,
-              rendered_context: "## Private Agent Memory\n- [project] use pytest",
-              items: [{ id: "mem-1", type: "project", content: "use pytest" }],
-            },
-          },
-        ],
-        runtime_state: {},
-        messages: [{ role: "user", content: "run" }],
-      })),
-    } as Partial<LabrastroRemoteClient>)
-
-    await subject.loadSession("remote-memory", vi.fn(), { suppressListRefresh: true })
-
-    const loaded = emitSessionMessage.mock.calls.find(([message]) => message.type === "session.loaded")?.[0]
-    const parts = loaded?.bundle.turns[0].assistantMessages[0].parts
-    expect(parts).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "memory_context",
-          memoryTitle: "注入记忆",
-          eventKey: "session:remote-memory:2",
-          sessionEventSeq: 2,
-          memoryPayload: expect.objectContaining({
-            schema: "memory_context.v1",
-            rendered_context: "## Private Agent Memory\n- [project] use pytest",
-          }),
-        }),
-      ])
-    )
-  })
-
-  it("does not duplicate replayed event parts already present in the snapshot", async () => {
-    const { emitSessionMessage, subject } = await coordinator({
-      loadSession: vi.fn(async () => ({
-        metadata: { id: "remote-7", saved_at: "2026-05-10T00:00:00.000Z" },
-        snapshot: {
-          session: { id: "remote-7", title: "Remote" },
-          turns: [
-            {
-              userMessage: { id: "u1", role: "user", text: "run", parts: [], timestamp: 0 },
-              assistantMessages: [
-                {
-                  id: "a1",
-                  role: "assistant",
-                  text: "",
-                  parts: [
-                    {
-                      id: "context-2",
-                      type: "context_event",
-                      eventKey: "session:remote-7:2",
-                      sessionEventSeq: 2,
-                      contextTitle: "已存在",
-                    },
-                  ],
-                  timestamp: 1,
-                },
-              ],
-            },
-          ],
-        },
-        events_after_snapshot: [
-          {
-            session_event_seq: 2,
-            type: "context_event",
-            payload: { message: "重复" },
-          },
-        ],
-        runtime_state: {},
-        messages: [{ role: "user", content: "run" }],
-      })),
-    } as Partial<LabrastroRemoteClient>)
-
-    await subject.loadSession("remote-7", vi.fn(), { suppressListRefresh: true })
-
-    const loaded = emitSessionMessage.mock.calls.find(([message]) => message.type === "session.loaded")?.[0]
-    const parts = loaded?.bundle.turns[0].assistantMessages[0].parts
-    expect(parts.filter((part: Record<string, unknown>) => part.type === "context_event")).toHaveLength(1)
-    expect(parts[0]).toMatchObject({ contextTitle: "已存在" })
-  })
-
-  it("does not duplicate replayed memory context parts already present in the snapshot", async () => {
-    const { emitSessionMessage, subject } = await coordinator({
-      loadSession: vi.fn(async () => ({
-        metadata: { id: "remote-memory-existing", saved_at: "2026-05-10T00:00:00.000Z" },
-        snapshot: {
-          session: { id: "remote-memory-existing", title: "Remote" },
-          turns: [
-            {
-              userMessage: { id: "u1", role: "user", text: "run", parts: [], timestamp: 0 },
-              assistantMessages: [
-                {
-                  id: "a1",
-                  role: "assistant",
-                  text: "",
-                  parts: [
-                    {
-                      id: "memory-2",
-                      type: "memory_context",
-                      eventKey: "session:remote-memory-existing:2",
-                      sessionEventSeq: 2,
-                      memoryTitle: "已存在",
-                    },
-                  ],
-                  timestamp: 1,
-                },
-              ],
-            },
-          ],
-        },
-        events_after_snapshot: [
-          {
-            session_event_seq: 2,
-            type: "memory_context",
-            payload: { schema: "memory_context.v1", rendered_context: "duplicate" },
-          },
-        ],
-        runtime_state: {},
-        messages: [{ role: "user", content: "run" }],
-      })),
-    } as Partial<LabrastroRemoteClient>)
-
-    await subject.loadSession("remote-memory-existing", vi.fn(), { suppressListRefresh: true })
-
-    const loaded = emitSessionMessage.mock.calls.find(([message]) => message.type === "session.loaded")?.[0]
-    const parts = loaded?.bundle.turns[0].assistantMessages[0].parts
-    expect(parts.filter((part: Record<string, unknown>) => part.type === "memory_context")).toHaveLength(1)
-    expect(parts[0]).toMatchObject({ memoryTitle: "已存在" })
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: "session.model.state",
+      requestId: "req-1",
+      providerId: "p1",
+      modelId: "m1",
+    }))
   })
 })

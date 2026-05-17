@@ -3,6 +3,7 @@ import * as fsSync from "fs"
 import * as fs from "fs/promises"
 import * as os from "os"
 import * as path from "path"
+import { createHash } from "crypto"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const vscodeMock = vi.hoisted(() => ({
@@ -179,7 +180,8 @@ function expectedPeerBinaryPath(storagePath: string, serverVersion = "0.2.9"): s
 
 function mockPeerFetch(artifactContent = Buffer.from("peer-binary"), serverVersion = "0.2.9") {
   const target = peerTarget()
-  const fetchMock = vi.fn(async (input: unknown) => {
+  const artifactEtag = strongTestEtag(artifactContent)
+  const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
     const url = String(input)
     if (url.endsWith("/remote/auth/refresh")) {
       return new Response(
@@ -217,8 +219,14 @@ function mockPeerFetch(artifactContent = Buffer.from("peer-binary"), serverVersi
       )
     }
     if (url.endsWith(`/remote/artifacts/${target.os}/${target.arch}/rcoder-peer`)) {
+      if (headerValue(init?.headers, "If-None-Match") === artifactEtag) {
+        return new Response(null, {
+          status: 304,
+          headers: { ETag: artifactEtag },
+        })
+      }
       return new Response(new Uint8Array(artifactContent), {
-        headers: { "Content-Type": "application/octet-stream" },
+        headers: { "Content-Type": "application/octet-stream", ETag: artifactEtag },
       })
     }
     if (url.endsWith("/remote/environment/manifest")) {
@@ -231,6 +239,22 @@ function mockPeerFetch(artifactContent = Buffer.from("peer-binary"), serverVersi
   })
   vi.stubGlobal("fetch", fetchMock)
   return fetchMock
+}
+
+function strongTestEtag(content: Buffer): string {
+  return `"sha256-${createHash("sha256").update(content).digest("hex")}"`
+}
+
+function headerValue(headers: RequestInit["headers"] | undefined, name: string): string | undefined {
+  if (!headers) return undefined
+  if (headers instanceof Headers) return headers.get(name) || undefined
+  if (Array.isArray(headers)) {
+    const found = headers.find(([key]) => key.toLowerCase() === name.toLowerCase())
+    return found ? found[1] : undefined
+  }
+  const lowerName = name.toLowerCase()
+  const found = Object.entries(headers).find(([key]) => key.toLowerCase() === lowerName)
+  return found ? String(found[1]) : undefined
 }
 
 function fetchPathCount(fetchMock: ReturnType<typeof vi.fn>, pathname: string): number {
@@ -985,7 +1009,7 @@ describe("LabrastroRemoteClient chat start", () => {
     })
   })
 
-  it("passes session list etag, snapshot digest, and default chat timeout to peer endpoints", async () => {
+  it("passes session list etag, fork anchor, and default chat timeout to peer endpoints", async () => {
     vscodeMock.labrastroValue = "http://127.0.0.1:8765"
     const context = {
       secrets: {
@@ -1022,8 +1046,7 @@ describe("LabrastroRemoteClient chat start", () => {
     ;(client as unknown as { peerProcess: typeof peerProcess }).peerProcess = peerProcess
 
     await client.listSessions(5, "etag-1")
-    await client.forkSession("session-1", 2, { session: { kind: "fork" } })
-    await client.saveSessionSnapshot("session-1", { turns: [] }, "digest-1")
+    await client.forkSession("session-1", 2)
     await client.streamChat("chat-1", 7)
     await client.chatStatus("chat-1", 8)
     await client.cancelChat("chat-1", "user_stop")
@@ -1059,16 +1082,6 @@ describe("LabrastroRemoteClient chat start", () => {
           peer_token: "peer-token-1",
           source_session_id: "session-1",
           keep_through_message_index: 2,
-          snapshot: { session: { kind: "fork" } },
-        },
-      },
-      {
-        pathname: "/remote/sessions/snapshot",
-        body: {
-          peer_token: "peer-token-1",
-          session_id: "session-1",
-          snapshot: { turns: [] },
-          snapshot_digest: "digest-1",
         },
       },
       {
@@ -1769,15 +1782,38 @@ describe("LabrastroRemoteClient peer startup", () => {
     const storagePath = await makeTempStorage()
     const binaryPath = expectedPeerBinaryPath(storagePath)
     await fs.mkdir(path.dirname(binaryPath), { recursive: true })
-    await fs.writeFile(binaryPath, "peer-binary")
+    const artifactContent = Buffer.from("peer-binary")
+    await fs.writeFile(binaryPath, artifactContent)
+    const oldTime = new Date("2024-01-02T03:04:05.000Z")
+    await fs.utimes(binaryPath, oldTime, oldTime)
+    const beforeStat = await fs.stat(binaryPath)
     const context = makePeerContext(storagePath)
-    const fetchMock = mockPeerFetch()
+    const fetchMock = mockPeerFetch(artifactContent)
     mockPeerSpawn()
 
     const client = new LabrastroRemoteClient(context as never)
     await client.environmentManifest()
 
     expect(fetchPathCount(fetchMock, `/remote/artifacts/${peerTarget().os}/${peerTarget().arch}/rcoder-peer`)).toBe(1)
+    const artifactCall = fetchMock.mock.calls.find(([input]) =>
+      String(input).endsWith(`/remote/artifacts/${peerTarget().os}/${peerTarget().arch}/rcoder-peer`)
+    )
+    expect(headerValue(artifactCall?.[1]?.headers, "If-None-Match")).toBe(strongTestEtag(artifactContent))
+    expect((await fs.stat(binaryPath)).mtimeMs).toBe(beforeStat.mtimeMs)
+    const records = await waitForPeerDiagnosticRecords(storagePath, (items) =>
+      items.some((record) => record.event === "http.get.buffer.not_modified")
+    )
+    expect(records).toContainEqual(expect.objectContaining({
+      category: "http",
+      event: "http.get.buffer.not_modified",
+      details: expect.objectContaining({
+        pathname: `/remote/artifacts/${peerTarget().os}/${peerTarget().arch}/rcoder-peer`,
+        status: 304,
+        bytes: 0,
+        etagSent: true,
+        etagMatched: true,
+      }),
+    }))
     expect(childProcessMock.spawn).toHaveBeenCalledTimes(1)
     expect(childProcessMock.spawn.mock.calls[0][0]).toBe(binaryPath)
   })

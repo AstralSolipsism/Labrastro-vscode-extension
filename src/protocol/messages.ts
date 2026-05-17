@@ -79,7 +79,6 @@ export type HostToWebviewMessageType =
   | "session.loaded"
   | "session.model.error"
   | "session.model.state"
-  | "session.snapshotStored"
   | "session.state"
   | "session.syncStatus"
   | "startup.metric"
@@ -181,7 +180,6 @@ export type WebviewToHostMessageType =
   | "session.model.switch"
   | "session.new"
   | "session.openInChat"
-  | "session.saveSnapshot"
   | "settingsTabChanged"
   | "showInfo"
   | "taskflow.state.get"
@@ -269,7 +267,6 @@ const HOST_TO_WEBVIEW_TYPES = new Set<HostToWebviewMessageType>([
   "session.loaded",
   "session.model.error",
   "session.model.state",
-  "session.snapshotStored",
   "session.state",
   "session.syncStatus",
   "startup.metric",
@@ -366,7 +363,6 @@ const WEBVIEW_TO_HOST_TYPES = new Set<WebviewToHostMessageType>([
   "session.model.switch",
   "session.new",
   "session.openInChat",
-  "session.saveSnapshot",
   "settingsTabChanged",
   "showInfo",
   "taskflow.state.get",

@@ -3,6 +3,7 @@ import * as fs from "fs/promises"
 import { constants as fsConstants } from "fs"
 import * as path from "path"
 import { spawn, type ChildProcessWithoutNullStreams } from "child_process"
+import { createHash } from "crypto"
 import { buildStartupConnectionState } from "./startup-state"
 import {
   DEFAULT_HOST_URL,
@@ -504,27 +505,12 @@ export class LabrastroRemoteClient {
 
   async forkSession(
     sourceSessionId: string,
-    keepThroughMessageIndex: number,
-    snapshot: JsonObject = {}
+    keepThroughMessageIndex: number
   ): Promise<JsonObject> {
     return this.postPeerJson("/remote/sessions/fork", (peer) => ({
       peer_token: peer.peer_token,
       source_session_id: sourceSessionId,
       keep_through_message_index: keepThroughMessageIndex,
-      ...(Object.keys(snapshot).length ? { snapshot } : {}),
-    }))
-  }
-
-  async saveSessionSnapshot(
-    sessionId: string,
-    snapshot: JsonObject,
-    snapshotDigest?: string
-  ): Promise<JsonObject> {
-    return this.postPeerJson("/remote/sessions/snapshot", (peer) => ({
-      peer_token: peer.peer_token,
-      session_id: sessionId,
-      snapshot,
-      ...(snapshotDigest ? { snapshot_digest: snapshotDigest } : {}),
     }))
   }
 
@@ -1337,24 +1323,48 @@ export class LabrastroRemoteClient {
       filename
     )
     const artifactPath = `/remote/artifacts/${platform.os}/${platform.arch}/rcoder-peer`
-    const content = await this.requestBuffer(artifactPath)
+    let existingEtag: string | undefined
+    let hasExistingBinary = false
     try {
       await fs.mkdir(path.dirname(binaryPath), { recursive: true })
       if (await isUsableFile(binaryPath)) {
-        const existing = await fs.readFile(binaryPath)
-        if (existing.equals(content)) {
-          await this.ensurePeerBinaryExecutable(binaryPath)
-          return binaryPath
-        }
-        return await this.installPeerBinary(binaryPath, content, true)
+        existingEtag = await fileStrongEtag(binaryPath)
+        hasExistingBinary = true
+      } else {
+        await removeEmptyFile(binaryPath)
       }
-      await removeEmptyFile(binaryPath)
     } catch (error) {
       throw peerBinaryAccessError(error, binaryPath)
     }
 
+    const artifact = await this.requestArtifactBuffer(artifactPath, existingEtag)
+    if (artifact.notModified) {
+      try {
+        if (await isUsableFile(binaryPath)) {
+          await this.ensurePeerBinaryExecutable(binaryPath)
+          return binaryPath
+        }
+      } catch (error) {
+        throw peerBinaryAccessError(error, binaryPath)
+      }
+    }
+
+    const content = artifact.notModified
+      ? (await this.requestArtifactBuffer(artifactPath)).content
+      : artifact.content
+    if (!content) {
+      throw new Error("Peer artifact response did not include binary content.")
+    }
+    if (hasExistingBinary && existingEtag && bufferStrongEtag(content) === existingEtag) {
+      try {
+        await this.ensurePeerBinaryExecutable(binaryPath)
+        return binaryPath
+      } catch (error) {
+        throw peerBinaryAccessError(error, binaryPath)
+      }
+    }
     try {
-      return await this.installPeerBinary(binaryPath, content, false)
+      return await this.installPeerBinary(binaryPath, content, hasExistingBinary)
     } catch (error) {
       throw peerBinaryAccessError(error, binaryPath)
     }
@@ -1468,12 +1478,28 @@ export class LabrastroRemoteClient {
     }
   }
 
-  private async requestBuffer(pathname: string): Promise<Buffer> {
+  private async requestArtifactBuffer(
+    pathname: string,
+    ifNoneMatch?: string
+  ): Promise<{ content?: Buffer; notModified: boolean }> {
     const startedAt = Date.now()
     let status: number | undefined
+    const headers = ifNoneMatch ? { "If-None-Match": ifNoneMatch } : undefined
     try {
-      const response = await fetchWithTimeout(this.hostUrl + pathname)
+      const response = await fetchWithTimeout(this.hostUrl + pathname, headers ? { headers } : {})
       status = response.status
+      if (status === 304) {
+        await this.peerDiagnosticsLogger.log("http", "http.get.buffer.not_modified", "Extension HTTP artifact cache hit.", {
+          method: "GET",
+          pathname: diagnosticPathname(pathname),
+          status,
+          durationMs: Date.now() - startedAt,
+          bytes: 0,
+          etagSent: Boolean(ifNoneMatch),
+          etagMatched: true,
+        })
+        return { notModified: true }
+      }
       if (!response.ok) {
         throw new Error(`${response.status} ${await response.text()}`)
       }
@@ -1484,14 +1510,17 @@ export class LabrastroRemoteClient {
         status,
         durationMs: Date.now() - startedAt,
         bytes: buffer.byteLength,
+        etagSent: Boolean(ifNoneMatch),
+        etagMatched: false,
       })
-      return buffer
+      return { content: buffer, notModified: false }
     } catch (error) {
       await this.peerDiagnosticsLogger.log("http", "http.get.buffer.error", "Extension HTTP request failed.", {
         method: "GET",
         pathname: diagnosticPathname(pathname),
         status: remoteStatus(error, status),
         durationMs: Date.now() - startedAt,
+        etagSent: Boolean(ifNoneMatch),
         error: errorDiagnostics(error),
       }, "warn")
       throw error
@@ -1699,6 +1728,15 @@ async function isUsableFile(filePath: string): Promise<boolean> {
     }
     throw error
   }
+}
+
+async function fileStrongEtag(filePath: string): Promise<string> {
+  const content = await fs.readFile(filePath)
+  return bufferStrongEtag(content)
+}
+
+function bufferStrongEtag(content: Buffer): string {
+  return `"sha256-${createHash("sha256").update(content).digest("hex")}"`
 }
 
 async function removeEmptyFile(filePath: string): Promise<void> {

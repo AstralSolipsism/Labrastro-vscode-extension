@@ -14,17 +14,9 @@ import type {
   MockTurn,
 } from "../components/chat/mock-data"
 import {
-  isLocalDraftSessionId,
-  mergeRemoteBundlePreservingLocalContent,
   sessionBundleHasContent,
-  shouldPreserveExistingSessionContent,
   shouldIgnoreInitialSessionLoad,
 } from "../utils/session-history"
-import {
-  SNAPSHOT_DEBOUNCE_MS,
-  SNAPSHOT_MAX_INTERVAL_MS,
-  snapshotDigest,
-} from "../utils/snapshot-digest"
 import { buildOrchestrationGraph, getRootSessionId } from "../utils/trace-orchestration"
 import { useVSCode, type ExtensionMessage } from "./vscode"
 
@@ -215,79 +207,6 @@ function normalizeSessionBundle(value: unknown): MockSessionBundle | undefined {
   }
 }
 
-function buildSessionSnapshot(
-  sessionId: string,
-  bundle: MockSessionBundle,
-  updatedAt = new Date().toISOString()
-): Record<string, unknown> {
-  return {
-    version: 1,
-    sessionId,
-    eventSeq: maxSessionEventSeq(bundle),
-    updatedAt,
-    session: bundle.session,
-    stats: bundle.stats,
-    turns: bundle.turns,
-    traceNodes: bundle.traceNodes,
-    traceEdges: bundle.traceEdges,
-    traceUI: bundle.traceUI,
-  }
-}
-
-function buildSessionSnapshotDigestPayload(
-  sessionId: string,
-  bundle: MockSessionBundle
-): Record<string, unknown> {
-  const snapshot = buildSessionSnapshot(sessionId, bundle, "")
-  delete snapshot.updatedAt
-  return snapshot
-}
-
-function maxSessionEventSeq(bundle: MockSessionBundle): number {
-  let max = 0
-  for (const turn of bundle.turns) {
-    for (const message of [turn.userMessage, ...turn.assistantMessages]) {
-      for (const part of message.parts) {
-        const value = typeof part.sessionEventSeq === "number" ? part.sessionEventSeq : 0
-        if (value > max) max = value
-      }
-    }
-  }
-  return max
-}
-
-function mergeRemoteBundleWithDraft(
-  remoteBundle: MockSessionBundle,
-  draftBundle: MockSessionBundle
-): MockSessionBundle {
-  const remoteUserMessageIds = new Set(remoteBundle.turns.map((turn) => turn.userMessage.id))
-  const draftTurns = draftBundle.turns.filter((turn) => !remoteUserMessageIds.has(turn.userMessage.id))
-
-  if (!draftTurns.length) return remoteBundle
-
-  return {
-    ...remoteBundle,
-    session: {
-      ...remoteBundle.session,
-      title: remoteBundle.session.title || draftBundle.session.title,
-      summary: remoteBundle.session.summary || draftBundle.session.summary,
-    },
-    stats: {
-      ...remoteBundle.stats,
-      taskText: remoteBundle.stats.taskText || draftBundle.stats.taskText,
-    },
-    turns: [...remoteBundle.turns, ...cloneValue(draftTurns)],
-    traceNodes: remoteBundle.traceNodes.length ? remoteBundle.traceNodes : cloneValue(draftBundle.traceNodes),
-    traceEdges: remoteBundle.traceEdges.length ? remoteBundle.traceEdges : cloneValue(draftBundle.traceEdges),
-    traceUI: {
-      ...remoteBundle.traceUI,
-      activeNodeId: remoteBundle.traceUI.activeNodeId ?? draftBundle.traceUI.activeNodeId,
-      selectedNodeId: remoteBundle.traceUI.selectedNodeId ?? draftBundle.traceUI.selectedNodeId,
-      focusedBranchId: remoteBundle.traceUI.focusedBranchId || draftBundle.traceUI.focusedBranchId,
-    },
-  }
-}
-
 interface TraceSnapshotPayload {
   activeTraceNodeId?: string | null
   currentSessionId?: string | null
@@ -341,7 +260,6 @@ interface TraceContextValue {
   appendTurn: (turn: MockTurn) => void
   replaceLastAssistantMessages: (assistantMessages: MockTurn["assistantMessages"]) => void
   patchStats: (patch: Partial<MockTaskStats>) => void
-  saveCurrentSnapshot: () => void
 }
 
 const TraceContext = createContext<TraceContextValue>()
@@ -360,11 +278,6 @@ export const TraceProvider: ParentComponent = (props) => {
   const [activeTraceNodeId, setActiveTraceNodeId] = createSignal<string | null>(null)
   const [focusedBranchId, setFocusedBranchId] = createSignal<string | null>(null)
   const [panelIntent, setPanelIntent] = createSignal<TraceNavigationIntent | null>(null)
-  let snapshotTimer: number | undefined
-  let snapshotMaxTimer: number | undefined
-  let pendingSnapshot: { sessionId: string; bundle: MockSessionBundle; digest: string } | undefined
-  const lastSnapshotDigests = new Map<string, string>()
-
   const recentSessions = createMemo(() =>
     allSessions().filter((session) => !session.parentSessionId)
   )
@@ -376,44 +289,6 @@ export const TraceProvider: ParentComponent = (props) => {
   )
 
   const getSessionBundle = (sessionId: string) => sessionBundles()[sessionId]
-  const postSessionSnapshot = (sessionId: string, bundle: MockSessionBundle, digest: string) => {
-    vscode.postMessage({
-      type: "session.saveSnapshot",
-      sessionId,
-      snapshot: buildSessionSnapshot(sessionId, bundle),
-      snapshotDigest: digest,
-    })
-  }
-  const clearSnapshotTimers = () => {
-    if (snapshotTimer) window.clearTimeout(snapshotTimer)
-    if (snapshotMaxTimer) window.clearTimeout(snapshotMaxTimer)
-    snapshotTimer = undefined
-    snapshotMaxTimer = undefined
-  }
-  const flushPendingSnapshot = () => {
-    if (!pendingSnapshot) {
-      clearSnapshotTimers()
-      return
-    }
-    const snapshot = pendingSnapshot
-    pendingSnapshot = undefined
-    clearSnapshotTimers()
-    postSessionSnapshot(snapshot.sessionId, snapshot.bundle, snapshot.digest)
-  }
-  const scheduleSessionSnapshot = (sessionId: string, bundle: MockSessionBundle) => {
-    const digest = snapshotDigest(buildSessionSnapshotDigestPayload(sessionId, bundle))
-    if (pendingSnapshot?.sessionId === sessionId && pendingSnapshot.digest === digest) return
-    if (!pendingSnapshot && lastSnapshotDigests.get(sessionId) === digest) return
-    if (pendingSnapshot && pendingSnapshot.sessionId !== sessionId) {
-      flushPendingSnapshot()
-    }
-    pendingSnapshot = { sessionId, bundle: cloneValue(bundle), digest }
-    if (snapshotTimer) window.clearTimeout(snapshotTimer)
-    if (!snapshotMaxTimer) {
-      snapshotMaxTimer = window.setTimeout(flushPendingSnapshot, SNAPSHOT_MAX_INTERVAL_MS)
-    }
-    snapshotTimer = window.setTimeout(flushPendingSnapshot, SNAPSHOT_DEBOUNCE_MS)
-  }
   const findTraceNodeSessionId = (nodeId: string) => {
     for (const [sessionId, bundle] of Object.entries(sessionBundles())) {
       if (bundle.traceNodes.some((node) => node.id === nodeId)) {
@@ -449,7 +324,7 @@ export const TraceProvider: ParentComponent = (props) => {
   const writeSessionBundle = (
     sessionId: string,
     bundle: MockSessionBundle,
-    options: { applyToCurrent?: boolean; preserveIntent?: boolean; skipSnapshot?: boolean; includeInHistory?: boolean } = {}
+    options: { applyToCurrent?: boolean; preserveIntent?: boolean; includeInHistory?: boolean } = {}
   ) => {
     const snapshot = cloneValue(bundle)
 
@@ -474,15 +349,11 @@ export const TraceProvider: ParentComponent = (props) => {
     if (options.applyToCurrent) {
       applyBundleToSignals(sessionId, snapshot, { preserveIntent: options.preserveIntent })
     }
-    if (!options.skipSnapshot && sessionId === (options.applyToCurrent ? sessionId : currentSessionId())) {
-      scheduleSessionSnapshot(sessionId, snapshot)
-    }
   }
 
   const updateSessionMeta = (
     sessionId: string,
-    updater: (session: MockSession) => MockSession,
-    options: { skipSnapshot?: boolean } = {}
+    updater: (session: MockSession) => MockSession
   ) => {
     const bundle = getSessionBundle(sessionId)
     if (!bundle) return
@@ -494,7 +365,6 @@ export const TraceProvider: ParentComponent = (props) => {
     }, {
       applyToCurrent: sessionId === currentSessionId(),
       preserveIntent: true,
-      skipSnapshot: options.skipSnapshot,
     })
   }
 
@@ -523,11 +393,6 @@ export const TraceProvider: ParentComponent = (props) => {
   }
 
   const removeSessionBundle = (sessionId: string) => {
-    if (pendingSnapshot?.sessionId === sessionId) {
-      pendingSnapshot = undefined
-      clearSnapshotTimers()
-    }
-    lastSnapshotDigests.delete(sessionId)
     setSessionBundles((prev) => {
       const next = { ...prev }
       delete next[sessionId]
@@ -537,9 +402,6 @@ export const TraceProvider: ParentComponent = (props) => {
   }
 
   const loadSession = (sessionId: string) => {
-    if (sessionId !== currentSessionId()) {
-      flushPendingSnapshot()
-    }
     const bundle = getSessionBundle(sessionId)
     if (bundle) {
       applyBundleToSignals(sessionId, bundle)
@@ -548,7 +410,6 @@ export const TraceProvider: ParentComponent = (props) => {
   }
 
   const clearSession = () => {
-    flushPendingSnapshot()
     setCurrentSessionId(null)
     setStats(EMPTY_STATS)
     setTurns([])
@@ -565,7 +426,6 @@ export const TraceProvider: ParentComponent = (props) => {
   }
 
   const deleteSession = (sessionId: string) => {
-    flushPendingSnapshot()
     removeSessionBundle(sessionId)
     if (currentSessionId() === sessionId) {
       setCurrentSessionId(null)
@@ -654,9 +514,6 @@ export const TraceProvider: ParentComponent = (props) => {
       applyToCurrent: options.sourceSessionId === currentSessionId(),
       preserveIntent: true,
     })
-    if (options.sourceSessionId !== currentSessionId()) {
-      scheduleSessionSnapshot(options.sourceSessionId, nextBundle)
-    }
   }
 
   const createMockFork = (sourceNodeId: string, mode: "fork" | "delegated_run" = "fork") => {
@@ -1054,7 +911,6 @@ export const TraceProvider: ParentComponent = (props) => {
   }
 
   const startDraftTask = (taskText: string) => {
-    flushPendingSnapshot()
     const sessionId = buildMockId("session")
     const bundle: MockSessionBundle = {
       session: {
@@ -1118,24 +974,6 @@ export const TraceProvider: ParentComponent = (props) => {
     }))
   }
 
-  const saveCurrentSnapshot = () => {
-    const sessionId = currentSessionId()
-    if (!sessionId) return
-    const bundle = getSessionBundle(sessionId)
-    if (!bundle) return
-    if (snapshotTimer) {
-      window.clearTimeout(snapshotTimer)
-      snapshotTimer = undefined
-    }
-    if (snapshotMaxTimer) {
-      window.clearTimeout(snapshotMaxTimer)
-      snapshotMaxTimer = undefined
-    }
-    pendingSnapshot = undefined
-    const digest = snapshotDigest(buildSessionSnapshotDigestPayload(sessionId, bundle))
-    postSessionSnapshot(sessionId, bundle, digest)
-  }
-
   onMount(() => {
     const unsubscribe = vscode.onMessage((msg: ExtensionMessage) => {
       if (msg.type === "session.list") {
@@ -1150,54 +988,8 @@ export const TraceProvider: ParentComponent = (props) => {
         }
       }
 
-      if (msg.type === "session.snapshotStored" && typeof msg.sessionId === "string") {
-        const digest = typeof msg.snapshotDigest === "string"
-          ? msg.snapshotDigest
-          : typeof msg.snapshot_digest === "string"
-            ? msg.snapshot_digest
-            : ""
-        if (digest) {
-          lastSnapshotDigests.set(msg.sessionId, digest)
-        }
-        const syncStatus = normalizeSyncStatus(msg.status)
-        if (syncStatus) {
-          updateSessionMeta(msg.sessionId, (session) => ({
-            ...session,
-            syncStatus,
-            syncError: typeof msg.message === "string" ? msg.message : undefined,
-          }), { skipSnapshot: true })
-        }
-      }
-
       if (msg.type === "session.adopted" && typeof msg.sessionId === "string") {
-        const draftSessionId =
-          typeof msg.previousSessionId === "string"
-            ? msg.previousSessionId
-            : currentSessionId()
-        const draftBundle =
-          draftSessionId && draftSessionId !== msg.sessionId && isLocalDraftSessionId(draftSessionId)
-            ? getSessionBundle(draftSessionId)
-            : undefined
-        if (draftBundle) {
-          if (pendingSnapshot?.sessionId === draftSessionId) {
-            pendingSnapshot = undefined
-            clearSnapshotTimers()
-          }
-          writeSessionBundle(msg.sessionId, {
-            ...draftBundle,
-            session: {
-              ...draftBundle.session,
-              id: msg.sessionId,
-              updatedAt: new Date().toISOString(),
-              syncStatus: "pending",
-              source: "local",
-            },
-          }, {
-            applyToCurrent: true,
-            preserveIntent: true,
-          })
-          removeSessionBundle(draftSessionId!)
-        }
+        setCurrentSessionId(msg.sessionId)
       }
 
       if (
@@ -1212,35 +1004,19 @@ export const TraceProvider: ParentComponent = (props) => {
         if (shouldIgnoreInitialSessionLoad(currentSessionId(), msg.sessionId, msg.reason)) {
           return
         }
-        const remoteBundle = normalizeSessionBundle(msg.bundle)
+        const remoteBundle = normalizeSessionBundle(msg.document || msg.bundle)
         const sessions = normalizeSessionList(msg.sessions)
         if (sessions.length) {
           setAllSessions(sessions)
         }
         if (remoteBundle) {
-          const draftSessionId = currentSessionId()
-          const draftBundle =
-            draftSessionId && draftSessionId !== msg.sessionId && isLocalDraftSessionId(draftSessionId)
-              ? getSessionBundle(draftSessionId)
-              : undefined
-          const existingBundle = getSessionBundle(msg.sessionId)
-          const bundle = draftBundle
-            ? mergeRemoteBundleWithDraft(remoteBundle, draftBundle)
-            : shouldPreserveExistingSessionContent(remoteBundle, existingBundle)
-              ? mergeRemoteBundlePreservingLocalContent(remoteBundle, existingBundle!)
-              : remoteBundle
-
-          writeSessionBundle(msg.sessionId, bundle, {
+          writeSessionBundle(msg.sessionId, remoteBundle, {
             applyToCurrent: true,
-            skipSnapshot: msg.type !== "session.forked",
             includeInHistory:
               msg.type === "session.forked" ||
               msg.type !== "session.created" ||
-              sessionBundleHasContent(bundle),
+              sessionBundleHasContent(remoteBundle),
           })
-          if (draftBundle && draftSessionId) {
-            removeSessionBundle(draftSessionId)
-          }
         }
       }
 
@@ -1281,7 +1057,6 @@ export const TraceProvider: ParentComponent = (props) => {
     })
 
     onCleanup(() => {
-      flushPendingSnapshot()
       unsubscribe()
     })
   })
@@ -1320,7 +1095,6 @@ export const TraceProvider: ParentComponent = (props) => {
     appendTurn,
     replaceLastAssistantMessages,
     patchStats,
-    saveCurrentSnapshot,
   }
 
   return <TraceContext.Provider value={value}>{props.children}</TraceContext.Provider>

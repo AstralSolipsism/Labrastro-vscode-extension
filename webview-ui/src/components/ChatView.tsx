@@ -86,7 +86,7 @@ import {
   reconcileShellFinalOutput,
   shellChunksFromText,
 } from "../utils/shell-tool-output"
-import { isLocalDraftSessionId, remoteSessionIdForMutation } from "../utils/session-history"
+import { remoteSessionIdForMutation } from "../utils/session-history"
 import type { MockMessage, MockPart } from "./chat/mock-data"
 
 interface PendingApproval extends ApprovalDetails {
@@ -215,8 +215,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
     const pending = typeof status.pendingCount === "number" ? status.pendingCount : 0
     const failed = typeof status.failedCount === "number" ? status.failedCount : 0
     if (typeof status.message === "string" && status.message) return status.message
-    if (failed > 0) return `${failed} 个会话快照同步失败，正在后台重试。`
-    if (pending > 0) return `${pending} 个会话快照待同步。`
+    if (failed > 0) return `${failed} 个会话文档同步失败，正在后台重试。`
+    if (pending > 0) return `${pending} 个会话文档待同步。`
     return ""
   })
   const sessionSyncLabel = (status: string | undefined) => {
@@ -795,6 +795,23 @@ const ChatView: Component<ChatViewProps> = (props) => {
       appendTextPart("连接恢复后发现部分流式事件已过期，正在刷新会话状态。", "events-lost", { meta: eventMeta })
       const sessionId = remoteSessionIdForMutation(trace.currentSessionId())
       if (sessionId) trace.loadSession(sessionId)
+    } else if (type === "chat_start") {
+      const prompt = stringValue(payload.prompt) || ""
+      if (prompt && !trace.turns().some((turn) => turn.userMessage.text === prompt && !turn.assistantMessages.length)) {
+        trace.appendTurn({
+          userMessage: {
+            id: `u-${eventMeta.sessionEventSeq ?? Date.now()}`,
+            role: "user",
+            text: prompt,
+            parts: [] as MockPart[],
+            timestamp: Date.now(),
+            ...(eventMeta.eventKey ? { eventKey: eventMeta.eventKey } : {}),
+            ...(eventMeta.sessionEventSeq !== undefined ? { sessionEventSeq: eventMeta.sessionEventSeq } : {}),
+          },
+          assistantMessages: [],
+        })
+      }
+      trace.patchStats({ taskText: prompt, runStatus: "running" })
     } else if (type === "taskflow_started") {
       const taskflow = objectValue(payload.taskflow)
       const meta = objectValue(taskflow.meta)
@@ -808,17 +825,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
       const currentSessionId = trace.currentSessionId()
       if (
         remoteSessionId &&
-        activeRunSessionId() &&
-        isLocalDraftSessionId(activeRunSessionId()) &&
-        currentSessionId === remoteSessionId
-      ) {
-        setActiveRunSessionId(remoteSessionId)
-      }
-      if (
-        remoteSessionId &&
         currentSessionId &&
         remoteSessionId !== currentSessionId &&
-        !isLocalDraftSessionId(currentSessionId)
+        remoteSessionIdForMutation(currentSessionId)
       ) {
         appendTextPart(`会话绑定异常：远端返回 ${remoteSessionId}，当前会话是 ${currentSessionId}`, "error", { meta: eventMeta })
         setIsWorking(false)
@@ -1068,14 +1077,12 @@ const ChatView: Component<ChatViewProps> = (props) => {
       if (!alreadyHadError) {
         appendTextPart(`错误：${payload.message || "unknown error"}`, "error", { meta: eventMeta })
       }
-      trace.saveCurrentSnapshot()
       finishChatRun("error")
     } else if (type === "chat_end") {
       setChatRunSawTerminal(true)
       if (payload.response && payload.response_rendered !== true) {
         appendTextPart(String(payload.response), "final", { format: "markdown", meta: eventMeta })
       }
-      trace.saveCurrentSnapshot()
       finishChatRun(doneStatusFromCurrentRun())
     }
     markRenderedEvent(eventMeta)
@@ -1242,70 +1249,6 @@ const ChatView: Component<ChatViewProps> = (props) => {
     chatMessages.refreshAdmin(vscode)
   }
 
-  const sliceTurnsForFork = (keepThroughMessageIndex: number) => {
-    const sourceBundle = trace.currentSessionId()
-      ? trace.getSessionBundle(trace.currentSessionId() as string)
-      : undefined
-    if (!sourceBundle) return []
-    return sourceBundle.turns
-      .filter((turn) => {
-        const userIndex = turn.userMessage.historyMessageIndex
-        return typeof userIndex === "number" && userIndex <= keepThroughMessageIndex
-      })
-      .map((turn) => ({
-        ...turn,
-        assistantMessages: turn.assistantMessages.filter((message) => {
-          const historyCutIndex = message.historyCutIndex
-          return typeof historyCutIndex === "number" && historyCutIndex <= keepThroughMessageIndex
-        }),
-      }))
-  }
-
-  const buildForkSnapshot = (
-    sourceSessionId: string,
-    options: {
-      keepThroughMessageIndex: number
-      sourceNodeId?: string
-      sessionTitle: string
-      sessionSummary: string
-      sessionKind: "fork" | "delegated_run"
-    }
-  ) => {
-    const sourceBundle = trace.getSessionBundle(sourceSessionId)
-    const stats = sourceBundle?.stats || trace.stats()
-    return {
-      version: 1,
-      sessionId: "",
-      session: {
-        id: "",
-        title: options.sessionTitle,
-        updatedAt: new Date().toISOString(),
-        kind: options.sessionKind,
-        state: "active",
-        parentSessionId: sourceSessionId,
-        sourceSessionId,
-        sourceNodeId: options.sourceNodeId,
-        summary: options.sessionSummary,
-      },
-      stats: {
-        ...stats,
-        taskText: options.sessionSummary,
-        runStatus: "idle",
-      },
-      turns: sliceTurnsForFork(options.keepThroughMessageIndex),
-      traceNodes: [],
-      traceEdges: [],
-      traceUI: {
-        activeNodeId: null,
-        selectedNodeId: null,
-        focusedBranchId: "main",
-        showInspector: false,
-        showMiniMap: false,
-        viewMode: "compact",
-      },
-    }
-  }
-
   const requestForkSession = (options: {
     keepThroughMessageIndex: number
     composeText: string
@@ -1329,13 +1272,6 @@ const ChatView: Component<ChatViewProps> = (props) => {
       type: "session.fork",
       sourceSessionId: remoteSourceSessionId,
       keepThroughMessageIndex: options.keepThroughMessageIndex,
-      snapshot: buildForkSnapshot(remoteSourceSessionId, {
-        keepThroughMessageIndex: options.keepThroughMessageIndex,
-        sourceNodeId: options.sourceNodeId,
-        sessionTitle,
-        sessionSummary,
-        sessionKind: "fork",
-      }),
       composeText: options.composeText,
       composeMode: options.composeMode,
       sourceLabel: options.sourceLabel,
@@ -1390,16 +1326,10 @@ const ChatView: Component<ChatViewProps> = (props) => {
     text: string,
     options: { modeOverride?: string | null; forceDirect?: boolean } = {},
   ) => {
-    let sessionId = trace.currentSessionId()
+    const sessionId = trace.currentSessionId()
     const mode = options.modeOverride === undefined ? selectedMode() : options.modeOverride || ""
     const route = routeSelectedChatMode(mode, { forceDirect: options.forceDirect })
-
-    if (!sessionId) {
-      trace.startDraftTask(text)
-      sessionId = trace.currentSessionId()
-    }
     const remoteSessionId = remoteSessionIdForMutation(sessionId)
-    const draftSessionId = sessionId && isLocalDraftSessionId(sessionId) ? sessionId : undefined
     const activeModelResolution = requiredModelSelection()
     if (!activeModelResolution.ok || !activeModelResolution.model) {
       setModelSwitchError(activeModelResolution.message)
@@ -1408,17 +1338,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     const activeModelOverride = activeModelResolution.model
     const activeForkCompose = forkCompose()
 
-    trace.appendTurn({
-      userMessage: {
-        id: `u-${Date.now()}`,
-        role: "user",
-        text,
-        parts: [] as MockPart[],
-        timestamp: Date.now(),
-      },
-      assistantMessages: [],
-    })
-
+    const requestId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     setIsWorking(true)
     setActiveRunSessionId(sessionId || "")
     setPendingCancel(false)
@@ -1436,7 +1356,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     chatMessages.send(vscode, {
       text,
       sessionId: remoteSessionId,
-      draftSessionId,
+      requestId,
       providerId: activeModelOverride.providerId,
       modelId: activeModelOverride.modelId,
       parameters: activeModelOverride.parameters,
@@ -1722,10 +1642,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       }
       if (msg.type === "session.adopted" && typeof msg.sessionId === "string") {
         const previousSessionId = typeof msg.previousSessionId === "string" ? msg.previousSessionId : ""
-        if (
-          activeRunSessionId() === previousSessionId ||
-          (activeRunSessionId() && isLocalDraftSessionId(activeRunSessionId()))
-        ) {
+        if (!activeRunSessionId() || activeRunSessionId() === previousSessionId) {
           setActiveRunSessionId(msg.sessionId)
         }
       }
@@ -1846,9 +1763,6 @@ const ChatView: Component<ChatViewProps> = (props) => {
         if (nextTaskflowId) setTaskflowId(nextTaskflowId)
       }
       if (msg.type === "chat.done") {
-        if (chatRunSawError() && !chatRunSawTerminal()) {
-          trace.saveCurrentSnapshot()
-        }
         finishChatRun(doneStatusFromCurrentRun(), { startNextEnvironment: true })
       }
       if (msg.type === "environment.run.completed" && isWorking()) {
@@ -2305,7 +2219,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
                     <span class="codicon codicon-trash" aria-hidden="true" />
                     <h3>删除会话</h3>
                   </div>
-                  <p>删除后会移除服务端会话记录和对应前端快照。</p>
+                  <p>删除后会移除服务端会话文档。</p>
                   <strong>{session()?.title || sessionId()}</strong>
                   <div class="session-delete-dialog__actions">
                     <button type="button" onClick={() => setDeleteSessionId(undefined)}>取消</button>

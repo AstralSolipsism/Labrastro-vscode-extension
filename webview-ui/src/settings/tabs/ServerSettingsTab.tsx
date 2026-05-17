@@ -45,8 +45,7 @@ export const ServerSettingsTab: Component<TabProps> = (props) => {
   const [persistenceRuntimeEnabled, setPersistenceRuntimeEnabled] = createSignal(true)
   const [persistenceSessionsEnabled, setPersistenceSessionsEnabled] = createSignal(true)
   const [persistenceRetentionDays, setPersistenceRetentionDays] = createSignal(0)
-  const [persistenceSnapshotVersions, setPersistenceSnapshotVersions] = createSignal(20)
-  const [persistenceCompressThreshold, setPersistenceCompressThreshold] = createSignal(262144)
+  const [persistenceEventPayloadCompressThreshold, setPersistenceEventPayloadCompressThreshold] = createSignal(262144)
   const [persistenceMaintenanceInterval, setPersistenceMaintenanceInterval] = createSignal(3600)
 
   const serverSettings = createMemo(() => {
@@ -77,8 +76,7 @@ export const ServerSettingsTab: Component<TabProps> = (props) => {
     setPersistenceRuntimeEnabled(boolValue(persistence.runtime_enabled, true))
     setPersistenceSessionsEnabled(boolValue(persistence.sessions_enabled, true))
     setPersistenceRetentionDays(Math.max(0, Math.floor(numberValue(persistence.retention_days, 0))))
-    setPersistenceSnapshotVersions(Math.max(1, Math.floor(numberValue(persistence.snapshot_max_versions_per_session, 20))))
-    setPersistenceCompressThreshold(Math.max(1, Math.floor(numberValue(persistence.snapshot_compress_threshold_bytes, 262144))))
+    setPersistenceEventPayloadCompressThreshold(Math.max(1, Math.floor(numberValue(persistence.event_payload_compress_threshold_bytes, 262144))))
     setPersistenceMaintenanceInterval(Math.max(1, Math.floor(numberValue(persistence.maintenance_interval_sec, 3600))))
   })
 
@@ -101,8 +99,7 @@ export const ServerSettingsTab: Component<TabProps> = (props) => {
           runtime_enabled: persistenceRuntimeEnabled(),
           sessions_enabled: persistenceSessionsEnabled(),
           retention_days: Math.max(0, Math.floor(persistenceRetentionDays())),
-          snapshot_max_versions_per_session: Math.max(1, Math.floor(persistenceSnapshotVersions())),
-          snapshot_compress_threshold_bytes: Math.max(1, Math.floor(persistenceCompressThreshold())),
+          event_payload_compress_threshold_bytes: Math.max(1, Math.floor(persistenceEventPayloadCompressThreshold())),
           maintenance_interval_sec: Math.max(1, Math.floor(persistenceMaintenanceInterval())),
         },
       },
@@ -271,11 +268,8 @@ export const ServerSettingsTab: Component<TabProps> = (props) => {
             <label class="field-label"><span>保留天数</span>
               <input type="number" min="0" value={persistenceRetentionDays()} onInput={(event) => { setPersistenceRetentionDays(Number(event.currentTarget.value) || 0); markInfraDirty() }} />
             </label>
-            <label class="field-label"><span>每会话快照版本数</span>
-              <input type="number" min="1" value={persistenceSnapshotVersions()} onInput={(event) => { setPersistenceSnapshotVersions(Number(event.currentTarget.value) || 1); markInfraDirty() }} />
-            </label>
-            <label class="field-label"><span>快照压缩阈值 bytes</span>
-              <input type="number" min="1" value={persistenceCompressThreshold()} onInput={(event) => { setPersistenceCompressThreshold(Number(event.currentTarget.value) || 1); markInfraDirty() }} />
+            <label class="field-label"><span>事件载荷压缩阈值 bytes</span>
+              <input type="number" min="1" value={persistenceEventPayloadCompressThreshold()} onInput={(event) => { setPersistenceEventPayloadCompressThreshold(Number(event.currentTarget.value) || 1); markInfraDirty() }} />
             </label>
             <label class="field-label"><span>维护周期秒</span>
               <input type="number" min="1" value={persistenceMaintenanceInterval()} onInput={(event) => { setPersistenceMaintenanceInterval(Number(event.currentTarget.value) || 1); markInfraDirty() }} />

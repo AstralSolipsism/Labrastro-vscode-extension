@@ -325,7 +325,6 @@ export class LabrastroController implements vscode.Disposable {
       tasks.push(run("backend-features", () => this.refreshBackendFeatures(post)))
     }
     if (options.includeSession) {
-      tasks.push(run("session-sync", () => this.sessionCoordinator.syncDueSessionSnapshots(post)))
       tasks.push(run("session-initialize", () => this.sessionCoordinator.initializeSessionState(post)))
     }
 
@@ -1145,7 +1144,6 @@ export class LabrastroController implements vscode.Disposable {
 
   private async refreshEnvironmentSessionList(post: PostMessage): Promise<void> {
     try {
-      await this.sessionCoordinator.syncDueSessionSnapshots(post)
       await this.sessionCoordinator.refreshSessions()
       this.emitSessionMessage({
         type: "session.list",
@@ -1166,6 +1164,7 @@ export class LabrastroController implements vscode.Disposable {
       workflowMode?: string
       taskflowId?: string
       draftSessionId?: string
+      clientRequestId?: string
       providerId?: string
       modelId?: string
       parameters?: Record<string, unknown>
@@ -1190,6 +1189,7 @@ export class LabrastroController implements vscode.Disposable {
       let sessionId = preparedSession.sessionId
       this.emitChatMessage({ type: "chat.started", text }, post)
       const start = await this.client.startChat(text, sessionId, options)
+      sessionId = stringValue(start.session_id) || sessionId
       const chatId = String(start.chat_id || "")
       this.chatRunCoordinator.setActiveRun({
         chatId,
