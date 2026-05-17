@@ -1,11 +1,20 @@
-﻿import { Component, For, Show } from "solid-js"
+﻿import { Component, For, Show, createSignal } from "solid-js"
 import { t } from "../../i18n"
 import { RefreshButton } from "../../components/common/RefreshButton"
 import { SelectableList } from "../../components/common/interaction"
 import { StatusBadge } from "../components/StatusBadge"
+import { ChoiceMultiSelect } from "../components/ChoiceMultiSelect"
 import type { SettingsController } from "../useSettingsController"
 
 interface TabProps { controller: SettingsController & Record<string, any> }
+
+type AgentConfigSection = "profiles" | "agents" | "runtimeTest"
+
+const AGENT_CONFIG_SECTIONS: Array<{ id: AgentConfigSection; labelKey: string; icon: string }> = [
+  { id: "profiles", labelKey: "agentConfig.profiles", icon: "server-environment" },
+  { id: "agents", labelKey: "agentConfig.agents", icon: "hubot" },
+  { id: "runtimeTest", labelKey: "agentConfig.runtimeTest.title", icon: "play" },
+]
 
 export const AgentConfigTab: Component<TabProps> = (props) => {
   const {
@@ -35,7 +44,6 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
     runtimeModelOptions,
     registeredMcpServers,
     profileMcpValidationWarnings,
-    renderStringChoiceList,
     agentDrafts,
     addAgent,
     selectedAgentId,
@@ -70,8 +78,11 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
     runtimeOptionDescription,
   } = props.controller
 
+  const [section, setSection] = createSignal<AgentConfigSection>("profiles")
   const profileIds = () => Object.keys(profileDrafts())
   const agentIds = () => Object.keys(agentDrafts())
+  const mcpChoiceOptions = () => registeredMcpServers().map((id: string) => ({ id, label: id, kind: "MCP" }))
+  const capabilityChoiceOptions = () => capabilityPackageOptions().map((id: string) => ({ id, label: id, kind: "能力包" }))
 
   return (
     <div class="settings-page">
@@ -101,8 +112,25 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
       </Show>
 
       {/* ── Runtime Profiles Section ── */}
-      <section class="settings-section settings-section--flat">
-        <div class="settings-section-heading">
+      <nav class="settings-subtabs" aria-label={t("agentConfig.title")}>
+        <For each={AGENT_CONFIG_SECTIONS}>
+          {(item) => (
+            <button
+              type="button"
+              class={`settings-subtab-button ${section() === item.id ? "settings-subtab-button--active" : ""}`}
+              aria-pressed={section() === item.id}
+              onClick={() => setSection(item.id)}
+            >
+              <span class={`codicon codicon-${item.icon}`} aria-hidden="true" />
+              {t(item.labelKey)}
+            </button>
+          )}
+        </For>
+      </nav>
+
+      <Show when={section() === "profiles"}>
+      <section class="settings-section settings-section--flat" classList={{ "settings-section--hidden": section() !== "profiles" }}>
+        <div class="settings-section-heading">
           <span>{t("agentConfig.profiles")}</span>
           <StatusBadge tone="muted">{String(Object.keys(profileDrafts()).length)}</StatusBadge>
         </div>
@@ -199,12 +227,15 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
                   <small class="field-help">{runtimeOptionDescription(PROFILE_APPROVAL_MODE_OPTIONS, currentProfileDraft()!.approval_mode)}</small>
                 </label>
                 <label class="field-label field-label--full"><span>{t("agentConfig.profile.mcpServers")}</span>
-                  {renderStringChoiceList(
-                    registeredMcpServers(),
-                    currentProfileDraft()!.mcpServersText,
-                    (next) => updateProfileField("mcpServersText", next),
-                    t("agentConfig.profile.mcpServers.empty"),
-                  )}
+                  <ChoiceMultiSelect
+                    ariaLabel={t("agentConfig.profile.mcpServers")}
+                    options={mcpChoiceOptions()}
+                    valueText={currentProfileDraft()!.mcpServersText}
+                    onChangeText={(next) => updateProfileField("mcpServersText", next)}
+                    emptyMessage={t("agentConfig.profile.mcpServers.empty")}
+                    searchPlaceholder="搜索 MCP"
+                    unknownLabel={t("agentConfig.choice.custom")}
+                  />
                   <small class="field-help">{t("agentConfig.profile.mcpServersDesc")}</small>
                 </label>
                 <Show when={profileMcpValidationWarnings().length > 0}>
@@ -247,12 +278,13 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
             </Show>
           </div>
         </div>
-      </section>
+      </section>
+      </Show>
 
       {/* ── Agents Section ── */}
-      <section class="settings-section settings-section--flat">
+      <section class="settings-section settings-section--flat" classList={{ "settings-section--hidden": section() !== "agents" }}>
         <div class="settings-section-heading">
-          <span>{t("agentConfig.agents")}</span>
+          <span>{t("agentConfig.agents")}</span>
           <StatusBadge tone="muted">{String(Object.keys(agentDrafts()).length)}</StatusBadge>
         </div>
         <div class="settings-master-detail">
@@ -361,13 +393,16 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
                   <small class="field-help">{t("agentConfig.agent.systemAppendDesc")}</small>
                 </label>
                 <label class="field-label field-label--full"><span>{t("agentConfig.agent.capabilityRefs")}</span>
-                  {renderStringChoiceList(
-                    capabilityPackageOptions(),
-                    currentAgentDraft()!.capabilityRefsText,
-                    (next) => updateAgentField("capabilityRefsText", formatAgentConfigList(parseAgentConfigListText(next), ", ")),
-                    t("agentConfig.agent.capabilityRefs.empty"),
-                    ", ",
-                  )}
+                  <ChoiceMultiSelect
+                    ariaLabel={t("agentConfig.agent.capabilityRefs")}
+                    options={capabilityChoiceOptions()}
+                    valueText={currentAgentDraft()!.capabilityRefsText}
+                    delimiter=", "
+                    onChangeText={(next) => updateAgentField("capabilityRefsText", formatAgentConfigList(parseAgentConfigListText(next), ", "))}
+                    emptyMessage={t("agentConfig.agent.capabilityRefs.empty")}
+                    searchPlaceholder="搜索能力包"
+                    unknownLabel={t("agentConfig.choice.custom")}
+                  />
                   <small class="field-help">{t("agentConfig.agent.capabilityRefsDesc")}</small>
                 </label>
                 <Show when={selectedAgentCapabilityPackages().length > 0}>
@@ -405,7 +440,7 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
         </div>
       </section>
 
-      <section class="settings-section settings-section--flat">
+      <section class="settings-section settings-section--flat" classList={{ "settings-section--hidden": section() !== "runtimeTest" }}>
         <div class="settings-section-heading">
           <span>{t("agentConfig.runtimeTest.title")}</span>
           <StatusBadge tone={agentRunPolling() ? "warning" : agentRunTerminal() ? "success" : "muted"}>

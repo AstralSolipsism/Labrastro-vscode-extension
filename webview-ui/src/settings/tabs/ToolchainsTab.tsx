@@ -10,12 +10,32 @@ import { RefreshButton } from "../../components/common/RefreshButton"
 import { DialogSurface } from "../../components/common/interaction"
 import { defaultCommandRuleCandidateRules } from "../../utils/command-auto-approval"
 import { StatusBadge } from "../components/StatusBadge"
+import { ChoiceMultiSelect } from "../components/ChoiceMultiSelect"
 import { settingsMessages } from "../settingsMessages"
 import type { SettingsController } from "../useSettingsController"
 
 type EnvironmentEntryKind = "cli" | "mcp" | "skill"
 type ToolchainKind = EnvironmentEntryKind
 type ToolchainKindFilter = "all" | ToolchainKind
+type ToolchainSection = "dashboard" | "components" | "packages" | "ingest" | "logs"
+
+const TOOLCHAIN_SECTIONS: Array<{ id: ToolchainSection; label: string; icon: string }> = [
+  { id: "dashboard", label: "环境看板", icon: "dashboard" },
+  { id: "components", label: "组件清单", icon: "symbol-method" },
+  { id: "packages", label: "能力包", icon: "package" },
+  { id: "ingest", label: "导入", icon: "cloud-download" },
+  { id: "logs", label: "运行日志", icon: "output" },
+]
+
+const COMMON_PERMISSION_OPTIONS = [
+  "read",
+  "write",
+  "execute",
+  "network",
+  "filesystem",
+  "secrets",
+  "approval_required",
+]
 interface ToolchainRecord {
   kind: ToolchainKind
   name: string
@@ -127,6 +147,7 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
     toolchainIngestLogs,
   } = props.controller
 
+  const [section, setSection] = createSignal<ToolchainSection>("dashboard")
   const [capabilityDirty, setCapabilityDirty] = createSignal(false)
   const [capabilitySaved, setCapabilitySaved] = createSignal(false)
   const [selectedCapabilityPackageId, setSelectedCapabilityPackageId] = createSignal("")
@@ -149,6 +170,10 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
   const registeredCliNames = createMemo(() => (environmentEntriesByKind().cli || []).map((item: any) => stringValue(item.name)).filter(Boolean))
   const registeredMcpNames = createMemo(() => (environmentEntriesByKind().mcp || []).map((item: any) => stringValue(item.name)).filter(Boolean))
   const registeredSkillNames = createMemo(() => (environmentEntriesByKind().skill || []).map((item: any) => stringValue(item.name)).filter(Boolean))
+  const cliChoiceOptions = () => registeredCliNames().map((id: string) => ({ id, label: id, kind: "CLI" }))
+  const mcpChoiceOptions = () => registeredMcpNames().map((id: string) => ({ id, label: id, kind: "MCP" }))
+  const skillChoiceOptions = () => registeredSkillNames().map((id: string) => ({ id, label: id, kind: "Skill" }))
+  const permissionChoiceOptions = () => COMMON_PERMISSION_OPTIONS.map((id) => ({ id, label: id, kind: "权限" }))
 
   const markCapabilityDirty = () => {
     setCapabilityDirty(true)
@@ -900,7 +925,23 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
           <div class="settings-empty-note">没有带环境任务标签的 Agent。请在 Agent 配置中创建适合环境任务的 Agent。</div>
         </Show>
 
-        <div class="toolchain-summary-grid">
+        <nav class="settings-subtabs" aria-label="能力组件视图">
+          <For each={TOOLCHAIN_SECTIONS}>
+            {(item) => (
+              <button
+                type="button"
+                class={`settings-subtab-button ${section() === item.id ? "settings-subtab-button--active" : ""}`}
+                aria-pressed={section() === item.id}
+                onClick={() => setSection(item.id)}
+              >
+                <span class={`codicon codicon-${item.icon}`} aria-hidden="true" />
+                {item.label}
+              </button>
+            )}
+          </For>
+        </nav>
+
+        <div class="toolchain-summary-grid" classList={{ "settings-section--hidden": section() !== "dashboard" }}>
           <button class="toolchain-summary-card" classList={{ "is-active": toolchainStatusFilter() === "ready" }} onClick={() => setToolchainStatusFilter(toolchainStatusFilter() === "ready" ? "all" : "ready")}>
             <span>已就绪</span>
             <strong>{String(toolchainSummary().ready)}</strong>
@@ -919,7 +960,7 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
           </button>
         </div>
 
-        <section class="settings-section settings-section--flat toolchain-ingest-panel">
+        <section class="settings-section settings-section--flat toolchain-ingest-panel" classList={{ "settings-section--hidden": section() !== "ingest" }}>
           <div class="settings-section-heading">
             <div>
               <span>新增能力组件</span>
@@ -987,7 +1028,7 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
           </Show>
         </section>
 
-        <section class="toolchain-workbench">
+        <section class="toolchain-workbench" classList={{ "settings-section--hidden": section() !== "components" }}>
           <div class="toolchain-list-pane">
             <div class="toolchain-toolbar">
               <div class="toolchain-kind-tabs" role="tablist" aria-label="工具类型筛选">
@@ -1183,7 +1224,7 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
           </aside>
         </section>
 
-        <section class="settings-section settings-section--flat">
+        <section class="settings-section settings-section--flat" classList={{ "settings-section--hidden": section() !== "packages" }}>
           <div class="settings-section-heading">
             <span>能力包定义</span>
             <div class="settings-actions settings-actions--right">
@@ -1239,19 +1280,48 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
                       <input value={pkg().description} onInput={(event) => updateCapabilityPackage({ description: event.currentTarget.value })} />
                     </label>
                     <label class="field-label field-label--full"><span>MCP Servers</span>
-                      <textarea rows={3} value={pkg().mcpServersText} placeholder={registeredMcpNames().join("\n") || "每行一个 MCP 名称"} onInput={(event) => updateCapabilityPackage({ mcpServersText: event.currentTarget.value })} />
-                      <small class="field-help">候选：{registeredMcpNames().join(", ") || "暂无"}</small>
+                      <ChoiceMultiSelect
+                        ariaLabel="MCP Servers"
+                        options={mcpChoiceOptions()}
+                        valueText={pkg().mcpServersText}
+                        onChangeText={(next) => updateCapabilityPackage({ mcpServersText: next })}
+                        emptyMessage="暂无可选 MCP；可先在组件清单中新增。"
+                        searchPlaceholder="搜索 MCP"
+                        unknownLabel="自定义 MCP"
+                      />
                     </label>
                     <label class="field-label field-label--full"><span>Skills</span>
-                      <textarea rows={3} value={pkg().skillsText} placeholder={registeredSkillNames().join("\n") || "每行一个 Skill 名称"} onInput={(event) => updateCapabilityPackage({ skillsText: event.currentTarget.value })} />
-                      <small class="field-help">候选：{registeredSkillNames().join(", ") || "暂无"}</small>
+                      <ChoiceMultiSelect
+                        ariaLabel="Skills"
+                        options={skillChoiceOptions()}
+                        valueText={pkg().skillsText}
+                        onChangeText={(next) => updateCapabilityPackage({ skillsText: next })}
+                        emptyMessage="暂无可选 Skill；可先启用扫描或新增组件。"
+                        searchPlaceholder="搜索 Skill"
+                        unknownLabel="自定义 Skill"
+                      />
                     </label>
                     <label class="field-label field-label--full"><span>CLI Tools</span>
-                      <textarea rows={3} value={pkg().cliToolsText} placeholder={registeredCliNames().join("\n") || "每行一个 CLI 名称"} onInput={(event) => updateCapabilityPackage({ cliToolsText: event.currentTarget.value })} />
-                      <small class="field-help">候选：{registeredCliNames().join(", ") || "暂无"}</small>
+                      <ChoiceMultiSelect
+                        ariaLabel="CLI Tools"
+                        options={cliChoiceOptions()}
+                        valueText={pkg().cliToolsText}
+                        onChangeText={(next) => updateCapabilityPackage({ cliToolsText: next })}
+                        emptyMessage="暂无可选 CLI；可先在组件清单中新增。"
+                        searchPlaceholder="搜索 CLI"
+                        unknownLabel="自定义 CLI"
+                      />
                     </label>
                     <label class="field-label field-label--full"><span>Permissions</span>
-                      <textarea rows={3} value={pkg().permissionsText} placeholder="每行一个权限名" onInput={(event) => updateCapabilityPackage({ permissionsText: event.currentTarget.value })} />
+                      <ChoiceMultiSelect
+                        ariaLabel="Permissions"
+                        options={permissionChoiceOptions()}
+                        valueText={pkg().permissionsText}
+                        onChangeText={(next) => updateCapabilityPackage({ permissionsText: next })}
+                        emptyMessage="暂无权限模板，可保留历史自定义值。"
+                        searchPlaceholder="搜索权限"
+                        unknownLabel="自定义权限"
+                      />
                     </label>
                     <label class="field-label"><span>Source</span>
                       <input value={pkg().source} onInput={(event) => updateCapabilityPackage({ source: event.currentTarget.value })} />
@@ -1263,7 +1333,7 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
           </div>
         </section>
 
-        <section class="settings-section settings-section--flat">
+        <section class="settings-section settings-section--flat" classList={{ "settings-section--hidden": section() !== "packages" }}>
           <div class="settings-section-heading">
             <span>Skills 发现</span>
             <StatusBadge tone={skillsEnabled() ? "success" : "muted"}>{skillsEnabled() ? "启用" : "关闭"}</StatusBadge>
@@ -1282,8 +1352,48 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
               <span>扫描用户 Skills</span>
             </label>
             <label class="field-label field-label--full"><span>禁用 Skills</span>
-              <textarea rows={4} value={skillsDisabledText()} placeholder="每行一个 skill name" onInput={(event) => { setSkillsDisabledText(event.currentTarget.value); markCapabilityDirty() }} />
+              <ChoiceMultiSelect
+                ariaLabel="禁用 Skills"
+                options={skillChoiceOptions()}
+                valueText={skillsDisabledText()}
+                onChangeText={(next) => { setSkillsDisabledText(next); markCapabilityDirty() }}
+                emptyMessage="暂无可选 Skill；历史禁用项会以自定义项保留。"
+                searchPlaceholder="搜索 Skill"
+                unknownLabel="自定义 Skill"
+              />
             </label>
+          </div>
+        </section>
+
+        <section class="settings-section settings-section--flat" classList={{ "settings-section--hidden": section() !== "logs" }}>
+          <div class="settings-section-heading">
+            <span>运行日志</span>
+            <StatusBadge>{String(environmentSnapshot().logs.length + toolchainIngestLogs().length)}</StatusBadge>
+          </div>
+          <div class="environment-log-list">
+            <Show when={environmentSnapshot().logs.length || toolchainIngestLogs().length} fallback={<p class="settings-empty-note">环境检查、配置或导入任务运行后会显示最近输出。</p>}>
+              <For each={environmentSnapshot().logs}>
+                {(log) => (
+                  <div class={`environment-log environment-log--${log.level}`}>
+                    <div class="environment-log__meta">
+                      <StatusBadge tone={log.level === "error" ? "error" : log.level === "warning" ? "warning" : "muted"}>
+                        {log.level === "error" ? "错误" : log.level === "warning" ? "提示" : "输出"}
+                      </StatusBadge>
+                      <small>{formatTimestamp(log.createdAt)}</small>
+                    </div>
+                    <pre class="environment-log__message">{log.message}</pre>
+                  </div>
+                )}
+              </For>
+              <For each={toolchainIngestLogs()}>
+                {(log) => (
+                  <div class={`toolchain-ingest-log toolchain-ingest-log--${stringValue(log.level, "info")}`}>
+                    <small>{formatTimestamp(log.createdAt)}</small>
+                    <span>{stringValue(log.message)}</span>
+                  </div>
+                )}
+              </For>
+            </Show>
           </div>
         </section>
 

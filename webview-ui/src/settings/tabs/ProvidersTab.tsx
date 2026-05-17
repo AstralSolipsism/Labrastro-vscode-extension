@@ -10,6 +10,7 @@ import {
   PROVIDER_KIND_REGISTRY,
   PROVIDER_TYPE_OPTIONS,
   inferProviderKind,
+  modelOwnerDisplay,
   resolveProviderProtocol,
   type ProviderCompat,
   type ProviderKind,
@@ -182,6 +183,18 @@ export const ProvidersTab: Component<TabProps> = (props) => {
   const capabilityError = createMemo(() => stringValue(server.modelCapabilitiesError?.()))
   const recommendation = createMemo(() => modelCapabilityRecommendation ? modelCapabilityRecommendation() : {})
   const recommendationAvailable = createMemo(() => Object.keys(recommendation()).length > 0)
+  const capabilitySyncIntervalPreset = createMemo(() => {
+    const interval = capabilitySyncIntervalSec()
+    if (interval === 86400 || interval === 43200 || interval === 3600) return String(interval)
+    return "custom"
+  })
+  const capabilitySyncIntervalLabel = createMemo(() => {
+    const preset = capabilitySyncIntervalPreset()
+    if (preset === "86400") return "每日"
+    if (preset === "43200") return "每 12 小时"
+    if (preset === "3600") return "每小时"
+    return `${capabilitySyncIntervalSec()} 秒`
+  })
 
   createEffect(() => {
     if (capabilitySyncDirty()) return
@@ -693,7 +706,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
                   {numberValue(capabilityStatus().model_count, 0)} 个模型 · 最近同步 {formatTimestamp(capabilityUpdatedAt())}
                 </small>
                 <small>
-                  后台同步：{capabilitySyncEnabled() ? "开启" : "关闭"} · 周期 {capabilitySyncIntervalSec()} 秒
+                  后台同步：{capabilitySyncEnabled() ? "开启" : "关闭"} · 周期 {capabilitySyncIntervalLabel()}
                 </small>
                 <Show when={capabilitySources().length}>
                   <small>来源：{capabilitySources().join(" / ")}</small>
@@ -708,13 +721,27 @@ export const ProvidersTab: Component<TabProps> = (props) => {
                 <span>每日后台同步</span>
               </label>
               <label class="field-label model-capability-sync__interval">
-                <span>周期秒</span>
-                <input
-                  type="number"
-                  min="60"
-                  value={capabilitySyncIntervalSec()}
-                  onInput={(event) => updateCapabilitySync({ intervalSec: Number(event.currentTarget.value) || 60 })}
-                />
+                <span>同步周期</span>
+                <select
+                  value={capabilitySyncIntervalPreset()}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value
+                    if (value !== "custom") updateCapabilitySync({ intervalSec: Number(value) })
+                  }}
+                >
+                  <option value="86400">每日</option>
+                  <option value="43200">每 12 小时</option>
+                  <option value="3600">每小时</option>
+                  <option value="custom">自定义</option>
+                </select>
+                <Show when={capabilitySyncIntervalPreset() === "custom"}>
+                  <input
+                    type="number"
+                    min="60"
+                    value={capabilitySyncIntervalSec()}
+                    onInput={(event) => updateCapabilitySync({ intervalSec: Number(event.currentTarget.value) || 60 })}
+                  />
+                </Show>
               </label>
               <button class="btn btn-secondary" type="button" disabled={!capabilitySyncDirty()} onClick={saveCapabilitySync}>
                 <span class="codicon codicon-save" aria-hidden="true" />
@@ -793,11 +820,14 @@ export const ProvidersTab: Component<TabProps> = (props) => {
                   {(model) => {
                     const custom = model.owned_by === "custom"
                     const flags = modelCapabilityFlags(model)
+                    const owner = modelOwnerDisplay(model.owned_by, providerId())
                     return (
                       <div class={`provider-model-row ${custom ? "provider-model-row--custom" : ""}`}>
                         <span class="provider-model-row__body">
                           <strong>{model.id}</strong>
-                          <small>{custom ? "自定义模型名" : model.owned_by || "provider model"}</small>
+                          <Show when={custom || owner}>
+                            <small>{custom ? "自定义模型名" : owner}</small>
+                          </Show>
                           <Show when={model.max_tokens || model.max_context_tokens}>
                             <small>上下文 {model.max_context_tokens || "-"} · 输出 {model.max_tokens || "-"}</small>
                           </Show>

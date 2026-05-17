@@ -3,11 +3,19 @@ import { t } from "../../i18n"
 import { RefreshButton } from "../../components/common/RefreshButton"
 import { StatusBadge } from "../components/StatusBadge"
 import { settingsMessages } from "../settingsMessages"
+import { approvalRuleDraftToPayload } from "../utils"
 import type { SettingsController } from "../useSettingsController"
 
 interface TabProps { controller: SettingsController & Record<string, any> }
 
 const SERVER_APPROVAL_ACTIONS = ["allow", "warn", "require_approval", "deny"]
+const SERVER_APPROVAL_MATCH_TYPES = [
+  { value: "all", label: "全部工具", placeholder: "无需填写匹配对象" },
+  { value: "tool_name", label: "工具名称", placeholder: "例如 read_file / shell" },
+  { value: "tool_source", label: "工具来源", placeholder: "例如 builtin / mcp" },
+  { value: "mcp_server", label: "MCP 服务器", placeholder: "例如 github / context7" },
+  { value: "effect_class", label: "风险类型", placeholder: "例如 read / write / execute" },
+] as const
 
 function objectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? value as Record<string, unknown> : {}
@@ -22,6 +30,22 @@ function approvalActionLabel(value: string): string {
   if (value === "warn") return "警告"
   if (value === "deny") return "拒绝"
   return "需要批准"
+}
+
+function serverRuleMatchType(rule: Record<string, string>): string {
+  for (const field of ["tool_name", "tool_source", "mcp_server", "effect_class"] as const) {
+    if (rule[field]?.trim()) return field
+  }
+  return "all"
+}
+
+function serverRuleMatchValue(rule: Record<string, string>): string {
+  const field = serverRuleMatchType(rule)
+  return field === "all" ? "" : rule[field] || ""
+}
+
+function serverRulePlaceholder(type: string): string {
+  return SERVER_APPROVAL_MATCH_TYPES.find((item) => item.value === type)?.placeholder || "填写匹配对象"
 }
 
 export const AutoApprovalTab: Component<TabProps> = (props) => {
@@ -85,19 +109,29 @@ export const AutoApprovalTab: Component<TabProps> = (props) => {
     markServerApprovalDirty()
   }
 
+  const updateServerRuleMatch = (index: number, type: string, value: string) => {
+    setServerApprovalRules((rules) => rules.map((rule, i) => {
+      if (i !== index) return rule
+      const next = {
+        ...rule,
+        tool_name: "",
+        tool_source: "",
+        mcp_server: "",
+        effect_class: "",
+      }
+      if (type !== "all") next[type as "tool_name" | "tool_source" | "mcp_server" | "effect_class"] = value
+      return next
+    }))
+    markServerApprovalDirty()
+  }
+
   const removeServerRule = (index: number) => {
     setServerApprovalRules((rules) => rules.filter((_, i) => i !== index))
     markServerApprovalDirty()
   }
 
   const saveServerApproval = () => {
-    const rules = serverApprovalRules().map((rule) => {
-      const next: Record<string, string> = { action: rule.action || "require_approval" }
-      for (const field of ["tool_name", "tool_source", "mcp_server", "effect_class", "profile"]) {
-        if (rule[field]?.trim()) next[field] = rule[field].trim()
-      }
-      return next
-    })
+    const rules = serverApprovalRules().map(approvalRuleDraftToPayload)
     settingsMessages.updateServerSettings(vscode, {
       settings: {
         approval: {
@@ -217,12 +251,18 @@ export const AutoApprovalTab: Component<TabProps> = (props) => {
 
       <section class="settings-section settings-section--flat command-approval-section">
         <div class="settings-section-heading">
-          <span>服务端审批策略</span>
+          <span>高级安全策略</span>
           <div class="settings-badge-group">
             <StatusBadge tone="muted">server</StatusBadge>
             <StatusBadge>{approvalActionLabel(serverApprovalDefaultMode())}</StatusBadge>
           </div>
         </div>
+        <p class="setting-description">影响服务端工具审批，适合需要精确限制 MCP、执行类工具或特定 Agent 场景时使用。</p>
+        <details class="settings-details settings-details--embedded server-approval-details">
+          <summary>
+            <span class="codicon codicon-shield" aria-hidden="true" />
+            编辑高级安全策略
+          </summary>
         <div class="settings-form-grid settings-form-grid--two">
           <label class="field-label"><span>默认动作</span>
             <select value={serverApprovalDefaultMode()} onChange={(event) => { setServerApprovalDefaultMode(event.currentTarget.value); markServerApprovalDirty() }}>
@@ -253,16 +293,38 @@ export const AutoApprovalTab: Component<TabProps> = (props) => {
             <For each={serverApprovalRules()}>
               {(rule, index) => (
                 <div class="settings-rule-row">
-                  <input value={rule.tool_name || ""} placeholder="tool_name" onInput={(event) => updateServerRule(index(), "tool_name", event.currentTarget.value)} />
-                  <input value={rule.tool_source || ""} placeholder="tool_source" onInput={(event) => updateServerRule(index(), "tool_source", event.currentTarget.value)} />
-                  <input value={rule.mcp_server || ""} placeholder="mcp_server" onInput={(event) => updateServerRule(index(), "mcp_server", event.currentTarget.value)} />
-                  <input value={rule.effect_class || ""} placeholder="effect_class" onInput={(event) => updateServerRule(index(), "effect_class", event.currentTarget.value)} />
-                  <input value={rule.profile || ""} placeholder="profile" onInput={(event) => updateServerRule(index(), "profile", event.currentTarget.value)} />
-                  <select value={rule.action || "require_approval"} onChange={(event) => updateServerRule(index(), "action", event.currentTarget.value)}>
+                  <label class="field-label">
+                    <span>规则范围</span>
+                    <select
+                      value={serverRuleMatchType(rule)}
+                      onChange={(event) => updateServerRuleMatch(index(), event.currentTarget.value, serverRuleMatchValue(rule))}
+                    >
+                      <For each={SERVER_APPROVAL_MATCH_TYPES}>
+                        {(type) => <option value={type.value}>{type.label}</option>}
+                      </For>
+                    </select>
+                  </label>
+                  <label class="field-label">
+                    <span>匹配对象</span>
+                    <input
+                      value={serverRuleMatchValue(rule)}
+                      disabled={serverRuleMatchType(rule) === "all"}
+                      placeholder={serverRulePlaceholder(serverRuleMatchType(rule))}
+                      onInput={(event) => updateServerRuleMatch(index(), serverRuleMatchType(rule), event.currentTarget.value)}
+                    />
+                  </label>
+                  <label class="field-label">
+                    <span>作用场景</span>
+                    <input value={rule.profile || ""} placeholder="可选，例如 chat / agent-run" onInput={(event) => updateServerRule(index(), "profile", event.currentTarget.value)} />
+                  </label>
+                  <label class="field-label">
+                    <span>动作</span>
+                    <select value={rule.action || "require_approval"} onChange={(event) => updateServerRule(index(), "action", event.currentTarget.value)}>
                     <For each={SERVER_APPROVAL_ACTIONS}>
                       {(action) => <option value={action}>{approvalActionLabel(action)}</option>}
                     </For>
-                  </select>
+                    </select>
+                  </label>
                   <button class="btn-icon" type="button" onClick={() => removeServerRule(index())} title="删除规则" aria-label="删除规则">
                     <span class="codicon codicon-trash" aria-hidden="true" />
                   </button>
@@ -271,6 +333,7 @@ export const AutoApprovalTab: Component<TabProps> = (props) => {
             </For>
           </div>
         </Show>
+        </details>
       </section>
     </div>
   )

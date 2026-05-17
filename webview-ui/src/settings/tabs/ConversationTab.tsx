@@ -1,6 +1,7 @@
 import { Component, For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js"
 import { t, locale, setLocale, LOCALES, type Locale } from "../../i18n"
 import { RefreshButton } from "../../components/common/RefreshButton"
+import { ChoiceMultiSelect } from "../components/ChoiceMultiSelect"
 import { StatusBadge } from "../components/StatusBadge"
 import { settingsMessages } from "../settingsMessages"
 import type { SettingsController } from "../useSettingsController"
@@ -43,6 +44,7 @@ function makeModeId(existing: string[]): string {
 export const ConversationTab: Component<TabProps> = (props) => {
   const {
     refreshAdmin,
+    registeredToolOptions,
     vscode,
     server,
   } = props.controller
@@ -318,9 +320,18 @@ export const ConversationTab: Component<TabProps> = (props) => {
                 <label class="field-label field-label--full"><span>{t("conversation.modes.description")}</span>
                   <input value={mode().description} onInput={(event) => updateMode({ description: event.currentTarget.value })} />
                 </label>
-                <label class="field-label field-label--full"><span>{t("conversation.modes.tools")}</span>
-                  <textarea rows={4} value={mode().toolsText} placeholder={t("conversation.modes.toolsPlaceholder")} onInput={(event) => updateMode({ toolsText: event.currentTarget.value })} />
-                </label>
+                <div class="field-label field-label--full">
+                  <span>{t("conversation.modes.tools")}</span>
+                  <ChoiceMultiSelect
+                    ariaLabel={t("conversation.modes.tools")}
+                    options={registeredToolOptions()}
+                    valueText={mode().toolsText}
+                    onChangeText={(next) => updateMode({ toolsText: next })}
+                    emptyMessage={t("conversation.modes.toolsEmpty")}
+                    searchPlaceholder={t("conversation.modes.toolsSearch")}
+                    unknownLabel={t("conversation.modes.customTools")}
+                  />
+                </div>
                 <label class="field-label field-label--full"><span>{t("conversation.modes.promptAppend")}</span>
                   <textarea rows={5} value={mode().promptAppend} onInput={(event) => updateMode({ promptAppend: event.currentTarget.value })} />
                 </label>
@@ -335,10 +346,15 @@ export const ConversationTab: Component<TabProps> = (props) => {
       </section>
 
       <section class="settings-section settings-section--plain">
-        <div class="settings-section-heading"><span>{t("conversation.globalPrompt.title")}</span></div>
-        <label class="field-label field-label--full">
-          <textarea rows={7} value={globalSystemAppend()} onInput={(event) => { setGlobalSystemAppend(event.currentTarget.value); markDirty() }} />
-        </label>
+        <details class="settings-details settings-details--embedded" open={Boolean(globalSystemAppend().trim())}>
+          <summary>
+            <span class="codicon codicon-settings-gear" aria-hidden="true" />
+            {t("conversation.globalPrompt.title")}
+          </summary>
+          <label class="field-label field-label--full">
+            <textarea rows={7} value={globalSystemAppend()} onInput={(event) => { setGlobalSystemAppend(event.currentTarget.value); markDirty() }} />
+          </label>
+        </details>
       </section>
     </div>
   )
