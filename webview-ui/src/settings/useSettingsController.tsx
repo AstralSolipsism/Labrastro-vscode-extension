@@ -25,7 +25,7 @@ import {
   sanitizeAutoApproveOptions,
   serverAgentRunSettingsPayload,
 } from "./settingsControllerUtils"
-import { isAccountAdminRole, resolveConnectionNotice, uniqueCommandRules } from "./utils"
+import { isAccountAdminRole, resolveConnectionNotice, uniqueCommandRules, type ChoiceOption } from "./utils"
 import {
   DEFAULT_AUTO_APPROVE_OPTIONS,
   approvalFromPayload,
@@ -150,7 +150,8 @@ interface EnvironmentEntryState {
   version?: string
   check: string
   install: string
-  command?: string
+  command?: string
+  alias?: string
   tags: string[]
   status: EnvironmentEntryStatus
   detail?: string
@@ -1733,6 +1734,27 @@ export function createSettingsController(props: SettingsViewProps) {
     const groups = toolchainGroups()
     return groups.mcp.map((item) => item.name)
   })
+  const registeredToolOptions = createMemo<ChoiceOption[]>(() => {
+    const groups = toolchainGroups()
+    const seen = new Set<string>()
+    const options: ChoiceOption[] = []
+    const add = (id: unknown, kind: string, description?: unknown) => {
+      const value = stringValue(id).trim()
+      if (!value || seen.has(value)) return
+      seen.add(value)
+      options.push({
+        id: value,
+        label: value,
+        kind,
+        description: stringValue(description),
+      })
+    }
+    for (const item of groups.cli) add(item.name, "CLI", item.command || stringValue((item as unknown as Record<string, unknown>).alias))
+    for (const item of groups.mcp) add(item.name, "MCP", item.command || stringValue((item as unknown as Record<string, unknown>).alias))
+    for (const item of groups.skill) add(item.name, "Skill", item.source || stringValue((item as unknown as Record<string, unknown>).alias))
+    for (const item of capabilityPackageViews()) add(item.id, "能力包", item.description || item.name)
+    return options.sort((a, b) => `${a.kind}:${a.id}`.localeCompare(`${b.kind}:${b.id}`))
+  })
   const profileIdList = createMemo(() => Object.keys(profileDrafts()))
   const currentProfileDraft = createMemo(() => profileDrafts()[selectedProfileId()])
   const currentAgentDraft = createMemo(() => agentDrafts()[selectedAgentId()])
@@ -3128,6 +3150,7 @@ const refreshAdmin = () => {
     agentRunsAgents,
     environmentAgentCandidates,
     registeredMcpServers,
+    registeredToolOptions,
     profileIdList,
     currentProfileDraft,
     currentAgentDraft,

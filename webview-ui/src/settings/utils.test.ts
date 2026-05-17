@@ -1,15 +1,19 @@
 ﻿import { describe, expect, it } from "vitest"
 import {
   PROVIDER_KIND_REGISTRY,
+  approvalRuleDraftToPayload,
   agentDefinitionDraftToPayload,
+  choiceListToText,
   inferProviderKind,
   isAccountAdminRole,
+  modelOwnerDisplay,
   modelProfilePayload,
   normalizeEnvironmentSnapshot,
   providerDraftToPayload,
   resolveConnectionNotice,
   resolveProviderProtocol,
   runtimeProfileDraftToPayload,
+  textToChoiceList,
   toolchainEditorToPayload,
   uniqueCommandRules,
 } from "./utils"
@@ -212,6 +216,37 @@ describe("settings utils", () => {
       "git status",
       "npm test",
     ])
+  })
+
+  it("maps choice lists without losing historical custom values", () => {
+    expect(textToChoiceList("github\ncontext7, github\ncustom-tool")).toEqual([
+      "github",
+      "context7",
+      "custom-tool",
+    ])
+    expect(choiceListToText(["github", " context7 ", "github", "", "custom-tool"], ", ")).toBe("github, context7, custom-tool")
+  })
+
+  it("hides model owner text when it duplicates the provider", () => {
+    expect(modelOwnerDisplay("deepseek", "deepseek")).toBeUndefined()
+    expect(modelOwnerDisplay("DeepSeek", "deepseek")).toBeUndefined()
+    expect(modelOwnerDisplay("provider", "deepseek")).toBeUndefined()
+    expect(modelOwnerDisplay("openrouter", "deepseek")).toBe("openrouter")
+  })
+
+  it("serializes approval rule drafts to the server payload shape", () => {
+    expect(approvalRuleDraftToPayload({
+      tool_name: " shell ",
+      tool_source: "",
+      mcp_server: "",
+      effect_class: "",
+      profile: " agent-run ",
+      action: "deny",
+    })).toEqual({
+      tool_name: "shell",
+      profile: "agent-run",
+      action: "deny",
+    })
   })
 
   it("normalizes settings controller helper payloads", () => {

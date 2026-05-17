@@ -85,6 +85,13 @@ export interface ToolchainEditorState {
   docsText: string
 }
 
+export interface ChoiceOption {
+  id: string
+  label?: string
+  description?: string
+  kind?: string
+}
+
 export const PROVIDER_TYPE_OPTIONS: ProviderType[] = ["openai_chat", "anthropic_messages", "openai_responses"]
 export const PROVIDER_COMPAT_OPTIONS: ProviderCompat[] = ["generic", "deepseek", "kimi", "glm", "qwen", "zenmux"]
 export const PROVIDER_KIND_REGISTRY: ProviderKindOption[] = [
@@ -237,6 +244,40 @@ export function parseStringList(text: string): string[] {
     values.push(value)
   }
   return values
+}
+
+export function textToChoiceList(text: string): string[] {
+  return parseStringList(text)
+}
+
+export function choiceListToText(values: string[], delimiter = "\n"): string {
+  const seen = new Set<string>()
+  const next: string[] = []
+  for (const item of values) {
+    const value = String(item).trim()
+    if (!value || seen.has(value)) continue
+    seen.add(value)
+    next.push(value)
+  }
+  return next.join(delimiter)
+}
+
+export function modelOwnerDisplay(owner: unknown, providerId: unknown): string | undefined {
+  const value = stringValue(owner).trim()
+  const provider = stringValue(providerId).trim()
+  if (!value || value.toLowerCase() === provider.toLowerCase() || value === "provider") return undefined
+  return value
+}
+
+export function approvalRuleDraftToPayload(rule: Record<string, unknown>): Record<string, string> {
+  const next: Record<string, string> = {
+    action: stringValue(rule.action, "require_approval") || "require_approval",
+  }
+  for (const field of ["tool_name", "tool_source", "mcp_server", "effect_class", "profile"]) {
+    const value = stringValue(rule[field]).trim()
+    if (value) next[field] = value
+  }
+  return next
 }
 
 export function uniqueCommandRules(values: string[]): string[] {

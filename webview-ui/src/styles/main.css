@@ -1056,9 +1056,9 @@ button {
 
 .settings-rule-row {
   display: grid;
-  grid-template-columns: repeat(6, minmax(90px, 1fr)) var(--ez-hit-target-sm);
-  gap: 6px;
-  align-items: center;
+  grid-template-columns: minmax(140px, 0.8fr) minmax(180px, 1.2fr) minmax(150px, 1fr) minmax(120px, 0.8fr) var(--ez-hit-target-sm);
+  gap: 8px;
+  align-items: end;
 }
 
 .model-capability-sync__interval {
@@ -3626,6 +3626,56 @@ button {
   background: color-mix(in srgb, var(--ez-link) 9%, transparent);
 }
 
+.settings-subtabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid var(--ez-border);
+  border-radius: var(--ez-radius);
+  background: color-mix(in srgb, var(--ez-surface-soft) 80%, transparent);
+}
+
+.settings-subtab-button {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--ez-muted);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.16s, background 0.16s, color 0.16s, transform 0.16s;
+}
+
+.settings-subtab-button:hover {
+  color: var(--ez-fg);
+  background: var(--ez-hover);
+}
+
+.settings-subtab-button:active {
+  transform: scale(0.98);
+}
+
+.settings-subtab-button:focus-visible {
+  outline: 1px solid var(--ez-focus);
+  outline-offset: 1px;
+}
+
+.settings-subtab-button--active {
+  color: var(--ez-fg);
+  border-color: color-mix(in srgb, var(--ez-link) 35%, var(--ez-border));
+  background: color-mix(in srgb, var(--ez-link) 9%, transparent);
+}
+
+.settings-section--hidden {
+  display: none !important;
+}
+
 .account-panel-grid {
   display: grid;
   gap: 14px;
@@ -4087,6 +4137,135 @@ button {
 
 .settings-details--embedded > summary {
   padding: 8px 0;
+}
+
+.choice-multiselect {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.choice-multiselect__chips,
+.choice-multiselect__unknown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.choice-chip {
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 5px 2px 7px;
+  border: 1px solid var(--ez-border);
+  border-radius: 999px;
+  color: var(--ez-fg);
+  background: color-mix(in srgb, var(--ez-surface-soft) 76%, transparent);
+}
+
+.choice-chip--unknown {
+  border-color: color-mix(in srgb, var(--ez-warning) 42%, var(--ez-border));
+}
+
+.choice-chip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.choice-chip button {
+  width: 18px;
+  height: 18px;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  color: var(--ez-muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.choice-multiselect__search {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid var(--vscode-input-border, var(--ez-border));
+  border-radius: 5px;
+  background: var(--ez-input);
+}
+
+.choice-multiselect__search input {
+  min-width: 0;
+  height: 30px;
+  border: 0;
+  color: var(--vscode-input-foreground, var(--ez-fg));
+  background: transparent;
+  outline: 0;
+}
+
+.choice-multiselect__unknown {
+  color: var(--ez-muted);
+  font-size: 11px;
+}
+
+.choice-multiselect__unknown code {
+  padding: 2px 5px;
+  border: 1px solid color-mix(in srgb, var(--ez-warning) 42%, var(--ez-border));
+  border-radius: 4px;
+  color: var(--ez-fg);
+  background: color-mix(in srgb, var(--ez-warning) 8%, transparent);
+}
+
+.choice-multiselect__options {
+  max-height: 180px;
+  display: grid;
+  gap: 4px;
+  overflow: auto;
+}
+
+.choice-option {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--ez-border);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--ez-surface) 72%, transparent);
+  cursor: pointer;
+}
+
+.choice-option:hover {
+  background: var(--ez-hover);
+}
+
+.choice-option > span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.choice-option strong,
+.choice-option small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.choice-option small {
+  color: var(--ez-muted);
+  font-size: 11px;
+}
+
+.choice-multiselect__custom-add {
+  justify-self: start;
 }
 
 .agent-config-choice-list {
