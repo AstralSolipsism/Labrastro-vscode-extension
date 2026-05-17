@@ -1027,6 +1027,17 @@ describe("LabrastroRemoteClient chat start", () => {
     await client.streamChat("chat-1", 7)
     await client.chatStatus("chat-1", 8)
     await client.cancelChat("chat-1", "user_stop")
+    await client.followUpChat({
+      chatId: "chat-1",
+      text: "guide this turn",
+      followupId: "follow-1",
+      clientRequestId: "req-1",
+    })
+    await client.cancelChatFollowUp({
+      chatId: "chat-1",
+      followupId: "follow-1",
+      reason: "user_changed_to_queue",
+    })
     await client.approvalReply({
       chat_id: "chat-1",
       approval_id: "approval-1",
@@ -1083,6 +1094,25 @@ describe("LabrastroRemoteClient chat start", () => {
           peer_token: "peer-token-1",
           chat_id: "chat-1",
           reason: "user_stop",
+        },
+      },
+      {
+        pathname: "/remote/chat/follow-up",
+        body: {
+          peer_token: "peer-token-1",
+          chat_id: "chat-1",
+          text: "guide this turn",
+          followup_id: "follow-1",
+          client_request_id: "req-1",
+        },
+      },
+      {
+        pathname: "/remote/chat/follow-up/cancel",
+        body: {
+          peer_token: "peer-token-1",
+          chat_id: "chat-1",
+          followup_id: "follow-1",
+          reason: "user_changed_to_queue",
         },
       },
       {

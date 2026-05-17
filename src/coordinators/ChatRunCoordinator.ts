@@ -34,6 +34,7 @@ export interface ChatRunCoordinatorOptions {
       workflowMode?: string
       taskflowId?: string
       draftSessionId?: string
+      clientRequestId?: string
       providerId?: string
       modelId?: string
       parameters?: Record<string, unknown>
@@ -117,6 +118,11 @@ export class ChatRunCoordinator {
             workflowMode: stringValue(message.workflowMode) || stringValue(message.workflow_mode),
             taskflowId: stringValue(message.taskflowId) || stringValue(message.taskflow_id),
             draftSessionId: stringValue(message.draftSessionId) || stringValue(message.draft_session_id),
+            clientRequestId:
+              stringValue(message.clientRequestId) ||
+              stringValue(message.client_request_id) ||
+              stringValue(message.requestId) ||
+              stringValue(message.request_id),
             providerId,
             modelId,
             parameters: message.parameters && typeof message.parameters === "object"
@@ -128,6 +134,45 @@ export class ChatRunCoordinator {
       case "chat.cancel":
         await this.options.cancelChat(stringValue(message.chatId), post)
         return true
+      case "chat.followup": {
+        const chatId = stringValue(message.chatId) || stringValue(message.chat_id) || this.activeChatId || ""
+        const text = stringValue(message.text) || ""
+        if (!chatId || !text.trim()) return true
+        const followupId = stringValue(message.followupId) || stringValue(message.followup_id)
+        const clientRequestId =
+          stringValue(message.clientRequestId) ||
+          stringValue(message.client_request_id) ||
+          stringValue(message.requestId) ||
+          stringValue(message.request_id)
+        try {
+          await this.options.client.followUpChat({
+            chatId,
+            text,
+            ...(followupId ? { followupId } : {}),
+            ...(clientRequestId ? { clientRequestId } : {}),
+          })
+        } catch (error) {
+          post({ type: "chat.error", message: chatErrorMessage(error) })
+          await this.options.postConnectionStateIfAuthRequired(error, post)
+        }
+        return true
+      }
+      case "chat.followup.cancel": {
+        const chatId = stringValue(message.chatId) || stringValue(message.chat_id) || this.activeChatId || ""
+        const followupId = stringValue(message.followupId) || stringValue(message.followup_id)
+        if (!chatId || !followupId) return true
+        try {
+          await this.options.client.cancelChatFollowUp({
+            chatId,
+            followupId,
+            reason: stringValue(message.reason) || "user_changed_to_queue",
+          })
+        } catch (error) {
+          post({ type: "chat.error", message: chatErrorMessage(error) })
+          await this.options.postConnectionStateIfAuthRequired(error, post)
+        }
+        return true
+      }
       case "approval.reply": {
         const chatId =
           stringValue(message.chatId) ||

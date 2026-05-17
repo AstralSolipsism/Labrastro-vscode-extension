@@ -125,6 +125,8 @@ export type WebviewToHostMessageType =
   | "autoApproval.get"
   | "autoApproval.update"
   | "chat.cancel"
+  | "chat.followup"
+  | "chat.followup.cancel"
   | "chat.send"
   | "chat.sendDuringRunMode.get"
   | "chat.sendDuringRunMode.update"
@@ -308,6 +310,8 @@ const WEBVIEW_TO_HOST_TYPES = new Set<WebviewToHostMessageType>([
   "autoApproval.get",
   "autoApproval.update",
   "chat.cancel",
+  "chat.followup",
+  "chat.followup.cancel",
   "chat.send",
   "chat.sendDuringRunMode.get",
   "chat.sendDuringRunMode.update",

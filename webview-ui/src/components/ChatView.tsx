@@ -34,8 +34,17 @@ import {
   clearPromptQueue,
   createPromptQueueState,
   enqueuePrompt,
+  guidePromptCount,
+  markPromptConsumed,
+  markPromptSubmitted,
+  markPromptUnconsumed,
+  queuedPromptCount,
+  removePromptItem,
   resolvePromptQueueAfterChat,
   resumePromptQueue,
+  switchPromptMode,
+  type PendingPromptItem,
+  type PendingPromptMode,
   type PromptQueueState,
 } from "../chat/promptQueue"
 import { resolveRuntimeStatusUiAction } from "../chat/runtimeStatus"
@@ -178,6 +187,12 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const selectedModelLabel = createMemo(() => modelLabel(selectedModelProfile(), modelOptions(), trace.stats().model))
   const selectedModelDescription = createMemo(() => modelDescription(selectedModelProfile(), modelOptions(), trace.stats().model))
   const visibleModelError = createMemo(() => modelSwitchError() || requiredModelSelection().message)
+  const sendDuringRunMode = createMemo<PendingPromptMode>(() =>
+    server.chatSendDuringRunModeState().mode === "queue" ? "queue" : "guide"
+  )
+  const queuedPromptItems = createMemo(() =>
+    queuedPrompts().items.filter((item) => item.mode === "queue")
+  )
   const pendingModelLabel = createMemo(() => {
     const pending = pendingModelProfile()
     return pending ? `当前回复结束后切换到 ${modelLabel(pending, modelOptions(), pending)}` : ""
@@ -868,6 +883,29 @@ const ChatView: Component<ChatViewProps> = (props) => {
       }, eventMeta)
     } else if (type === "usage_update" || type === "run_stats") {
       applyUsageUpdate(payload)
+    } else if (type === "chat_follow_up_accepted") {
+      const itemId = stringValue(payload.client_request_id) || stringValue(payload.request_id)
+      const followupId = stringValue(payload.followup_id)
+      if (itemId && followupId) {
+        setQueuedPrompts((current) => markPromptSubmitted(current, itemId, followupId))
+      }
+    } else if (type === "chat_follow_up_consumed") {
+      const followupId = stringValue(payload.followup_id)
+      if (followupId) {
+        setQueuedPrompts((current) => markPromptConsumed(current, followupId))
+      }
+    } else if (type === "chat_follow_up_cancelled") {
+      const followupId = stringValue(payload.followup_id)
+      if (followupId) {
+        setQueuedPrompts((current) => markPromptUnconsumed(current, followupId))
+      }
+    } else if (type === "chat_follow_up_unconsumed") {
+      const followupId = stringValue(payload.followup_id)
+      if (followupId) {
+        setQueuedPrompts((current) =>
+          markPromptUnconsumed(current, followupId, "当前回复未出现可注入点，已转为排队。")
+        )
+      }
     } else if (type === "tool_call_start") {
       const toolName = String(payload.tool_name || "tool")
       const toolCallId = requiredToolCallId(payload)
@@ -1137,6 +1175,52 @@ const ChatView: Component<ChatViewProps> = (props) => {
     await writeClipboard(copyTextForTranscript(trace.turns()))
   }
 
+  const submitGuidePrompt = (item: PendingPromptItem) => {
+    const chatId = activeChatId()
+    if (!chatId || item.mode !== "guide" || item.state !== "pending") return
+    const followupId = item.followupId || `follow-${item.id}`
+    setQueuedPrompts((current) => markPromptSubmitted(current, item.id, followupId))
+    chatMessages.followUp(vscode, {
+      chatId,
+      text: item.text,
+      followupId,
+      requestId: item.requestId,
+    })
+  }
+
+  const submitPendingGuidePrompts = () => {
+    if (!isWorking() || !activeChatId()) return
+    const pending = queuedPrompts().items.filter((item) =>
+      item.mode === "guide" && item.state === "pending"
+    )
+    for (const item of pending) {
+      submitGuidePrompt(item)
+    }
+  }
+
+  createEffect(() => {
+    submitPendingGuidePrompts()
+  })
+
+  const cancelGuidePromptIfSubmitted = (item: PendingPromptItem, reason = "user_changed_to_queue") => {
+    const chatId = activeChatId()
+    if (!chatId || item.mode !== "guide" || !item.followupId) return
+    chatMessages.cancelFollowUp(vscode, chatId, item.followupId, reason)
+  }
+
+  const switchPendingPromptMode = (item: PendingPromptItem, mode: PendingPromptMode) => {
+    if (item.mode === mode) return
+    if (item.mode === "guide" && mode === "queue") {
+      cancelGuidePromptIfSubmitted(item)
+    }
+    setQueuedPrompts((current) => switchPromptMode(current, item.id, mode))
+  }
+
+  const removePendingPrompt = (item: PendingPromptItem) => {
+    cancelGuidePromptIfSubmitted(item, "user_removed")
+    setQueuedPrompts((current) => removePromptItem(current, item.id))
+  }
+
   const continueQueuedPrompts = () => {
     if (isWorking() || modelSwitching()) return
     const resumed = resumePromptQueue(queuedPrompts())
@@ -1147,6 +1231,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
   }
 
   const clearQueuedPrompts = () => {
+    for (const item of queuedPrompts().items) {
+      cancelGuidePromptIfSubmitted(item, "user_cleared")
+    }
     setQueuedPrompts(clearPromptQueue())
   }
 
@@ -1359,7 +1446,12 @@ const ChatView: Component<ChatViewProps> = (props) => {
 
   const handleSend = (text: string) => {
     if (isWorking()) {
-      setQueuedPrompts((current) => enqueuePrompt(current, text))
+      const mode = sendDuringRunMode()
+      setQueuedPrompts((current) =>
+        enqueuePrompt(current, text, mode, {
+          requestId: `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        })
+      )
       return
     }
     sendChatText(text)
@@ -1975,13 +2067,42 @@ const ChatView: Component<ChatViewProps> = (props) => {
         <Show when={queuedPrompts().items.length > 0}>
           <div class="prompt-queue-banner" role="status">
             <span class="codicon codicon-history" aria-hidden="true" />
-            <span>
-              {queuedPrompts().paused
-                ? `${queuedPrompts().items.length} 条输入已排队，上一轮未成功完成。`
-                : `${queuedPrompts().items.length} 条输入会在当前回复后继续发送。`}
-            </span>
+            <div class="prompt-queue-banner__body">
+              <strong>
+                {queuedPrompts().paused
+                  ? `${queuedPromptCount(queuedPrompts())} 条输入已暂停`
+                  : `${guidePromptCount(queuedPrompts())} 条引导，${queuedPromptCount(queuedPrompts())} 条排队`}
+              </strong>
+              <div class="prompt-queue-list">
+                <For each={queuedPrompts().items}>
+                  {(item) => (
+                    <div class={`prompt-queue-item prompt-queue-item--${item.mode}`}>
+                      <span
+                        class={`codicon ${item.mode === "guide" ? "codicon-comment-discussion" : "codicon-history"}`}
+                        aria-hidden="true"
+                      />
+                      <span class="prompt-queue-item__text" title={item.text}>{item.text}</span>
+                      <span class="prompt-queue-item__status">
+                        {item.mode === "guide"
+                          ? item.state === "submitted" ? "等待注入" : "引导"
+                          : item.error || (queuedPrompts().paused ? "已暂停" : "排队")}
+                      </span>
+                      <div class="prompt-queue-item__actions">
+                        <button
+                          type="button"
+                          onClick={() => switchPendingPromptMode(item, item.mode === "guide" ? "queue" : "guide")}
+                        >
+                          {item.mode === "guide" ? "转排队" : "转引导"}
+                        </button>
+                        <button type="button" onClick={() => removePendingPrompt(item)}>移除</button>
+                      </div>
+                    </div>
+                  )}
+                </For>
+              </div>
+            </div>
             <div class="prompt-queue-banner__actions">
-              <Show when={!isWorking()}>
+              <Show when={!isWorking() && queuedPromptItems().length > 0}>
                 <button type="button" onClick={continueQueuedPrompts}>继续发送</button>
               </Show>
               <button type="button" onClick={clearQueuedPrompts}>清空</button>

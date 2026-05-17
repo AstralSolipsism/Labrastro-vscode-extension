@@ -5,6 +5,8 @@ function coordinator() {
   const options = {
     client: {
       approvalReply: vi.fn(),
+      followUpChat: vi.fn(async () => ({ ok: true })),
+      cancelChatFollowUp: vi.fn(async () => ({ ok: true })),
       getTaskflowState: vi.fn(async () => ({ ok: true, taskflow: { id: "taskflow-1" } })),
       getTaskflowWorkspace: vi.fn(async () => ({ ok: true, schema_version: "taskflow.workspace.v1" })),
       getTaskflowRuntime: vi.fn(async () => ({ ok: true, task_runs: [] })),
@@ -111,6 +113,42 @@ describe("ChatRunCoordinator", () => {
       approval_id: "approval-1",
       decision: "allow_once",
       reason: "ok",
+    })
+  })
+
+  it("routes chat follow-ups to the active run and supports cancellation", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    subject.setActiveRun({
+      chatId: "active-chat",
+      cursor: 0,
+      status: "running",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reconnectAttempts: 0,
+    })
+
+    await subject.handleMessage({
+      type: "chat.followup",
+      text: "use this extra constraint",
+      followupId: "follow-1",
+      requestId: "req-1",
+    }, post)
+    await subject.handleMessage({
+      type: "chat.followup.cancel",
+      followupId: "follow-1",
+      reason: "user_changed_to_queue",
+    }, post)
+
+    expect(options.client.followUpChat).toHaveBeenCalledWith({
+      chatId: "active-chat",
+      text: "use this extra constraint",
+      followupId: "follow-1",
+      clientRequestId: "req-1",
+    })
+    expect(options.client.cancelChatFollowUp).toHaveBeenCalledWith({
+      chatId: "active-chat",
+      followupId: "follow-1",
+      reason: "user_changed_to_queue",
     })
   })
 

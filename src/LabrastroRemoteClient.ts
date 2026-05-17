@@ -553,6 +553,7 @@ export class LabrastroRemoteClient {
       providerId?: string
       modelId?: string
       parameters?: JsonObject
+      clientRequestId?: string
     } = {}
   ): Promise<JsonObject> {
     const taskflowId = options.taskflowId?.trim()
@@ -565,6 +566,7 @@ export class LabrastroRemoteClient {
       peer_token: peer.peer_token,
       prompt,
       session_hint: sessionId,
+      client_request_id: options.clientRequestId || `chat-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
       ...(options.mode?.trim() ? { mode: options.mode.trim() } : {}),
       ...(options.workflowMode?.trim() ? { workflow_mode: options.workflowMode.trim() } : {}),
       ...(taskflowId ? { taskflow_id: taskflowId } : {}),
@@ -843,6 +845,34 @@ export class LabrastroRemoteClient {
       peer_token: peer.peer_token,
       chat_id: chatId,
       reason,
+    }))
+  }
+
+  async followUpChat(payload: {
+    chatId: string
+    text: string
+    followupId?: string
+    clientRequestId?: string
+  }): Promise<JsonObject> {
+    return this.postPeerJson("/remote/chat/follow-up", (peer) => ({
+      peer_token: peer.peer_token,
+      chat_id: payload.chatId,
+      text: payload.text,
+      ...(payload.followupId ? { followup_id: payload.followupId } : {}),
+      ...(payload.clientRequestId ? { client_request_id: payload.clientRequestId } : {}),
+    }))
+  }
+
+  async cancelChatFollowUp(payload: {
+    chatId: string
+    followupId: string
+    reason?: string
+  }): Promise<JsonObject> {
+    return this.postPeerJson("/remote/chat/follow-up/cancel", (peer) => ({
+      peer_token: peer.peer_token,
+      chat_id: payload.chatId,
+      followup_id: payload.followupId,
+      reason: payload.reason || "user_changed_to_queue",
     }))
   }
 

@@ -10,6 +10,7 @@ export interface ChatSendInput {
   text: string
   sessionId?: string
   draftSessionId?: string
+  requestId?: string
   mode?: string
   workflowMode?: ChatWorkflowMode
   providerId?: string
@@ -23,6 +24,13 @@ export interface SessionModelSwitchInput {
   modelId: string
   requestId?: string
   parameters?: Record<string, unknown>
+}
+
+export interface ChatFollowUpInput {
+  chatId: string
+  text: string
+  followupId: string
+  requestId?: string
 }
 
 export function routeSelectedChatMode(
@@ -48,6 +56,7 @@ export function buildChatSendMessage(input: ChatSendInput): WebviewToHostMessage
     text,
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     ...(input.draftSessionId ? { draftSessionId: input.draftSessionId } : {}),
+    ...(input.requestId ? { requestId: input.requestId } : {}),
     ...(mode ? { mode } : {}),
     ...(workflowMode ? { workflowMode } : {}),
     ...(providerId && modelId ? { providerId, modelId } : {}),
@@ -81,6 +90,25 @@ export const chatMessages = {
     port.postMessage({
       type: "chat.cancel",
       ...(chatId ? { chatId } : {}),
+      reason,
+    })
+  },
+
+  followUp(port: ChatMessagePort, input: ChatFollowUpInput): void {
+    port.postMessage({
+      type: "chat.followup",
+      chatId: input.chatId,
+      text: input.text,
+      followupId: input.followupId,
+      ...(input.requestId ? { requestId: input.requestId } : {}),
+    })
+  },
+
+  cancelFollowUp(port: ChatMessagePort, chatId: string, followupId: string, reason = "user_changed_to_queue"): void {
+    port.postMessage({
+      type: "chat.followup.cancel",
+      chatId,
+      followupId,
       reason,
     })
   },
