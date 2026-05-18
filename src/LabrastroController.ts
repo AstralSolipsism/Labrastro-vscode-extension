@@ -155,6 +155,7 @@ export class LabrastroController implements vscode.Disposable {
       approvalDocuments: this.approvalDocuments,
       startChat: this.startChat.bind(this),
       cancelChat: this.cancelChat.bind(this),
+      recoverChat: this.recoverChat.bind(this),
       postConnectionStateIfAuthRequired: this.postConnectionStateIfAuthRequired.bind(this),
     })
     this.context.subscriptions.push(
@@ -1202,7 +1203,21 @@ export class LabrastroController implements vscode.Disposable {
         lastStreamAt: new Date().toISOString(),
       })
       this.emitChatMessage({ type: "chat.session", chatId, sessionId }, post)
-      let cursor = 0
+      await this.pollChatStream(chatId, sessionId || "", post)
+    } catch (error) {
+      this.emitChatMessage({ type: "chat.error", message: chatErrorMessage(error) }, post)
+      await this.postConnectionStateIfAuthRequired(error, post)
+      this.chatRunCoordinator.clearActiveRun()
+    }
+  }
+
+  private async pollChatStream(
+    chatId: string,
+    initialSessionId: string,
+    post: PostMessage
+  ): Promise<void> {
+      let sessionId = initialSessionId
+      let cursor = this.chatRunCoordinator.activeRun?.cursor ?? 0
       while (!this.disposed) {
         if (this.chatRunCoordinator.activeRun?.chatId !== chatId) {
           break
@@ -1314,6 +1329,31 @@ export class LabrastroController implements vscode.Disposable {
           break
         }
       }
+  }
+
+  private async recoverChat(
+    chatId: string,
+    action: "continue" | "retry",
+    post: PostMessage
+  ): Promise<void> {
+    try {
+      await this.client.recoverChat({ chatId, action })
+      const status = await this.client.chatStatus(chatId)
+      const sessionId = stringValue(status.session_id) || stringValue(status.sessionId) || ""
+      this.chatRunCoordinator.setActiveRun({
+        chatId,
+        cursor: Number(status.next_cursor ?? status.cursor ?? 0),
+        sessionId,
+        status: "running",
+        startedAt: new Date().toISOString(),
+        reconnectAttempts: 0,
+        lastStreamAt: new Date().toISOString(),
+      })
+      this.emitChatMessage({
+        type: "chat.resume",
+        payload: { chatId, sessionId, status: "running" },
+      }, post)
+      await this.pollChatStream(chatId, sessionId, post)
     } catch (error) {
       this.emitChatMessage({ type: "chat.error", message: chatErrorMessage(error) }, post)
       await this.postConnectionStateIfAuthRequired(error, post)

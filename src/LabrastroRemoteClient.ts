@@ -862,6 +862,17 @@ export class LabrastroRemoteClient {
     }))
   }
 
+  async recoverChat(payload: {
+    chatId: string
+    action: "continue" | "retry"
+  }): Promise<JsonObject> {
+    return this.postPeerJson("/remote/chat/recover", (peer) => ({
+      peer_token: peer.peer_token,
+      chat_id: payload.chatId,
+      action: payload.action,
+    }))
+  }
+
   async approvalReply(payload: JsonObject): Promise<JsonObject> {
     return this.postPeerJson("/remote/approval/reply", (peer) => ({
       ...payload,

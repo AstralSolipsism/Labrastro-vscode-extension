@@ -33,6 +33,11 @@ export interface ChatFollowUpInput {
   requestId?: string
 }
 
+export interface ChatRecoverInput {
+  chatId: string
+  action: "continue" | "retry"
+}
+
 export function routeSelectedChatMode(
   mode: string,
   options: { forceDirect?: boolean } = {},
@@ -110,6 +115,14 @@ export const chatMessages = {
       chatId,
       followupId,
       reason,
+    })
+  },
+
+  recover(port: ChatMessagePort, input: ChatRecoverInput): void {
+    port.postMessage({
+      type: "chat.recover",
+      chatId: input.chatId,
+      action: input.action,
     })
   },
 

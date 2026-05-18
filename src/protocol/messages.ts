@@ -126,6 +126,7 @@ export type WebviewToHostMessageType =
   | "chat.cancel"
   | "chat.followup"
   | "chat.followup.cancel"
+  | "chat.recover"
   | "chat.send"
   | "chat.sendDuringRunMode.get"
   | "chat.sendDuringRunMode.update"
@@ -309,6 +310,7 @@ const WEBVIEW_TO_HOST_TYPES = new Set<WebviewToHostMessageType>([
   "chat.cancel",
   "chat.followup",
   "chat.followup.cancel",
+  "chat.recover",
   "chat.send",
   "chat.sendDuringRunMode.get",
   "chat.sendDuringRunMode.update",

@@ -20,6 +20,7 @@ describe("protocol message guards", () => {
     expect(isWebviewToHostMessage({ type: "chat.send", text: "hi" })).toBe(true)
     expect(isWebviewToHostMessage({ type: "chat.followup", chatId: "chat-1", text: "guide" })).toBe(true)
     expect(isWebviewToHostMessage({ type: "chat.followup.cancel", chatId: "chat-1", followupId: "f1" })).toBe(true)
+    expect(isWebviewToHostMessage({ type: "chat.recover", chatId: "chat-1", action: "continue" })).toBe(true)
     expect(isWebviewToHostMessage({ type: "chat.sendDuringRunMode.update", mode: "queue" })).toBe(true)
     expect(isWebviewToHostMessage({ type: "session.load", sessionId: "s1" })).toBe(true)
     expect(isWebviewToHostMessage({ type: "openTaskflow", taskflowId: "tf-1" })).toBe(true)

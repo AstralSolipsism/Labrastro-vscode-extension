@@ -1061,6 +1061,10 @@ describe("LabrastroRemoteClient chat start", () => {
       followupId: "follow-1",
       reason: "user_changed_to_queue",
     })
+    await client.recoverChat({
+      chatId: "chat-1",
+      action: "continue",
+    })
     await client.approvalReply({
       chat_id: "chat-1",
       approval_id: "approval-1",
@@ -1126,6 +1130,14 @@ describe("LabrastroRemoteClient chat start", () => {
           chat_id: "chat-1",
           followup_id: "follow-1",
           reason: "user_changed_to_queue",
+        },
+      },
+      {
+        pathname: "/remote/chat/recover",
+        body: {
+          peer_token: "peer-token-1",
+          chat_id: "chat-1",
+          action: "continue",
         },
       },
       {

@@ -41,6 +41,11 @@ export interface ChatRunCoordinatorOptions {
     }
   ) => Promise<void>
   cancelChat: (chatId: string | undefined, post: PostMessage) => Promise<void>
+  recoverChat: (
+    chatId: string,
+    action: "continue" | "retry",
+    post: PostMessage
+  ) => Promise<void>
   postConnectionStateIfAuthRequired: (error: unknown, post: PostMessage) => Promise<void>
 }
 
@@ -134,6 +139,14 @@ export class ChatRunCoordinator {
       case "chat.cancel":
         await this.options.cancelChat(stringValue(message.chatId), post)
         return true
+      case "chat.recover": {
+        const chatId = stringValue(message.chatId) || stringValue(message.chat_id) || this.activeChatId || ""
+        const rawAction = stringValue(message.action) || "continue"
+        const action = rawAction === "retry" ? "retry" : "continue"
+        if (!chatId) return true
+        await this.options.recoverChat(chatId, action, post)
+        return true
+      }
       case "chat.followup": {
         const chatId = stringValue(message.chatId) || stringValue(message.chat_id) || this.activeChatId || ""
         const text = stringValue(message.text) || ""

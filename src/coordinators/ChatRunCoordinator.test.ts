@@ -7,6 +7,7 @@ function coordinator() {
       approvalReply: vi.fn(),
       followUpChat: vi.fn(async () => ({ ok: true })),
       cancelChatFollowUp: vi.fn(async () => ({ ok: true })),
+      recoverChat: vi.fn(async () => ({ ok: true })),
       getTaskflowState: vi.fn(async () => ({ ok: true, taskflow: { id: "taskflow-1" } })),
       getTaskflowWorkspace: vi.fn(async () => ({ ok: true, schema_version: "taskflow.workspace.v1" })),
       getTaskflowRuntime: vi.fn(async () => ({ ok: true, task_runs: [] })),
@@ -37,6 +38,7 @@ function coordinator() {
     },
     startChat: vi.fn(),
     cancelChat: vi.fn(),
+    recoverChat: vi.fn(),
     postConnectionStateIfAuthRequired: vi.fn(),
   }
   return {
@@ -150,6 +152,25 @@ describe("ChatRunCoordinator", () => {
       followupId: "follow-1",
       reason: "user_changed_to_queue",
     })
+  })
+
+  it("routes chat.recover to the active interrupted chat", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    subject.setActiveRun({
+      chatId: "active-chat",
+      cursor: 7,
+      status: "running",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reconnectAttempts: 0,
+    })
+
+    await subject.handleMessage({
+      type: "chat.recover",
+      action: "retry",
+    }, post)
+
+    expect(options.recoverChat).toHaveBeenCalledWith("active-chat", "retry", post)
   })
 
   it("routes taskflow complexity requests and posts results", async () => {
