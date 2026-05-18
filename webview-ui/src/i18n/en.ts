@@ -560,6 +560,7 @@ const en: Record<string, string> = {
   "task.status.stopping": "Stopping",
   "task.status.cancelled": "Stopped",
   "task.status.error": "Error",
+  "task.status.interrupted": "Recoverable",
   "task.status.done": "Done",
   "task.status.ready": "Ready",
   "task.stopSession": "Stop current session",

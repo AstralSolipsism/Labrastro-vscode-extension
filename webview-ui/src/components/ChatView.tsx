@@ -121,6 +121,7 @@ interface ChatViewProps {
 }
 
 const MODEL_SWITCH_TIMEOUT_MS = 20_000
+type ChatRunStatus = "idle" | "running" | "stopping" | "cancelled" | "done" | "error" | "interrupted"
 
 const ChatView: Component<ChatViewProps> = (props) => {
   const trace = useTrace()
@@ -131,7 +132,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const [workingElapsed, setWorkingElapsed] = createSignal("0:00")
   const [activeChatId, setActiveChatId] = createSignal<string | undefined>()
   const [activeRunSessionId, setActiveRunSessionId] = createSignal("")
-  const [chatStatus, setChatStatus] = createSignal<"idle" | "running" | "stopping" | "cancelled" | "done" | "error">("idle")
+  const [chatStatus, setChatStatus] = createSignal<ChatRunStatus>("idle")
   const [chatRunSawError, setChatRunSawError] = createSignal(false)
   const [chatRunSawTerminal, setChatRunSawTerminal] = createSignal(false)
   const [pendingCancel, setPendingCancel] = createSignal(false)
@@ -146,6 +147,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const [sessionOperationError, setSessionOperationError] = createSignal("")
   const [sessionSyncStatus, setSessionSyncStatus] = createSignal<Record<string, unknown>>({})
   const [queuedPrompts, setQueuedPrompts] = createSignal<PromptQueueState>(createPromptQueueState())
+  const [streamRecoveryMessage, setStreamRecoveryMessage] = createSignal("")
   const [forkCompose, setForkCompose] = createSignal<ForkComposeState | undefined>()
   const [forkComposeNonce, setForkComposeNonce] = createSignal(0)
   const initialWebviewState = vscode.getState<ChatWebviewState>() || {}
@@ -356,13 +358,16 @@ const ChatView: Component<ChatViewProps> = (props) => {
   }
 
   const finishChatRun = (
-    nextStatus: "cancelled" | "done" | "error",
+    nextStatus: "cancelled" | "done" | "error" | "interrupted",
     options: { startNextEnvironment?: boolean } = {},
   ) => {
     setIsWorking(false)
     setActiveRunSessionId("")
     setChatStatus(nextStatus)
-    setActiveChatId(undefined)
+    if (nextStatus !== "interrupted") {
+      setActiveChatId(undefined)
+      setStreamRecoveryMessage("")
+    }
     setPendingCancel(false)
     setPendingApprovals([])
     setSelectedApproval(undefined)
@@ -392,8 +397,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
     setChatRunSawTerminal(false)
   }
 
-  const doneStatusFromCurrentRun = (): "cancelled" | "done" | "error" => {
+  const doneStatusFromCurrentRun = (): "cancelled" | "done" | "error" | "interrupted" => {
     if (chatStatus() === "cancelled") return "cancelled"
+    if (chatStatus() === "interrupted") return "interrupted"
     if (chatStatus() === "error" || chatRunSawError()) return "error"
     return "done"
   }
@@ -915,6 +921,34 @@ const ChatView: Component<ChatViewProps> = (props) => {
           markPromptUnconsumed(current, followupId, "当前回复未出现可注入点，已转为排队。")
         )
       }
+    } else if (type === "provider_stream_interrupted") {
+      const message = stringValue(payload.message) || "模型输出流中断，正在尝试恢复。"
+      setStreamRecoveryMessage(message)
+      setWorkingText("正在恢复输出")
+      trace.patchStats({ runStatus: "running" })
+      appendTextPart("模型输出流中断，正在尝试恢复。", "stream-recovery", { meta: eventMeta })
+    } else if (type === "provider_stream_recovering") {
+      setStreamRecoveryMessage(stringValue(payload.message) || "正在恢复输出。")
+      setWorkingText("正在恢复输出")
+      trace.patchStats({ runStatus: "running" })
+    } else if (type === "provider_stream_recovered") {
+      setStreamRecoveryMessage("")
+      setWorkingText("正在继续处理")
+      trace.patchStats({ runStatus: "running" })
+    } else if (type === "chat_recovery_start") {
+      setStreamRecoveryMessage("")
+      setIsWorking(true)
+      setChatStatus("running")
+      setWorkingText("正在继续生成")
+      trace.patchStats({ runStatus: "running" })
+    } else if (type === "chat_interrupted") {
+      const message = stringValue(payload.message) || "模型输出流中断，可继续生成。"
+      setChatRunSawTerminal(true)
+      setChatStatus("interrupted")
+      setStreamRecoveryMessage(message)
+      trace.patchStats({ runStatus: "interrupted" })
+      appendTextPart(`输出中断：${message}`, "stream-interrupted", { meta: eventMeta })
+      finishChatRun("interrupted")
     } else if (type === "tool_call_start") {
       const toolName = String(payload.tool_name || "tool")
       const toolCallId = requiredToolCallId(payload)
@@ -1344,6 +1378,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     setPendingCancel(false)
     setActiveChatId(undefined)
     setChatStatus("running")
+    setStreamRecoveryMessage("")
     resetChatRunTerminalState()
     setWorkingText("正在分析请求")
     setPendingApprovals([])
@@ -1431,6 +1466,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     setPendingCancel(false)
     setActiveChatId(undefined)
     setChatStatus("running")
+    setStreamRecoveryMessage("")
     resetChatRunTerminalState()
     setWorkingText(item.mode === "check" ? "正在检查能力环境" : "正在配置能力环境")
     setPendingApprovals([])
@@ -1505,6 +1541,25 @@ const ChatView: Component<ChatViewProps> = (props) => {
 
   const sendCancel = (chatId: string) => {
     chatMessages.cancel(vscode, chatId)
+  }
+
+  const recoverInterruptedChat = (action: "continue" | "retry") => {
+    const chatId = activeChatId()
+    if (!chatId) return
+    setIsWorking(true)
+    setChatStatus("running")
+    setWorkingText(action === "retry" ? "正在重新请求" : "正在继续生成")
+    setStreamRecoveryMessage("")
+    trace.patchStats({ runStatus: "running" })
+    startTimer()
+    chatMessages.recover(vscode, { chatId, action })
+  }
+
+  const dismissInterruptedChat = () => {
+    setStreamRecoveryMessage("")
+    setActiveChatId(undefined)
+    trace.patchStats({ runStatus: "done" })
+    setChatStatus("done")
   }
 
   const sendApprovalDecision = (approval: PendingApproval, decision: ApprovalDecision, reason?: string) => {
@@ -1763,6 +1818,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         if (nextTaskflowId) setTaskflowId(nextTaskflowId)
       }
       if (msg.type === "chat.done") {
+        if (chatStatus() === "interrupted") return
         finishChatRun(doneStatusFromCurrentRun(), { startNextEnvironment: true })
       }
       if (msg.type === "environment.run.completed" && isWorking()) {
@@ -1976,6 +2032,20 @@ const ChatView: Component<ChatViewProps> = (props) => {
             <span class="codicon codicon-git-branch" aria-hidden="true" />
             <strong>{forkCompose()!.mode === "edit" ? "编辑并 Fork" : "从此 Fork"}</strong>
             <span>来源：{forkCompose()!.sourceLabel}</span>
+          </div>
+        </Show>
+        <Show when={chatStatus() === "interrupted" && activeChatId()}>
+          <div class="stream-recovery-banner" role="status">
+            <span class="codicon codicon-debug-restart" aria-hidden="true" />
+            <div class="stream-recovery-banner__body">
+              <strong>输出可继续</strong>
+              <span>{streamRecoveryMessage() || "模型输出流已中断，可以从当前内容继续生成。"}</span>
+            </div>
+            <div class="stream-recovery-banner__actions">
+              <button type="button" onClick={() => recoverInterruptedChat("continue")}>继续生成</button>
+              <button type="button" onClick={() => recoverInterruptedChat("retry")}>重新请求</button>
+              <button type="button" onClick={dismissInterruptedChat}>结束本轮</button>
+            </div>
           </div>
         </Show>
         <Show when={queuedPrompts().items.length > 0}>
@@ -2312,13 +2382,14 @@ function costStatusValue(value: unknown): "available" | "unavailable" | "unknown
   return value === "available" || value === "unknown" ? value : "unavailable"
 }
 
-function runStatusValue(value: unknown): "idle" | "running" | "stopping" | "cancelled" | "done" | "error" | undefined {
+function runStatusValue(value: unknown): ChatRunStatus | undefined {
   return value === "idle" ||
     value === "running" ||
     value === "stopping" ||
     value === "cancelled" ||
     value === "done" ||
-    value === "error"
+    value === "error" ||
+    value === "interrupted"
     ? value
     : undefined
 }

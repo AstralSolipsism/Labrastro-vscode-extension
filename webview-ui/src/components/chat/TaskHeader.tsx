@@ -28,7 +28,7 @@ interface TaskHeaderProps {
   contextTokens: number
   contextWindow: number
   maxOutputTokens: number
-  runStatus?: "idle" | "running" | "stopping" | "cancelled" | "done" | "error"
+  runStatus?: "idle" | "running" | "stopping" | "cancelled" | "done" | "error" | "interrupted"
   traceNodes?: TraceNode[]
   traceEdges?: TraceEdge[]
   activeTraceNodeId?: string | null
@@ -61,6 +61,8 @@ export const TaskHeader: Component<TaskHeaderProps> = (props) => {
         return t("task.status.cancelled")
       case "error":
         return t("task.status.error")
+      case "interrupted":
+        return t("task.status.interrupted")
       case "done":
         return t("task.status.done")
       default:

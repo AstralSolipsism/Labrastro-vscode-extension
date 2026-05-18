@@ -126,7 +126,7 @@ export interface MockTaskStats {
   maxOutputTokens: number
   model?: string
   mode?: string
-  runStatus?: "idle" | "running" | "stopping" | "cancelled" | "done" | "error"
+  runStatus?: "idle" | "running" | "stopping" | "cancelled" | "done" | "error" | "interrupted"
 }
 
 export interface MockSessionBundle {

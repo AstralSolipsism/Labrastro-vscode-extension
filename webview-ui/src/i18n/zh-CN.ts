@@ -560,6 +560,7 @@ const zhCN: Record<string, string> = {
   "task.status.stopping": "正在停止",
   "task.status.cancelled": "已停止",
   "task.status.error": "异常",
+  "task.status.interrupted": "可继续",
   "task.status.done": "完成",
   "task.status.ready": "就绪",
   "task.stopSession": "停止当前会话",

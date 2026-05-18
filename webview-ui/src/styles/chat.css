@@ -850,6 +850,7 @@
 }
 
 .fork-compose-banner,
+.stream-recovery-banner,
 .prompt-queue-banner {
   display: flex;
   align-items: center;
@@ -863,8 +864,43 @@
 }
 
 .fork-compose-banner strong,
+.stream-recovery-banner strong,
 .prompt-queue-banner strong {
   color: var(--ez-fg);
+}
+
+.stream-recovery-banner {
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  border-color: color-mix(in srgb, var(--ez-warning) 38%, var(--ez-border));
+}
+
+.stream-recovery-banner__body {
+  flex: 1 1 240px;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.stream-recovery-banner__actions {
+  display: inline-flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.stream-recovery-banner__actions button {
+  padding: 4px 10px;
+  border: 1px solid var(--ez-border);
+  border-radius: 999px;
+  color: var(--ez-fg);
+  background: var(--ez-surface);
+  cursor: pointer;
+}
+
+.stream-recovery-banner__actions button:hover {
+  border-color: color-mix(in srgb, var(--ez-accent) 40%, var(--ez-border));
+  background: var(--ez-hover);
 }
 
 .prompt-queue-banner {

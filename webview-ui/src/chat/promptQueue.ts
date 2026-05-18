@@ -72,7 +72,7 @@ export function enqueuePrompt(
 
 export function resolvePromptQueueAfterChat(
   state: PromptQueueState,
-  status: "done" | "error" | "cancelled"
+  status: "done" | "error" | "cancelled" | "interrupted"
 ): PromptQueueResolution {
   const finalized = finalizeGuidanceAfterChat(state)
   const hasQueueItems = finalized.items.some(isRunnableQueueItem)
