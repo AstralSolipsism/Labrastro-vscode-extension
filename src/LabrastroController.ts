@@ -14,6 +14,7 @@ import { AdminCoordinator } from "./coordinators/AdminCoordinator"
 import { ChatRunCoordinator, type ActiveChatRun } from "./coordinators/ChatRunCoordinator"
 import { EnvironmentCoordinator } from "./coordinators/EnvironmentCoordinator"
 import { SessionCoordinator } from "./coordinators/SessionCoordinator"
+import { resolveChatLocalePreference } from "./chatLocale"
 
 type EnvironmentRunMode = "check" | "configure"
 type EnvironmentEntryKind = "cli" | "mcp" | "skill"
@@ -715,7 +716,10 @@ export class LabrastroController implements vscode.Disposable {
       if (!startupModel) {
         throw new Error("新增能力 Agent 需要先在设置页配置默认会话模型。")
       }
-      const start = await this.client.startChat(prompt, undefined, startupModel)
+      const start = await this.client.startChat(prompt, undefined, {
+        ...startupModel,
+        locale: this.currentChatLocale(),
+      })
       chatId = String(start.chat_id || "")
       if (!chatId) {
         throw new Error("toolchain_ingest_chat_id_missing")
@@ -1156,6 +1160,13 @@ export class LabrastroController implements vscode.Disposable {
     }
   }
 
+  private currentChatLocale(): "zh-CN" | "en" {
+    return resolveChatLocalePreference(
+      this.context.workspaceState.get<string>("labrastro.locale"),
+      vscode.env.language,
+    )
+  }
+
   private async startChat(
     text: string,
     requestedSessionId: string | undefined,
@@ -1189,7 +1200,10 @@ export class LabrastroController implements vscode.Disposable {
       }
       let sessionId = preparedSession.sessionId
       this.emitChatMessage({ type: "chat.started", text }, post)
-      const start = await this.client.startChat(text, sessionId, options)
+      const start = await this.client.startChat(text, sessionId, {
+        ...options,
+        locale: this.currentChatLocale(),
+      })
       sessionId = stringValue(start.session_id) || sessionId
       const chatId = String(start.chat_id || "")
       this.chatRunCoordinator.setActiveRun({

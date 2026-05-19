@@ -539,12 +539,14 @@ export class LabrastroRemoteClient {
       providerId?: string
       modelId?: string
       parameters?: JsonObject
+      locale?: string
       clientRequestId?: string
     } = {}
   ): Promise<JsonObject> {
     const taskflowId = options.taskflowId?.trim()
     const providerId = options.providerId?.trim()
     const modelId = options.modelId?.trim()
+    const locale = options.locale?.trim()
     const parameters = options.parameters && Object.keys(options.parameters).length
       ? options.parameters
       : undefined
@@ -558,6 +560,7 @@ export class LabrastroRemoteClient {
       ...(taskflowId ? { taskflow_id: taskflowId } : {}),
       ...(providerId && modelId ? { provider_id: providerId, model_id: modelId } : {}),
       ...(providerId && modelId && parameters ? { parameters } : {}),
+      ...(locale ? { locale } : {}),
     }))
   }
 

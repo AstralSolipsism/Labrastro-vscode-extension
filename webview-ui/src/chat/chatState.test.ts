@@ -18,18 +18,21 @@ import {
 
 describe("chat messages", () => {
   it("builds chat.send payloads with optional mode and workflow", () => {
-    expect(buildChatSendMessage({
+    const payload = buildChatSendMessage({
       text: "  hello  ",
       sessionId: "session-1",
       mode: "taskflow",
       workflowMode: "taskflow",
-    })).toEqual({
+    })
+
+    expect(payload).toEqual({
       type: "chat.send",
       text: "hello",
       sessionId: "session-1",
       mode: "taskflow",
       workflowMode: "taskflow",
     })
+    expect(payload).not.toHaveProperty("locale")
   })
 
   it("omits optional routing fields when chat mode does not need them", () => {

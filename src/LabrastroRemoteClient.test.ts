@@ -945,6 +945,7 @@ describe("LabrastroRemoteClient chat start", () => {
       providerId: "deepseek",
       modelId: "V4FLASH",
       parameters: { max_context_tokens: 1000000 },
+      locale: "zh-CN",
     })).resolves.toMatchObject({ chat_id: "chat-1" })
 
     expect(postedBody).toMatchObject({
@@ -957,6 +958,7 @@ describe("LabrastroRemoteClient chat start", () => {
       provider_id: "deepseek",
       model_id: "V4FLASH",
       parameters: { max_context_tokens: 1000000 },
+      locale: "zh-CN",
     })
   })
 

@@ -62,6 +62,7 @@ describe("ChatRunCoordinator", () => {
       providerId: "p1",
       modelId: "m1",
       parameters: { temperature: 0 },
+      locale: "zh-CN",
     }, post)).resolves.toBe(true)
 
     expect(options.startChat).toHaveBeenCalledWith("hello", "s1", post, {
