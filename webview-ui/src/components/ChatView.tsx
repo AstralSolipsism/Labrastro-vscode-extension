@@ -87,7 +87,7 @@ import {
   shellChunksFromText,
 } from "../utils/shell-tool-output"
 import { remoteSessionIdForMutation } from "../utils/session-history"
-import type { MockMessage, MockPart } from "./chat/mock-data"
+import type { MockMessage, MockPart, MockTurn } from "./chat/mock-data"
 
 interface PendingApproval extends ApprovalDetails {
   chatId: string
@@ -173,6 +173,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const [pendingModelProfile, setPendingModelProfile] = createSignal("")
   const [taskflowId, setTaskflowId] = createSignal("")
   const renderedEventKeys = new Set<string>()
+  const [activeStreamParts, setActiveStreamParts] = createSignal<MockPart[]>([])
 
   const hasMessages = () => trace.turns().length > 0
   const taskflowAvailable = createMemo(() => canUseTaskflow(server.backendFeatures()))
@@ -372,6 +373,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     setPendingApprovals([])
     setSelectedApproval(undefined)
     setRememberingApprovalId("")
+    clearActiveStreamDraft()
     trace.patchStats({ runStatus: nextStatus })
     stopTimer()
     const queuedSwitchStarted = applyQueuedModelSwitch()
@@ -412,10 +414,40 @@ const ChatView: Component<ChatViewProps> = (props) => {
 
   const visibleIsWorking = () => isWorking() && currentRunSessionMatches()
   const visiblePendingApprovals = () => (currentRunSessionMatches() ? pendingApprovals() : [])
+  const activeStreamMessage = createMemo<MockMessage | undefined>(() => {
+    const parts = activeStreamParts()
+    if (!parts.length || !currentRunSessionMatches()) return undefined
+    const text = parts
+      .filter((part) => part.type === "text")
+      .map((part) => part.text || "")
+      .join("")
+    return {
+      id: `assistant-stream-${activeChatId() || "pending"}`,
+      role: "assistant",
+      text,
+      parts,
+      timestamp: Date.now(),
+      traceNodeKind: "assistant_message",
+      traceNodeStatus: "active",
+    }
+  })
+  const visibleTurns = createMemo<MockTurn[]>(() => {
+    const turns = trace.turns()
+    const draft = activeStreamMessage()
+    if (!draft || !turns.length) return turns
+    const next = [...turns]
+    const last = next[next.length - 1]
+    next[next.length - 1] = {
+      ...last,
+      assistantMessages: [...last.assistantMessages, draft],
+    }
+    return next
+  })
 
   const clearCurrentSession = () => {
     trace.clearSession()
     setSelectedApproval(undefined)
+    setActiveStreamParts([])
   }
 
   createEffect(() => {
@@ -574,6 +606,114 @@ const ChatView: Component<ChatViewProps> = (props) => {
         ...parts.slice(firstAssistantTextIndex),
       ]
     })
+  }
+
+  const clearActiveStreamDraft = () => setActiveStreamParts([])
+
+  const clearActiveStreamParts = (predicate: (part: MockPart) => boolean) => {
+    setActiveStreamParts((parts) => parts.filter((part) => !predicate(part)))
+  }
+
+  const upsertActiveStreamPart = (
+    predicate: (part: MockPart) => boolean,
+    createPart: (parts: MockPart[]) => MockPart,
+    updatePart: (part: MockPart) => MockPart,
+  ) => {
+    setActiveStreamParts((parts) => {
+      const index = parts.findIndex(predicate)
+      if (index < 0) return [...parts, createPart(parts)]
+      const next = [...parts]
+      next[index] = updatePart(next[index])
+      return next
+    })
+  }
+
+  const appendActiveTextStream = (text: string, meta?: EventRenderMeta) => {
+    const content = stripAnsi(text)
+    if (!content) return
+    upsertActiveStreamPart(
+      (part) => part.type === "text" && part.textStreamKey === "assistant-stream",
+      (parts) => withEventMeta({
+        id: `assistant-stream-${Date.now()}-${parts.length}`,
+        type: "text",
+        text: content,
+        textFormat: "plain",
+        textStreamKey: "assistant-stream",
+      }, meta),
+      (part) => withEventMeta({
+        ...part,
+        text: `${part.text || ""}${content}`,
+        textFormat: "plain",
+        textStreamKey: "assistant-stream",
+      }, meta),
+    )
+  }
+
+  const appendActiveReasoningStream = (text: string, meta?: EventRenderMeta) => {
+    const content = stripAnsi(text)
+    if (!content) return
+    upsertActiveStreamPart(
+      (part) => part.type === "reasoning" && part.reasoningStreamKey === "reasoning-stream",
+      (parts) => withEventMeta({
+        id: `reasoning-stream-${Date.now()}-${parts.length}`,
+        type: "reasoning",
+        reasoningText: content,
+        reasoningFormat: "plain",
+        reasoningStreamKey: "reasoning-stream",
+      }, meta),
+      (part) => withEventMeta({
+        ...part,
+        reasoningText: `${part.reasoningText || ""}${content}`,
+        reasoningFormat: "plain",
+        reasoningStreamKey: "reasoning-stream",
+      }, meta),
+    )
+  }
+
+  const appendActiveToolStream = (payload: Record<string, unknown>, meta?: EventRenderMeta) => {
+    const toolName = String(payload.tool_name || "tool")
+    const toolCallId = requiredToolCallId(payload)
+    if (!toolCallId) return
+    const content = stripAnsi(String(payload.content || ""))
+    if (!content) return
+    const stream = String(payload.stream || "stdout")
+    const outputFormat = stringValue(payload.format) || stringValue(payload.output_format) || stringValue(payload.tool_output_format)
+    const toolSource = stringValue(payload.tool_source)
+    const isShell = isShellToolName(toolName, toolSource)
+    upsertActiveStreamPart(
+      (part) => part.type === "tool" && part.toolCallId === toolCallId,
+      (parts) => {
+        const shellOutput = isShell ? appendShellOutputChunk(undefined, stream, content) : undefined
+        return withEventMeta({
+          id: `tool-stream-${toolCallId || Date.now()}-${parts.length}`,
+          type: "tool",
+          tool: toolName,
+          status: "running",
+          toolCallId,
+          toolSource,
+          toolStream: stream,
+          toolOutputFormat: inferToolOutputFormat(toolName, toolSource, outputFormat),
+          toolOutput: shellOutput ? buildShellOutputText(shellOutput.chunks) : content,
+          toolOutputChunks: shellOutput?.chunks,
+          toolOutputTruncated: shellOutput?.truncated,
+        }, meta)
+      },
+      (part) => {
+        const shellOutput = isShell
+          ? appendShellOutputChunk(part.toolOutputChunks, stream, content)
+          : undefined
+        return withEventMeta({
+          ...part,
+          status: "running",
+          toolSource: toolSource || part.toolSource,
+          toolStream: stream,
+          toolOutputFormat: inferToolOutputFormat(toolName, toolSource || part.toolSource, outputFormat),
+          toolOutput: shellOutput ? buildShellOutputText(shellOutput.chunks) : `${part.toolOutput || ""}${content}`,
+          toolOutputChunks: shellOutput?.chunks || part.toolOutputChunks,
+          toolOutputTruncated: shellOutput?.truncated || part.toolOutputTruncated,
+        }, meta)
+      },
+    )
   }
 
   const appendRemoteStatusPart = (payload: Record<string, unknown>, meta?: EventRenderMeta) => {
@@ -785,6 +925,28 @@ const ChatView: Component<ChatViewProps> = (props) => {
     })
   }
 
+  const handleLiveStreamEvent = (event: Record<string, unknown>) => {
+    const type = String(event.type || "")
+    const payload = (event.payload && typeof event.payload === "object" ? event.payload : {}) as Record<string, unknown>
+    const eventMeta = eventRenderMeta(event, type, payload)
+    if (shouldSkipEvent(eventMeta)) return
+    if (typeof event.chat_id === "string") {
+      setActiveChatId(event.chat_id)
+      if (pendingCancel()) {
+        sendCancel(event.chat_id)
+        setPendingCancel(false)
+      }
+    }
+    if (type === "reasoning_delta") {
+      appendActiveReasoningStream(String(payload.content || ""), eventMeta)
+    } else if (type === "assistant_delta") {
+      appendActiveTextStream(String(payload.content || ""), eventMeta)
+    } else if (type === "tool_call_stream") {
+      appendActiveToolStream(payload, eventMeta)
+    }
+    markRenderedEvent(eventMeta)
+  }
+
   const handleRemoteEvent = (event: Record<string, unknown>) => {
     const type = String(event.type || "")
     const payload = (event.payload && typeof event.payload === "object" ? event.payload : {}) as Record<string, unknown>
@@ -796,6 +958,10 @@ const ChatView: Component<ChatViewProps> = (props) => {
         sendCancel(event.chat_id)
         setPendingCancel(false)
       }
+    }
+    if (type === "assistant_delta" || type === "reasoning_delta" || type === "tool_call_stream") {
+      handleLiveStreamEvent(event)
+      return
     }
     if (type === "events_lost") {
       appendTextPart("连接恢复后发现部分流式事件已过期，正在刷新会话状态。", "events-lost", { meta: eventMeta })
@@ -850,21 +1016,16 @@ const ChatView: Component<ChatViewProps> = (props) => {
         runStatus: chatStatus(),
       })
       appendRemoteStatusPart(payload, eventMeta)
-    } else if (type === "reasoning_delta") {
-      appendReasoningPart(String(payload.content || ""), "reasoning-stream", {
+    } else if (type === "reasoning_message") {
+      clearActiveStreamParts((part) => part.type === "reasoning" && part.reasoningStreamKey === "reasoning-stream")
+      appendReasoningPart(String(payload.content || ""), "reasoning-message", {
         format: stringValue(payload.format) === "plain" ? "plain" : "markdown",
         merge: true,
         trim: false,
         meta: eventMeta,
       })
-    } else if (type === "assistant_delta") {
-      appendTextPart(String(payload.content || ""), "assistant-stream", {
-        format: "markdown",
-        merge: true,
-        trim: false,
-        meta: eventMeta,
-      })
     } else if (type === "assistant_message") {
+      clearActiveStreamParts((part) => part.type === "text" && part.textStreamKey === "assistant-stream")
       appendTextPart(String(payload.content || ""), "assistant-message", { format: "markdown", meta: eventMeta })
     } else if (type === "output") {
       const format = String(payload.format || "plain")
@@ -960,35 +1121,11 @@ const ChatView: Component<ChatViewProps> = (props) => {
         toolStartedAt: numberValue(payload.started_at),
         toolInput: (payload.tool_args || {}) as Record<string, unknown>,
       }, toolCallId, { meta: eventMeta })
-    } else if (type === "tool_call_stream") {
-      const toolName = String(payload.tool_name || "tool")
-      const toolCallId = requiredToolCallId(payload)
-      if (!toolCallId) return
-      const chunk = String(payload.content || "")
-      const outputFormat = stringValue(payload.format) || stringValue(payload.output_format) || stringValue(payload.tool_output_format)
-      const toolSource = stringValue(payload.tool_source)
-      const stream = String(payload.stream || "stdout")
-      const isShell = isShellToolName(toolName, toolSource)
-      const parts = ensureAssistantMessage().parts
-      const existingIndex = resolveToolPartIndex(parts, toolName, toolCallId)
-      const existing = existingIndex >= 0 ? parts[existingIndex] : undefined
-      const shellOutput = isShell
-        ? appendShellOutputChunk(existing?.toolOutputChunks, stream, chunk)
-        : undefined
-      upsertToolPart(toolName, {
-        status: "running",
-        toolCallId,
-        toolSource,
-        toolStream: stream,
-        toolOutputFormat: inferToolOutputFormat(toolName, toolSource, outputFormat),
-        toolOutput: shellOutput ? buildShellOutputText(shellOutput.chunks) : `${existing?.toolOutput || ""}${chunk}`,
-        toolOutputChunks: shellOutput?.chunks,
-        toolOutputTruncated: shellOutput?.truncated || existing?.toolOutputTruncated,
-      }, toolCallId, { meta: eventMeta })
     } else if (type === "tool_call_protocol_error") {
       const toolName = String(payload.tool_name || "tool")
       const toolCallId = requiredToolCallId(payload)
       if (!toolCallId) return
+      clearActiveStreamParts((part) => part.type === "tool" && part.toolCallId === toolCallId)
       const code = stringValue(payload.code)
       const message = String(payload.message || code || "Remote tool protocol error")
       const output = code ? `[${code}] ${message}` : message
@@ -1006,6 +1143,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       const toolName = String(payload.tool_name || "tool")
       const toolCallId = requiredToolCallId(payload)
       if (!toolCallId) return
+      clearActiveStreamParts((part) => part.type === "tool" && part.toolCallId === toolCallId)
       const outputFormat = stringValue(payload.format) || stringValue(payload.output_format) || stringValue(payload.tool_output_format) || stringValue(payload.tool_result_format)
       const toolSource = stringValue(payload.tool_source)
       const finalOutput = String(payload.tool_result || "")
@@ -1380,6 +1518,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     setChatStatus("running")
     setStreamRecoveryMessage("")
     resetChatRunTerminalState()
+    clearActiveStreamDraft()
     setWorkingText("正在分析请求")
     setPendingApprovals([])
     setSelectedApproval(undefined)
@@ -1813,6 +1952,13 @@ const ChatView: Component<ChatViewProps> = (props) => {
           }
         }
       }
+      if (msg.type === "chat.stream" && Array.isArray(msg.events)) {
+        for (const event of msg.events) {
+          if (event && typeof event === "object") {
+            handleLiveStreamEvent(event as Record<string, unknown>)
+          }
+        }
+      }
       if (msg.type === "taskflow.focusChatInteraction") {
         const nextTaskflowId = stringValue(msg.taskflowId) || stringValue(msg.taskflow_id)
         if (nextTaskflowId) setTaskflowId(nextTaskflowId)
@@ -1937,7 +2083,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
 
       <main class="chat-main">
         <MessageList
-          turns={trace.turns()}
+          turns={visibleTurns()}
           recentSessions={trace.recentSessions()}
           isWorking={visibleIsWorking()}
           defaultReasoningOpen={server.reasoningDisplayState().defaultOpen === true}

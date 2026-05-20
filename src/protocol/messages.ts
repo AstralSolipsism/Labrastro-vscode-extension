@@ -49,6 +49,7 @@ export type HostToWebviewMessageType =
   | "chat.sendDuringRunMode.state"
   | "chat.session"
   | "chat.started"
+  | "chat.stream"
   | "connection.result"
   | "connection.state"
   | "diagnostics.toolArguments.error"
@@ -238,6 +239,7 @@ const HOST_TO_WEBVIEW_TYPES = new Set<HostToWebviewMessageType>([
   "chat.sendDuringRunMode.state",
   "chat.session",
   "chat.started",
+  "chat.stream",
   "connection.result",
   "connection.state",
   "diagnostics.toolArguments.error",

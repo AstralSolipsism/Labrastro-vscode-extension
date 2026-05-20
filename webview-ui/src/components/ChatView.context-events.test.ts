@@ -23,9 +23,18 @@ describe("ChatView context events", () => {
     expect(source).toContain('} else if (type === "usage_update" || type === "run_stats") {')
   })
 
-  it("routes reasoning deltas into a merged reasoning part before assistant text", () => {
+  it("routes live deltas into active stream draft state", () => {
+    expect(source).toContain('msg.type === "chat.stream"')
+    expect(source).toContain("const handleLiveStreamEvent =")
+    expect(source).toContain("appendActiveReasoningStream")
+    expect(source).toContain("appendActiveTextStream")
+    expect(source).toContain("appendActiveToolStream")
+    expect(source).toContain("const visibleTurns =")
+  })
+
+  it("routes final reasoning messages into a persisted reasoning part before assistant text", () => {
     expect(source).toContain("const appendReasoningPart =")
-    expect(source).toContain('} else if (type === "reasoning_delta") {')
+    expect(source).toContain('} else if (type === "reasoning_message") {')
     expect(source).toContain('type: "reasoning"')
     expect(source).toContain('part.type === "text" &&')
     expect(source).toContain('["assistant-stream", "assistant-message", "final"].includes')

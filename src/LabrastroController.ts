@@ -1326,7 +1326,12 @@ export class LabrastroController implements vscode.Disposable {
               await this.approvalDocuments.store(objectValue(event.payload))
             }
           }
-          this.emitChatMessage({ type: "chat.events", chatId, events }, post)
+          for (const batch of splitChatStreamBatches(events)) {
+            this.emitChatMessage(
+              { type: batch.live ? "chat.stream" : "chat.events", chatId, events: batch.events },
+              post
+            )
+          }
         }
         cursor = nextCursor
         this.chatRunCoordinator.patchActiveRun({
@@ -1806,6 +1811,31 @@ function buildToolchainIngestPrompt(input: Record<string, unknown>): string {
     '  "reason": ""\n',
     "}\n",
   ].join("")
+}
+
+const LIVE_CHAT_STREAM_EVENT_TYPES = new Set([
+  "assistant_delta",
+  "reasoning_delta",
+  "tool_call_stream",
+])
+
+function isLiveChatStreamEvent(event: unknown): boolean {
+  if (!event || typeof event !== "object") return false
+  return LIVE_CHAT_STREAM_EVENT_TYPES.has(stringValue((event as Record<string, unknown>).type) || "")
+}
+
+function splitChatStreamBatches(events: unknown[]): Array<{ live: boolean; events: unknown[] }> {
+  const batches: Array<{ live: boolean; events: unknown[] }> = []
+  for (const event of events) {
+    const live = isLiveChatStreamEvent(event)
+    const last = batches[batches.length - 1]
+    if (last && last.live === live) {
+      last.events.push(event)
+      continue
+    }
+    batches.push({ live, events: [event] })
+  }
+  return batches
 }
 
 function toolchainIngestAssistantText(event: Record<string, unknown>): string {
