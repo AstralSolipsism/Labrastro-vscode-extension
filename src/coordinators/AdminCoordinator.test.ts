@@ -26,7 +26,7 @@ function coordinator() {
       authAuditList: vi.fn(),
       serverSettingsRead: vi.fn(),
       serverSettingsUpdate: vi.fn(),
-      toolArgumentDiagnosticsStats: vi.fn(),
+      toolDiagnosticsStats: vi.fn(),
       peerDiagnosticsLoggingState: vi.fn(() => peerDiagnosticsState),
       savePeerDiagnosticsLoggingState: vi.fn(async (payload: Record<string, unknown>) => {
         peerDiagnosticsState = {
@@ -147,21 +147,21 @@ describe("AdminCoordinator", () => {
     expect(options.openFileTarget).toHaveBeenCalledWith("src/index.ts", 2, 3)
   })
 
-  it("loads tool argument diagnostics stats", async () => {
+  it("loads tool diagnostics stats", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
-    options.client.toolArgumentDiagnosticsStats.mockResolvedValue({
+    options.client.toolDiagnosticsStats.mockResolvedValue({
       ok: true,
-      tool_argument_validation: { totals: { events: 1 } },
+      tool_diagnostics: { totals: { events: 1 } },
     })
 
-    await expect(subject.handleMessage({ type: "diagnostics.toolArguments.stats" }, post)).resolves.toBe(true)
+    await expect(subject.handleMessage({ type: "diagnostics.toolDiagnostics.stats" }, post)).resolves.toBe(true)
 
     expect(post).toHaveBeenCalledWith({
-      type: "diagnostics.toolArguments.state",
+      type: "diagnostics.toolDiagnostics.state",
       payload: {
         ok: true,
-        tool_argument_validation: { totals: { events: 1 } },
+        tool_diagnostics: { totals: { events: 1 } },
       },
     })
   })

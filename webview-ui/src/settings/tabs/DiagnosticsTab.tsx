@@ -36,26 +36,27 @@ export const DiagnosticsTab: Component<TabProps> = (props) => {
     return objectValue(server.adminState().server_settings)
   })
   const diagnosticsSettings = createMemo(() =>
-    objectValue(objectValue(serverSettings().diagnostics).tool_argument_validation)
+    objectValue(objectValue(serverSettings().diagnostics).tool_diagnostics)
   )
   const llmTraceSettings = createMemo(() =>
     objectValue(objectValue(serverSettings().diagnostics).llm_trace)
   )
   const llmTraceEnabled = createMemo(() => llmTraceSettings().enabled === true)
   const llmTraceRawChunks = createMemo(() => llmTraceSettings().raw_chunks === true)
-  const toolArgumentTelemetryEnabled = createMemo(() =>
+  const toolDiagnosticsTelemetryEnabled = createMemo(() =>
     diagnosticsSettings().enabled !== false
   )
-  const toolArgumentRecordClean = createMemo(() =>
+  const toolDiagnosticsRecordClean = createMemo(() =>
     diagnosticsSettings().record_clean === true
   )
-  const toolArgumentStats = createMemo(() =>
-    objectValue(objectValue(server.diagnosticsState()).tool_argument_validation)
+  const toolDiagnosticsStats = createMemo(() =>
+    objectValue(objectValue(server.diagnosticsState()).tool_diagnostics)
   )
-  const totals = createMemo(() => objectValue(toolArgumentStats().totals))
-  const modelRows = createMemo(() => arrayOfRecords(toolArgumentStats().by_model).slice(0, 8))
-  const issueRows = createMemo(() => arrayOfRecords(toolArgumentStats().issues).slice(0, 8))
-  const repairRows = createMemo(() => arrayOfRecords(toolArgumentStats().repairs).slice(0, 8))
+  const totals = createMemo(() => objectValue(toolDiagnosticsStats().totals))
+  const modelRows = createMemo(() => arrayOfRecords(toolDiagnosticsStats().by_model).slice(0, 8))
+  const stageRows = createMemo(() => arrayOfRecords(toolDiagnosticsStats().by_stage).slice(0, 8))
+  const issueRows = createMemo(() => arrayOfRecords(toolDiagnosticsStats().issues).slice(0, 8))
+  const repairRows = createMemo(() => arrayOfRecords(toolDiagnosticsStats().repairs).slice(0, 8))
   const peerDiagnosticsLogging = createMemo(() => objectValue(server.peerDiagnosticsLoggingState()))
   const peerLoggingEnabled = createMemo(() => peerDiagnosticsLogging().enabled !== false)
   const peerLoggingLifecycle = createMemo(() => peerDiagnosticsLogging().lifecycle !== false)
@@ -63,7 +64,7 @@ export const DiagnosticsTab: Component<TabProps> = (props) => {
   const peerLoggingHttp = createMemo(() => peerDiagnosticsLogging().http !== false)
   const peerLoggingPath = createMemo(() => stringValue(peerDiagnosticsLogging().logPath))
 
-  const refreshDiagnostics = () => settingsMessages.readToolArgumentDiagnosticsStats(vscode)
+  const refreshDiagnostics = () => settingsMessages.readToolDiagnosticsStats(vscode)
   const refreshDiagnosticsPage = () => {
     refreshAdmin()
     settingsMessages.readServerSettings(vscode)
@@ -92,13 +93,13 @@ export const DiagnosticsTab: Component<TabProps> = (props) => {
       },
     })
   }
-  const updateToolArgumentTelemetry = (patch: Record<string, boolean>) => {
+  const updateToolDiagnosticsTelemetry = (patch: Record<string, boolean>) => {
     settingsMessages.updateServerSettings(vscode, {
       settings: {
         diagnostics: {
-          tool_argument_validation: {
-            enabled: toolArgumentTelemetryEnabled(),
-            record_clean: toolArgumentRecordClean(),
+          tool_diagnostics: {
+            enabled: toolDiagnosticsTelemetryEnabled(),
+            record_clean: toolDiagnosticsRecordClean(),
             ...patch,
           },
         },
@@ -244,17 +245,17 @@ export const DiagnosticsTab: Component<TabProps> = (props) => {
         <label class="field-label field-label--checkbox">
           <input
             type="checkbox"
-            checked={toolArgumentTelemetryEnabled()}
-            onChange={(event) => updateToolArgumentTelemetry({ enabled: event.currentTarget.checked })}
+            checked={toolDiagnosticsTelemetryEnabled()}
+            onChange={(event) => updateToolDiagnosticsTelemetry({ enabled: event.currentTarget.checked })}
           />
           <span>{t("diagnostics.toolArgs.enabled")}</span>
         </label>
         <label class="field-label field-label--checkbox">
           <input
             type="checkbox"
-            disabled={!toolArgumentTelemetryEnabled()}
-            checked={toolArgumentRecordClean()}
-            onChange={(event) => updateToolArgumentTelemetry({ record_clean: event.currentTarget.checked })}
+            disabled={!toolDiagnosticsTelemetryEnabled()}
+            checked={toolDiagnosticsRecordClean()}
+            onChange={(event) => updateToolDiagnosticsTelemetry({ record_clean: event.currentTarget.checked })}
           />
           <span>{t("diagnostics.toolArgs.recordClean")}</span>
         </label>
@@ -284,7 +285,7 @@ export const DiagnosticsTab: Component<TabProps> = (props) => {
             </div>
             <div class="diagnostics-stat">
               <span>{t("diagnostics.toolArgs.invalidEvents")}</span>
-              <strong>{numberValue(totals().invalid)}</strong>
+              <strong>{numberValue(totals().errors)}</strong>
             </div>
             <div class="diagnostics-stat">
               <span>{t("diagnostics.toolArgs.repairedEvents")}</span>
@@ -298,7 +299,20 @@ export const DiagnosticsTab: Component<TabProps> = (props) => {
                 {(row) => (
                   <div class="diagnostics-table__row">
                     <span>{stringValue(row.name)}</span>
-                    <span>{numberValue(row.events)} / {numberValue(row.invalid)} / {numberValue(row.repaired)}</span>
+                    <span>{numberValue(row.events)} / {numberValue(row.errors)} / {numberValue(row.repaired)}</span>
+                  </div>
+                )}
+              </For>
+            </div>
+          </Show>
+          <Show when={stageRows().length}>
+            <div class="diagnostics-table">
+              <div class="diagnostics-table__title">{t("diagnostics.toolArgs.byStage")}</div>
+              <For each={stageRows()}>
+                {(row) => (
+                  <div class="diagnostics-table__row">
+                    <span>{stringValue(row.name)}</span>
+                    <span>{numberValue(row.events)} / {numberValue(row.errors)} / {numberValue(row.repaired)}</span>
                   </div>
                 )}
               </For>
@@ -335,7 +349,7 @@ export const DiagnosticsTab: Component<TabProps> = (props) => {
               <span class="codicon codicon-json" aria-hidden="true" />
               {t("diagnostics.toolArgs.raw")}
             </summary>
-            <pre class="settings-result">{JSON.stringify(toolArgumentStats(), null, 2)}</pre>
+            <pre class="settings-result">{JSON.stringify(toolDiagnosticsStats(), null, 2)}</pre>
           </details>
         </details>
       </section>

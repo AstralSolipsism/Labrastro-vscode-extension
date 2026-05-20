@@ -190,11 +190,11 @@ export const ServerProvider: ParentComponent = (props) => {
       if (msg.type === "serverSettings.error") {
         setServerSettingsError(typeof msg.message === "string" ? msg.message : "Server settings request failed")
       }
-      if (msg.type === "diagnostics.toolArguments.state" && typeof msg.payload === "object" && msg.payload) {
+      if (msg.type === "diagnostics.toolDiagnostics.state" && typeof msg.payload === "object" && msg.payload) {
         setDiagnosticsState(msg.payload as Record<string, unknown>)
         setDiagnosticsError(undefined)
       }
-      if (msg.type === "diagnostics.toolArguments.error") {
+      if (msg.type === "diagnostics.toolDiagnostics.error") {
         setDiagnosticsError(typeof msg.message === "string" ? msg.message : "Diagnostics request failed")
       }
       if (msg.type === "modelCapabilities.state" && typeof msg.payload === "object" && msg.payload) {

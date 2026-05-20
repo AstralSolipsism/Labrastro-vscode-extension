@@ -80,8 +80,8 @@ export const settingsMessages = {
     port.postMessage({ type: "serverSettings.update", payload })
   },
 
-  readToolArgumentDiagnosticsStats(port: SettingsMessagePort): void {
-    port.postMessage({ type: "diagnostics.toolArguments.stats" })
+  readToolDiagnosticsStats(port: SettingsMessagePort): void {
+    port.postMessage({ type: "diagnostics.toolDiagnostics.stats" })
   },
 
   modelCapabilitiesStatus(port: SettingsMessagePort): void {

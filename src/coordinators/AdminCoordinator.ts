@@ -265,14 +265,14 @@ export class AdminCoordinator {
           post({ type: "serverSettings.error", message: errorMessage(error) })
         }
         return true
-      case "diagnostics.toolArguments.stats":
+      case "diagnostics.toolDiagnostics.stats":
         try {
           post({
-            type: "diagnostics.toolArguments.state",
-            payload: await this.options.client.toolArgumentDiagnosticsStats(),
+            type: "diagnostics.toolDiagnostics.state",
+            payload: await this.options.client.toolDiagnosticsStats(),
           })
         } catch (error) {
-          post({ type: "diagnostics.toolArguments.error", message: errorMessage(error) })
+          post({ type: "diagnostics.toolDiagnostics.error", message: errorMessage(error) })
         }
         return true
       case "modelCapabilities.status":
