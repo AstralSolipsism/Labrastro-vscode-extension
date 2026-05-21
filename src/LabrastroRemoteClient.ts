@@ -38,7 +38,7 @@ export {
 
 export type JsonObject = Record<string, unknown>
 
-export const CHAT_STREAM_TIMEOUT_SEC = 10
+export const CHAT_EVENTS_TIMEOUT_SEC = 10
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
 const LEGACY_AUTH_SESSION_KEY = "labrastro.authSession"
 
@@ -49,13 +49,20 @@ export interface BackendFeatures {
   sessions: boolean
   sessionAutoSave: boolean
   sessionHistoryWritable: boolean
-  chatStream: boolean
+  chatEvents: boolean
   taskflow: boolean
   issueAssignment: boolean
   freshSessionWithoutSessionHint: boolean
   peerTokenHeartbeatRefresh: boolean
   agentRuns: AgentRunFeatures
 }
+
+export interface ChatEventsOptions {
+  timeoutSec?: number
+  signal?: AbortSignal
+}
+
+export type ChatEventsHandler = (batch: JsonObject) => void | Promise<void>
 
 export interface AgentRunFeatures {
   executorFeatures: Record<string, ExecutorFeature>
@@ -808,17 +815,20 @@ export class LabrastroRemoteClient {
     }))
   }
 
-  async streamChat(
+  async streamChatEvents(
     chatId: string,
     cursor: number,
-    timeoutSec = CHAT_STREAM_TIMEOUT_SEC
-  ): Promise<JsonObject> {
-    return this.postPeerJson("/remote/chat/stream", (peer) => ({
-      peer_token: peer.peer_token,
-      chat_id: chatId,
-      cursor,
-      timeout_sec: timeoutSec,
-    }), { timeoutMs: Math.max(DEFAULT_REQUEST_TIMEOUT_MS, (timeoutSec + 10) * 1000) })
+    onBatch: ChatEventsHandler,
+    options: ChatEventsOptions = {}
+  ): Promise<void> {
+    let peer = await this.ensurePeer()
+    return retryInvalidPeerTokenOnce(
+      () => this.openChatEventStream(peer, chatId, cursor, onBatch, options),
+      async () => {
+        await this.stopPeer("invalid_peer_token_retry")
+        peer = await this.ensurePeer()
+      }
+    )
   }
 
   async chatStatus(chatId: string, cursor?: number): Promise<JsonObject> {
@@ -1111,6 +1121,83 @@ export class LabrastroRemoteClient {
         peer = await this.ensurePeer()
       }
     )
+  }
+
+  private async openChatEventStream(
+    peer: PeerInfo,
+    chatId: string,
+    cursor: number,
+    onBatch: ChatEventsHandler,
+    options: ChatEventsOptions
+  ): Promise<void> {
+    const pathname = "/remote/chat/events"
+    const startedAt = Date.now()
+    let status: number | undefined
+    try {
+      const response = await fetchStreaming(this.hostUrl + pathname, {
+        method: "POST",
+        headers: {
+          "Accept": "text/event-stream",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          peer_token: peer.peer_token,
+          chat_id: chatId,
+          cursor,
+          timeout_sec: options.timeoutSec ?? CHAT_EVENTS_TIMEOUT_SEC,
+        }),
+        signal: options.signal,
+      })
+      status = response.status
+      if (!response.ok) {
+        await parseJsonResponse(response)
+        return
+      }
+      if (!response.body) {
+        throw new RemoteTransportError(
+          "Chat event stream response did not include a readable body.",
+          "transient_network"
+        )
+      }
+      let completed = false
+      await readSseStream(response.body, async (frame) => {
+        if (frame.event !== "chat" && frame.event !== "message" && frame.event !== "done") {
+          return
+        }
+        const batch = parseSseJson(frame.data)
+        await onBatch(batch)
+        if (batch.done === true || frame.event === "done") {
+          completed = true
+        }
+      })
+      if (!completed) {
+        throw new RemoteTransportError(
+          "Chat event stream closed before the done frame.",
+          "transient_network"
+        )
+      }
+      await this.peerDiagnosticsLogger.log("http", "http.sse.ok", "Extension SSE stream completed.", {
+        method: "POST",
+        pathname: diagnosticPathname(pathname),
+        status,
+        durationMs: Date.now() - startedAt,
+      })
+    } catch (error) {
+      await this.peerDiagnosticsLogger.log("http", "http.sse.error", "Extension SSE stream failed.", {
+        method: "POST",
+        pathname: diagnosticPathname(pathname),
+        status: remoteStatus(error, status),
+        durationMs: Date.now() - startedAt,
+        error: errorDiagnostics(error),
+      }, "warn")
+      if (error instanceof RemoteError || error instanceof RemoteTransportError) {
+        throw error
+      }
+      if (classifyRemoteError(error) === "transient_network") {
+        throw new RemoteTransportError(errorMessage(error), "transient_network", error)
+      }
+      throw error
+    }
   }
 
   private async getPeerJson(pathname: string): Promise<JsonObject> {
@@ -1564,6 +1651,90 @@ async function fetchWithTimeout(
   }
 }
 
+async function fetchStreaming(input: string, init: RequestInit = {}): Promise<Response> {
+  try {
+    return await fetch(input, init)
+  } catch (error) {
+    if (classifyRemoteError(error) === "transient_network") {
+      throw new RemoteTransportError(errorMessage(error), "transient_network", error)
+    }
+    throw error
+  }
+}
+
+interface SseFrame {
+  event: string
+  data: string
+}
+
+async function readSseStream(
+  body: NonNullable<Response["body"]>,
+  onFrame: (frame: SseFrame) => void | Promise<void>
+): Promise<void> {
+  const reader = body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ""
+  try {
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      buffer = normalizeSseNewlines(buffer)
+      let frameEnd = buffer.indexOf("\n\n")
+      while (frameEnd >= 0) {
+        const rawFrame = buffer.slice(0, frameEnd)
+        buffer = buffer.slice(frameEnd + 2)
+        const frame = parseSseFrame(rawFrame)
+        if (frame) {
+          await onFrame(frame)
+        }
+        frameEnd = buffer.indexOf("\n\n")
+      }
+    }
+    buffer += decoder.decode()
+  } finally {
+    reader.releaseLock()
+  }
+}
+
+function normalizeSseNewlines(value: string): string {
+  return value.replace(/\r\n/g, "\n").replace(/\r/g, "\n")
+}
+
+function parseSseFrame(rawFrame: string): SseFrame | undefined {
+  let event = "message"
+  const dataLines: string[] = []
+  for (const rawLine of rawFrame.split("\n")) {
+    if (!rawLine || rawLine.startsWith(":")) continue
+    const separator = rawLine.indexOf(":")
+    if (separator < 0) continue
+    const field = rawLine.slice(0, separator)
+    let value = rawLine.slice(separator + 1)
+    if (value.startsWith(" ")) {
+      value = value.slice(1)
+    }
+    if (field === "event") {
+      event = value
+    } else if (field === "data") {
+      dataLines.push(value)
+    }
+  }
+  if (!dataLines.length) return undefined
+  return { event, data: dataLines.join("\n") }
+}
+
+function parseSseJson(data: string): JsonObject {
+  try {
+    const parsed = JSON.parse(data)
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as JsonObject
+    }
+  } catch (error) {
+    throw new RemoteTransportError(errorMessage(error), "fatal_chat", error)
+  }
+  throw new RemoteTransportError("Chat event stream data must be a JSON object.", "fatal_chat")
+}
+
 export async function parseJsonResponse(response: Response): Promise<JsonObject> {
   const text = await response.text()
   let body: unknown = {}
@@ -1597,7 +1768,7 @@ function normalizeBackendFeatures(payload: JsonObject): BackendFeatures {
       features.session_history_writable === false
         ? false
         : features.sessions === true,
-    chatStream: features.chat_stream === true,
+    chatEvents: features.chat_events === true,
     taskflow: features.taskflow === true,
     issueAssignment: features.issue_assignment === true,
     freshSessionWithoutSessionHint: features.fresh_session_without_session_hint === true,

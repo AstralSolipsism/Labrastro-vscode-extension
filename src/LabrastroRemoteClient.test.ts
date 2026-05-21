@@ -66,7 +66,7 @@ vi.mock("fs/promises", async () => {
 })
 
 import {
-  CHAT_STREAM_TIMEOUT_SEC,
+  CHAT_EVENTS_TIMEOUT_SEC,
   LabrastroRemoteClient,
   RemoteError,
   classifyRemoteError,
@@ -210,7 +210,7 @@ function mockPeerFetch(artifactContent = Buffer.from("peer-binary"), serverVersi
           server_version: serverVersion,
           features: {
             sessions: true,
-            chat_stream: true,
+            chat_events: true,
             fresh_session_without_session_hint: true,
             peer_token_heartbeat_refresh: true,
           },
@@ -259,6 +259,39 @@ function headerValue(headers: RequestInit["headers"] | undefined, name: string):
 
 function fetchPathCount(fetchMock: ReturnType<typeof vi.fn>, pathname: string): number {
   return fetchMock.mock.calls.filter(([input]) => String(input).endsWith(pathname)).length
+}
+
+function streamTextResponse(chunks: string[], headers: Record<string, string> = {}): Response {
+  const encoder = new TextEncoder()
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) {
+          controller.enqueue(encoder.encode(chunk))
+        }
+        controller.close()
+      },
+    }),
+    { headers: { "Content-Type": "text/event-stream", ...headers } }
+  )
+}
+
+function attachPeer(client: LabrastroRemoteClient, peerToken = "peer-token-1"): void {
+  ;(client as unknown as { peerInfo: { peer_id: string; peer_token: string } }).peerInfo = {
+    peer_id: "peer-1",
+    peer_token: peerToken,
+  }
+  const peerProcess = new EventEmitter() as EventEmitter & {
+    stdout: EventEmitter
+    stderr: EventEmitter
+    exitCode: number | null
+    kill: ReturnType<typeof vi.fn>
+  }
+  peerProcess.stdout = new EventEmitter()
+  peerProcess.stderr = new EventEmitter()
+  peerProcess.exitCode = null
+  peerProcess.kill = vi.fn()
+  ;(client as unknown as { peerProcess: typeof peerProcess }).peerProcess = peerProcess
 }
 
 async function readPeerDiagnosticRecords(storagePath: string): Promise<Array<Record<string, unknown>>> {
@@ -385,7 +418,7 @@ describe("LabrastroRemoteClient features", () => {
         server_version: "0.3.0",
         features: {
           sessions: true,
-          chat_stream: true,
+          chat_events: true,
           agent_runs: {
             executor_features: {
               claude: {
@@ -410,6 +443,7 @@ describe("LabrastroRemoteClient features", () => {
 
     const features = await new LabrastroRemoteClient(context as never).features()
 
+    expect(features.chatEvents).toBe(true)
     expect(features.agentRuns.executorFeatures.claude).toMatchObject({
       installed: true,
       version: "2.0.1",
@@ -1011,7 +1045,7 @@ describe("LabrastroRemoteClient chat start", () => {
     })
   })
 
-  it("passes session list etag, fork anchor, and default chat timeout to peer endpoints", async () => {
+  it("passes session list etag, fork anchor, and peer chat control requests to peer endpoints", async () => {
     vscodeMock.labrastroValue = "http://127.0.0.1:8765"
     const context = {
       secrets: {
@@ -1049,7 +1083,6 @@ describe("LabrastroRemoteClient chat start", () => {
 
     await client.listSessions(5, "etag-1")
     await client.forkSession("session-1", 2)
-    await client.streamChat("chat-1", 7)
     await client.chatStatus("chat-1", 8)
     await client.cancelChat("chat-1", "user_stop")
     await client.followUpChat({
@@ -1088,15 +1121,6 @@ describe("LabrastroRemoteClient chat start", () => {
           peer_token: "peer-token-1",
           source_session_id: "session-1",
           keep_through_message_index: 2,
-        },
-      },
-      {
-        pathname: "/remote/chat/stream",
-        body: {
-          peer_token: "peer-token-1",
-          chat_id: "chat-1",
-          cursor: 7,
-          timeout_sec: CHAT_STREAM_TIMEOUT_SEC,
         },
       },
       {
@@ -1152,6 +1176,84 @@ describe("LabrastroRemoteClient chat start", () => {
         },
       },
     ])
+  })
+
+  it("streams chat SSE frames across chunk boundaries", async () => {
+    vscodeMock.labrastroValue = "http://127.0.0.1:8765"
+    const context = {
+      secrets: {
+        get: vi.fn(async () => undefined),
+      },
+    }
+    const posted: Array<{ pathname: string; accept: string | undefined; body: Record<string, unknown> }> = []
+    const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
+      const url = new URL(String(input))
+      posted.push({
+        pathname: url.pathname,
+        accept: headerValue(init?.headers, "Accept"),
+        body: JSON.parse(String(init?.body || "{}")) as Record<string, unknown>,
+      })
+      return streamTextResponse([
+        "event: chat\n",
+        'data: {"events":[{"type":"assistant_delta","payload":{"content":"he',
+        'llo"}}],"done":false,"next_cursor":2}\n\n',
+        ": ping\n\n",
+        'event: chat\ndata: {"events":[{"type":"chat_end","payload":{"response":"ok"}}],"done":true,"next_cursor":3}\n\n',
+      ])
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    const client = new LabrastroRemoteClient(context as never)
+    attachPeer(client)
+
+    const batches: JsonBody[] = []
+    await client.streamChatEvents("chat-1", 1, async (batch) => {
+      batches.push(batch)
+    }, { timeoutSec: 2 })
+
+    expect(posted).toEqual([
+      {
+        pathname: "/remote/chat/events",
+        accept: "text/event-stream",
+        body: {
+          peer_token: "peer-token-1",
+          chat_id: "chat-1",
+          cursor: 1,
+          timeout_sec: 2,
+        },
+      },
+    ])
+    expect(batches).toEqual([
+      {
+        events: [{ type: "assistant_delta", payload: { content: "hello" } }],
+        done: false,
+        next_cursor: 2,
+      },
+      {
+        events: [{ type: "chat_end", payload: { response: "ok" } }],
+        done: true,
+        next_cursor: 3,
+      },
+    ])
+  })
+
+  it("surfaces SSE error statuses as remote errors", async () => {
+    vscodeMock.labrastroValue = "http://127.0.0.1:8765"
+    const context = {
+      secrets: {
+        get: vi.fn(async () => undefined),
+      },
+    }
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(
+      JSON.stringify({ ok: false, error: "chat_events_unavailable", message: "no stream" }),
+      { status: 503, headers: { "Content-Type": "application/json" } }
+    )))
+    const client = new LabrastroRemoteClient(context as never)
+    attachPeer(client)
+
+    await expect(client.streamChatEvents("chat-1", 0, async () => undefined)).rejects.toMatchObject({
+      status: 503,
+      code: "chat_events_unavailable",
+    })
   })
 
   it("calls taskflow complexity control-plane peer endpoints", async () => {
@@ -1512,7 +1614,7 @@ describe("LabrastroRemoteClient peer retry strategy", () => {
             server_version: "0.2.9",
             features: {
               sessions: true,
-              chat_stream: true,
+              chat_events: true,
               fresh_session_without_session_hint: true,
               peer_token_heartbeat_refresh: true,
             },
@@ -1531,15 +1633,14 @@ describe("LabrastroRemoteClient peer retry strategy", () => {
           headers: { "Content-Type": "application/json" },
         })
       }
-      if (url.pathname === "/remote/chat/stream") {
+      if (url.pathname === "/remote/chat/events") {
         streamBodies.push(body)
         if (body.peer_token === "stale-peer-token") {
           return new Response(JSON.stringify({ error: "invalid_peer_token" }), { status: 401 })
         }
-        return new Response(
-          JSON.stringify({ events: [], done: false, next_cursor: body.cursor }),
-          { headers: { "Content-Type": "application/json" } }
-        )
+        return streamTextResponse([
+          `event: chat\ndata: ${JSON.stringify({ events: [], done: true, next_cursor: body.cursor })}\n\n`,
+        ])
       }
       return new Response(JSON.stringify({ error: "unexpected_url", path: url.pathname }), { status: 500 })
     })
@@ -1589,25 +1690,28 @@ describe("LabrastroRemoteClient peer retry strategy", () => {
     })
     ;(client as unknown as { peerProcess: typeof staleProcess }).peerProcess = staleProcess
 
-    await expect(client.streamChat("chat-1", 7)).resolves.toMatchObject({
-      done: false,
-      next_cursor: 7,
-    })
+    const batches: JsonBody[] = []
+    await expect(
+      client.streamChatEvents("chat-1", 7, async (batch) => {
+        batches.push(batch)
+      })
+    ).resolves.toBeUndefined()
 
     expect(streamBodies).toEqual([
       {
         peer_token: "stale-peer-token",
         chat_id: "chat-1",
         cursor: 7,
-        timeout_sec: CHAT_STREAM_TIMEOUT_SEC,
+        timeout_sec: CHAT_EVENTS_TIMEOUT_SEC,
       },
       {
         peer_token: "fresh-peer-token",
         chat_id: "chat-1",
         cursor: 7,
-        timeout_sec: CHAT_STREAM_TIMEOUT_SEC,
+        timeout_sec: CHAT_EVENTS_TIMEOUT_SEC,
       },
     ])
+    expect(batches).toEqual([{ events: [], done: true, next_cursor: 7 }])
     expect(disconnectBodies).toEqual([
       {
         peer_token: "stale-peer-token",

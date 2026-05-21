@@ -10,7 +10,7 @@ const writableFeatures: BackendFeatures = {
   sessions: true,
   sessionAutoSave: true,
   sessionHistoryWritable: true,
-  chatStream: true,
+  chatEvents: true,
   taskflow: false,
   issueAssignment: false,
   freshSessionWithoutSessionHint: false,

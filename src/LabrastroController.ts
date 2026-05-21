@@ -98,8 +98,8 @@ interface ActiveEnvironmentRun {
   cancelled: boolean
 }
 
-const CHAT_STREAM_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 15_000]
-const CHAT_STREAM_RECOVERY_DEADLINE_MS = 5 * 60 * 1000
+const CHAT_EVENTS_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 15_000]
+const CHAT_EVENTS_RECOVERY_DEADLINE_MS = 5 * 60 * 1000
 const CHAT_WEBVIEW_TARGETS: readonly WebviewTarget[] = ["sidebar"]
 const SESSION_WEBVIEW_TARGETS: readonly WebviewTarget[] = ["sidebar", "agentManager"]
 export class LabrastroController implements vscode.Disposable {
@@ -738,40 +738,51 @@ export class LabrastroController implements vscode.Disposable {
       let cursor = 0
       let assistantText = ""
       let finalResponse = ""
-      while (!this.disposed && this.activeToolchainIngestChatId === chatId) {
-        const stream = await this.client.streamChat(chatId, cursor, 2)
-        const events = Array.isArray(stream.events) ? stream.events : []
-        const nextCursor = Number(stream.next_cursor ?? cursor)
-        for (const event of events) {
-          if (!event || typeof event !== "object") continue
-          const normalized = event as Record<string, unknown>
-          if (normalized.type === "approval_request") {
-            await this.approvalDocuments.store(objectValue(normalized.payload))
-          }
-          const capturedText = toolchainIngestAssistantText(normalized)
-          if (capturedText) {
-            assistantText += capturedText
-          }
-          const chatEndResponse = toolchainIngestChatEndResponse(normalized)
-          if (chatEndResponse) {
-            finalResponse = chatEndResponse
-          }
-          const log = toolchainIngestEventLog(normalized)
-          if (log) {
-            post({
-              type: "toolchain.ingest.event",
-              payload: {
-                chatId,
-                ...log,
-                createdAt: new Date().toISOString(),
-              },
-            })
-          }
+      const abortController = new AbortController()
+      const abortInactiveStream = setInterval(() => {
+        if (this.disposed || this.activeToolchainIngestChatId !== chatId) {
+          abortController.abort()
         }
-        cursor = nextCursor
-        if (stream.done) {
-          break
-        }
+      }, 250)
+      try {
+        await this.client.streamChatEvents(
+          chatId,
+          cursor,
+          async (stream) => {
+            const events = Array.isArray(stream.events) ? stream.events : []
+            const nextCursor = Number(stream.next_cursor ?? cursor)
+            for (const event of events) {
+              if (!event || typeof event !== "object") continue
+              const normalized = event as Record<string, unknown>
+              if (normalized.type === "approval_request") {
+                await this.approvalDocuments.store(objectValue(normalized.payload))
+              }
+              const capturedText = toolchainIngestAssistantText(normalized)
+              if (capturedText) {
+                assistantText += capturedText
+              }
+              const chatEndResponse = toolchainIngestChatEndResponse(normalized)
+              if (chatEndResponse) {
+                finalResponse = chatEndResponse
+              }
+              const log = toolchainIngestEventLog(normalized)
+              if (log) {
+                post({
+                  type: "toolchain.ingest.event",
+                  payload: {
+                    chatId,
+                    ...log,
+                    createdAt: new Date().toISOString(),
+                  },
+                })
+              }
+            }
+            cursor = nextCursor
+          },
+          { timeoutSec: 2, signal: abortController.signal }
+        )
+      } finally {
+        clearInterval(abortInactiveStream)
       }
       if (this.activeToolchainIngestChatId !== chatId) {
         return
@@ -815,6 +826,9 @@ export class LabrastroController implements vscode.Disposable {
         await this.refreshEnvironmentManifest(post)
       }
     } catch (error) {
+      if (this.disposed || (chatId && this.activeToolchainIngestChatId !== chatId)) {
+        return
+      }
       post({
         type: "toolchain.ingest.error",
         payload: {
@@ -1217,7 +1231,7 @@ export class LabrastroController implements vscode.Disposable {
         lastStreamAt: new Date().toISOString(),
       })
       this.emitChatMessage({ type: "chat.session", chatId, sessionId }, post)
-      await this.pollChatStream(chatId, sessionId || "", post)
+      await this.consumeChatEventStream(chatId, sessionId || "", post)
     } catch (error) {
       this.emitChatMessage({ type: "chat.error", message: chatErrorMessage(error) }, post)
       await this.postConnectionStateIfAuthRequired(error, post)
@@ -1225,129 +1239,187 @@ export class LabrastroController implements vscode.Disposable {
     }
   }
 
-  private async pollChatStream(
+  private async consumeChatEventStream(
     chatId: string,
     initialSessionId: string,
     post: PostMessage
   ): Promise<void> {
-      let sessionId = initialSessionId
-      let cursor = this.chatRunCoordinator.activeRun?.cursor ?? 0
-      while (!this.disposed) {
-        if (this.chatRunCoordinator.activeRun?.chatId !== chatId) {
-          break
+    let sessionId = initialSessionId
+    let cursor = this.chatRunCoordinator.activeRun?.cursor ?? 0
+    while (!this.disposed && this.chatRunCoordinator.activeRun?.chatId === chatId) {
+      const abortController = new AbortController()
+      let completed = false
+      const abortInactiveStream = setInterval(() => {
+        if (this.disposed || this.chatRunCoordinator.activeRun?.chatId !== chatId) {
+          abortController.abort()
         }
-        let stream: Record<string, unknown>
-        try {
-          stream = await this.client.streamChat(chatId, cursor, 2)
-          const reconnecting = this.chatRunCoordinator.activeRun?.status === "reconnecting"
-          this.chatRunCoordinator.patchActiveRun({
-            status: "running",
-            reconnectAttempts: 0,
-            reconnectStartedAt: undefined,
-            lastError: undefined,
-            nextRetryAt: undefined,
-            lastStreamAt: new Date().toISOString(),
-          })
-          if (reconnecting && this.chatRunCoordinator.activeRun) {
-            this.emitChatMessage(
-              {
-                type: "chat.reconnected",
-                chatId,
-                payload: this.chatRunCoordinator.activeRunPayload(),
-              },
-              post
-            )
-          }
-        } catch (error) {
-          const activeRun = this.chatRunCoordinator.activeRun
-          if (
-            activeRun?.chatId === chatId &&
-            classifyRemoteError(error) === "transient_network" &&
-            canRetryChatStream(activeRun)
-          ) {
-            const delayMs = retryDelayForChatRun(activeRun)
-            const reconnectStartedAt = activeRun.reconnectStartedAt ?? Date.now()
-            const next = this.chatRunCoordinator.patchActiveRun({
-              status: "reconnecting",
-              reconnectAttempts: activeRun.reconnectAttempts + 1,
-              reconnectStartedAt,
-              lastError: errorMessage(error),
-              nextRetryAt: Date.now() + delayMs,
-            })
-            this.emitChatMessage(
-              {
-                type: "chat.reconnecting",
-                chatId,
-                message: errorMessage(error),
-                payload: next ? this.chatRunCoordinator.activeRunPayload() : undefined,
-              },
-              post
-            )
-            await delay(delayMs)
-            continue
-          }
-          throw error
-        }
-        const events = Array.isArray(stream.events) ? stream.events : []
-        const nextCursor = Number(stream.next_cursor ?? cursor)
-        if (events.length) {
-          for (const event of events) {
-            if (
-              event &&
-              event.type === "remote_peer_ready" &&
-              typeof event.payload === "object" &&
-              event.payload
-            ) {
-              const remoteSessionId = stringValue(
-                (event.payload as Record<string, unknown>).session_id
-              )
-              if (remoteSessionId && sessionId && remoteSessionId !== sessionId) {
-                this.emitChatMessage({
-                  type: "chat.error",
-                  message: `会话绑定异常：当前会话 ${sessionId}，远端返回 ${remoteSessionId}。`,
-                }, post)
-                this.chatRunCoordinator.clearActiveRun()
-                return
-              }
-              const currentSessionId = await this.sessionCoordinator.adoptRemoteSession(
-                remoteSessionId,
-                sessionId,
-                this.chatRunCoordinator.activeDraftSessionId,
-                post
-              )
-              this.chatRunCoordinator.patchActiveRun({
-                sessionId: currentSessionId,
-                draftSessionId: undefined,
-              })
-            }
-          }
-          for (const event of events) {
-            if (event && event.type === "approval_request") {
-              await this.approvalDocuments.store(objectValue(event.payload))
-            }
-          }
-          for (const batch of splitChatStreamBatches(events)) {
-            this.emitChatMessage(
-              { type: batch.live ? "chat.stream" : "chat.events", chatId, events: batch.events },
-              post
-            )
-          }
-        }
-        cursor = nextCursor
-        this.chatRunCoordinator.patchActiveRun({
+      }, 250)
+      try {
+        await this.client.streamChatEvents(
+          chatId,
           cursor,
-          lastStreamAt: new Date().toISOString(),
-        })
-        if (stream.done) {
-          await this.sessionCoordinator.reloadCurrentAfterChatDone(post)
-          this.emitChatMessage({ type: "chat.done", chatId }, post)
-          if (this.chatRunCoordinator.activeRun?.chatId === chatId) {
-            this.chatRunCoordinator.setActiveRun(undefined)
-          }
-          this.chatRunCoordinator.clearActiveDraftSessionId()
+          async (stream) => {
+            this.markChatEventsConnected(chatId, post)
+            const result = await this.applyChatEventsBatch(
+              chatId,
+              sessionId,
+              cursor,
+              stream,
+              post
+            )
+            sessionId = result.sessionId
+            cursor = result.cursor
+            completed = result.done
+            if (!result.active) {
+              abortController.abort()
+            }
+          },
+          { timeoutSec: 2, signal: abortController.signal }
+        )
+        break
+      } catch (error) {
+        if (completed || (abortController.signal.aborted && this.chatRunCoordinator.activeRun?.chatId !== chatId)) {
           break
+        }
+        if (await this.retryChatEventsAfterError(chatId, error, post)) {
+          continue
+        }
+        throw error
+      } finally {
+        clearInterval(abortInactiveStream)
+      }
+    }
+  }
+
+  private markChatEventsConnected(chatId: string, post: PostMessage): void {
+    const reconnecting = this.chatRunCoordinator.activeRun?.status === "reconnecting"
+    this.chatRunCoordinator.patchActiveRun({
+      status: "running",
+      reconnectAttempts: 0,
+      reconnectStartedAt: undefined,
+      lastError: undefined,
+      nextRetryAt: undefined,
+      lastStreamAt: new Date().toISOString(),
+    })
+    if (reconnecting && this.chatRunCoordinator.activeRun) {
+      this.emitChatMessage(
+        {
+          type: "chat.reconnected",
+          chatId,
+          payload: this.chatRunCoordinator.activeRunPayload(),
+        },
+        post
+      )
+    }
+  }
+
+  private async retryChatEventsAfterError(
+    chatId: string,
+    error: unknown,
+    post: PostMessage
+  ): Promise<boolean> {
+    const activeRun = this.chatRunCoordinator.activeRun
+    if (
+      activeRun?.chatId !== chatId ||
+      classifyRemoteError(error) !== "transient_network" ||
+      !canRetryChatEvents(activeRun)
+    ) {
+      return false
+    }
+    const delayMs = retryDelayForChatRun(activeRun)
+    const reconnectStartedAt = activeRun.reconnectStartedAt ?? Date.now()
+    const next = this.chatRunCoordinator.patchActiveRun({
+      status: "reconnecting",
+      reconnectAttempts: activeRun.reconnectAttempts + 1,
+      reconnectStartedAt,
+      lastError: errorMessage(error),
+      nextRetryAt: Date.now() + delayMs,
+    })
+    this.emitChatMessage(
+      {
+        type: "chat.reconnecting",
+        chatId,
+        message: errorMessage(error),
+        payload: next ? this.chatRunCoordinator.activeRunPayload() : undefined,
+      },
+      post
+    )
+    await delay(delayMs)
+    return true
+  }
+
+  private async applyChatEventsBatch(
+    chatId: string,
+    sessionId: string,
+    cursor: number,
+    stream: Record<string, unknown>,
+    post: PostMessage
+  ): Promise<{ sessionId: string; cursor: number; done: boolean; active: boolean }> {
+    const events = Array.isArray(stream.events) ? stream.events : []
+    const nextCursor = Number(stream.next_cursor ?? cursor)
+    if (events.length) {
+      for (const event of events) {
+        if (
+          event &&
+          event.type === "remote_peer_ready" &&
+          typeof event.payload === "object" &&
+          event.payload
+        ) {
+          const remoteSessionId = stringValue(
+            (event.payload as Record<string, unknown>).session_id
+          )
+          if (remoteSessionId && sessionId && remoteSessionId !== sessionId) {
+            this.emitChatMessage({
+              type: "chat.error",
+              message: `会话绑定异常：当前会话 ${sessionId}，远端返回 ${remoteSessionId}。`,
+            }, post)
+            this.chatRunCoordinator.clearActiveRun()
+            return { sessionId, cursor, done: false, active: false }
+          }
+          sessionId = (await this.sessionCoordinator.adoptRemoteSession(
+            remoteSessionId,
+            sessionId,
+            this.chatRunCoordinator.activeDraftSessionId,
+            post
+          )) || sessionId
+          this.chatRunCoordinator.patchActiveRun({
+            sessionId,
+            draftSessionId: undefined,
+          })
         }
       }
+      for (const event of events) {
+        if (event && event.type === "approval_request") {
+          await this.approvalDocuments.store(objectValue(event.payload))
+        }
+      }
+      for (const batch of splitChatEventBatches(events)) {
+        this.emitChatMessage(
+          { type: batch.live ? "chat.stream" : "chat.events", chatId, events: batch.events },
+          post
+        )
+      }
+    }
+    cursor = nextCursor
+    this.chatRunCoordinator.patchActiveRun({
+      cursor,
+      lastStreamAt: new Date().toISOString(),
+    })
+    if (stream.done) {
+      await this.sessionCoordinator.reloadCurrentAfterChatDone(post)
+      this.emitChatMessage({ type: "chat.done", chatId }, post)
+      if (this.chatRunCoordinator.activeRun?.chatId === chatId) {
+        this.chatRunCoordinator.setActiveRun(undefined)
+      }
+      this.chatRunCoordinator.clearActiveDraftSessionId()
+      return { sessionId, cursor, done: true, active: false }
+    }
+    return {
+      sessionId,
+      cursor,
+      done: false,
+      active: this.chatRunCoordinator.activeRun?.chatId === chatId,
+    }
   }
 
   private async recoverChat(
@@ -1372,7 +1444,7 @@ export class LabrastroController implements vscode.Disposable {
         type: "chat.resume",
         payload: { chatId, sessionId, status: "running" },
       }, post)
-      await this.pollChatStream(chatId, sessionId, post)
+      await this.consumeChatEventStream(chatId, sessionId, post)
     } catch (error) {
       this.emitChatMessage({ type: "chat.error", message: chatErrorMessage(error) }, post)
       await this.postConnectionStateIfAuthRequired(error, post)
@@ -1587,14 +1659,14 @@ function delay(ms: number): Promise<void> {
 }
 
 function retryDelayForChatRun(run: ActiveChatRun): number {
-  return CHAT_STREAM_RETRY_DELAYS_MS[
-    Math.min(run.reconnectAttempts, CHAT_STREAM_RETRY_DELAYS_MS.length - 1)
+  return CHAT_EVENTS_RETRY_DELAYS_MS[
+    Math.min(run.reconnectAttempts, CHAT_EVENTS_RETRY_DELAYS_MS.length - 1)
   ]
 }
 
-function canRetryChatStream(run: ActiveChatRun): boolean {
+function canRetryChatEvents(run: ActiveChatRun): boolean {
   const startedAt = run.reconnectStartedAt ?? Date.now()
-  return Date.now() - startedAt <= CHAT_STREAM_RECOVERY_DEADLINE_MS
+  return Date.now() - startedAt <= CHAT_EVENTS_RECOVERY_DEADLINE_MS
 }
 
 function resolveWorkspacePath(pathValue: string): string | undefined {
@@ -1813,21 +1885,21 @@ function buildToolchainIngestPrompt(input: Record<string, unknown>): string {
   ].join("")
 }
 
-const LIVE_CHAT_STREAM_EVENT_TYPES = new Set([
+const LIVE_CHAT_EVENT_TYPES = new Set([
   "assistant_delta",
   "reasoning_delta",
   "tool_call_stream",
 ])
 
-function isLiveChatStreamEvent(event: unknown): boolean {
+function isLiveChatEvent(event: unknown): boolean {
   if (!event || typeof event !== "object") return false
-  return LIVE_CHAT_STREAM_EVENT_TYPES.has(stringValue((event as Record<string, unknown>).type) || "")
+  return LIVE_CHAT_EVENT_TYPES.has(stringValue((event as Record<string, unknown>).type) || "")
 }
 
-function splitChatStreamBatches(events: unknown[]): Array<{ live: boolean; events: unknown[] }> {
+function splitChatEventBatches(events: unknown[]): Array<{ live: boolean; events: unknown[] }> {
   const batches: Array<{ live: boolean; events: unknown[] }> = []
   for (const event of events) {
-    const live = isLiveChatStreamEvent(event)
+    const live = isLiveChatEvent(event)
     const last = batches[batches.length - 1]
     if (last && last.live === live) {
       last.events.push(event)
