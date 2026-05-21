@@ -613,9 +613,9 @@ const SessionPart: Component<PartProps> = (props) => {
   )
 }
 
-const MarkdownText: Component<{ text?: string; format?: "plain" | "markdown" }> = (props) => (
+const MarkdownText: Component<{ text?: string; format?: "plain" | "markdown"; streaming?: boolean }> = (props) => (
   <Show when={props.format === "markdown"} fallback={<div class="assistant-text-part">{props.text}</div>}>
-    <MarkdownBlock text={props.text} />
+    <MarkdownBlock text={props.text} streaming={props.streaming} />
   </Show>
 )
 
@@ -989,7 +989,11 @@ const PartView: Component<PartProps> = (props) => {
       }
     >
       <Match when={props.part.type === "text"}>
-        <MarkdownText text={props.part.text} format={props.part.textFormat} />
+        <MarkdownText
+          text={props.part.text}
+          format={props.part.textFormat}
+          streaming={props.part.textStreamKey === "assistant-stream"}
+        />
       </Match>
       <Match when={props.part.type === "reasoning"}>
         <ReasoningPart {...props} />

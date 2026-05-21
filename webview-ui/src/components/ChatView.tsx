@@ -637,13 +637,13 @@ const ChatView: Component<ChatViewProps> = (props) => {
         id: `assistant-stream-${Date.now()}-${parts.length}`,
         type: "text",
         text: content,
-        textFormat: "plain",
+        textFormat: "markdown",
         textStreamKey: "assistant-stream",
       }, meta),
       (part) => withEventMeta({
         ...part,
         text: `${part.text || ""}${content}`,
-        textFormat: "plain",
+        textFormat: "markdown",
         textStreamKey: "assistant-stream",
       }, meta),
     )

@@ -6,22 +6,30 @@ import { renderStreamingMarkdown, type MarkdownRenderPart } from "./markdown-ren
 interface MarkdownBlockProps {
   text?: string
   class?: string
+  streaming?: boolean
 }
 
 const UNSAFE_PROTOCOL = /^(?:javascript|command|data|vbscript):/i
 const DRIVE_LINE_TARGET = /^([A-Za-z]:[\\/].*?)(?::(\d+))(?::(\d+))?$/
 const PATH_LINE_TARGET = /^(.+?)(?::(\d+))(?::(\d+))?$/
+const STREAMING_RENDER_INTERVAL_MS = 64
 
 export const MarkdownBlock: Component<MarkdownBlockProps> = (props) => {
   const vscode = useVSCode()
   const text = () => props.text || ""
+  const streaming = () => props.streaming === true
   const className = () => ["assistant-text-part", "assistant-markdown", props.class].filter(Boolean).join(" ")
   const [renderText, setRenderText] = createSignal(text())
-  const parts = createMemo(() => renderStreamingMarkdown(renderText(), props.class || "default"))
+  const parts = createMemo(() =>
+    renderStreamingMarkdown(renderText(), props.class || "default", {
+      highlightCode: !streaming(),
+    })
+  )
   let renderedValue = text()
   let pendingValue = renderedValue
   let frameId: number | undefined
   let timeoutId: number | undefined
+  let lastStreamingRenderAt = 0
 
   const cancelPendingRender = () => {
     if (frameId !== undefined) {
@@ -36,6 +44,7 @@ export const MarkdownBlock: Component<MarkdownBlockProps> = (props) => {
 
   createEffect(() => {
     const next = text()
+    const isStreaming = streaming()
     if (next === renderedValue) {
       pendingValue = renderedValue
       cancelPendingRender()
@@ -48,13 +57,28 @@ export const MarkdownBlock: Component<MarkdownBlockProps> = (props) => {
       frameId = undefined
       timeoutId = undefined
       renderedValue = next
+      if (isStreaming) lastStreamingRenderAt = Date.now()
       setRenderText(next)
     }
-    if (typeof requestAnimationFrame === "function") {
-      frameId = requestAnimationFrame(apply)
+    if (!isStreaming) {
+      apply()
       return
     }
-    timeoutId = window.setTimeout(apply, 16)
+    const elapsed = Date.now() - lastStreamingRenderAt
+    const delay = Math.max(0, STREAMING_RENDER_INTERVAL_MS - elapsed)
+    const scheduleFrame = () => {
+      timeoutId = undefined
+      if (typeof requestAnimationFrame === "function") {
+        frameId = requestAnimationFrame(apply)
+        return
+      }
+      apply()
+    }
+    if (delay <= 0) {
+      scheduleFrame()
+      return
+    }
+    timeoutId = window.setTimeout(scheduleFrame, delay)
   })
 
   onCleanup(cancelPendingRender)

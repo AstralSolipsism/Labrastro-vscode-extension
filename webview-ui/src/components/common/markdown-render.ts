@@ -20,6 +20,10 @@ export type MarkdownRenderPart =
   | { type: "html"; html: string }
   | { type: "open-code"; code: string; language: string }
 
+export interface MarkdownRenderOptions {
+  highlightCode?: boolean
+}
+
 interface OpenCodeFence {
   code: string
   language: string
@@ -99,39 +103,53 @@ function ensureSanitizerHooks() {
   })
 }
 
-const renderer = {
-  code(token: Tokens.Code) {
-    const language = normalizeLanguage(token.lang)
-    const code = token.text || ""
-    const highlighted = highlightCode(code, language)
-    const label = language || "text"
-    return [
-      `<div class="markdown-code-block" data-code-block="true">`,
-      `<div class="markdown-code-block__header">`,
-      `<span class="markdown-code-block__language">${escapeHtml(label)}</span>`,
-      `<button class="markdown-code-block__copy" data-copy-code="true">${escapeHtml(t("markdown.copy"))}</button>`,
-      `</div>`,
-      `<pre class="markdown-code"><code class="hljs${language ? ` language-${escapeHtml(language)}` : ""}">${highlighted}</code></pre>`,
-      `</div>`,
-    ].join("")
-  },
-  image(token: Tokens.Image) {
-    const href = sanitizeHref(token.href)
-    const text = token.text || token.title || href
-    if (!href) return escapeHtml(text)
-    return `<a class="markdown-image-link" href="${escapeAttribute(href)}">${t("markdown.imageLink", { text: escapeHtml(text) })}</a>`
-  },
+function createRenderer(options: Required<MarkdownRenderOptions>) {
+  return {
+    code(token: Tokens.Code) {
+      const language = normalizeLanguage(token.lang)
+      const code = token.text || ""
+      const highlighted = options.highlightCode ? highlightCodeBlock(code, language) : escapeHtml(code)
+      const label = language || "text"
+      const codeClass = [
+        options.highlightCode ? "hljs" : "",
+        language ? `language-${escapeHtml(language)}` : "",
+      ].filter(Boolean).join(" ")
+      return [
+        `<div class="markdown-code-block" data-code-block="true">`,
+        `<div class="markdown-code-block__header">`,
+        `<span class="markdown-code-block__language">${escapeHtml(label)}</span>`,
+        `<button class="markdown-code-block__copy" data-copy-code="true">${escapeHtml(t("markdown.copy"))}</button>`,
+        `</div>`,
+        `<pre class="markdown-code"><code${codeClass ? ` class="${codeClass}"` : ""}>${highlighted}</code></pre>`,
+        `</div>`,
+      ].join("")
+    },
+    image(token: Tokens.Image) {
+      const href = sanitizeHref(token.href)
+      const text = token.text || token.title || href
+      if (!href) return escapeHtml(text)
+      return `<a class="markdown-image-link" href="${escapeAttribute(href)}">${t("markdown.imageLink", { text: escapeHtml(text) })}</a>`
+    },
+  }
 }
 
-const marked = new Marked({
+const markedHighlighted = new Marked({
   async: false,
   breaks: false,
   gfm: true,
-  renderer,
+  renderer: createRenderer({ highlightCode: true }),
 })
 
-export function renderMarkdown(value: string, context = "default"): string {
-  const cacheKey = `${locale()}\u0000${context}\u0000${value}`
+const markedPlainCode = new Marked({
+  async: false,
+  breaks: false,
+  gfm: true,
+  renderer: createRenderer({ highlightCode: false }),
+})
+
+export function renderMarkdown(value: string, context = "default", options: MarkdownRenderOptions = {}): string {
+  const shouldHighlightCode = options.highlightCode !== false
+  const cacheKey = `${locale()}\u0000${context}\u0000${shouldHighlightCode ? "highlight" : "plain-code"}\u0000${value}`
   const cached = renderCache.get(cacheKey)
   if (cached !== undefined) {
     cacheHits += 1
@@ -141,23 +159,24 @@ export function renderMarkdown(value: string, context = "default"): string {
   }
 
   cacheMisses += 1
-  ensureHighlighters()
-  const raw = marked.parse(value, { async: false }) as string
+  if (shouldHighlightCode) ensureHighlighters()
+  const parser = shouldHighlightCode ? markedHighlighted : markedPlainCode
+  const raw = parser.parse(value, { async: false }) as string
   const html = sanitizeHtml(raw)
   renderCache.set(cacheKey, html)
   trimRenderCache()
   return html
 }
 
-export function renderStreamingMarkdown(value: string, context = "default"): MarkdownRenderPart[] {
+export function renderStreamingMarkdown(value: string, context = "default", options: MarkdownRenderOptions = {}): MarkdownRenderPart[] {
   const split = splitOpenCodeFence(value)
-  if (!split.openCode) return [{ type: "html", html: renderMarkdown(value, context) }]
+  if (!split.openCode) return [{ type: "html", html: renderMarkdown(value, context, options) }]
 
   const parts: MarkdownRenderPart[] = []
   if (split.closedMarkdown.trim()) {
     parts.push({
       type: "html",
-      html: renderMarkdown(split.closedMarkdown, `${context}:closed`),
+      html: renderMarkdown(split.closedMarkdown, `${context}:closed`, options),
     })
   }
   parts.push({
@@ -294,7 +313,7 @@ function normalizeLanguage(language?: string): string {
   return aliases[value] || value
 }
 
-function highlightCode(code: string, language: string): string {
+function highlightCodeBlock(code: string, language: string): string {
   if (language && hljs.getLanguage(language)) {
     return hljs.highlight(code, { language, ignoreIllegals: true }).value
   }

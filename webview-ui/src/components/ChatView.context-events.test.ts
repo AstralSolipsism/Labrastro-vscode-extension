@@ -30,6 +30,8 @@ describe("ChatView context events", () => {
     expect(source).toContain("appendActiveTextStream")
     expect(source).toContain("appendActiveToolStream")
     expect(source).toContain("const visibleTurns =")
+    expect(source).toContain('textFormat: "markdown"')
+    expect(source).toContain('reasoningFormat: "plain"')
   })
 
   it("routes final reasoning messages into a persisted reasoning part before assistant text", () => {

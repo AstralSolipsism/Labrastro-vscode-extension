@@ -46,6 +46,24 @@ describe("markdown renderer", () => {
     expect(JSON.stringify(parts)).not.toContain("hljs")
   })
 
+  it("renders streaming closed code fences without highlight markup", () => {
+    const parts = renderStreamingMarkdown("```ts\nconst answer = 42\n```", "stream", { highlightCode: false })
+
+    expect(parts).toHaveLength(1)
+    const html = parts[0].type === "html" ? parts[0].html : ""
+    expect(html).toContain("markdown-code-block")
+    expect(html).toContain("language-typescript")
+    expect(html).not.toContain("hljs")
+  })
+
+  it("keeps highlighted final render separate from streaming cache entries", () => {
+    renderStreamingMarkdown("```ts\nconst answer = 42\n```", "stream", { highlightCode: false })
+    const html = renderMarkdown("```ts\nconst answer = 42\n```", "stream")
+
+    expect(html).toContain("hljs")
+    expect(html).toContain("data-copy-code")
+  })
+
   it("removes unsafe html, inline style, and unsafe link protocols", () => {
     const html = renderMarkdown('<script>alert(1)</script><a href="javascript:alert(1)" style="color:red">bad</a><strong>ok</strong>')
 
