@@ -335,7 +335,7 @@ const zhCN: Record<string, string> = {
   "agentConfig.agent.systemAppendDesc": "可选，只写这个 Agent 的角色边界、输出风格和限制。",
   "agentConfig.agent.agentMd": "Agent 指令文件",
   "agentConfig.agent.capabilityRefs": "已启用能力包",
-  "agentConfig.agent.capabilityRefsDesc": "能力包只决定该 Agent 可用的 MCP、Skills、CLI 和权限。",
+  "agentConfig.agent.capabilityRefsDesc": "能力包只决定该 Agent 可用的 MCP、Skills 和 CLI。",
   "agentConfig.agent.capabilityRefs.empty": "还没有可选能力包。",
   "agentConfig.agent.capabilityPackagesPreview": "能力包内容",
   "agentConfig.agent.maxConcurrentTasks": "最大并发任务",

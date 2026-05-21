@@ -335,7 +335,7 @@ const en: Record<string, string> = {
   "agentConfig.agent.systemAppendDesc": "Optional. Use this for the Agent's role boundary, output style, and constraints.",
   "agentConfig.agent.agentMd": "Agent Instruction File",
   "agentConfig.agent.capabilityRefs": "Enabled Capability Packages",
-  "agentConfig.agent.capabilityRefsDesc": "Capability packages grant MCP, Skills, CLI tools, and permissions for this Agent.",
+  "agentConfig.agent.capabilityRefsDesc": "Capability packages grant MCP, Skills, and CLI tools for this Agent.",
   "agentConfig.agent.capabilityRefs.empty": "No capability packages are available yet.",
   "agentConfig.agent.capabilityPackagesPreview": "Capability Package Contents",
   "agentConfig.agent.maxConcurrentTasks": "Max Concurrent Tasks",

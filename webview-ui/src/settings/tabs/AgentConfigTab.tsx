@@ -416,7 +416,6 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
                           <For each={pkg.mcpServers}>{(item) => <StatusBadge>MCP: {item}</StatusBadge>}</For>
                           <For each={pkg.skills}>{(item) => <StatusBadge>Skill: {item}</StatusBadge>}</For>
                           <For each={pkg.cliTools}>{(item) => <StatusBadge>CLI: {item}</StatusBadge>}</For>
-                          <For each={pkg.permissions}>{(item) => <StatusBadge>{item}</StatusBadge>}</For>
                         </div>
                       </div>
                     )}</For>

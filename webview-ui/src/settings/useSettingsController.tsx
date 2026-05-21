@@ -72,6 +72,7 @@ type EnvironmentEntryKind = "cli" | "mcp" | "skill"
 type ToolchainKind = EnvironmentEntryKind
 type ToolchainKindFilter = "all" | ToolchainKind
 type ToolchainStatusFilter = "all" | "ready" | "missing" | "stopped" | "awaiting"
+const BUILT_IN_ENVIRONMENT_AGENT_ID = "environment_configurator"
 type EnvironmentEntryStatus =
   | "unchecked"
   | "checking"
@@ -271,7 +272,6 @@ interface CapabilityPackageView {
   mcpServers: string[]
   skills: string[]
   cliTools: string[]
-  permissions: string[]
   source: string
 }
 
@@ -865,7 +865,6 @@ function capabilityPackageValue(id: string, value: unknown): CapabilityPackageVi
     mcpServers: stringArray(item.mcp_servers),
     skills: stringArray(item.skills),
     cliTools: stringArray(item.cli_tools),
-    permissions: stringArray(item.permissions),
     source: stringValue(item.source),
   }
 }
@@ -1721,14 +1720,7 @@ export function createSettingsController(props: SettingsViewProps) {
     }))
   })
   const environmentAgentCandidates = createMemo<Array<Record<string, unknown> & { id: string }>>(() => {
-    const packages = new Map(capabilityPackageViews().map((item) => [item.id, item]))
-    return agentRunsAgents().filter((agent) => {
-      const refs = stringArray(agent.capability_refs)
-      return refs.some((ref) => {
-        const pkg = packages.get(ref)
-        return pkg?.permissions.some((permission) => permission.startsWith("environment.")) === true
-      })
-    })
+    return agentRunsAgents().filter((agent) => agent.id === BUILT_IN_ENVIRONMENT_AGENT_ID)
   })
   const registeredMcpServers = createMemo(() => {
     const groups = toolchainGroups()
@@ -2409,7 +2401,7 @@ const refreshAdmin = () => {
   const runEnvironment = (mode: "check" | "configure", entryIds?: string[]) => {
     const items = environmentRunItems(entryIds)
     if (!items.length) return
-    const agentId = selectedEnvironmentAgentId()
+    const agentId = environmentAgentCandidates()[0]?.id || BUILT_IN_ENVIRONMENT_AGENT_ID
     if (!agentId) {
       return
     }

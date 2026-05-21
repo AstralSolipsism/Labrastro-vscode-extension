@@ -27,15 +27,6 @@ const TOOLCHAIN_SECTIONS: Array<{ id: ToolchainSection; label: string; icon: str
   { id: "logs", label: "运行日志", icon: "output" },
 ]
 
-const COMMON_PERMISSION_OPTIONS = [
-  "read",
-  "write",
-  "execute",
-  "network",
-  "filesystem",
-  "secrets",
-  "approval_required",
-]
 interface ToolchainRecord {
   kind: ToolchainKind
   name: string
@@ -51,7 +42,6 @@ interface CapabilityPackageDraft {
   mcpServersText: string
   skillsText: string
   cliToolsText: string
-  permissionsText: string
   source: string
 }
 
@@ -98,8 +88,6 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
     environmentSnapshot,
     environmentError,
     environmentAgentCandidates,
-    selectedEnvironmentAgentId,
-    setSelectedEnvironmentAgentId,
     toolchainError,
     toolchainActionFeedback,
     environmentRunStatusLabel,
@@ -173,7 +161,11 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
   const cliChoiceOptions = () => registeredCliNames().map((id: string) => ({ id, label: id, kind: "CLI" }))
   const mcpChoiceOptions = () => registeredMcpNames().map((id: string) => ({ id, label: id, kind: "MCP" }))
   const skillChoiceOptions = () => registeredSkillNames().map((id: string) => ({ id, label: id, kind: "Skill" }))
-  const permissionChoiceOptions = () => COMMON_PERMISSION_OPTIONS.map((id) => ({ id, label: id, kind: "权限" }))
+  const environmentAgentAvailable = () => environmentAgentCandidates().length > 0
+  const environmentAgentLabel = () => {
+    const agent = environmentAgentCandidates()[0]
+    return agent ? stringValue(agent.name) || agent.id : "environment_configurator"
+  }
 
   const markCapabilityDirty = () => {
     setCapabilityDirty(true)
@@ -194,7 +186,6 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
         mcpServersText: stringArrayValue(item.mcp_servers).join("\n"),
         skillsText: stringArrayValue(item.skills).join("\n"),
         cliToolsText: stringArrayValue(item.cli_tools).join("\n"),
-        permissionsText: stringArrayValue(item.permissions).join("\n"),
         source: stringValue(item.source),
       }
     }
@@ -226,7 +217,6 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
         mcpServersText: "",
         skillsText: "",
         cliToolsText: "",
-        permissionsText: "",
         source: "local",
       },
     }))
@@ -275,7 +265,6 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
         mcp_servers: parseListText(draft.mcpServersText),
         skills: parseListText(draft.skillsText),
         cli_tools: parseListText(draft.cliToolsText),
-        permissions: parseListText(draft.permissionsText),
         source: draft.source || "local",
       }
     }
@@ -673,19 +662,7 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
           </button>
           <label class="field-label field-label--compact">
             <span>环境 Agent</span>
-            <select
-              value={selectedEnvironmentAgentId()}
-              onChange={(event) => setSelectedEnvironmentAgentId(event.currentTarget.value)}
-              disabled={!environmentAgentCandidates().length || environmentSnapshot().running}
-            >
-              <For each={environmentAgentCandidates()}>
-                {(agent) => (
-                  <option value={agent.id}>
-                    {stringValue(agent.name) || agent.id}
-                  </option>
-                )}
-              </For>
-            </select>
+            <input value={environmentAgentLabel()} disabled />
           </label>
           <Show
             when={!environmentSnapshot().running}
@@ -697,11 +674,11 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
             }
           >
             <>
-              <button class="btn btn-secondary" onClick={() => runEnvironment("check")} disabled={!environmentSnapshot().entries.length || !environmentAgentCandidates().length}>
+              <button class="btn btn-secondary" onClick={() => runEnvironment("check")} disabled={!environmentSnapshot().entries.length || !environmentAgentAvailable()}>
                 <span class="codicon codicon-search" aria-hidden="true" />
                 检查当前环境
               </button>
-              <button class="btn btn-primary" onClick={() => runEnvironment("configure")} disabled={!environmentSnapshot().entries.length || !environmentAgentCandidates().length}>
+              <button class="btn btn-primary" onClick={() => runEnvironment("configure")} disabled={!environmentSnapshot().entries.length || !environmentAgentAvailable()}>
                 <span class="codicon codicon-tools" aria-hidden="true" />
                 配置环境
               </button>
@@ -719,8 +696,8 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
       <Show when={toolchainActionFeedback()}>
         <div class="settings-success">{toolchainActionFeedback()}</div>
       </Show>
-      <Show when={!environmentAgentCandidates().length}>
-        <div class="settings-empty-note">没有带环境任务标签的 Agent。请在 Agent 配置中创建适合环境任务的 Agent。</div>
+      <Show when={!environmentAgentAvailable()}>
+        <div class="settings-empty-note">内建环境 Agent environment_configurator 不可用。请刷新服务器设置或检查后端配置。</div>
       </Show>
 
       <section class="settings-section settings-section--flat">
@@ -884,28 +861,16 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
           <div class="settings-actions settings-actions--right">
             <label class="field-label field-label--compact">
               <span>环境 Agent</span>
-              <select
-                value={selectedEnvironmentAgentId()}
-                onChange={(event) => setSelectedEnvironmentAgentId(event.currentTarget.value)}
-                disabled={!environmentAgentCandidates().length || environmentSnapshot().running}
-              >
-                <For each={environmentAgentCandidates()}>
-                  {(agent) => (
-                    <option value={agent.id}>
-                      {stringValue(agent.name) || agent.id}
-                    </option>
-                  )}
-                </For>
-              </select>
+              <input value={environmentAgentLabel()} disabled />
             </label>
             <RefreshButton class="btn-secondary" onClick={refreshToolchains} disabled={environmentSnapshot().running}>
               刷新
             </RefreshButton>
-            <button class="btn btn-secondary" onClick={() => runEnvironment("check")} disabled={!environmentSnapshot().entries.length || environmentSnapshot().running || !environmentAgentCandidates().length}>
+            <button class="btn btn-secondary" onClick={() => runEnvironment("check")} disabled={!environmentSnapshot().entries.length || environmentSnapshot().running || !environmentAgentAvailable()}>
               <span class="codicon codicon-search" aria-hidden="true" />
               检查全部
             </button>
-            <button class="btn btn-primary" onClick={() => runEnvironment("configure")} disabled={!environmentSnapshot().entries.length || environmentSnapshot().running || !environmentAgentCandidates().length}>
+            <button class="btn btn-primary" onClick={() => runEnvironment("configure")} disabled={!environmentSnapshot().entries.length || environmentSnapshot().running || !environmentAgentAvailable()}>
               <span class="codicon codicon-tools" aria-hidden="true" />
               配置全部
             </button>
@@ -921,8 +886,8 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
         <Show when={toolchainActionFeedback()}>
           <div class="settings-success">{toolchainActionFeedback()}</div>
         </Show>
-        <Show when={!environmentAgentCandidates().length}>
-          <div class="settings-empty-note">没有带环境任务标签的 Agent。请在 Agent 配置中创建适合环境任务的 Agent。</div>
+        <Show when={!environmentAgentAvailable()}>
+          <div class="settings-empty-note">内建环境 Agent environment_configurator 不可用。请刷新服务器设置或检查后端配置。</div>
         </Show>
 
         <nav class="settings-subtabs" aria-label="能力组件视图">
@@ -1091,10 +1056,10 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
                           </StatusBadge>
                         </span>
                         <span class="toolchain-row-actions">
-                          <button class="ez-icon-button" title="检查" disabled={environmentSnapshot().running || !environmentAgentCandidates().length} onClick={(event) => { event.stopPropagation(); runEnvironment("check", [item.id]) }}>
+                          <button class="ez-icon-button" title="检查" disabled={environmentSnapshot().running || !environmentAgentAvailable()} onClick={(event) => { event.stopPropagation(); runEnvironment("check", [item.id]) }}>
                             <span class="codicon codicon-search" aria-hidden="true" />
                           </button>
-                          <button class="ez-icon-button" title="配置" disabled={environmentSnapshot().running || !environmentAgentCandidates().length} onClick={(event) => { event.stopPropagation(); runEnvironment("configure", [item.id]) }}>
+                          <button class="ez-icon-button" title="配置" disabled={environmentSnapshot().running || !environmentAgentAvailable()} onClick={(event) => { event.stopPropagation(); runEnvironment("configure", [item.id]) }}>
                             <span class="codicon codicon-tools" aria-hidden="true" />
                           </button>
                           <button class="ez-icon-button" title="编辑" onClick={(event) => { event.stopPropagation(); openEditToolchain(record()) }}>
@@ -1130,11 +1095,11 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
                     </StatusBadge>
                   </div>
                   <div class="toolchain-detail-actions">
-                    <button class="btn btn-secondary" disabled={environmentSnapshot().running || !environmentAgentCandidates().length} onClick={() => runEnvironment("check", [item().id])}>
+                    <button class="btn btn-secondary" disabled={environmentSnapshot().running || !environmentAgentAvailable()} onClick={() => runEnvironment("check", [item().id])}>
                       <span class="codicon codicon-search" aria-hidden="true" />
                       检查
                     </button>
-                    <button class="btn btn-primary" disabled={environmentSnapshot().running || !environmentAgentCandidates().length} onClick={() => runEnvironment("configure", [item().id])}>
+                    <button class="btn btn-primary" disabled={environmentSnapshot().running || !environmentAgentAvailable()} onClick={() => runEnvironment("configure", [item().id])}>
                       <span class="codicon codicon-tools" aria-hidden="true" />
                       配置
                     </button>
@@ -1310,17 +1275,6 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
                         emptyMessage="暂无可选 CLI；可先在组件清单中新增。"
                         searchPlaceholder="搜索 CLI"
                         unknownLabel="自定义 CLI"
-                      />
-                    </label>
-                    <label class="field-label field-label--full"><span>Permissions</span>
-                      <ChoiceMultiSelect
-                        ariaLabel="Permissions"
-                        options={permissionChoiceOptions()}
-                        valueText={pkg().permissionsText}
-                        onChangeText={(next) => updateCapabilityPackage({ permissionsText: next })}
-                        emptyMessage="暂无权限模板，可保留历史自定义值。"
-                        searchPlaceholder="搜索权限"
-                        unknownLabel="自定义权限"
                       />
                     </label>
                     <label class="field-label"><span>Source</span>
