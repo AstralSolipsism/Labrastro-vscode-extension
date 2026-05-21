@@ -28,20 +28,32 @@ describe("ChatView context events", () => {
     expect(source).toContain("const handleLiveStreamEvent =")
     expect(source).toContain("appendActiveReasoningStream")
     expect(source).toContain("appendActiveTextStream")
-    expect(source).toContain("appendActiveToolStream")
+    expect(source).toContain("appendToolStreamToToolPart")
+    expect(source).toContain("archiveActiveStreamParts")
     expect(source).toContain("const visibleTurns =")
     expect(source).toContain('textFormat: "markdown"')
     expect(source).toContain('reasoningFormat: "plain"')
   })
 
+  it("archives active reasoning/text before persistent tool and message events", () => {
+    expect(source).toContain("const shouldArchiveActiveStreamBeforeEvent =")
+    expect(source).toContain('"tool_call_start"')
+    expect(source).toContain('"tool_call_end"')
+    expect(source).toContain('"assistant_message"')
+    expect(source).toContain('"reasoning_message"')
+    expect(source).toContain("appendToolStreamToToolPart(payload, eventMeta)")
+  })
+
   it("routes final reasoning messages into a persisted reasoning part before assistant text", () => {
     expect(source).toContain("const appendReasoningPart =")
+    expect(source).toContain("const finalizeReasoningStreamPart =")
     expect(source).toContain('} else if (type === "reasoning_message") {')
     expect(source).toContain('type: "reasoning"')
     expect(source).toContain('part.type === "text" &&')
     expect(source).toContain('["assistant-stream", "assistant-message", "final"].includes')
-    expect(source).toContain("merge: true")
+    expect(source).toContain('reasoningStreamKey: prefix')
   })
+
   it("sends the current frontend locale with chat.send", () => {
     expect(source).toContain('locale: locale()')
   })
