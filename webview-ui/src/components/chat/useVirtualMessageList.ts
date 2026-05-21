@@ -172,8 +172,9 @@ export function resolveHeightChangeScrollAction(input: {
   delta: number
 }): HeightChangeScrollAction {
   if (input.userScrolled && input.itemTop < input.scrollTop) return "anchor"
+  if (input.userScrolled) return "none"
   if (!input.userScrolled && input.followLiveOutput) return "follow"
-  if (!input.userScrolled && input.isWorking && input.delta > 0) return "detach"
+  if (!input.userScrolled && input.isWorking && input.delta > 0) return "follow"
   if (!input.userScrolled && !input.isWorking) return "follow"
   return "none"
 }

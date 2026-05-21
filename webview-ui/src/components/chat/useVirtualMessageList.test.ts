@@ -73,7 +73,7 @@ describe("virtual message list windowing", () => {
     )
   })
 
-  it("does not force-follow streaming height growth unless explicitly requested", () => {
+  it("follows streaming height growth while anchored to the bottom", () => {
     expect(resolveHeightChangeScrollAction({
       userScrolled: false,
       followLiveOutput: false,
@@ -81,7 +81,7 @@ describe("virtual message list windowing", () => {
       itemTop: 800,
       scrollTop: 800,
       delta: 24,
-    })).toBe("detach")
+    })).toBe("follow")
     expect(resolveHeightChangeScrollAction({
       userScrolled: false,
       followLiveOutput: true,
@@ -98,6 +98,14 @@ describe("virtual message list windowing", () => {
       scrollTop: 800,
       delta: 24,
     })).toBe("anchor")
+    expect(resolveHeightChangeScrollAction({
+      userScrolled: true,
+      followLiveOutput: true,
+      isWorking: true,
+      itemTop: 800,
+      scrollTop: 800,
+      delta: 24,
+    })).toBe("none")
     expect(resolveHeightChangeScrollAction({
       userScrolled: false,
       followLiveOutput: false,
