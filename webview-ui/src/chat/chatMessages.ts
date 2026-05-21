@@ -11,6 +11,7 @@ export interface ChatSendInput {
   sessionId?: string
   draftSessionId?: string
   requestId?: string
+  locale?: string
   mode?: string
   workflowMode?: ChatWorkflowMode
   providerId?: string
@@ -56,12 +57,14 @@ export function buildChatSendMessage(input: ChatSendInput): WebviewToHostMessage
   const workflowMode = input.workflowMode === "taskflow" ? "taskflow" : undefined
   const providerId = input.providerId?.trim()
   const modelId = input.modelId?.trim()
+  const locale = input.locale?.trim()
   return {
     type: "chat.send",
     text,
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     ...(input.draftSessionId ? { draftSessionId: input.draftSessionId } : {}),
     ...(input.requestId ? { requestId: input.requestId } : {}),
+    ...(locale ? { locale } : {}),
     ...(mode ? { mode } : {}),
     ...(workflowMode ? { workflowMode } : {}),
     ...(providerId && modelId ? { providerId, modelId } : {}),

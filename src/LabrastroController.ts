@@ -14,7 +14,7 @@ import { AdminCoordinator } from "./coordinators/AdminCoordinator"
 import { ChatRunCoordinator, type ActiveChatRun } from "./coordinators/ChatRunCoordinator"
 import { EnvironmentCoordinator } from "./coordinators/EnvironmentCoordinator"
 import { SessionCoordinator } from "./coordinators/SessionCoordinator"
-import { resolveChatLocalePreference } from "./chatLocale"
+import { normalizeChatLocale, resolveChatLocalePreference } from "./chatLocale"
 
 type EnvironmentRunMode = "check" | "configure"
 type EnvironmentEntryKind = "cli" | "mcp" | "skill"
@@ -1174,7 +1174,10 @@ export class LabrastroController implements vscode.Disposable {
     }
   }
 
-  private currentChatLocale(): "zh-CN" | "en" {
+  private currentChatLocale(requestLocale?: string): "zh-CN" | "en" {
+    if (requestLocale && requestLocale.trim()) {
+      return normalizeChatLocale(requestLocale)
+    }
     return resolveChatLocalePreference(
       this.context.workspaceState.get<string>("labrastro.locale"),
       vscode.env.language,
@@ -1191,6 +1194,7 @@ export class LabrastroController implements vscode.Disposable {
       taskflowId?: string
       draftSessionId?: string
       clientRequestId?: string
+      locale?: string
       providerId?: string
       modelId?: string
       parameters?: Record<string, unknown>
@@ -1216,7 +1220,7 @@ export class LabrastroController implements vscode.Disposable {
       this.emitChatMessage({ type: "chat.started", text }, post)
       const start = await this.client.startChat(text, sessionId, {
         ...options,
-        locale: this.currentChatLocale(),
+        locale: this.currentChatLocale(options.locale),
       })
       sessionId = stringValue(start.session_id) || sessionId
       const chatId = String(start.chat_id || "")

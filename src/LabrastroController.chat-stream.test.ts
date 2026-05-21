@@ -24,4 +24,10 @@ describe("LabrastroController chat stream batching", () => {
     expect(source).not.toContain("streamChat(")
     expect(source).not.toContain("LIVE_CHAT_STREAM_EVENT_TYPES")
   })
+
+  it("prefers the live chat.send locale over saved workspace locale", () => {
+    expect(source).toContain("normalizeChatLocale")
+    expect(source).toContain("currentChatLocale(requestLocale?: string)")
+    expect(source).toContain("locale: this.currentChatLocale(options.locale)")
+  })
 })

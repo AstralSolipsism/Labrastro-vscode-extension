@@ -59,10 +59,10 @@ describe("ChatRunCoordinator", () => {
       workflowMode: "chat",
       taskflowId: "taskflow-1",
       draftSessionId: "session-local",
+      locale: "zh-CN",
       providerId: "p1",
       modelId: "m1",
       parameters: { temperature: 0 },
-      locale: "zh-CN",
     }, post)).resolves.toBe(true)
 
     expect(options.startChat).toHaveBeenCalledWith("hello", "s1", post, {
@@ -70,6 +70,7 @@ describe("ChatRunCoordinator", () => {
       workflowMode: "chat",
       taskflowId: "taskflow-1",
       draftSessionId: "session-local",
+      locale: "zh-CN",
       providerId: "p1",
       modelId: "m1",
       parameters: { temperature: 0 },

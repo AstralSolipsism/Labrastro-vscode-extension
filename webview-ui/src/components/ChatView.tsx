@@ -73,7 +73,7 @@ import {
   resolveModeSelection,
   shouldAcceptModelSwitchResponse,
 } from "../chat/chatState"
-import { t } from "../i18n"
+import { locale, t } from "../i18n"
 import {
   defaultCommandRuleCandidateRules,
   evaluateCommandDecision,
@@ -1531,6 +1531,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       text,
       sessionId: remoteSessionId,
       requestId,
+      locale: locale(),
       providerId: activeModelOverride.providerId,
       modelId: activeModelOverride.modelId,
       parameters: activeModelOverride.parameters,

@@ -42,4 +42,7 @@ describe("ChatView context events", () => {
     expect(source).toContain('["assistant-stream", "assistant-message", "final"].includes')
     expect(source).toContain("merge: true")
   })
+  it("sends the current frontend locale with chat.send", () => {
+    expect(source).toContain('locale: locale()')
+  })
 })

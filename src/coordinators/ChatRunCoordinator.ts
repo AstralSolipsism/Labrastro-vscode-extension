@@ -35,6 +35,7 @@ export interface ChatRunCoordinatorOptions {
       taskflowId?: string
       draftSessionId?: string
       clientRequestId?: string
+      locale?: string
       providerId?: string
       modelId?: string
       parameters?: Record<string, unknown>
@@ -123,6 +124,7 @@ export class ChatRunCoordinator {
             workflowMode: stringValue(message.workflowMode) || stringValue(message.workflow_mode),
             taskflowId: stringValue(message.taskflowId) || stringValue(message.taskflow_id),
             draftSessionId: stringValue(message.draftSessionId) || stringValue(message.draft_session_id),
+            locale: stringValue(message.locale),
             clientRequestId:
               stringValue(message.clientRequestId) ||
               stringValue(message.client_request_id) ||

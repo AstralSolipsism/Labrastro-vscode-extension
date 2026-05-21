@@ -46,6 +46,7 @@ describe("chat messages", () => {
     expect(buildChatSendMessage({
       text: "hello",
       draftSessionId: "session-local",
+      locale: " zh-CN ",
       providerId: " deepseek ",
       modelId: " V4PRO ",
       parameters: { max_tokens: 4096 },
@@ -53,6 +54,7 @@ describe("chat messages", () => {
       type: "chat.send",
       text: "hello",
       draftSessionId: "session-local",
+      locale: "zh-CN",
       providerId: "deepseek",
       modelId: "V4PRO",
       parameters: { max_tokens: 4096 },
