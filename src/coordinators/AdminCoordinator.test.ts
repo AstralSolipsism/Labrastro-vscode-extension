@@ -290,6 +290,32 @@ describe("AdminCoordinator", () => {
     expect(options.postAdminState).toHaveBeenCalled()
   })
 
+  it("refreshes model capability status after successful login", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    options.client.login.mockResolvedValue({
+      status: "ready",
+      authenticated: true,
+      hostUrl: "https://dogcode.outlune.com",
+    })
+
+    await expect(subject.handleMessage({
+      type: "connection.login",
+      hostUrl: "https://dogcode.outlune.com",
+      username: "superadmin",
+      password: "secret",
+    }, post)).resolves.toBe(true)
+
+    expect(options.client.modelCapabilitiesStatus).toHaveBeenCalled()
+    expect(post).toHaveBeenCalledWith({
+      type: "modelCapabilities.state",
+      payload: {
+        ok: true,
+        model_capabilities: { enabled: true, model_count: 2 },
+      },
+    })
+  })
+
   it("applies selected model capability recommendation through admin action", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()

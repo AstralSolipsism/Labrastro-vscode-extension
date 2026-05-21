@@ -90,6 +90,7 @@ export class AdminCoordinator {
           post({ type: "connection.result", payload: state })
           post({ type: "connection.state", payload: state })
           await this.options.postAdminState(post)
+          await this.postModelCapabilitiesStatus(post)
           await this.options.refreshBackendFeatures(post)
         } catch (error) {
           const failureMessage = isRemoteError(error)
@@ -276,11 +277,7 @@ export class AdminCoordinator {
         }
         return true
       case "modelCapabilities.status":
-        try {
-          post({ type: "modelCapabilities.state", payload: await this.options.client.modelCapabilitiesStatus() })
-        } catch (error) {
-          post({ type: "modelCapabilities.error", message: errorMessage(error) })
-        }
+        await this.postModelCapabilitiesStatus(post)
         return true
       case "modelCapabilities.list":
         try {
@@ -382,6 +379,14 @@ export class AdminCoordinator {
         return true
       default:
         return false
+    }
+  }
+
+  private async postModelCapabilitiesStatus(post: PostMessage): Promise<void> {
+    try {
+      post({ type: "modelCapabilities.state", payload: await this.options.client.modelCapabilitiesStatus() })
+    } catch (error) {
+      post({ type: "modelCapabilities.error", message: errorMessage(error) })
     }
   }
 
