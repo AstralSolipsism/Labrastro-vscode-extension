@@ -57,4 +57,22 @@ describe("ChatView context events", () => {
   it("sends the current frontend locale with chat.send", () => {
     expect(source).toContain('locale: locale()')
   })
+
+  it("guards slash command dispatch during active runs with command metadata", () => {
+    expect(source).toContain("findChatCommandByText(chatCommandCatalog(), text)")
+    expect(source).toContain("isWorking() && !command?.availableDuringRun")
+    expect(source).toContain("当前运行中不能执行该指令")
+  })
+
+  it("preserves raw non-command text so leading-space slash input stays chat text", () => {
+    expect(source).toContain("const rawText = submission.text")
+    expect(source).toContain("if (!rawText.trim()) return")
+    expect(source).toContain("sendChatText(rawText, { mentions: submission.mentions })")
+  })
+
+  it("keeps workspace mention search responses tied to the latest request", () => {
+    expect(source).toContain('type: "workspace.files.search"')
+    expect(source).toContain("setWorkspaceMentionRequest({ id: requestId, query: normalizedQuery })")
+    expect(source).toContain("requestId !== activeRequest.id")
+  })
 })

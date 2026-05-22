@@ -1,8 +1,22 @@
-import { Component, For, Show, createEffect, createSignal } from "solid-js"
+import { Component, For, Show, createEffect, createMemo, createSignal } from "solid-js"
 import { IconButton } from "../common/IconButton"
 import { DropdownMenu } from "../common/interaction"
 import { t } from "../../i18n"
 import type { ChatModeOption, ChatModelOption } from "../../chat/chatState"
+import {
+  buildMentionOptions,
+  commandTextForSelection,
+  activeMentionBindings,
+  filterChatCommandOptions,
+  filterMentionOptions,
+  nextPopupIndex,
+  normalizeChatCommandOptions,
+  popupDismissedForToken,
+  type ChatCommandOption,
+  type MentionOption,
+  type PromptCommandSelection,
+  type PromptSubmission,
+} from "./promptInputCatalog"
 
 interface PromptInputProps {
   disabled?: boolean
@@ -20,15 +34,26 @@ interface PromptInputProps {
   modelSwitching?: boolean
   modelError?: string
   modelRequired?: boolean
+  chatCommands?: unknown[]
+  mentionProviders?: unknown[]
+  agentTools?: unknown[]
+  workspaceFiles?: unknown[]
+  onMentionQuery?: (query: string) => void
+  onMentionInsert?: (mention: MentionOption) => void
+  onCommandSelect?: (selection: PromptCommandSelection) => boolean | void
   onModelChange?: (modelId: string) => void
   onModelUnavailable?: () => void
-  onSend?: (text: string) => void
+  onSubmit?: (submission: PromptSubmission) => boolean | void
 }
 
 export const PromptInput: Component<PromptInputProps> = (props) => {
   const [text, setText] = createSignal("")
+  const [mentionBindings, setMentionBindings] = createSignal<MentionOption[]>([])
   const [modeMenuOpen, setModeMenuOpen] = createSignal(false)
   const [modelMenuOpen, setModelMenuOpen] = createSignal(false)
+  const [selectedPopupIndex, setSelectedPopupIndex] = createSignal(0)
+  const [dismissedPopupToken, setDismissedPopupToken] = createSignal("")
+  const [lastWorkspaceMentionQuery, setLastWorkspaceMentionQuery] = createSignal("")
   let textareaRef: HTMLTextAreaElement | undefined
 
   createEffect(() => {
@@ -36,6 +61,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     const draft = props.draftText
     if (draft === undefined) return
     setText(draft)
+    setMentionBindings([])
     queueMicrotask(() => {
       if (!textareaRef) return
       textareaRef.value = draft
@@ -51,20 +77,130 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     textareaRef.style.height = `${Math.min(textareaRef.scrollHeight, 180)}px`
   }
 
-  const handleSend = () => {
-    const draft = text().trim()
-    if (!draft || props.disabled || props.modelSwitching) return
-    if (modelBlocked()) {
-      props.onModelUnavailable?.()
-      return
-    }
-
-    props.onSend?.(draft)
+  const clearInput = () => {
     setText("")
+    setMentionBindings([])
     if (textareaRef) {
       textareaRef.value = ""
       textareaRef.style.height = "auto"
     }
+  }
+
+  const handleSubmit = () => {
+    const draft = text()
+    if (!draft.trim()) return
+    const accepted = props.onSubmit?.({ text: draft, mentions: activeMentionBindings(draft, mentionBindings()) })
+    if (accepted === false) return
+    clearInput()
+  }
+
+  const chatCommandOptions = createMemo(() => normalizeChatCommandOptions(props.chatCommands || []))
+  const mentionOptions = createMemo(() => buildMentionOptions(
+    props.mentionProviders || [],
+    props.agentTools || [],
+    props.workspaceFiles || [],
+  ))
+  const hasWorkspaceMentionProvider = createMemo(() =>
+    Array.isArray(props.mentionProviders) &&
+    props.mentionProviders.some((item) =>
+      Boolean(
+        item &&
+        typeof item === "object" &&
+        !Array.isArray(item) &&
+        String((item as Record<string, unknown>).id || "") === "workspace_files"
+      )
+    )
+  )
+  const slashToken = () => {
+    const value = text()
+    const firstLine = value.split(/\r?\n/, 1)[0] || ""
+    if (!firstLine.startsWith("/") || firstLine.includes(" ")) return ""
+    return firstLine
+  }
+  const mentionToken = () => {
+    const value = text()
+    const match = value.match(/(^|\s)(@[^\s]*)$/)
+    return match ? match[2] : ""
+  }
+  const activePopup = createMemo<"commands" | "mentions" | undefined>(() => {
+    if (slashToken() && !popupDismissedForToken(dismissedPopupToken(), slashToken())) return "commands"
+    if (mentionToken() && !popupDismissedForToken(dismissedPopupToken(), mentionToken())) return "mentions"
+    return undefined
+  })
+  const popupItems = createMemo<Array<ChatCommandOption | MentionOption>>(() => {
+    const popup = activePopup()
+    if (popup === "commands") return filterChatCommandOptions(chatCommandOptions(), slashToken())
+    if (popup === "mentions") return filterMentionOptions(mentionOptions(), mentionToken())
+    return []
+  })
+  const selectedPopupItem = () => popupItems()[selectedPopupIndex()]
+
+  createEffect(() => {
+    activePopup()
+    text()
+    const token = slashToken() || mentionToken()
+    if (dismissedPopupToken() && dismissedPopupToken() !== token) {
+      setDismissedPopupToken("")
+    }
+    setSelectedPopupIndex(0)
+  })
+
+  createEffect(() => {
+    const token = mentionToken()
+    if (!token || !hasWorkspaceMentionProvider()) {
+      if (lastWorkspaceMentionQuery()) setLastWorkspaceMentionQuery("")
+      return
+    }
+    const query = token.replace(/^@/, "").trim()
+    if (query === lastWorkspaceMentionQuery()) return
+    setLastWorkspaceMentionQuery(query)
+    props.onMentionQuery?.(query)
+  })
+
+  const applyMentionSelection = (mention: MentionOption) => {
+    const next = text().replace(/(^|\s)(@[^\s]*)$/, (_match, prefix: string) => `${prefix}${mention.insertText} `)
+    setText(next)
+    setMentionBindings((current) => [...current.filter((item) => item.id !== mention.id), mention])
+    props.onMentionInsert?.(mention)
+    if (textareaRef) {
+      textareaRef.value = next
+      queueMicrotask(() => {
+        adjustHeight()
+        textareaRef?.focus()
+        textareaRef?.setSelectionRange(next.length, next.length)
+      })
+    }
+  }
+
+  const applyCommandSelection = (command: ChatCommandOption) => {
+    const selection = commandTextForSelection(command)
+    if (selection.action === "dispatch") {
+      const accepted = props.onCommandSelect?.({ command, text: selection.text })
+      if (accepted === false) return
+      clearInput()
+      return
+    }
+    setText(selection.text)
+    if (textareaRef) {
+      textareaRef.value = selection.text
+      queueMicrotask(() => {
+        adjustHeight()
+        textareaRef?.focus()
+        textareaRef?.setSelectionRange(selection.text.length, selection.text.length)
+      })
+    }
+  }
+
+  const applyPopupSelection = () => {
+    const item = selectedPopupItem()
+    const popup = activePopup()
+    if (!item || !popup) return false
+    if (popup === "commands") {
+      applyCommandSelection(item as ChatCommandOption)
+      return true
+    }
+    applyMentionSelection(item as MentionOption)
+    return true
   }
 
   const modeSelectorLabel = () => props.modeLabel || props.selectedMode || "Coder"
@@ -103,12 +239,59 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
           adjustHeight()
         }}
         onKeyDown={(event) => {
+          const items = popupItems()
+          if (items.length) {
+            if (event.key === "ArrowDown") {
+              event.preventDefault()
+              setSelectedPopupIndex((index) => nextPopupIndex(index, "down", items.length))
+              return
+            }
+            if (event.key === "ArrowUp") {
+              event.preventDefault()
+              setSelectedPopupIndex((index) => nextPopupIndex(index, "up", items.length))
+              return
+            }
+            if (event.key === "Escape") {
+              event.preventDefault()
+              setDismissedPopupToken(slashToken() || mentionToken())
+              setSelectedPopupIndex(0)
+              return
+            }
+            if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+              event.preventDefault()
+              if (applyPopupSelection()) return
+            }
+          }
           if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
             event.preventDefault()
-            handleSend()
+            handleSubmit()
           }
         }}
       />
+      <Show when={popupItems().length}>
+        <div class="prompt-input-popup" role="listbox">
+          <For each={popupItems()}>
+            {(item, index) => (
+              <button
+                type="button"
+                class="prompt-input-popup__item"
+                classList={{ "prompt-input-popup__item--selected": index() === selectedPopupIndex() }}
+                onMouseDown={(event) => {
+                  event.preventDefault()
+                  setSelectedPopupIndex(index())
+                  applyPopupSelection()
+                }}
+              >
+                <strong>{activePopup() === "commands" ? (item as ChatCommandOption).trigger : (item as MentionOption).insertText}</strong>
+                <span>{item.label}</span>
+                <Show when={item.description}>
+                  <small>{item.description}</small>
+                </Show>
+              </button>
+            )}
+          </For>
+        </div>
+      </Show>
       <div class="prompt-input-toolbar">
         <div class="prompt-input-selectors">
           <DropdownMenu
@@ -218,7 +401,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
             icon="arrow-up"
             title={sendButtonTitle()}
             disabled={!text().trim() || props.disabled || props.modelSwitching || modelBlocked()}
-            onClick={handleSend}
+            onClick={handleSubmit}
           />
         </div>
       </div>

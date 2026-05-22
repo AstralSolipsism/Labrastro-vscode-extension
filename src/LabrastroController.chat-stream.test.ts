@@ -30,4 +30,13 @@ describe("LabrastroController chat stream batching", () => {
     expect(source).toContain("currentChatLocale(requestLocale?: string)")
     expect(source).toContain("locale: this.currentChatLocale(options.locale)")
   })
+
+  it("serves workspace file mention searches from the extension host", () => {
+    expect(source).toContain('message.type === "workspace.files.search"')
+    expect(source).toContain("vscode.workspace.findFiles")
+    expect(source).toContain("getWorkspaceFileIndex")
+    expect(source).toContain("fuzzySubsequenceScore")
+    expect(source).toContain('type: "workspace.files"')
+    expect(source).not.toContain("findFiles(\r\n        \"**/*\",\r\n        WORKSPACE_FILE_EXCLUDE_GLOB,\r\n        500")
+  })
 })

@@ -2383,6 +2383,7 @@
 }
 
 .prompt-input-shell {
+  position: relative;
   border: 1px solid var(--vscode-input-border, var(--ez-border));
   border-radius: var(--ez-radius);
   background: var(--vscode-input-background, var(--ez-surface-soft));
@@ -2404,6 +2405,56 @@
 
 .prompt-input::placeholder {
   color: var(--vscode-input-placeholderForeground, var(--ez-muted));
+}
+
+.prompt-input-popup {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: calc(100% + 6px);
+  z-index: 30;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--ez-border);
+  border-radius: var(--ez-radius);
+  background: var(--vscode-dropdown-background, var(--ez-surface));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+}
+
+.prompt-input-popup__item {
+  width: 100%;
+  min-height: 38px;
+  display: grid;
+  grid-template-columns: minmax(100px, 0.45fr) minmax(120px, 0.55fr);
+  gap: 4px 10px;
+  align-items: center;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--ez-fg);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.prompt-input-popup__item strong,
+.prompt-input-popup__item span,
+.prompt-input-popup__item small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prompt-input-popup__item small {
+  grid-column: 1 / -1;
+  color: var(--ez-muted);
+}
+
+.prompt-input-popup__item:hover,
+.prompt-input-popup__item--selected {
+  background: var(--ez-hover);
 }
 
 .prompt-input-toolbar {

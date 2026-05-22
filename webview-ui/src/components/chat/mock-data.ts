@@ -45,6 +45,8 @@ export interface MockPart {
   approvalContent?: string
   status?: ToolExecutionStatus
   remotePeerId?: string
+  remoteMainAgentId?: string
+  remoteAgentConfigId?: string
   remoteSessionId?: string
   remoteFingerprint?: string
   remoteMode?: string

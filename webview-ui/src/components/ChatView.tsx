@@ -2,6 +2,12 @@
 import { TaskHeader } from "./chat/TaskHeader"
 import { MessageList } from "./chat/MessageList"
 import { PromptInput } from "./chat/PromptInput"
+import {
+  findChatCommandByText,
+  type ChatCommandOption,
+  type PromptCommandSelection,
+  type PromptSubmission,
+} from "./chat/promptInputCatalog"
 import { AutoApproveMenu } from "./chat/AutoApproveMenu"
 import {
   ApprovalDetailsDialog,
@@ -201,6 +207,19 @@ const ChatView: Component<ChatViewProps> = (props) => {
     return pending ? `当前回复结束后切换到 ${modelLabel(pending, modelOptions(), pending)}` : ""
   })
   const hostTarget = createMemo(() => resolveHostTargetSummary(server.connectionState(), server.executorType()))
+  const behaviorCatalog = createMemo(() => objectValue(server.toolchainState()?.behavior_catalog))
+  const behaviorCatalogArray = (key: string) => {
+    const state = server.toolchainState() || {}
+    const direct = state[key]
+    if (Array.isArray(direct)) return direct
+    const nested = behaviorCatalog()[key]
+    return Array.isArray(nested) ? nested : []
+  }
+  const chatCommandCatalog = createMemo(() => behaviorCatalogArray("chat_commands"))
+  const mentionProviderCatalog = createMemo(() => behaviorCatalogArray("mention_providers"))
+  const agentToolCatalog = createMemo(() => behaviorCatalogArray("agent_tools"))
+  const [workspaceMentionFiles, setWorkspaceMentionFiles] = createSignal<string[]>([])
+  const [workspaceMentionRequest, setWorkspaceMentionRequest] = createSignal({ id: "", query: "" })
   const taskSummary = () =>
     trace.stats().taskText ||
     trace.turns()[0]?.userMessage.text ||
@@ -385,8 +404,10 @@ const ChatView: Component<ChatViewProps> = (props) => {
     }
     const promptResolution = resolvePromptQueueAfterChat(queuedPrompts(), nextStatus)
     setQueuedPrompts(promptResolution.state)
-    if (promptResolution.nextPrompt) {
-      window.setTimeout(() => sendChatText(promptResolution.nextPrompt as string), 0)
+    if (promptResolution.nextItem) {
+      window.setTimeout(() => sendChatText(promptResolution.nextItem!.text, {
+        mentions: promptResolution.nextItem!.mentions,
+      }), 0)
       return
     }
     if (options.startNextEnvironment) {
@@ -813,6 +834,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
         id: `remote-${Date.now()}-${parts.length}`,
         type: "remote_status",
         remotePeerId: String(payload.peer_id || ""),
+        remoteMainAgentId: String(payload.main_agent_id || ""),
+        remoteAgentConfigId: String(payload.agent_config_id || ""),
         remoteSessionId: String(payload.session_id || ""),
         remoteFingerprint: String(payload.fingerprint || ""),
         remoteMode: String(payload.mode || ""),
@@ -1522,8 +1545,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
     if (isWorking() || modelSwitching()) return
     const resumed = resumePromptQueue(queuedPrompts())
     setQueuedPrompts(resumed.state)
-    if (resumed.nextPrompt) {
-      sendChatText(resumed.nextPrompt)
+    if (resumed.nextItem) {
+      sendChatText(resumed.nextItem.text, { mentions: resumed.nextItem.mentions })
     }
   }
 
@@ -1614,7 +1637,11 @@ const ChatView: Component<ChatViewProps> = (props) => {
 
   const sendChatText = (
     text: string,
-    options: { modeOverride?: string | null; forceDirect?: boolean } = {},
+    options: {
+      modeOverride?: string | null
+      forceDirect?: boolean
+      mentions?: Record<string, unknown>[]
+    } = {},
   ) => {
     const sessionId = trace.currentSessionId()
     const mode = options.modeOverride === undefined ? selectedMode() : options.modeOverride || ""
@@ -1653,21 +1680,102 @@ const ChatView: Component<ChatViewProps> = (props) => {
       providerId: activeModelOverride.providerId,
       modelId: activeModelOverride.modelId,
       parameters: activeModelOverride.parameters,
+      mentions: options.mentions,
       ...route,
     })
   }
 
-  const handleSend = (text: string) => {
+  const dispatchChatCommand = (input: {
+    text: string
+    commandId?: string
+    trigger?: string
+    args?: string
+    command?: ChatCommandOption
+    mentions?: Record<string, unknown>[]
+  }): boolean => {
+    const text = input.text
+    if (!text.startsWith("/") || chatStatus() === "stopping") return false
+    const command = input.command || findChatCommandByText(chatCommandCatalog(), text)
+    if (!command) return false
+    if (isWorking() && !command?.availableDuringRun) {
+      appendTextPart("当前运行中不能执行该指令。请等待当前运行结束，或先取消运行。", "error")
+      return false
+    }
+    const sessionId = trace.currentSessionId()
+    const remoteSessionId = remoteSessionIdForMutation(sessionId)
+    const requestId = `chat-command-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    setIsWorking(true)
+    setActiveRunSessionId(sessionId || "")
+    setPendingCancel(false)
+    setActiveChatId(undefined)
+    setChatStatus("running")
+    setStreamRecoveryMessage("")
+    resetChatRunTerminalState()
+    clearActiveStreamDraft()
+    setWorkingText("正在执行指令")
+    setPendingApprovals([])
+    setSelectedApproval(undefined)
+    trace.patchStats({ taskText: text, runStatus: "running" })
+    startTimer()
+    chatMessages.dispatchCommand(vscode, {
+      text,
+      commandId: input.commandId,
+      trigger: input.trigger,
+      args: input.args,
+      sessionId: remoteSessionId,
+      requestId,
+      mentions: input.mentions,
+    })
+    return true
+  }
+
+  const handleSend = (submission: PromptSubmission) => {
+    const rawText = submission.text
+    if (!rawText.trim()) return
     if (isWorking()) {
       const mode = sendDuringRunMode()
       setQueuedPrompts((current) =>
-        enqueuePrompt(current, text, mode, {
+        enqueuePrompt(current, rawText, mode, {
           requestId: `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          mentions: submission.mentions,
         })
       )
       return
     }
-    sendChatText(text)
+    sendChatText(rawText, { mentions: submission.mentions })
+  }
+
+  const canSubmitComposerAction = () => {
+    if (chatStatus() === "stopping" || modelSwitching()) return false
+    const activeModelResolution = requiredModelSelection()
+    if (!activeModelResolution.ok || !activeModelResolution.model) {
+      setModelSwitchError(activeModelResolution.message)
+      return false
+    }
+    return true
+  }
+
+  const handlePromptSubmit = (submission: PromptSubmission) => {
+    const text = submission.text
+    const command = findChatCommandByText(chatCommandCatalog(), text)
+    if (command) {
+      if (chatStatus() === "stopping") return false
+      return dispatchChatCommand({ text, command, mentions: submission.mentions })
+    }
+    if (!text.trim() || !canSubmitComposerAction()) return false
+    handleSend(submission)
+    return true
+  }
+
+  const handleCommandSelect = (selection: PromptCommandSelection) => {
+    const text = selection.text.trim()
+    if (!text || chatStatus() === "stopping") return false
+    return dispatchChatCommand({
+      text,
+      commandId: selection.command.id,
+      trigger: selection.command.trigger,
+      command: selection.command,
+    })
   }
 
   const handleModelChange = (profileId: string) => {
@@ -1897,9 +2005,26 @@ const ChatView: Component<ChatViewProps> = (props) => {
     })
   }
 
+  const requestWorkspaceMentionFiles = (query: string) => {
+    const normalizedQuery = query.trim().replace(/^@/, "")
+    const requestId = `workspace-mention-${Date.now()}`
+    setWorkspaceMentionRequest({ id: requestId, query: normalizedQuery })
+    vscode.postMessage({
+      type: "workspace.files.search",
+      requestId,
+      query: normalizedQuery,
+    })
+  }
+
   onMount(() => {
     vscode.postMessage({ type: "autoApproval.get" })
     const unsubscribe = vscode.onMessage((msg) => {
+      if (msg.type === "workspace.files" && Array.isArray(msg.files)) {
+        const requestId = stringValue(msg.requestId) || ""
+        const activeRequest = workspaceMentionRequest()
+        if (activeRequest.id && requestId && requestId !== activeRequest.id) return
+        setWorkspaceMentionFiles(sanitizeStringArray(msg.files))
+      }
       if (msg.type === "autoApproval.state") {
         const payload = objectValue(msg.payload)
         setAutoApproveOptions(sanitizeAutoApproveOptions(payload.options))
@@ -2119,6 +2244,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
       chatStatus,
       handleStop,
       handleSend,
+      handlePromptSubmit,
+      handleCommandSelect,
       handleSessionCommand,
       clearCurrentSession,
     },
@@ -2374,9 +2501,15 @@ const ChatView: Component<ChatViewProps> = (props) => {
           modelSwitching={modelSwitching()}
           modelError={visibleModelError()}
           modelRequired={true}
+          chatCommands={chatCommandCatalog()}
+          mentionProviders={mentionProviderCatalog()}
+          agentTools={agentToolCatalog()}
+          workspaceFiles={workspaceMentionFiles()}
+          onMentionQuery={requestWorkspaceMentionFiles}
           onModelChange={chatController.model.handleModelChange}
           onModelUnavailable={chatController.model.handleModelUnavailable}
-          onSend={chatController.runtime.handleSend}
+          onSubmit={chatController.runtime.handlePromptSubmit}
+          onCommandSelect={chatController.runtime.handleCommandSelect}
         />
         <div class="chat-footer-target">
           <button
@@ -2747,6 +2880,8 @@ function parseTerminalTuiCards(content: string): MockPart[] {
         id: "remote-tui",
         type: "remote_status",
         remotePeerId: fields.Peer || "",
+        remoteMainAgentId: fields.MainAgent || fields["Main Agent"] || "",
+        remoteAgentConfigId: fields.AgentConfig || fields["Agent Config"] || "",
         remoteSessionId: fields.Session || "",
         remoteFingerprint: fields.Fingerprint || "",
         remoteMode: fields.Mode || "",

@@ -669,6 +669,8 @@ const RemoteStatusPart: Component<PartProps> = (props) => {
   })
   const fields = () => [
     ["Peer", props.part.remotePeerId],
+    ["Main Agent", props.part.remoteMainAgentId],
+    ["Agent Config", props.part.remoteAgentConfigId],
     ["Session", props.part.remoteSessionId],
     ["Fingerprint", props.part.remoteFingerprint],
     ["Workspace", props.part.remoteWorkspaceRoot],

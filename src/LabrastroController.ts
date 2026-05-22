@@ -98,10 +98,16 @@ interface ActiveEnvironmentRun {
   cancelled: boolean
 }
 
+interface WorkspaceFileIndex {
+  rootsKey: string
+  files: string[]
+}
+
 const CHAT_EVENTS_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 15_000]
 const CHAT_EVENTS_RECOVERY_DEADLINE_MS = 5 * 60 * 1000
 const CHAT_WEBVIEW_TARGETS: readonly WebviewTarget[] = ["sidebar"]
 const SESSION_WEBVIEW_TARGETS: readonly WebviewTarget[] = ["sidebar", "agentManager"]
+const WORKSPACE_FILE_EXCLUDE_GLOB = "{**/node_modules/**,**/.git/**,**/dist/**,**/out/**,**/build/**,**/.next/**,**/target/**}"
 export class LabrastroController implements vscode.Disposable {
   private readonly client: LabrastroRemoteClient
   private readonly approvalDocuments: ApprovalDocumentProvider
@@ -112,6 +118,8 @@ export class LabrastroController implements vscode.Disposable {
   private backendFeatures: BackendFeatures | null | undefined
   private readonly webviewBus = new WebviewBus()
   private disposed = false
+  private workspaceFileIndex: WorkspaceFileIndex | undefined
+  private workspaceFileIndexPromise: Promise<WorkspaceFileIndex> | undefined
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.client = new LabrastroRemoteClient(context)
@@ -167,6 +175,11 @@ export class LabrastroController implements vscode.Disposable {
         this.approvalDocuments
       )
     )
+    const workspaceFileWatcher = vscode.workspace.createFileSystemWatcher("**/*")
+    workspaceFileWatcher.onDidChange(() => this.invalidateWorkspaceFileIndex())
+    workspaceFileWatcher.onDidCreate(() => this.invalidateWorkspaceFileIndex())
+    workspaceFileWatcher.onDidDelete(() => this.invalidateWorkspaceFileIndex())
+    this.context.subscriptions.push(workspaceFileWatcher)
   }
 
   private get toolchainState(): Record<string, unknown> | undefined {
@@ -346,11 +359,68 @@ export class LabrastroController implements vscode.Disposable {
     message: WebviewToHostMessage,
     post: PostMessage
   ): Promise<boolean> {
+    if (message.type === "workspace.files.search") {
+      await this.searchWorkspaceFiles(message, post)
+      return true
+    }
     if (await this.adminCoordinator.handleMessage(message, post)) return true
     if (await this.environmentCoordinator.handleMessage(message, post)) return true
     if (await this.sessionCoordinator.handleMessage(message, post)) return true
     if (await this.chatRunCoordinator.handleMessage(message, post)) return true
     return false
+  }
+
+  private async searchWorkspaceFiles(message: WebviewToHostMessage, post: PostMessage): Promise<void> {
+    const query = textValue(message.query).trim().replace(/^@/, "")
+    const requestId = textValue(message.requestId)
+    const index = await this.getWorkspaceFileIndex()
+    const needle = query.toLowerCase()
+    const files = index.files
+      .map((file) => ({ file, score: workspaceFileMentionScore(file, needle) }))
+      .filter((item) => Number.isFinite(item.score))
+      .sort((left, right) => left.score - right.score || left.file.length - right.file.length || left.file.localeCompare(right.file))
+      .map((item) => item.file)
+      .slice(0, 50)
+
+    post({
+      type: "workspace.files",
+      requestId,
+      query,
+      files,
+    })
+  }
+
+  private invalidateWorkspaceFileIndex(): void {
+    this.workspaceFileIndex = undefined
+    this.workspaceFileIndexPromise = undefined
+  }
+
+  private async getWorkspaceFileIndex(): Promise<WorkspaceFileIndex> {
+    const rootsKey = workspaceFoldersKey()
+    if (!rootsKey) return { rootsKey: "", files: [] }
+    if (this.workspaceFileIndex?.rootsKey === rootsKey) return this.workspaceFileIndex
+    if (!this.workspaceFileIndexPromise) {
+      this.workspaceFileIndexPromise = this.buildWorkspaceFileIndex(rootsKey).finally(() => {
+        this.workspaceFileIndexPromise = undefined
+      })
+    }
+    return this.workspaceFileIndexPromise
+  }
+
+  private async buildWorkspaceFileIndex(rootsKey: string): Promise<WorkspaceFileIndex> {
+    const uris = await vscode.workspace.findFiles("**/*", WORKSPACE_FILE_EXCLUDE_GLOB)
+    const seen = new Set<string>()
+    const files = uris
+      .map((uri) => vscode.workspace.asRelativePath(uri, false).replace(/\\/g, "/"))
+      .filter((file) => {
+        if (!file || seen.has(file)) return false
+        seen.add(file)
+        return true
+      })
+      .sort((left, right) => left.localeCompare(right))
+    const index = { rootsKey, files }
+    this.workspaceFileIndex = index
+    return index
   }
 
   private getExecutorType(): { location: string; engine: string } {
@@ -492,11 +562,13 @@ export class LabrastroController implements vscode.Disposable {
       }
       let behaviorCatalog: Record<string, unknown> | undefined
       try {
-        behaviorCatalog = await this.client.toolchainBehaviorCatalog()
+        behaviorCatalog = await this.client.behaviorCatalog()
       } catch (error) {
         behaviorCatalog = {
           error: errorMessage(error),
-          user_actions: [],
+          chat_commands: [],
+          mention_providers: [],
+          ui_actions: [],
           agent_tools: [],
         }
       }
@@ -511,7 +583,9 @@ export class LabrastroController implements vscode.Disposable {
             ? dashboardPayload.summary
             : {},
         behavior_catalog: behaviorPayload,
-        user_actions: Array.isArray(behaviorPayload.user_actions) ? behaviorPayload.user_actions : [],
+        chat_commands: Array.isArray(behaviorPayload.chat_commands) ? behaviorPayload.chat_commands : [],
+        mention_providers: Array.isArray(behaviorPayload.mention_providers) ? behaviorPayload.mention_providers : [],
+        ui_actions: Array.isArray(behaviorPayload.ui_actions) ? behaviorPayload.ui_actions : [],
         agent_tools: Array.isArray(behaviorPayload.agent_tools) ? behaviorPayload.agent_tools : [],
         behavior_catalog_error: typeof behaviorPayload.error === "string" ? behaviorPayload.error : "",
       }
@@ -1215,6 +1289,7 @@ export class LabrastroController implements vscode.Disposable {
       providerId?: string
       modelId?: string
       parameters?: Record<string, unknown>
+      mentions?: Record<string, unknown>[]
     } = {}
   ): Promise<void> {
     try {
@@ -1587,6 +1662,39 @@ function booleanValue(value: unknown): boolean | undefined {
 
 function objectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {}
+}
+
+function workspaceFoldersKey(): string {
+  return (vscode.workspace.workspaceFolders || [])
+    .map((folder) => folder.uri.fsPath)
+    .join("|")
+}
+
+function workspaceFileMentionScore(filePath: string, needle: string): number {
+  const normalizedNeedle = needle.trim().replace(/\\/g, "/").toLowerCase()
+  if (!normalizedNeedle) return filePath.split("/").length
+  const lower = filePath.toLowerCase()
+  const base = lower.split("/").pop() || lower
+  if (base.startsWith(normalizedNeedle)) return 0
+  if (lower.startsWith(normalizedNeedle)) return 1
+  const index = lower.indexOf(normalizedNeedle)
+  if (index >= 0) return 10 + index
+  const baseFuzzy = fuzzySubsequenceScore(base, normalizedNeedle)
+  if (baseFuzzy !== undefined) return 100 + baseFuzzy
+  const pathFuzzy = fuzzySubsequenceScore(lower, normalizedNeedle)
+  return pathFuzzy === undefined ? Number.POSITIVE_INFINITY : 200 + pathFuzzy
+}
+
+function fuzzySubsequenceScore(value: string, needle: string): number | undefined {
+  let lastIndex = -1
+  let gapPenalty = 0
+  for (const char of needle) {
+    const index = value.indexOf(char, lastIndex + 1)
+    if (index < 0) return undefined
+    gapPenalty += index - lastIndex - 1
+    lastIndex = index
+  }
+  return gapPenalty + value.length / 1000
 }
 
 function chatStartupModelError(options: {
