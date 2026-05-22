@@ -2565,7 +2565,7 @@ button {
 
 .toolchain-toolbar {
   display: grid;
-  grid-template-columns: auto minmax(220px, 1fr);
+  grid-template-columns: auto minmax(220px, 1fr) auto;
   gap: 10px;
   align-items: center;
   padding: 10px;
@@ -2617,6 +2617,17 @@ button {
   outline: 0;
   color: var(--vscode-input-foreground, var(--ez-fg));
   background: transparent;
+}
+
+.toolchain-toolbar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.toolchain-toolbar__actions .btn {
+  white-space: nowrap;
 }
 
 .toolchain-table {
@@ -2815,6 +2826,149 @@ button {
   color: var(--ez-muted);
 }
 
+.settings-section-heading--compact {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--ez-border) 68%, transparent);
+}
+
+.capability-package-workbench {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.92fr) minmax(0, 1.08fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.capability-source-panel,
+.capability-draft-panel,
+.capability-package-card,
+.capability-draft-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--ez-border);
+  border-radius: var(--ez-radius);
+  background: color-mix(in srgb, var(--ez-surface-soft) 70%, transparent);
+}
+
+.capability-ingest-status,
+.capability-package-card__head,
+.capability-package-card__meta {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.capability-ingest-status {
+  margin-top: 10px;
+}
+
+.capability-ingest-status code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ez-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.capability-package-list,
+.capability-component-list {
+  display: grid;
+  gap: 10px;
+}
+
+.capability-package-card,
+.capability-draft-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.capability-package-card__head {
+  justify-content: space-between;
+}
+
+.capability-package-card__head > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.capability-package-card__head strong,
+.capability-package-card__head small,
+.capability-package-card p,
+.capability-package-card__meta small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.capability-package-card__head small,
+.capability-package-card__meta small,
+.capability-package-card p {
+  color: var(--ez-muted);
+  line-height: 1.45;
+}
+
+.capability-component-card {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--ez-border) 78%, transparent);
+  border-radius: var(--ez-radius);
+  background: color-mix(in srgb, var(--ez-surface) 72%, transparent);
+}
+
+.capability-component-card > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.capability-component-card strong,
+.capability-component-card small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.capability-component-card small {
+  color: var(--ez-muted);
+}
+
+.capability-component-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.capability-component-chips span {
+  max-width: 100%;
+  padding: 3px 7px;
+  border: 1px solid color-mix(in srgb, var(--ez-border) 75%, transparent);
+  border-radius: 999px;
+  color: var(--ez-muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  background: color-mix(in srgb, var(--ez-surface) 70%, transparent);
+}
+
+.capability-text-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--ez-fg);
+}
+
+.capability-text-list li {
+  margin: 3px 0;
+  overflow-wrap: anywhere;
+}
+
 .toolchain-empty {
   padding: 18px;
   color: var(--ez-muted);
@@ -2867,8 +3021,13 @@ button {
   .toolchain-summary-grid,
   .toolchain-ingest-grid,
   .toolchain-toolbar,
-  .toolchain-detail-grid {
+  .toolchain-detail-grid,
+  .capability-package-workbench {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .toolchain-toolbar__actions {
+    justify-content: flex-start;
   }
 
   .provider-list-panel {

@@ -413,9 +413,7 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
                         <strong>{pkg.name || pkg.id}</strong>
                         <small>{pkg.description || pkg.id}</small>
                         <div class="settings-badge-group">
-                          <For each={pkg.mcpServers}>{(item) => <StatusBadge>MCP: {item}</StatusBadge>}</For>
-                          <For each={pkg.skills}>{(item) => <StatusBadge>Skill: {item}</StatusBadge>}</For>
-                          <For each={pkg.cliTools}>{(item) => <StatusBadge>CLI: {item}</StatusBadge>}</For>
+                          <For each={pkg.components}>{(item) => <StatusBadge>{item}</StatusBadge>}</For>
                         </div>
                       </div>
                     )}</For>

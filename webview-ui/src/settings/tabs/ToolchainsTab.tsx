@@ -1,14 +1,8 @@
 import { Component, For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js"
 import { t } from "../../i18n"
-import {
-  ApprovalDetailsDialog,
-  approvalSummary,
-  extractApprovalCommand,
-  type ApprovalDecision,
-} from "../../components/chat/ApprovalDetailsDialog"
+import { ApprovalDetailsDialog } from "../../components/chat/ApprovalDetailsDialog"
 import { RefreshButton } from "../../components/common/RefreshButton"
 import { DialogSurface } from "../../components/common/interaction"
-import { defaultCommandRuleCandidateRules } from "../../utils/command-auto-approval"
 import { StatusBadge } from "../components/StatusBadge"
 import { ChoiceMultiSelect } from "../components/ChoiceMultiSelect"
 import { settingsMessages } from "../settingsMessages"
@@ -36,13 +30,18 @@ interface ToolchainRecord {
 interface ToolchainEditorState {
   [key: string]: any
 }
-interface CapabilityPackageDraft {
+interface CapabilityPackageView {
   name: string
+  id: string
   description: string
-  mcpServersText: string
-  skillsText: string
-  cliToolsText: string
-  source: string
+  components: string[]
+  enabled: boolean
+  status: string
+  source: Record<string, unknown>
+  installPlan: string[]
+  usage: string[]
+  credentials: string[]
+  riskLevel: string
 }
 
 interface TabProps { controller: SettingsController & Record<string, any> }
@@ -60,22 +59,14 @@ function parseListText(value: string): string[] {
     .filter(Boolean)
 }
 
-function makeCapabilityPackageId(existing: string[]): string {
-  let index = 1
-  while (existing.includes(`capability_${index}`)) index += 1
-  return `capability_${index}`
-}
-
 export const ToolchainsTab: Component<TabProps> = (props) => {
   const {
     environmentEntriesByKind,
-    environmentKindIcon,
     environmentStatusTone,
     environmentStatusLabel,
     formatTimestamp,
     refreshEnvironmentManifest,
     vscode,
-    toolchainGroups,
     toolchainEditor,
     setToolchainEditor,
     emptyToolchainEditor,
@@ -84,15 +75,12 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
     stringValue,
     server,
     runEnvironment,
-    stopEnvironmentRun,
     environmentSnapshot,
     environmentError,
     environmentAgentCandidates,
     toolchainError,
     toolchainActionFeedback,
     environmentRunStatusLabel,
-    environmentCounts,
-    environmentRunTone,
     selectedEnvironmentApproval,
     setSelectedEnvironmentApproval,
     replyEnvironmentApproval,
@@ -133,13 +121,25 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
     objectValue,
     numberValue,
     toolchainIngestLogs,
+    capabilitySourceType,
+    setCapabilitySourceType,
+    capabilitySourceUrl,
+    setCapabilitySourceUrl,
+    capabilitySourceNotes,
+    setCapabilitySourceNotes,
+    capabilityPackageIdHint,
+    setCapabilityPackageIdHint,
+    capabilityPackageIngestState,
+    startCapabilityPackageIngest,
+    refreshCapabilityPackageIngestStatus,
+    acceptCapabilityPackageDraft,
+    deleteCapabilityPackage,
+    enableCapabilityPackage,
   } = props.controller
 
   const [section, setSection] = createSignal<ToolchainSection>("dashboard")
   const [capabilityDirty, setCapabilityDirty] = createSignal(false)
   const [capabilitySaved, setCapabilitySaved] = createSignal(false)
-  const [selectedCapabilityPackageId, setSelectedCapabilityPackageId] = createSignal("")
-  const [capabilityPackageDrafts, setCapabilityPackageDrafts] = createSignal<Record<string, CapabilityPackageDraft>>({})
   const [skillsEnabled, setSkillsEnabled] = createSignal(true)
   const [skillsScanProject, setSkillsScanProject] = createSignal(true)
   const [skillsScanUser, setSkillsScanUser] = createSignal(true)
@@ -150,16 +150,45 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
     if (Object.keys(direct).length > 0) return direct
     return objectValue(server.adminState().server_settings)
   })
-  const capabilityPackageIds = createMemo(() => Object.keys(capabilityPackageDrafts()).sort())
-  const currentCapabilityPackage = createMemo(() => {
-    const id = selectedCapabilityPackageId()
-    return id ? capabilityPackageDrafts()[id] : undefined
+  const installedCapabilityPackages = createMemo<CapabilityPackageView[]>(() => {
+    const packages = objectValue(serverSettings().capability_packages)
+    return Object.entries(packages)
+      .map(([id, raw]) => {
+        const item = objectValue(raw)
+        return {
+          id,
+          name: stringValue(item.name, id),
+          description: stringValue(item.description),
+          components: stringArrayValue(item.components),
+          enabled: item.enabled !== false,
+          status: stringValue(item.status, "installed"),
+          source: objectValue(item.source),
+          installPlan: stringArrayValue(item.install_plan),
+          usage: stringArrayValue(item.usage),
+          credentials: stringArrayValue(item.credentials),
+          riskLevel: stringValue(item.risk_level),
+        }
+      })
+      .sort((a, b) => a.id.localeCompare(b.id))
   })
-  const registeredCliNames = createMemo(() => (environmentEntriesByKind().cli || []).map((item: any) => stringValue(item.name)).filter(Boolean))
-  const registeredMcpNames = createMemo(() => (environmentEntriesByKind().mcp || []).map((item: any) => stringValue(item.name)).filter(Boolean))
+  const capabilityComponents = createMemo(() => objectValue(serverSettings().capability_components))
+  const currentCapabilityDraft = createMemo(() => objectValue(capabilityPackageIngestState().draft))
+  const currentDraftComponents = createMemo(() => {
+    const draft = currentCapabilityDraft()
+    const components = draft.components
+    if (!Array.isArray(components)) return []
+    return components.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+  })
+  const currentDraftEvidence = createMemo(() => {
+    const evidence = currentCapabilityDraft().evidence
+    if (!Array.isArray(evidence)) return []
+    return evidence.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+  })
+  const currentDraftReady = createMemo(() => {
+    const draft = currentCapabilityDraft()
+    return Boolean(stringValue(draft.id) && currentDraftComponents().length > 0)
+  })
   const registeredSkillNames = createMemo(() => (environmentEntriesByKind().skill || []).map((item: any) => stringValue(item.name)).filter(Boolean))
-  const cliChoiceOptions = () => registeredCliNames().map((id: string) => ({ id, label: id, kind: "CLI" }))
-  const mcpChoiceOptions = () => registeredMcpNames().map((id: string) => ({ id, label: id, kind: "MCP" }))
   const skillChoiceOptions = () => registeredSkillNames().map((id: string) => ({ id, label: id, kind: "Skill" }))
   const environmentAgentAvailable = () => environmentAgentCandidates().length > 0
   const environmentAgentLabel = () => {
@@ -175,102 +204,18 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
   createEffect(() => {
     if (capabilityDirty()) return
     const settings = serverSettings()
-    const packages = objectValue(settings.capability_packages)
     const skills = objectValue(settings.skills)
-    const drafts: Record<string, CapabilityPackageDraft> = {}
-    for (const [id, raw] of Object.entries(packages)) {
-      const item = objectValue(raw)
-      drafts[id] = {
-        name: stringValue(item.name),
-        description: stringValue(item.description),
-        mcpServersText: stringArrayValue(item.mcp_servers).join("\n"),
-        skillsText: stringArrayValue(item.skills).join("\n"),
-        cliToolsText: stringArrayValue(item.cli_tools).join("\n"),
-        source: stringValue(item.source),
-      }
-    }
-    setCapabilityPackageDrafts(drafts)
-    setSelectedCapabilityPackageId((current) => current && drafts[current] ? current : Object.keys(drafts).sort()[0] || "")
     setSkillsEnabled(skills.enabled !== false)
     setSkillsScanProject(skills.scan_project !== false)
     setSkillsScanUser(skills.scan_user !== false)
     setSkillsDisabledText(stringArrayValue(skills.disabled).join("\n"))
   })
 
-  createEffect(() => {
-    const ids = capabilityPackageIds()
-    if (!selectedCapabilityPackageId() && ids.length) setSelectedCapabilityPackageId(ids[0])
-    if (selectedCapabilityPackageId() && !ids.includes(selectedCapabilityPackageId())) {
-      setSelectedCapabilityPackageId(ids[0] || "")
-    }
-  })
-
   onMount(() => settingsMessages.readServerSettings(vscode))
 
-  const addCapabilityPackage = () => {
-    const id = makeCapabilityPackageId(capabilityPackageIds())
-    setCapabilityPackageDrafts((current) => ({
-      ...current,
-      [id]: {
-        name: id,
-        description: "",
-        mcpServersText: "",
-        skillsText: "",
-        cliToolsText: "",
-        source: "local",
-      },
-    }))
-    setSelectedCapabilityPackageId(id)
-    markCapabilityDirty()
-  }
-
-  const renameCapabilityPackage = (nextId: string) => {
-    const oldId = selectedCapabilityPackageId()
-    const id = nextId.trim()
-    if (!oldId || !id || id === oldId || capabilityPackageDrafts()[id]) return
-    setCapabilityPackageDrafts((current) => {
-      const next = { ...current, [id]: current[oldId] }
-      delete next[oldId]
-      return next
-    })
-    setSelectedCapabilityPackageId(id)
-    markCapabilityDirty()
-  }
-
-  const updateCapabilityPackage = (patch: Partial<CapabilityPackageDraft>) => {
-    const id = selectedCapabilityPackageId()
-    if (!id) return
-    setCapabilityPackageDrafts((current) => ({
-      ...current,
-      [id]: { ...current[id], ...patch },
-    }))
-    markCapabilityDirty()
-  }
-
-  const deleteCapabilityPackage = (id: string) => {
-    setCapabilityPackageDrafts((current) => {
-      const next = { ...current }
-      delete next[id]
-      return next
-    })
-    markCapabilityDirty()
-  }
-
-  const saveCapabilityPackages = () => {
-    const packages: Record<string, unknown> = {}
-    for (const [id, draft] of Object.entries(capabilityPackageDrafts())) {
-      packages[id] = {
-        name: draft.name || id,
-        description: draft.description,
-        mcp_servers: parseListText(draft.mcpServersText),
-        skills: parseListText(draft.skillsText),
-        cli_tools: parseListText(draft.cliToolsText),
-        source: draft.source || "local",
-      }
-    }
+  const saveSkillsSettings = () => {
     settingsMessages.updateServerSettings(vscode, {
       settings: {
-        capability_packages: packages,
         skills: {
           enabled: skillsEnabled(),
           scan_project: skillsScanProject(),
@@ -283,101 +228,23 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
     setCapabilitySaved(true)
   }
 
-  const quickRememberEnvironmentApprovalDecision = (
-    approval: Parameters<typeof rememberEnvironmentApprovalDecision>[0],
-    decision: ApprovalDecision,
-  ) => {
-    const rules = defaultCommandRuleCandidateRules(extractApprovalCommand(approval))
-    if (!rules.length) return
-    rememberEnvironmentApprovalDecision(approval, decision, rules)
+  const capabilitySourceLabel = (source: Record<string, unknown>) => {
+    const type = stringValue(source.type, "unknown")
+    const url = stringValue(source.url)
+    if (type === "github_repo") return url ? `GitHub · ${url}` : "GitHub"
+    if (type === "docs_url") return url ? `文档 · ${url}` : "文档"
+    if (type === "project_notes") return "项目说明"
+    if (type === "builtin") return "内置"
+    return url || type
   }
 
-  const renderEnvironmentSection = (
-    kind: EnvironmentEntryKind,
-    title: string,
-  ) => {
-    const entries = () => environmentEntriesByKind()[kind]
-    return (
-      <section class="settings-section settings-section--flat environment-section">
-        <div class="settings-section-heading">
-          <div>
-            <span>{title}</span>
-          </div>
-          <StatusBadge>{String(entries().length)}</StatusBadge>
-        </div>
-        <Show when={entries().length} fallback={<p class="settings-empty-note">当前没有 {title} 条目。</p>}>
-          <div class="environment-entry-list">
-            <For each={entries()}>
-              {(entry) => (
-                <details class="environment-entry">
-                  <summary class="environment-entry__summary">
-                    <div class="environment-entry__main">
-                      <span class={`codicon codicon-${environmentKindIcon(kind)}`} aria-hidden="true" />
-                      <span class="environment-entry__title">
-                        <strong>{entry.name}</strong>
-                        <small>{entry.description || entry.source || "未提供描述"}</small>
-                      </span>
-                    </div>
-                    <div class="environment-entry__meta">
-                      <Show when={entry.tags.length}>
-                        <span class="settings-badge-group">
-                          <For each={entry.tags.slice(0, 3)}>
-                            {(tag) => <StatusBadge>{tag}</StatusBadge>}
-                          </For>
-                        </span>
-                      </Show>
-                      <StatusBadge tone={environmentStatusTone(entry.status)}>
-                        {environmentStatusLabel(entry.status)}
-                      </StatusBadge>
-                    </div>
-                  </summary>
-                  <div class="environment-entry__details">
-                    <div class="environment-entry__grid">
-                      <div class="environment-entry__field">
-                        <span>来源</span>
-                        <strong>{entry.source || "未提供"}</strong>
-                      </div>
-                      <div class="environment-entry__field">
-                        <span>版本</span>
-                        <strong>{entry.version || "未提供"}</strong>
-                      </div>
-                      <div class="environment-entry__field">
-                        <span>最后动作</span>
-                        <strong>{entry.lastAction || "尚未开始"}</strong>
-                      </div>
-                      <div class="environment-entry__field">
-                        <span>更新时间</span>
-                        <strong>{formatTimestamp(entry.lastUpdated)}</strong>
-                      </div>
-                    </div>
-                    <Show when={entry.check}>
-                      <label class="field-label">
-                        <span>检查命令</span>
-                        <code class="environment-command">{entry.check}</code>
-                      </label>
-                    </Show>
-                    <Show when={entry.install}>
-                      <label class="field-label">
-                        <span>安装命令</span>
-                        <code class="environment-command">{entry.install}</code>
-                      </label>
-                    </Show>
-                    <Show when={entry.detail}>
-                      <label class="field-label">
-                        <span>最近输出</span>
-                        <pre class="settings-result environment-command environment-command--multiline">{entry.detail}</pre>
-                      </label>
-                    </Show>
-                  </div>
-                </details>
-              )}
-            </For>
-          </div>
-        </Show>
-      </section>
-    )
-  }
-
+  const componentSummary = (componentId: string) => {
+    const component = objectValue(capabilityComponents()[componentId])
+    const name = stringValue(component.name, componentId)
+    const kind = stringValue(component.kind)
+    return kind ? `${kind.toUpperCase()} · ${name}` : name
+  }
+
   const refreshToolchains = () => {
     settingsMessages.refreshToolchains(vscode)
     refreshEnvironmentManifest()
@@ -412,55 +279,6 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
     if (!globalThis.confirm(`删除 ${record.name}？此操作会从服务器能力组件清单移除该条目。`)) return
     settingsMessages.deleteToolchain(vscode, record.kind, record.name)
   }
-
-  const renderToolchainGroup = (
-    kind: ToolchainKind,
-    title: string,
-    items: ToolchainRecord[],
-  ) => (
-    <section class="settings-section settings-section--flat">
-      <div class="settings-section-heading">
-        <div>
-          <span>{title}</span>
-        </div>
-        <StatusBadge>{String(items.length)}</StatusBadge>
-      </div>
-      <Show when={items.length} fallback={<p class="settings-empty-note">尚未配置 {title} 条目。</p>}>
-        <div class="toolchain-list">
-          <For each={items}>
-            {(item) => (
-              <div class={`toolchain-row ${item.enabled === false ? "toolchain-row--disabled" : ""}`}>
-                <div class="toolchain-row__main">
-                  <div class="toolchain-row__title">
-                    <strong>{item.name}</strong>
-                    <StatusBadge tone={item.enabled === false ? "muted" : "success"}>
-                      {item.enabled === false ? t("provider.disabled") : t("provider.enabled")}
-                    </StatusBadge>
-                    <Show when={item.version}>
-                      <StatusBadge>{item.version}</StatusBadge>
-                    </Show>
-                  </div>
-                  <span>{item.description || item.source || item.command || item.check || "未填写说明"}</span>
-                  <small>{item.check ? `检查：${item.check}` : "未填写检查命令"}</small>
-                </div>
-                <div class="settings-actions settings-actions--right">
-                  <button class="btn btn-secondary" onClick={() => enableToolchain(item, item.enabled === false)}>
-                    {item.enabled === false ? "启用" : "停用"}
-                  </button>
-                  <button class="btn btn-secondary" onClick={() => openEditToolchain(item)}>
-                    编辑
-                  </button>
-                  <button class="btn btn-danger" onClick={() => deleteToolchain(item)}>
-                    删除
-                  </button>
-                </div>
-              </div>
-            )}
-          </For>
-        </div>
-      </Show>
-    </section>
-  )
 
   const renderToolchainEditor = () => {
     const editor = toolchainEditor()
@@ -638,217 +456,6 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
     )
   }
 
-  const renderToolchainsLegacy = () => (
-    <div class="settings-page settings-page--wide">
-      <div class="settings-page-header">
-        <div>
-          <h2>{t("toolchain.title")}</h2>
-          <p class="setting-description">
-            当前状态：{environmentRunStatusLabel(environmentSnapshot().status)} · 最近清单刷新：{formatTimestamp(environmentSnapshot().lastManifestAt)}
-          </p>
-        </div>
-        <div class="settings-actions settings-actions--right">
-          <RefreshButton class="btn-secondary" onClick={refreshToolchains} disabled={environmentSnapshot().running}>
-            刷新清单
-          </RefreshButton>
-          <button class="btn btn-secondary" onClick={() => openCreateToolchain("cli")}>
-            新增 CLI 组件
-          </button>
-          <button class="btn btn-secondary" onClick={() => openCreateToolchain("mcp")}>
-            新增 MCP 组件
-          </button>
-          <button class="btn btn-secondary" onClick={() => openCreateToolchain("skill")}>
-            新增 Skill 组件
-          </button>
-          <label class="field-label field-label--compact">
-            <span>环境 Agent</span>
-            <input value={environmentAgentLabel()} disabled />
-          </label>
-          <Show
-            when={!environmentSnapshot().running}
-            fallback={
-              <button class="btn btn-danger" onClick={stopEnvironmentRun}>
-                <span class="codicon codicon-debug-stop" aria-hidden="true" />
-                停止
-              </button>
-            }
-          >
-            <>
-              <button class="btn btn-secondary" onClick={() => runEnvironment("check")} disabled={!environmentSnapshot().entries.length || !environmentAgentAvailable()}>
-                <span class="codicon codicon-search" aria-hidden="true" />
-                检查当前环境
-              </button>
-              <button class="btn btn-primary" onClick={() => runEnvironment("configure")} disabled={!environmentSnapshot().entries.length || !environmentAgentAvailable()}>
-                <span class="codicon codicon-tools" aria-hidden="true" />
-                配置环境
-              </button>
-            </>
-          </Show>
-        </div>
-      </div>
-
-      <Show when={environmentError()}>
-        <div class="settings-error">{environmentError()}</div>
-      </Show>
-      <Show when={toolchainError()}>
-        <div class="settings-error">{toolchainError()}</div>
-      </Show>
-      <Show when={toolchainActionFeedback()}>
-        <div class="settings-success">{toolchainActionFeedback()}</div>
-      </Show>
-      <Show when={!environmentAgentAvailable()}>
-        <div class="settings-empty-note">内建环境 Agent environment_configurator 不可用。请刷新服务器设置或检查后端配置。</div>
-      </Show>
-
-      <section class="settings-section settings-section--flat">
-        <div class="settings-section-heading">
-          <div>
-            <span>服务器能力组件 Manifest</span>
-          </div>
-          <RefreshButton class="btn-secondary" onClick={() => settingsMessages.refreshToolchains(vscode)}>
-            刷新管理列表
-          </RefreshButton>
-        </div>
-      </section>
-      {renderToolchainGroup("cli", "CLI", toolchainGroups().cli)}
-      {renderToolchainGroup("mcp", "MCP", toolchainGroups().mcp)}
-      {renderToolchainGroup("skill", "Skills", toolchainGroups().skill)}
-
-      <section class="settings-section settings-section--flat environment-banner">
-        <div class="settings-status-line">
-          <StatusBadge tone={environmentRunTone(environmentSnapshot().status)}>
-            {environmentRunStatusLabel(environmentSnapshot().status)}
-          </StatusBadge>
-          <StatusBadge>总计 {String(environmentCounts().total)}</StatusBadge>
-          <StatusBadge tone="success">可用 {String(environmentCounts().available + environmentCounts().configured)}</StatusBadge>
-          <StatusBadge tone="warning">缺失 {String(environmentCounts().missing)}</StatusBadge>
-          <Show when={environmentCounts().failed > 0}>
-            <StatusBadge tone="error">失败 {String(environmentCounts().failed)}</StatusBadge>
-          </Show>
-        </div>
-        <div class="environment-banner__content">
-          <div class="environment-banner__block">
-            <span>当前摘要</span>
-            <strong>{environmentSnapshot().summary}</strong>
-            <small>
-              {environmentSnapshot().mode
-                ? `${environmentSnapshot().mode === "check" ? "检查" : "配置"} · 开始于 ${formatTimestamp(environmentSnapshot().startedAt)}`
-                : "尚未启动环境任务"}
-            </small>
-          </div>
-          <div class="environment-banner__block">
-            <span>最近一次运行</span>
-            <strong>{environmentSnapshot().lastRunSummary || "尚无记录"}</strong>
-            <small>
-              {environmentSnapshot().lastRunStatus
-                ? `${environmentRunStatusLabel(environmentSnapshot().lastRunStatus || "idle")} · ${formatTimestamp(environmentSnapshot().lastRunCompletedAt)}`
-                : "完成后会在这里保留结果摘要"}
-            </small>
-          </div>
-        </div>
-      </section>
-
-      <Show when={environmentSnapshot().approvals.length}>
-        <section class="settings-section settings-section--flat">
-          <div class="settings-section-heading">
-            <span>等待批准</span>
-            <StatusBadge tone="warning">{String(environmentSnapshot().approvals.length)}</StatusBadge>
-          </div>
-          <div class="environment-approval-list">
-            <For each={environmentSnapshot().approvals}>
-              {(approval) => {
-                const summary = () => approvalSummary(approval)
-                const quickRememberRules = () => defaultCommandRuleCandidateRules(extractApprovalCommand(approval))
-                const canQuickRemember = () => summary().category === "execute" && quickRememberRules().length > 0
-                return (
-                  <div class="environment-approval-card">
-                    <div class="environment-approval-card__body">
-                      <strong>{summary().title}</strong>
-                      <span>{summary().primary}</span>
-                      <small>{summary().secondary}</small>
-                    </div>
-                    <div class="settings-actions settings-actions--right">
-                      <button class="btn btn-secondary" onClick={() => setSelectedEnvironmentApproval(approval)}>
-                        <span class="codicon codicon-file-diff" aria-hidden="true" />
-                        查看详情
-                      </button>
-                      <Show when={canQuickRemember()}>
-                        <button class="btn btn-primary" onClick={() => quickRememberEnvironmentApprovalDecision(approval, "allow_once")}>
-                          批准并记住
-                        </button>
-                      </Show>
-                      <button class="btn btn-primary" onClick={() => replyEnvironmentApproval(approval, "allow_once")}>
-                        批准一次
-                      </button>
-                      <Show when={canQuickRemember()}>
-                        <button class="btn btn-secondary" onClick={() => quickRememberEnvironmentApprovalDecision(approval, "deny_once")}>
-                          拒绝并记住
-                        </button>
-                      </Show>
-                      <button class="btn btn-secondary" onClick={() => replyEnvironmentApproval(approval, "deny_once")}>
-                        拒绝
-                      </button>
-                    </div>
-                  </div>
-                )
-              }}
-            </For>
-          </div>
-        </section>
-      </Show>
-
-      <Show
-        when={environmentSnapshot().entries.length}
-        fallback={
-          <div class="settings-empty-state">
-            <span class="codicon codicon-tools" aria-hidden="true" />
-          <strong>环境清单尚未加载。</strong>
-          </div>
-        }
-      >
-        {renderEnvironmentSection("cli", "CLI")}
-        {renderEnvironmentSection("mcp", "MCP")}
-        {renderEnvironmentSection("skill", "Skills")}
-      </Show>
-
-      <section class="settings-section settings-section--flat">
-        <div class="settings-section-heading">
-          <span>运行日志</span>
-          <StatusBadge>{String(environmentSnapshot().logs.length)}</StatusBadge>
-        </div>
-        <Show when={environmentSnapshot().logs.length} fallback={<p class="settings-empty-note">环境任务开始后，这里会显示关键事件和最近输出。</p>}>
-          <div class="environment-log-list">
-            <For each={environmentSnapshot().logs}>
-              {(log) => (
-                <div class={`environment-log environment-log--${log.level}`}>
-                  <div class="environment-log__meta">
-                    <StatusBadge tone={log.level === "error" ? "error" : log.level === "warning" ? "warning" : "muted"}>
-                      {log.level === "error" ? "错误" : log.level === "warning" ? "提示" : "输出"}
-                    </StatusBadge>
-                    <small>{formatTimestamp(log.createdAt)}</small>
-                  </div>
-                  <pre class="environment-log__message">{log.message}</pre>
-                </div>
-              )}
-            </For>
-          </div>
-        </Show>
-      </section>
-      <Show when={selectedEnvironmentApproval()}>
-        {(approval) => (
-          <ApprovalDetailsDialog
-            approval={approval()}
-            autoApprovalPending={false}
-            onClose={() => setSelectedEnvironmentApproval(undefined)}
-            onDecision={(decision) => replyEnvironmentApproval(approval(), decision)}
-            onRememberDecision={(decision, rules) => rememberEnvironmentApprovalDecision(approval(), decision, rules)}
-          />
-        )}
-      </Show>
-      {renderToolchainEditor()}
-    </div>
-  )
-
   return (
       <div class="settings-page settings-page--wide toolchain-dashboard-page">
         <div class="settings-page-header">
@@ -1013,6 +620,20 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
               <div class="toolchain-toolbar__search">
                 <span class="codicon codicon-search" aria-hidden="true" />
                 <input value={toolchainSearch()} placeholder="搜索工具、文档、命令" onInput={(event) => setToolchainSearch(event.currentTarget.value)} />
+              </div>
+              <div class="toolchain-toolbar__actions" aria-label="新增能力组件">
+                <button class="btn btn-secondary btn--compact" type="button" onClick={() => openCreateToolchain("cli")}>
+                  <span class="codicon codicon-add" aria-hidden="true" />
+                  新增 CLI
+                </button>
+                <button class="btn btn-secondary btn--compact" type="button" onClick={() => openCreateToolchain("mcp")}>
+                  <span class="codicon codicon-add" aria-hidden="true" />
+                  新增 MCP
+                </button>
+                <button class="btn btn-secondary btn--compact" type="button" onClick={() => openCreateToolchain("skill")}>
+                  <span class="codicon codicon-add" aria-hidden="true" />
+                  新增 Skill
+                </button>
               </div>
             </div>
 
@@ -1191,107 +812,197 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
 
         <section class="settings-section settings-section--flat" classList={{ "settings-section--hidden": section() !== "packages" }}>
           <div class="settings-section-heading">
-            <span>能力包定义</span>
+            <span>能力包生成</span>
             <div class="settings-actions settings-actions--right">
-              <button class="btn btn-secondary" type="button" onClick={addCapabilityPackage}>
-                <span class="codicon codicon-add" aria-hidden="true" />
-                新增能力包
+              <button class="btn btn-secondary" type="button" disabled={!capabilityPackageIngestState().agentRunId} onClick={refreshCapabilityPackageIngestStatus}>
+                <span class="codicon codicon-refresh" aria-hidden="true" />
+                刷新草案
               </button>
-              <button class="btn btn-primary" type="button" disabled={!capabilityDirty()} onClick={saveCapabilityPackages}>
-                <span class="codicon codicon-save" aria-hidden="true" />
-                保存能力包
+              <button class="btn btn-primary" type="button" onClick={startCapabilityPackageIngest}>
+                <span class="codicon codicon-play" aria-hidden="true" />
+                生成草案
+              </button>
+              <button class="btn btn-primary" type="button" disabled={!currentDraftReady()} onClick={acceptCapabilityPackageDraft}>
+                <span class="codicon codicon-check" aria-hidden="true" />
+                确认安装
               </button>
             </div>
           </div>
           <Show when={server.serverSettingsError()}>
             <div class="settings-error">{server.serverSettingsError()}</div>
           </Show>
-          <Show when={capabilitySaved() && !capabilityDirty()}>
-            <div class="settings-success">能力包和 Skills 设置已保存并重载。</div>
+          <Show when={capabilityPackageIngestState().error}>
+            <div class="settings-error">{capabilityPackageIngestState().error}</div>
           </Show>
-          <div class="settings-master-detail">
-            <div class="settings-master-list">
-              <Show when={capabilityPackageIds().length} fallback={<p class="settings-empty-note">暂无能力包。</p>}>
-                <div class="selectable-list">
-                  <For each={capabilityPackageIds()}>
-                    {(id) => (
-                      <div class={`settings-master-item ${selectedCapabilityPackageId() === id ? "settings-master-item--active" : ""}`}>
-                        <button type="button" class="settings-master-item__select" onClick={() => setSelectedCapabilityPackageId(id)}>
-                          <span class="settings-master-item__info">
-                            <strong>{id}</strong>
-                            <small>{capabilityPackageDrafts()[id]?.name || "未命名"}</small>
-                          </span>
-                        </button>
-                        <button class="btn-icon" type="button" title="删除" onClick={() => deleteCapabilityPackage(id)}>
-                          <span class="codicon codicon-trash" aria-hidden="true" />
-                        </button>
+
+          <div class="capability-package-workbench">
+            <div class="capability-source-panel">
+              <div class="settings-form-grid settings-form-grid--two">
+                <label class="field-label"><span>来源类型</span>
+                  <select value={capabilitySourceType()} onChange={(event) => setCapabilitySourceType(event.currentTarget.value as "github_repo" | "docs_url" | "project_notes")}>
+                    <option value="github_repo">GitHub 仓库</option>
+                    <option value="docs_url">文档 URL</option>
+                    <option value="project_notes">项目说明</option>
+                  </select>
+                </label>
+                <label class="field-label"><span>能力包 ID 提示</span>
+                  <input value={capabilityPackageIdHint()} onInput={(event) => setCapabilityPackageIdHint(event.currentTarget.value)} placeholder="review / pr / deploy" />
+                </label>
+                <Show when={capabilitySourceType() !== "project_notes"}>
+                  <label class="field-label field-label--full"><span>仓库或文档地址</span>
+                    <input value={capabilitySourceUrl()} onInput={(event) => setCapabilitySourceUrl(event.currentTarget.value)} placeholder="https://github.com/org/repo 或 https://docs.example.com" />
+                  </label>
+                </Show>
+                <label class="field-label field-label--full"><span>补充说明</span>
+                  <textarea rows={5} value={capabilitySourceNotes()} onInput={(event) => setCapabilitySourceNotes(event.currentTarget.value)} placeholder="目标场景、预期命令、凭据边界" />
+                </label>
+              </div>
+              <div class="capability-ingest-status">
+                <StatusBadge tone={capabilityPackageIngestState().running ? "warning" : capabilityPackageIngestState().status === "completed" ? "success" : "muted"}>
+                  {capabilityPackageIngestState().status || "idle"}
+                </StatusBadge>
+                <Show when={capabilityPackageIngestState().agentRunId}>
+                  <code>{capabilityPackageIngestState().agentRunId}</code>
+                </Show>
+              </div>
+            </div>
+
+            <div class="capability-draft-panel">
+              <div class="settings-section-heading settings-section-heading--compact">
+                <span>待确认草案</span>
+                <StatusBadge tone={currentDraftReady() ? "success" : "muted"}>
+                  {currentDraftReady() ? "ready" : "empty"}
+                </StatusBadge>
+              </div>
+              <Show when={Object.keys(currentCapabilityDraft()).length > 0} fallback={<p class="settings-empty-note">暂无草案。</p>}>
+                <div class="capability-draft-card">
+                  <div class="capability-package-card__head">
+                    <div>
+                      <strong>{stringValue(currentCapabilityDraft().id, "未命名能力包")}</strong>
+                      <small>{stringValue(currentCapabilityDraft().name)}</small>
+                    </div>
+                    <StatusBadge>{stringValue(currentCapabilityDraft().risk_level, "unrated")}</StatusBadge>
+                  </div>
+                  <Show when={stringValue(currentCapabilityDraft().description)}>
+                    <p>{stringValue(currentCapabilityDraft().description)}</p>
+                  </Show>
+                  <div class="capability-component-list">
+                    <For each={currentDraftComponents()}>
+                      {(component) => (
+                        <div class="capability-component-card">
+                          <div>
+                            <strong>{stringValue(component.id, stringValue(component.name, "component"))}</strong>
+                            <small>{stringValue(component.description) || stringValue(component.name)}</small>
+                          </div>
+                          <StatusBadge>{stringValue(component.kind, "component")}</StatusBadge>
+                        </div>
+                      )}
+                    </For>
+                  </div>
+                  <Show when={stringArrayValue(currentCapabilityDraft().install_plan).length}>
+                    <div class="toolchain-detail-section">
+                      <span>安装方式</span>
+                      <ul class="capability-text-list">
+                        <For each={stringArrayValue(currentCapabilityDraft().install_plan)}>
+                          {(item) => <li>{item}</li>}
+                        </For>
+                      </ul>
+                    </div>
+                  </Show>
+                  <Show when={stringArrayValue(currentCapabilityDraft().usage).length}>
+                    <div class="toolchain-detail-section">
+                      <span>调用方式</span>
+                      <ul class="capability-text-list">
+                        <For each={stringArrayValue(currentCapabilityDraft().usage)}>
+                          {(item) => <li>{item}</li>}
+                        </For>
+                      </ul>
+                    </div>
+                  </Show>
+                  <Show when={stringArrayValue(currentCapabilityDraft().credentials).length}>
+                    <div class="toolchain-detail-section">
+                      <span>凭据需求</span>
+                      <small>{stringArrayValue(currentCapabilityDraft().credentials).join(", ")}</small>
+                    </div>
+                  </Show>
+                  <Show when={currentDraftEvidence().length}>
+                    <div class="toolchain-detail-section">
+                      <span>证据来源</span>
+                      <div class="toolchain-evidence-list">
+                        <For each={currentDraftEvidence().slice(0, 5)}>
+                          {(evidence) => (
+                            <div>
+                              <strong>{stringValue(evidence.title) || stringValue(evidence.url) || "evidence"}</strong>
+                              <small>{stringValue(evidence.excerpt) || stringValue(evidence.url)}</small>
+                            </div>
+                          )}
+                        </For>
                       </div>
-                    )}
-                  </For>
+                    </div>
+                  </Show>
                 </div>
               </Show>
             </div>
-            <div class="settings-detail-panel">
-              <Show when={currentCapabilityPackage()} fallback={<p class="settings-empty-note">选择一个能力包查看详情。</p>}>
+          </div>
+
+          <div class="settings-section-heading settings-section-heading--compact">
+            <span>已安装能力包</span>
+            <StatusBadge>{String(installedCapabilityPackages().length)}</StatusBadge>
+          </div>
+          <Show when={installedCapabilityPackages().length} fallback={<p class="settings-empty-note">暂无已确认安装的能力包。</p>}>
+            <div class="capability-package-list">
+              <For each={installedCapabilityPackages()}>
                 {(pkg) => (
-                  <div class="settings-form-grid">
-                    <label class="field-label"><span>能力包 ID</span>
-                      <input value={selectedCapabilityPackageId()} onChange={(event) => renameCapabilityPackage(event.currentTarget.value)} />
-                    </label>
-                    <label class="field-label"><span>名称</span>
-                      <input value={pkg().name} onInput={(event) => updateCapabilityPackage({ name: event.currentTarget.value })} />
-                    </label>
-                    <label class="field-label field-label--full"><span>描述</span>
-                      <input value={pkg().description} onInput={(event) => updateCapabilityPackage({ description: event.currentTarget.value })} />
-                    </label>
-                    <label class="field-label field-label--full"><span>MCP Servers</span>
-                      <ChoiceMultiSelect
-                        ariaLabel="MCP Servers"
-                        options={mcpChoiceOptions()}
-                        valueText={pkg().mcpServersText}
-                        onChangeText={(next) => updateCapabilityPackage({ mcpServersText: next })}
-                        emptyMessage="暂无可选 MCP；可先在组件清单中新增。"
-                        searchPlaceholder="搜索 MCP"
-                        unknownLabel="自定义 MCP"
-                      />
-                    </label>
-                    <label class="field-label field-label--full"><span>Skills</span>
-                      <ChoiceMultiSelect
-                        ariaLabel="Skills"
-                        options={skillChoiceOptions()}
-                        valueText={pkg().skillsText}
-                        onChangeText={(next) => updateCapabilityPackage({ skillsText: next })}
-                        emptyMessage="暂无可选 Skill；可先启用扫描或新增组件。"
-                        searchPlaceholder="搜索 Skill"
-                        unknownLabel="自定义 Skill"
-                      />
-                    </label>
-                    <label class="field-label field-label--full"><span>CLI Tools</span>
-                      <ChoiceMultiSelect
-                        ariaLabel="CLI Tools"
-                        options={cliChoiceOptions()}
-                        valueText={pkg().cliToolsText}
-                        onChangeText={(next) => updateCapabilityPackage({ cliToolsText: next })}
-                        emptyMessage="暂无可选 CLI；可先在组件清单中新增。"
-                        searchPlaceholder="搜索 CLI"
-                        unknownLabel="自定义 CLI"
-                      />
-                    </label>
-                    <label class="field-label"><span>Source</span>
-                      <input value={pkg().source} onInput={(event) => updateCapabilityPackage({ source: event.currentTarget.value })} />
-                    </label>
+                  <div class="capability-package-card">
+                    <div class="capability-package-card__head">
+                      <div>
+                        <strong>{pkg.name || pkg.id}</strong>
+                        <small>{pkg.id} · {capabilitySourceLabel(pkg.source)}</small>
+                      </div>
+                      <StatusBadge tone={pkg.enabled ? "success" : "muted"}>{pkg.enabled ? "enabled" : "disabled"}</StatusBadge>
+                    </div>
+                    <Show when={pkg.description}>
+                      <p>{pkg.description}</p>
+                    </Show>
+                    <div class="capability-component-chips">
+                      <For each={pkg.components}>
+                        {(componentId) => <span>{componentSummary(componentId)}</span>}
+                      </For>
+                    </div>
+                    <div class="capability-package-card__meta">
+                      <small>状态：{pkg.status || "installed"}</small>
+                      <Show when={pkg.riskLevel}><small>风险：{pkg.riskLevel}</small></Show>
+                      <Show when={pkg.credentials.length}><small>凭据：{pkg.credentials.join(", ")}</small></Show>
+                    </div>
+                    <div class="settings-actions settings-actions--right">
+                      <button class="btn btn-secondary btn--compact" type="button" disabled={pkg.id === "environment"} onClick={() => enableCapabilityPackage(pkg.id, !pkg.enabled)}>
+                        {pkg.enabled ? "停用" : "启用"}
+                      </button>
+                      <button class="btn btn-danger btn--compact" type="button" disabled={pkg.id === "environment"} onClick={() => deleteCapabilityPackage(pkg.id)}>
+                        删除
+                      </button>
+                    </div>
                   </div>
                 )}
-              </Show>
+              </For>
             </div>
-          </div>
+          </Show>
         </section>
 
         <section class="settings-section settings-section--flat" classList={{ "settings-section--hidden": section() !== "packages" }}>
           <div class="settings-section-heading">
             <span>Skills 发现</span>
-            <StatusBadge tone={skillsEnabled() ? "success" : "muted"}>{skillsEnabled() ? "启用" : "关闭"}</StatusBadge>
+            <div class="settings-actions settings-actions--right">
+              <StatusBadge tone={skillsEnabled() ? "success" : "muted"}>{skillsEnabled() ? "启用" : "关闭"}</StatusBadge>
+              <button class="btn btn-primary" type="button" disabled={!capabilityDirty()} onClick={saveSkillsSettings}>
+                <span class="codicon codicon-save" aria-hidden="true" />
+                保存 Skills
+              </button>
+            </div>
           </div>
+          <Show when={capabilitySaved() && !capabilityDirty()}>
+            <div class="settings-success">Skills 设置已保存并重载。</div>
+          </Show>
           <div class="settings-form-grid settings-form-grid--two">
             <label class="field-label field-label--checkbox">
               <input type="checkbox" checked={skillsEnabled()} onChange={(event) => { setSkillsEnabled(event.currentTarget.checked); markCapabilityDirty() }} />
