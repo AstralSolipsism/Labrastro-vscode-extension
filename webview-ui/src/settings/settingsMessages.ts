@@ -100,6 +100,26 @@ export const settingsMessages = {
     port.postMessage({ type: "modelCapabilities.apply", payload: { profile_id: profileId } })
   },
 
+  startCapabilityPackageIngest(port: SettingsMessagePort, payload: Record<string, unknown>): void {
+    port.postMessage({ type: "capabilityPackage.ingest.start", payload })
+  },
+
+  capabilityPackageIngestStatus(port: SettingsMessagePort, agentRunId: string): void {
+    port.postMessage({ type: "capabilityPackage.ingest.status", payload: { agent_run_id: agentRunId } })
+  },
+
+  acceptCapabilityPackageDraft(port: SettingsMessagePort, draft: Record<string, unknown>): void {
+    port.postMessage({ type: "capabilityPackage.draft.accept", payload: { draft } })
+  },
+
+  deleteCapabilityPackage(port: SettingsMessagePort, packageId: string): void {
+    port.postMessage({ type: "capabilityPackage.delete", payload: { package_id: packageId } })
+  },
+
+  enableCapabilityPackage(port: SettingsMessagePort, packageId: string, enabled: boolean): void {
+    port.postMessage({ type: "capabilityPackage.enable", payload: { package_id: packageId, enabled } })
+  },
+
   runToolchainIngest(port: SettingsMessagePort, payload: Record<string, unknown>): void {
     port.postMessage({ type: "toolchain.ingest.run", payload })
   },

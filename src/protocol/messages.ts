@@ -39,6 +39,10 @@ export type HostToWebviewMessageType =
   | "auth.users"
   | "autoApproval.state"
   | "backend.features"
+  | "capabilityPackage.actionResult"
+  | "capabilityPackage.error"
+  | "capabilityPackage.ingest.started"
+  | "capabilityPackage.ingest.status"
   | "chat.cancelled"
   | "chat.done"
   | "chat.error"
@@ -124,6 +128,11 @@ export type WebviewToHostMessageType =
   | "auth.users.update"
   | "autoApproval.get"
   | "autoApproval.update"
+  | "capabilityPackage.delete"
+  | "capabilityPackage.draft.accept"
+  | "capabilityPackage.enable"
+  | "capabilityPackage.ingest.start"
+  | "capabilityPackage.ingest.status"
   | "chat.cancel"
   | "chat.followup"
   | "chat.followup.cancel"
@@ -229,6 +238,10 @@ const HOST_TO_WEBVIEW_TYPES = new Set<HostToWebviewMessageType>([
   "auth.users",
   "autoApproval.state",
   "backend.features",
+  "capabilityPackage.actionResult",
+  "capabilityPackage.error",
+  "capabilityPackage.ingest.started",
+  "capabilityPackage.ingest.status",
   "chat.cancelled",
   "chat.done",
   "chat.error",
@@ -309,6 +322,11 @@ const WEBVIEW_TO_HOST_TYPES = new Set<WebviewToHostMessageType>([
   "auth.users.update",
   "autoApproval.get",
   "autoApproval.update",
+  "capabilityPackage.delete",
+  "capabilityPackage.draft.accept",
+  "capabilityPackage.enable",
+  "capabilityPackage.ingest.start",
+  "capabilityPackage.ingest.status",
   "chat.cancel",
   "chat.followup",
   "chat.followup.cancel",

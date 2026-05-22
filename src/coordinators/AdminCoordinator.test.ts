@@ -87,6 +87,8 @@ function coordinator() {
     postConnectionState: vi.fn(),
     postAdminState: vi.fn(),
     refreshBackendFeatures: vi.fn(),
+    refreshToolchainState: vi.fn(),
+    refreshEnvironmentManifest: vi.fn(),
     broadcastState: vi.fn(),
     runAdminAction: vi.fn(async (_post, action) => {
       await action()
@@ -290,7 +292,7 @@ describe("AdminCoordinator", () => {
     expect(options.postAdminState).toHaveBeenCalled()
   })
 
-  it("refreshes model capability status after successful login", async () => {
+  it("refreshes dependent admin state after successful login", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
     options.client.login.mockResolvedValue({
@@ -307,6 +309,9 @@ describe("AdminCoordinator", () => {
     }, post)).resolves.toBe(true)
 
     expect(options.client.modelCapabilitiesStatus).toHaveBeenCalled()
+    expect(options.refreshBackendFeatures).toHaveBeenCalledWith(post)
+    expect(options.refreshToolchainState).toHaveBeenCalledWith(post)
+    expect(options.refreshEnvironmentManifest).toHaveBeenCalledWith(post)
     expect(post).toHaveBeenCalledWith({
       type: "modelCapabilities.state",
       payload: {
@@ -314,6 +319,29 @@ describe("AdminCoordinator", () => {
         model_capabilities: { enabled: true, model_count: 2 },
       },
     })
+  })
+
+  it("keeps toolchain and environment state untouched after failed login", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    options.client.login.mockRejectedValue(new Error("bad credentials"))
+    options.connectionErrorState.mockReturnValue({
+      status: "error",
+      authenticated: false,
+      message: "登录失败：bad credentials",
+    })
+
+    await expect(subject.handleMessage({
+      type: "connection.login",
+      hostUrl: "https://dogcode.outlune.com",
+      username: "superadmin",
+      password: "wrong",
+    }, post)).resolves.toBe(true)
+
+    expect(options.refreshToolchainState).not.toHaveBeenCalled()
+    expect(options.refreshEnvironmentManifest).not.toHaveBeenCalled()
+    expect(options.refreshBackendFeatures).not.toHaveBeenCalled()
+    expect(options.client.modelCapabilitiesStatus).not.toHaveBeenCalled()
   })
 
   it("applies selected model capability recommendation through admin action", async () => {

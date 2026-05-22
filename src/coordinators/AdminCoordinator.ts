@@ -41,6 +41,8 @@ export interface AdminCoordinatorOptions {
   postConnectionState: (post: PostMessage) => Promise<void>
   postAdminState: (post: PostMessage) => Promise<void>
   refreshBackendFeatures: (post?: PostMessage) => Promise<void>
+  refreshToolchainState: (post: PostMessage) => Promise<void>
+  refreshEnvironmentManifest: (post: PostMessage) => Promise<void>
   broadcastState: (payload: Record<string, unknown>) => void
   runAdminAction: (
     post: PostMessage,
@@ -92,6 +94,8 @@ export class AdminCoordinator {
           await this.options.postAdminState(post)
           await this.postModelCapabilitiesStatus(post)
           await this.options.refreshBackendFeatures(post)
+          await this.options.refreshToolchainState(post)
+          await this.options.refreshEnvironmentManifest(post)
         } catch (error) {
           const failureMessage = isRemoteError(error)
             ? `登录失败：${errorMessage(error)}`
@@ -299,6 +303,47 @@ export class AdminCoordinator {
       case "modelCapabilities.apply":
         if (await this.options.runAdminAction(post, () => this.options.client.modelCapabilitiesApply(objectValue(message.payload)))) {
           await this.options.postAdminState(post)
+        }
+        return true
+      case "capabilityPackage.ingest.start":
+        try {
+          post({
+            type: "capabilityPackage.ingest.started",
+            payload: await this.options.client.capabilityPackageIngestStart(objectValue(message.payload)),
+          })
+        } catch (error) {
+          post({ type: "capabilityPackage.error", message: errorMessage(error) })
+        }
+        return true
+      case "capabilityPackage.ingest.status":
+        try {
+          post({
+            type: "capabilityPackage.ingest.status",
+            payload: await this.options.client.capabilityPackageIngestStatus(objectValue(message.payload)),
+          })
+        } catch (error) {
+          post({ type: "capabilityPackage.error", message: errorMessage(error) })
+        }
+        return true
+      case "capabilityPackage.draft.accept":
+        if (await this.options.runAdminAction(post, () => this.options.client.capabilityPackageDraftAccept(objectValue(message.payload)))) {
+          await this.options.postAdminState(post)
+          await this.options.refreshToolchainState(post)
+          await this.options.refreshEnvironmentManifest(post)
+        }
+        return true
+      case "capabilityPackage.delete":
+        if (await this.options.runAdminAction(post, () => this.options.client.capabilityPackageDelete(objectValue(message.payload)))) {
+          await this.options.postAdminState(post)
+          await this.options.refreshToolchainState(post)
+          await this.options.refreshEnvironmentManifest(post)
+        }
+        return true
+      case "capabilityPackage.enable":
+        if (await this.options.runAdminAction(post, () => this.options.client.capabilityPackageEnable(objectValue(message.payload)))) {
+          await this.options.postAdminState(post)
+          await this.options.refreshToolchainState(post)
+          await this.options.refreshEnvironmentManifest(post)
         }
         return true
       case "openFile":

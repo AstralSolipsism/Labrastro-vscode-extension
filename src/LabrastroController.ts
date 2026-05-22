@@ -123,6 +123,8 @@ export class LabrastroController implements vscode.Disposable {
       postConnectionState: this.postConnectionState.bind(this),
       postAdminState: this.postAdminState.bind(this),
       refreshBackendFeatures: this.refreshBackendFeatures.bind(this),
+      refreshToolchainState: this.refreshToolchainState.bind(this),
+      refreshEnvironmentManifest: this.refreshEnvironmentManifest.bind(this),
       broadcastState: this.broadcastWebviewMessage.bind(this),
       runAdminAction: this.runAdminAction.bind(this),
       openFileTarget: this.openFileTarget.bind(this),

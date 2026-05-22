@@ -222,6 +222,9 @@ interface ToolchainRecord {
   risk_level?: string
   last_action?: string
   last_updated?: string
+  component_id?: string
+  package_ids?: string[]
+  managed_by?: string
   install_prompt?: string
   verify_prompt?: string
   notes?: string[]
@@ -249,6 +252,9 @@ interface ToolchainDashboardItem {
   enabled: boolean
   last_action: string
   last_updated: string
+  component_id: string
+  package_ids: string[]
+  managed_by: string
 }
 
 interface ExecutorFeatureView {
@@ -269,10 +275,24 @@ interface CapabilityPackageView {
   id: string
   name: string
   description: string
-  mcpServers: string[]
-  skills: string[]
-  cliTools: string[]
-  source: string
+  components: string[]
+  enabled: boolean
+  status: string
+  source: Record<string, unknown>
+  installPlan: string[]
+  usage: string[]
+  evidence: Array<Record<string, string>>
+  credentials: string[]
+  riskLevel: string
+}
+
+interface CapabilityPackageIngestState {
+  running: boolean
+  agentRunId: string
+  status: string
+  error: string
+  draft?: Record<string, unknown>
+  source?: Record<string, unknown>
 }
 
 interface ToolchainEditorState {
@@ -858,14 +878,20 @@ function executorFeatureValue(value: unknown): ExecutorFeatureView {
 
 function capabilityPackageValue(id: string, value: unknown): CapabilityPackageView {
   const item = objectValue(value)
+  const source = objectValue(item.source)
   return {
     id,
     name: stringValue(item.name, id),
     description: stringValue(item.description),
-    mcpServers: stringArray(item.mcp_servers),
-    skills: stringArray(item.skills),
-    cliTools: stringArray(item.cli_tools),
-    source: stringValue(item.source),
+    components: stringArray(item.components),
+    enabled: item.enabled !== false,
+    status: stringValue(item.status),
+    source,
+    installPlan: stringArray(item.install_plan),
+    usage: stringArray(item.usage),
+    evidence: normalizeEvidence(item.evidence),
+    credentials: stringArray(item.credentials),
+    riskLevel: stringValue(item.risk_level),
   }
 }
 
@@ -934,6 +960,9 @@ function toolchainRecordToDashboardItem(record: ToolchainRecord): ToolchainDashb
     enabled: boolValue(record.enabled, true),
     last_action: stringValue(record.last_action),
     last_updated: stringValue(record.last_updated),
+    component_id: stringValue(record.component_id),
+    package_ids: stringArray(record.package_ids),
+    managed_by: stringValue(record.managed_by),
   }
 }
 
@@ -968,6 +997,9 @@ function normalizeToolchainDashboardItems(
         enabled: boolValue(item.enabled, true),
         last_action: stringValue(item.last_action),
         last_updated: stringValue(item.last_updated),
+        component_id: stringValue(item.component_id),
+        package_ids: stringArray(item.package_ids),
+        managed_by: stringValue(item.managed_by),
       }))
     : (["cli", "mcp", "skill"] as ToolchainKind[]).flatMap((kind) =>
         fallbackGroups[kind].map(toolchainRecordToDashboardItem)
@@ -1096,6 +1128,9 @@ function dashboardItemToRecord(item: ToolchainDashboardItem): ToolchainRecord {
     risk_level: item.risk_level,
     last_action: item.last_action,
     last_updated: item.last_updated,
+    component_id: item.component_id,
+    package_ids: item.package_ids,
+    managed_by: item.managed_by,
   }
 }
 
@@ -1456,6 +1491,16 @@ export function createSettingsController(props: SettingsViewProps) {
   const [ingestKindHint, setIngestKindHint] = createSignal<ToolchainKindFilter>("all")
   const [ingestNameHint, setIngestNameHint] = createSignal("")
   const [ingestPlacementHint, setIngestPlacementHint] = createSignal("")
+  const [capabilitySourceType, setCapabilitySourceType] = createSignal<"github_repo" | "docs_url" | "project_notes">("github_repo")
+  const [capabilitySourceUrl, setCapabilitySourceUrl] = createSignal("")
+  const [capabilitySourceNotes, setCapabilitySourceNotes] = createSignal("")
+  const [capabilityPackageIdHint, setCapabilityPackageIdHint] = createSignal("")
+  const [capabilityPackageIngestState, setCapabilityPackageIngestState] = createSignal<CapabilityPackageIngestState>({
+    running: false,
+    agentRunId: "",
+    status: "idle",
+    error: "",
+  })
   const [toolchainRunSerial, setToolchainRunSerial] = createSignal(true)
   const [serverMaxRunningAgents, setServerMaxRunningAgents] = createSignal(4)
   const [serverMaxShellsPerAgent, setServerMaxShellsPerAgent] = createSignal(1)
@@ -1936,6 +1981,7 @@ export function createSettingsController(props: SettingsViewProps) {
   })
 
   let agentRunPollTimer: ReturnType<typeof setInterval> | undefined
+  let capabilityIngestPollTimer: ReturnType<typeof setInterval> | undefined
 
   const stopAgentRunPolling = () => {
     if (agentRunPollTimer) {
@@ -1965,6 +2011,24 @@ export function createSettingsController(props: SettingsViewProps) {
   }
 
   onCleanup(stopAgentRunPolling)
+
+  const stopCapabilityIngestPolling = () => {
+    if (capabilityIngestPollTimer) {
+      clearInterval(capabilityIngestPollTimer)
+      capabilityIngestPollTimer = undefined
+    }
+  }
+
+  const startCapabilityIngestPolling = (agentRunId: string) => {
+    stopCapabilityIngestPolling()
+    if (!agentRunId) return
+    settingsMessages.capabilityPackageIngestStatus(vscode, agentRunId)
+    capabilityIngestPollTimer = setInterval(() => {
+      settingsMessages.capabilityPackageIngestStatus(vscode, agentRunId)
+    }, 2000)
+  }
+
+  onCleanup(stopCapabilityIngestPolling)
 
   onMount(() => {
     const unsubscribe = vscode.onMessage((msg) => {
@@ -2012,6 +2076,45 @@ export function createSettingsController(props: SettingsViewProps) {
         setAgentRunSubmitting(false)
         stopAgentRunPolling()
         setAgentRunError(typeof msg.message === "string" ? msg.message : "Runtime request failed")
+      }
+      if (msg.type === "capabilityPackage.ingest.started" && typeof msg.payload === "object" && msg.payload) {
+        const payload = objectValue(msg.payload)
+        const task = objectValue(payload.agent_run)
+        const agentRunId = stringValue(task.id || task.agent_run_id)
+        setCapabilityPackageIngestState((current) => ({
+          ...current,
+          running: true,
+          agentRunId,
+          status: stringValue(task.status, "queued"),
+          source: objectValue(payload.source),
+          error: "",
+        }))
+        if (agentRunId) startCapabilityIngestPolling(agentRunId)
+      }
+      if (msg.type === "capabilityPackage.ingest.status" && typeof msg.payload === "object" && msg.payload) {
+        const payload = objectValue(msg.payload)
+        const task = objectValue(payload.agent_run)
+        const status = stringValue(task.status, "queued")
+        const draft = objectValue(payload.draft)
+        setCapabilityPackageIngestState((current) => ({
+          ...current,
+          running: !["completed", "failed", "cancelled", "blocked"].includes(status),
+          agentRunId: stringValue(task.id || task.agent_run_id, current.agentRunId),
+          status,
+          draft: Object.keys(draft).length ? draft : current.draft,
+          error: "",
+        }))
+        if (["completed", "failed", "cancelled", "blocked"].includes(status)) {
+          stopCapabilityIngestPolling()
+        }
+      }
+      if (msg.type === "capabilityPackage.error") {
+        stopCapabilityIngestPolling()
+        setCapabilityPackageIngestState((current) => ({
+          ...current,
+          running: false,
+          error: typeof msg.message === "string" ? msg.message : "Capability package request failed",
+        }))
       }
     })
     onCleanup(unsubscribe)
@@ -2441,7 +2544,46 @@ const refreshAdmin = () => {
     })
   }
   const cancelToolchainIngest = () => settingsMessages.cancelToolchainIngest(vscode)
-  const updateAutoApproval = (patch: {
+  const startCapabilityPackageIngest = () => {
+    const sourceType = capabilitySourceType()
+    const url = capabilitySourceUrl().trim()
+    const notes = capabilitySourceNotes().trim()
+    if (sourceType !== "project_notes" && !url) return
+    if (sourceType === "project_notes" && !notes) return
+    setCapabilityPackageIngestState({
+      running: true,
+      agentRunId: "",
+      status: "starting",
+      error: "",
+    })
+    settingsMessages.startCapabilityPackageIngest(vscode, {
+      source: {
+        type: sourceType,
+        url,
+        notes,
+        package_id_hint: capabilityPackageIdHint().trim(),
+      },
+    })
+  }
+  const refreshCapabilityPackageIngestStatus = () => {
+    const agentRunId = capabilityPackageIngestState().agentRunId
+    if (!agentRunId) return
+    settingsMessages.capabilityPackageIngestStatus(vscode, agentRunId)
+  }
+  const acceptCapabilityPackageDraft = () => {
+    const draft = capabilityPackageIngestState().draft
+    if (!draft) return
+    settingsMessages.acceptCapabilityPackageDraft(vscode, draft)
+  }
+  const deleteCapabilityPackage = (packageId: string) => {
+    if (!packageId || packageId === "environment") return
+    settingsMessages.deleteCapabilityPackage(vscode, packageId)
+  }
+  const enableCapabilityPackage = (packageId: string, enabled: boolean) => {
+    if (!packageId) return
+    settingsMessages.enableCapabilityPackage(vscode, packageId, enabled)
+  }
+  const updateAutoApproval = (patch: {
     options?: Record<string, boolean>
     allowedCommands?: string[]
     deniedCommands?: string[]
@@ -3027,6 +3169,16 @@ const refreshAdmin = () => {
     setIngestNameHint,
     ingestPlacementHint,
     setIngestPlacementHint,
+    capabilitySourceType,
+    setCapabilitySourceType,
+    capabilitySourceUrl,
+    setCapabilitySourceUrl,
+    capabilitySourceNotes,
+    setCapabilitySourceNotes,
+    capabilityPackageIdHint,
+    setCapabilityPackageIdHint,
+    capabilityPackageIngestState,
+    setCapabilityPackageIngestState,
     toolchainRunSerial,
     setToolchainRunSerial,
     serverMaxRunningAgents,
@@ -3203,6 +3355,11 @@ const refreshAdmin = () => {
     saveServerSettings,
     runToolchainIngest,
     cancelToolchainIngest,
+    startCapabilityPackageIngest,
+    refreshCapabilityPackageIngestStatus,
+    acceptCapabilityPackageDraft,
+    deleteCapabilityPackage,
+    enableCapabilityPackage,
     updateAutoApproval,
     addCommandRule,
     removeCommandRule,

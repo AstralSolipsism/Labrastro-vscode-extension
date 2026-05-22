@@ -451,6 +451,26 @@ export class LabrastroRemoteClient {
     return this.authenticatedPost("/remote/admin/models/activate", payload)
   }
 
+  async capabilityPackageIngestStart(payload: JsonObject): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/capability-packages/ingest/start", payload)
+  }
+
+  async capabilityPackageIngestStatus(payload: JsonObject): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/capability-packages/ingest/status", payload)
+  }
+
+  async capabilityPackageDraftAccept(payload: JsonObject): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/capability-packages/drafts/accept", payload)
+  }
+
+  async capabilityPackageDelete(payload: JsonObject): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/capability-packages/delete", payload)
+  }
+
+  async capabilityPackageEnable(payload: JsonObject): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/capability-packages/enable", payload)
+  }
+
   async toolchainList(): Promise<JsonObject> {
     return this.authenticatedPost("/remote/admin/toolchains/list", {})
   }
