@@ -80,7 +80,8 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
 
   const [section, setSection] = createSignal<AgentConfigSection>("profiles")
   const profileIds = () => Object.keys(profileDrafts())
-  const agentIds = () => Object.keys(agentDrafts())
+  const agentIds = () => Object.keys(agentDrafts()).filter((id) => agentDrafts()[id]?.visibility === "user")
+  const systemAgentIds = () => Object.keys(agentDrafts()).filter((id) => agentDrafts()[id]?.visibility !== "user")
   const mcpChoiceOptions = () => registeredMcpServers().map((id: string) => ({ id, label: id, kind: "MCP" }))
   const capabilityChoiceOptions = () => capabilityPackageOptions().map((id: string) => ({ id, label: id, kind: "能力包" }))
 
@@ -285,7 +286,7 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
       <section class="settings-section settings-section--flat" classList={{ "settings-section--hidden": section() !== "agents" }}>
         <div class="settings-section-heading">
           <span>{t("agentConfig.agents")}</span>
-          <StatusBadge tone="muted">{String(Object.keys(agentDrafts()).length)}</StatusBadge>
+          <StatusBadge tone="muted">{String(agentIds().length)}</StatusBadge>
         </div>
         <div class="settings-master-detail">
           <div class="settings-master-list">
@@ -295,7 +296,7 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
                 {t("agentConfig.agent.add")}
               </button>
             </div>
-            <Show when={Object.keys(agentDrafts()).length === 0}>
+            <Show when={agentIds().length === 0}>
               <p class="settings-empty-note">{t("agentConfig.agent.empty")}</p>
             </Show>
             <SelectableList
@@ -315,7 +316,20 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
                 </button>
               )}
             />
-          </div>
+            <Show when={systemAgentIds().length > 0}>
+              <div class="settings-system-agent-list">
+                <small>{t("agentConfig.agent.systemAgents")}</small>
+                <For each={systemAgentIds()}>
+                  {(aid) => (
+                    <div class="settings-system-agent">
+                      <strong>{agentDrafts()[aid]?.name || aid}</strong>
+                      <span>{agentDrafts()[aid]?.visibility}</span>
+                    </div>
+                  )}
+                </For>
+              </div>
+            </Show>
+          </div>
           <div class="settings-detail-panel">
             <Show when={currentAgentDraft()} fallback={<p class="settings-empty-note">{t("agentConfig.agent.noSelection")}</p>}>
               <div class="settings-form-grid">
@@ -347,11 +361,29 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
                 <label class="field-label agent-config-toggle">
                   <input
                     type="checkbox"
-                    checked={currentAgentDraft()!.entrypoint}
-                    onChange={(e) => updateAgentField("entrypoint", e.currentTarget.checked)}
+                    checked={currentAgentDraft()!.chat_entrypoint}
+                    onChange={(e) => updateAgentField("chat_entrypoint", e.currentTarget.checked)}
                   />
                   <span>{t("agentConfig.agent.entrypoint")}</span>
                   <small class="field-help">{t("agentConfig.agent.entrypointDesc")}</small>
+                </label>
+                <label class="field-label agent-config-toggle">
+                  <input
+                    type="checkbox"
+                    checked={currentAgentDraft()!.delegable}
+                    onChange={(e) => updateAgentField("delegable", e.currentTarget.checked)}
+                  />
+                  <span>{t("agentConfig.agent.delegable")}</span>
+                  <small class="field-help">{t("agentConfig.agent.delegableDesc")}</small>
+                </label>
+                <label class="field-label agent-config-toggle">
+                  <input
+                    type="checkbox"
+                    checked={currentAgentDraft()!.taskflow_eligible}
+                    onChange={(e) => updateAgentField("taskflow_eligible", e.currentTarget.checked)}
+                  />
+                  <span>{t("agentConfig.agent.taskflowEligible")}</span>
+                  <small class="field-help">{t("agentConfig.agent.taskflowEligibleDesc")}</small>
                 </label>
 
                 <label class="field-label"><span>{t("agentConfig.agent.runtimeProfile")}</span>
@@ -428,6 +460,10 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
                     <label class="field-label field-label--full"><span>{t("agentConfig.agent.credentialRefs")}</span>
                       <textarea rows={3} value={currentAgentDraft()!.credentialRefsText} onInput={(e) => updateAgentField("credentialRefsText", e.currentTarget.value)} placeholder={t("agentConfig.agent.credentialRefsPlaceholder")} />
                       <small class="field-help">{t("agentConfig.agent.credentialRefsDesc")}</small>
+                    </label>
+                    <label class="field-label field-label--full"><span>{t("agentConfig.agent.systemFlowOnly")}</span>
+                      <textarea rows={3} value={currentAgentDraft()!.systemFlowOnlyText} onInput={(e) => updateAgentField("systemFlowOnlyText", e.currentTarget.value)} />
+                      <small class="field-help">{t("agentConfig.agent.systemFlowOnlyDesc")}</small>
                     </label>
                   </div>
                 </details>

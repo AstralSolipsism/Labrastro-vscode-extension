@@ -6,22 +6,13 @@ import { DialogSurface } from "../../components/common/interaction"
 import { StatusBadge } from "../components/StatusBadge"
 import { ChoiceMultiSelect } from "../components/ChoiceMultiSelect"
 import { settingsMessages } from "../settingsMessages"
+import { agentToolExecutionPolicyLabel, agentToolExecutionPolicyTitle } from "../toolchainCatalogLabels"
+import { TOOLCHAIN_SECTIONS, type ToolchainSection } from "../toolchainSections"
 import type { SettingsController } from "../useSettingsController"
 
 type EnvironmentEntryKind = "cli" | "mcp" | "skill"
 type ToolchainKind = EnvironmentEntryKind
 type ToolchainKindFilter = "all" | ToolchainKind
-type ToolchainSection = "dashboard" | "components" | "packages" | "actions" | "agentTools" | "ingest" | "logs"
-
-const TOOLCHAIN_SECTIONS: Array<{ id: ToolchainSection; label: string; icon: string }> = [
-  { id: "dashboard", label: "环境看板", icon: "dashboard" },
-  { id: "components", label: "组件清单", icon: "symbol-method" },
-  { id: "packages", label: "能力包", icon: "package" },
-  { id: "actions", label: "用户指令", icon: "terminal" },
-  { id: "agentTools", label: "Agent Tools", icon: "tools" },
-  { id: "ingest", label: "导入", icon: "cloud-download" },
-  { id: "logs", label: "运行日志", icon: "output" },
-]
 
 interface ToolchainRecord {
   kind: ToolchainKind
@@ -42,6 +33,7 @@ interface CapabilityPackageView {
   source: Record<string, unknown>
   installPlan: string[]
   usage: string[]
+  effectiveCapabilities: string[]
   credentials: string[]
   riskLevel: string
 }
@@ -89,7 +81,8 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
     rememberEnvironmentApprovalDecision,
     toolchainSummary,
     toolchainBehaviorError,
-    userActionCatalogItems,
+    chatCommandCatalogItems,
+    mentionProviderCatalogItems,
     agentToolCatalogItems,
     toolchainStatusFilter,
     setToolchainStatusFilter,
@@ -170,6 +163,7 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
           source: objectValue(item.source),
           installPlan: stringArrayValue(item.install_plan),
           usage: stringArrayValue(item.usage),
+          effectiveCapabilities: stringArrayValue(item.effective_capabilities),
           credentials: stringArrayValue(item.credentials),
           riskLevel: stringValue(item.risk_level),
         }
@@ -204,21 +198,50 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
   const actionSourceLabel = (source: string) => {
     if (source === "action_registry") return "ActionRegistry"
     if (source === "settings_ui") return "设置页"
+    if (source === "workspace") return "工作区"
+    if (source === "config") return "配置"
+    if (source === "behavior_catalog") return "行为目录"
     return source || "未知"
   }
-  const triggerSummary = (action: { triggers: Array<{ kind: string; value: string }> }) => {
-    if (!action.triggers.length) return "—"
-    return action.triggers.map((trigger) => `${trigger.kind}:${trigger.value}`).join("、")
+  const commandSemanticsLabel = (command: {
+    supportsArgs: boolean
+    argsHint: string
+    selectionBehavior: string
+    visibility: string
+  }) => {
+    const args = command.supportsArgs ? command.argsHint || "支持参数" : "无参数"
+    const behavior = command.selectionBehavior === "insert_for_args" ? "补全文本" : "选择即执行"
+    const visibility = command.visibility === "hidden" ? "隐藏" : "可见"
+    return `${args} · ${behavior} · ${visibility}`
   }
-  const approvalLabel = (value: string) => {
-    if (value === "allow") return "允许"
-    if (value === "warn") return "警告"
-    if (value === "deny") return "拒绝"
-    if (value === "require_approval") return "需批准"
-    if (value === "inherits_component_policy") return "继承组件策略"
-    return value || "—"
-  }
-
+  const userInstructionItems = createMemo(() => [
+    ...chatCommandCatalogItems().map((command: any) => ({
+      id: stringValue(command.id) || stringValue(command.name) || stringValue(command.trigger),
+      name: command.displayName || command.trigger || command.name,
+      description: command.description,
+      domain: command.featureId || "chat",
+      trigger: command.trigger || "—",
+      triggerKind: "/",
+      source: actionSourceLabel(command.sourceType),
+      ui: catalogListText(command.uiTargets),
+      interactive: "是",
+      semantics: commandSemanticsLabel(command),
+      registrationPath: command.registrationPath || "—",
+    })),
+    ...mentionProviderCatalogItems().map((provider: any) => ({
+      id: stringValue(provider.id) || stringValue(provider.name),
+      name: provider.displayName || provider.name,
+      description: provider.description,
+      domain: "reference_context",
+      trigger: provider.trigger || "@",
+      triggerKind: "@",
+      source: actionSourceLabel(provider.sourceType),
+      ui: "ChatView",
+      interactive: "是",
+      semantics: `reference_only · ${provider.insertFormat || "结构化引用"}`,
+      registrationPath: provider.registrationPath || "—",
+    })),
+  ])
   const markCapabilityDirty = () => {
     setCapabilityDirty(true)
     setCapabilitySaved(false)
@@ -536,40 +559,44 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
           </For>
         </nav>
 
-        <Show when={toolchainBehaviorError() && (section() === "actions" || section() === "agentTools")}>
+        <Show when={toolchainBehaviorError() && ["userActions", "agentTools"].includes(section())}>
           <div class="settings-error">行为目录加载失败：{toolchainBehaviorError()}</div>
         </Show>
 
-        <section class="settings-section settings-section--flat" classList={{ "settings-section--hidden": section() !== "actions" }}>
+        <section class="settings-section settings-section--flat" classList={{ "settings-section--hidden": section() !== "userActions" }}>
           <div class="settings-section-heading">
             <span>用户指令</span>
-            <StatusBadge>{String(userActionCatalogItems().length)}</StatusBadge>
+            <StatusBadge>{String(userInstructionItems().length)}</StatusBadge>
           </div>
-          <Show when={userActionCatalogItems().length} fallback={<p class="settings-empty-note">暂无用户指令。</p>}>
-            <div class="settings-table">
-              <div class="settings-table-row settings-table-row--head">
+          <p class="settings-empty-note">这里只展示用户能在 ChatView 通过 / 或 @ 主动唤起的行为；@ 引用始终是 reference_only，不授予 tool 权限。</p>
+          <Show when={userInstructionItems().length} fallback={<p class="settings-empty-note">暂无用户指令。</p>}>
+            <div class="settings-table settings-table--user-actions">
+              <div class="settings-table-row settings-table-row--user-actions settings-table-row--head">
                 <strong>指令</strong>
                 <strong>功能域</strong>
                 <strong>触发方式</strong>
                 <strong>来源</strong>
                 <strong>UI</strong>
+                <strong>执行语义</strong>
                 <strong>交互</strong>
+                <strong>注册路径</strong>
               </div>
-              <For each={userActionCatalogItems()}>
-                {(action) => (
-                  <div class="settings-table-row">
+              <For each={userInstructionItems()}>
+                {(item) => (
+                  <div class="settings-table-row settings-table-row--user-actions">
                     <div>
-                      <strong>{action.name}</strong>
-                      <Show when={action.description}>
-                        <small>{action.description}</small>
+                      <strong>{item.name}</strong>
+                      <Show when={item.description}>
+                        <small>{item.description}</small>
                       </Show>
                     </div>
-                    <span>{action.featureId || "—"}</span>
-                    <span>{triggerSummary(action)}</span>
-                    <span>{actionSourceLabel(action.sourceType)}</span>
-                    <span>{catalogListText(action.uiTargets)}</span>
-                    <span>{action.interactive ? "是" : "否"}</span>
-                    <code>{action.registrationPath || "—"}</code>
+                    <span>{item.domain}</span>
+                    <span>{item.triggerKind}:{item.trigger}</span>
+                    <span>{item.source}</span>
+                    <span>{item.ui}</span>
+                    <span>{item.semantics}</span>
+                    <span>{item.interactive}</span>
+                    <code>{item.registrationPath}</code>
                   </div>
                 )}
               </For>
@@ -583,35 +610,38 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
             <StatusBadge>{String(agentToolCatalogItems().length)}</StatusBadge>
           </div>
           <Show when={agentToolCatalogItems().length} fallback={<p class="settings-empty-note">暂无 Agent Tools。</p>}>
-            <div class="settings-table">
-              <div class="settings-table-row settings-table-row--head">
+            <div class="settings-table settings-table--agent-tools">
+              <div class="settings-table-row settings-table-row--agent-tools settings-table-row--head">
                 <strong>Tool</strong>
                 <strong>来源</strong>
                 <strong>启用</strong>
                 <strong>注册路径</strong>
                 <strong>能力包/组件</strong>
-                <strong>批准</strong>
+                <strong>模式</strong>
+                <strong title="运行时执行授权策略，不是每次后台任务都弹窗批准。">执行策略</strong>
               </div>
               <For each={agentToolCatalogItems()}>
                 {(tool) => (
-                  <div class="settings-table-row">
+                  <div class="settings-table-row settings-table-row--agent-tools">
                     <div>
                       <strong>{tool.displayName}</strong>
                       <Show when={tool.description}>
                         <small>{tool.description}</small>
                       </Show>
                     </div>
-                    <span>{tool.sourceLabel || tool.sourceType}</span>
-                    <span>{tool.enabled ? "是" : "否"}</span>
-                    <span>{tool.registrationPath || "—"}</span>
-                    <span>
+                    <span class="settings-table-cell">{tool.sourceLabel || tool.sourceType}</span>
+                    <span class="settings-table-cell settings-table-cell--center">{tool.enabled ? "是" : "否"}</span>
+                    <code class="settings-table-cell settings-table-cell--path" title={tool.registrationPath || ""}>{tool.registrationPath || "—"}</code>
+                    <span class="settings-table-cell settings-table-cell--relations">
                       {catalogListText([
                         ...tool.relatedPackageIds.map((id: string) => `包:${id}`),
                         ...tool.relatedComponents.map((id: string) => `组件:${id}`),
                       ])}
                     </span>
-                    <span>{approvalLabel(tool.approvalStatus)}</span>
-                    <code>{catalogListText(tool.modeRefs)}</code>
+                    <code class="settings-table-cell settings-table-cell--mode">{catalogListText(tool.modeRefs)}</code>
+                    <span class="settings-table-cell settings-table-cell--policy" title={agentToolExecutionPolicyTitle(tool.executionPolicy || tool.approvalStatus)}>
+                      {agentToolExecutionPolicyLabel(tool.executionPolicy || tool.approvalStatus)}
+                    </span>
                   </div>
                 )}
               </For>
@@ -1025,6 +1055,16 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
                       </ul>
                     </div>
                   </Show>
+                  <Show when={stringArrayValue(currentCapabilityDraft().effective_capabilities).length}>
+                    <div class="toolchain-detail-section">
+                      <span>增强能力</span>
+                      <ul class="capability-text-list">
+                        <For each={stringArrayValue(currentCapabilityDraft().effective_capabilities)}>
+                          {(item) => <li>{item}</li>}
+                        </For>
+                      </ul>
+                    </div>
+                  </Show>
                   <Show when={stringArrayValue(currentCapabilityDraft().credentials).length}>
                     <div class="toolchain-detail-section">
                       <span>凭据需求</span>
@@ -1069,6 +1109,16 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
                     </div>
                     <Show when={pkg.description}>
                       <p>{pkg.description}</p>
+                    </Show>
+                    <Show when={pkg.effectiveCapabilities.length}>
+                      <div class="toolchain-detail-section">
+                        <span>增强能力</span>
+                        <ul class="capability-text-list">
+                          <For each={pkg.effectiveCapabilities}>
+                            {(item) => <li>{item}</li>}
+                          </For>
+                        </ul>
+                      </div>
                     </Show>
                     <div class="capability-component-chips">
                       <For each={pkg.components}>

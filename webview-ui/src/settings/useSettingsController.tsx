@@ -73,6 +73,7 @@ type ToolchainKind = EnvironmentEntryKind
 type ToolchainKindFilter = "all" | ToolchainKind
 type ToolchainStatusFilter = "all" | "ready" | "missing" | "stopped" | "awaiting"
 const BUILT_IN_ENVIRONMENT_AGENT_ID = "environment_configurator"
+type AgentVisibility = "user" | "system" | "internal"
 type EnvironmentEntryStatus =
   | "unchecked"
   | "checking"
@@ -88,14 +89,40 @@ type EnvironmentEntryStatus =
   | "needs_review"
 type EnvironmentSnapshotStatus = "idle" | "running" | "completed" | "error" | "canceled"
 
-interface BehaviorTriggerView {
-  kind: string
-  value: string
+interface ChatCommandCatalogItem {
+  id: string
+  name: string
+  displayName: string
+  featureId: string
+  sourceType: string
+  registrationPath: string
+  description: string
+  triggerKind: string
+  trigger: string
   uiTargets: string[]
   requiredCapabilities: string[]
+  interactive: boolean
+  supportsArgs: boolean
+  argsHint: string
+  selectionBehavior: string
+  availableDuringRun: boolean
+  visibility: string
 }
 
-interface UserActionCatalogItem {
+interface MentionProviderCatalogItem {
+  id: string
+  name: string
+  displayName: string
+  sourceType: string
+  registrationPath: string
+  description: string
+  trigger: string
+  enabled: boolean
+  insertFormat: string
+  itemCount: number | null
+}
+
+interface UiActionCatalogItem {
   id: string
   name: string
   featureId: string
@@ -105,7 +132,7 @@ interface UserActionCatalogItem {
   uiTargets: string[]
   requiredCapabilities: string[]
   interactive: boolean
-  triggers: BehaviorTriggerView[]
+  triggers: Array<{ kind: string; value: string; uiTargets: string[]; requiredCapabilities: string[] }>
 }
 
 interface AgentToolCatalogItem {
@@ -121,6 +148,7 @@ interface AgentToolCatalogItem {
   relatedComponents: string[]
   modeRefs: string[]
   approvalStatus: string
+  executionPolicy: string
 }
 
 export interface SettingsViewProps {
@@ -316,6 +344,7 @@ interface CapabilityPackageView {
   source: Record<string, unknown>
   installPlan: string[]
   usage: string[]
+  effectiveCapabilities: string[]
   evidence: Array<Record<string, string>>
   credentials: string[]
   riskLevel: string
@@ -384,7 +413,11 @@ interface AgentDefinitionDraft {
   name: string
   description: string
   role: string
-  entrypoint: boolean
+  chat_entrypoint: boolean
+  visibility: AgentVisibility
+  delegable: boolean
+  taskflow_eligible: boolean
+  systemFlowOnlyText: string
 
   runtime_profile: string
   modelKey: string
@@ -458,7 +491,11 @@ function emptyAgentDraft(id = ""): AgentDefinitionDraft {
     name: "",
     description: "",
     role: "worker",
-    entrypoint: false,
+    chat_entrypoint: false,
+    visibility: "user",
+    delegable: true,
+    taskflow_eligible: true,
+    systemFlowOnlyText: "",
 
     runtime_profile: "",
     modelKey: "",
@@ -500,12 +537,18 @@ function agentToDraft(id: string, agent: Record<string, unknown>): AgentDefiniti
   const dispatch = objectValue(agent.dispatch)
   const providerId = stringValue(model.provider || model.provider_id)
   const modelId = stringValue(model.model || model.model_id)
+  const visibility = agentVisibilityValue(agent.visibility)
+  const userVisible = visibility === "user"
   return {
     id,
     name: stringValue(agent.name),
     description: stringValue(agent.description),
     role: stringValue(agent.role, "worker"),
-    entrypoint: agent.entrypoint === true,
+    chat_entrypoint: agent.chat_entrypoint === true || agent.entrypoint === true,
+    visibility,
+    delegable: boolValue(agent.delegable, userVisible),
+    taskflow_eligible: boolValue(agent.taskflow_eligible, userVisible),
+    systemFlowOnlyText: stringArray(agent.system_flow_only).join("\n"),
 
     runtime_profile: stringValue(agent.runtime_profile),
     modelKey: providerId && modelId ? modelOptionKey(providerId, modelId) : "",
@@ -563,7 +606,13 @@ function agentDraftToPayload(draft: AgentDefinitionDraft): Record<string, unknow
   }
   if (draft.description) payload.description = draft.description
   if (draft.role.trim()) payload.role = draft.role.trim()
-  if (draft.entrypoint) payload.entrypoint = true
+  if (draft.visibility !== "user") payload.visibility = draft.visibility
+  if (draft.chat_entrypoint) payload.chat_entrypoint = true
+  const userVisible = draft.visibility === "user"
+  if (draft.delegable !== userVisible) payload.delegable = draft.delegable
+  if (draft.taskflow_eligible !== userVisible) payload.taskflow_eligible = draft.taskflow_eligible
+  const systemFlowOnly = parseAgentConfigListText(draft.systemFlowOnlyText)
+  if (systemFlowOnly.length) payload.system_flow_only = systemFlowOnly
   if (draft.runtime_profile) payload.runtime_profile = draft.runtime_profile
   const [providerId, modelId] = splitModelOptionKey(draft.modelKey)
   if (providerId && modelId) payload.model = { provider: providerId, model: modelId }
@@ -690,7 +739,14 @@ function boolValue(value: unknown, fallback = true): boolean {
   return Boolean(value)
 }
 
-function stringListText(value: unknown): string {
+function agentVisibilityValue(value: unknown): AgentVisibility {
+  const visibility = stringValue(value, "user")
+  return visibility === "system" || visibility === "internal" ? visibility : "user"
+}
+
+
+
+function stringListText(value: unknown): string {
   return Array.isArray(value) ? value.map((item) => String(item)).join("\n") : ""
 }
 
@@ -894,7 +950,7 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : []
 }
 
-function normalizeBehaviorTrigger(value: unknown): BehaviorTriggerView {
+function normalizeBehaviorTrigger(value: unknown): UiActionCatalogItem["triggers"][number] {
   const item = objectValue(value)
   return {
     kind: stringValue(item.kind),
@@ -904,7 +960,54 @@ function normalizeBehaviorTrigger(value: unknown): BehaviorTriggerView {
   }
 }
 
-function normalizeUserActionCatalog(value: unknown): UserActionCatalogItem[] {
+function normalizeChatCommandCatalog(value: unknown): ChatCommandCatalogItem[] {
+  return Array.isArray(value)
+    ? value
+      .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+      .map((item) => ({
+        id: stringValue(item.id),
+        name: stringValue(item.name) || stringValue(item.id),
+        displayName: stringValue(item.display_name) || stringValue(item.trigger) || stringValue(item.name) || stringValue(item.id),
+        featureId: stringValue(item.feature_id),
+        sourceType: stringValue(item.source_type),
+        registrationPath: stringValue(item.registration_path),
+        description: stringValue(item.description),
+        triggerKind: stringValue(item.trigger_kind),
+        trigger: stringValue(item.trigger),
+        uiTargets: stringArray(item.ui_targets),
+        requiredCapabilities: stringArray(item.required_capabilities),
+        interactive: item.interactive === true,
+        supportsArgs: item.supports_args === true,
+        argsHint: stringValue(item.args_hint),
+        selectionBehavior: stringValue(item.selection_behavior),
+        availableDuringRun: item.available_during_run === true,
+        visibility: stringValue(item.visibility, "visible"),
+      }))
+      .filter((item) => item.id)
+    : []
+}
+
+function normalizeMentionProviderCatalog(value: unknown): MentionProviderCatalogItem[] {
+  return Array.isArray(value)
+    ? value
+      .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+      .map((item) => ({
+        id: stringValue(item.id),
+        name: stringValue(item.name) || stringValue(item.id),
+        displayName: stringValue(item.display_name) || stringValue(item.name) || stringValue(item.id),
+        sourceType: stringValue(item.source_type),
+        registrationPath: stringValue(item.registration_path),
+        description: stringValue(item.description),
+        trigger: stringValue(item.trigger),
+        enabled: boolValue(item.enabled, true),
+        insertFormat: stringValue(item.insert_format),
+        itemCount: item.item_count === null || item.item_count === undefined ? null : numberValue(item.item_count, 0),
+      }))
+      .filter((item) => item.id)
+    : []
+}
+
+function normalizeUiActionCatalog(value: unknown): UiActionCatalogItem[] {
   return Array.isArray(value)
     ? value
       .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
@@ -943,6 +1046,7 @@ function normalizeAgentToolCatalog(value: unknown): AgentToolCatalogItem[] {
         relatedComponents: stringArray(item.related_components),
         modeRefs: stringArray(item.mode_refs),
         approvalStatus: stringValue(item.approval_status),
+        executionPolicy: stringValue(item.execution_policy) || stringValue(item.approval_status),
       }))
       .filter((item) => item.id)
     : []
@@ -978,6 +1082,7 @@ function capabilityPackageValue(id: string, value: unknown): CapabilityPackageVi
     source,
     installPlan: stringArray(item.install_plan),
     usage: stringArray(item.usage),
+    effectiveCapabilities: stringArray(item.effective_capabilities),
     evidence: normalizeEvidence(item.evidence),
     credentials: stringArray(item.credentials),
     riskLevel: stringValue(item.risk_level),
@@ -1785,21 +1890,31 @@ export function createSettingsController(props: SettingsViewProps) {
     toolchainDashboardItems()[0]
   )
   const toolchainSummary = createMemo(() => summarizeToolchainDashboard(toolchainDashboardItems()))
-  const toolchainBehaviorCatalog = createMemo(() =>
+  const behaviorCatalog = createMemo(() =>
     objectValue(server.toolchainState()?.behavior_catalog)
   )
   const toolchainBehaviorError = createMemo(() =>
     stringValue(server.toolchainState()?.behavior_catalog_error) ||
-    stringValue(toolchainBehaviorCatalog().error)
+    stringValue(behaviorCatalog().error)
   )
-  const userActionCatalogItems = createMemo(() =>
-    normalizeUserActionCatalog(
-      server.toolchainState()?.user_actions || toolchainBehaviorCatalog().user_actions
+  const chatCommandCatalogItems = createMemo(() =>
+    normalizeChatCommandCatalog(
+      server.toolchainState()?.chat_commands || behaviorCatalog().chat_commands
+    )
+  )
+  const mentionProviderCatalogItems = createMemo(() =>
+    normalizeMentionProviderCatalog(
+      server.toolchainState()?.mention_providers || behaviorCatalog().mention_providers
+    )
+  )
+  const uiActionCatalogItems = createMemo(() =>
+    normalizeUiActionCatalog(
+      server.toolchainState()?.ui_actions || behaviorCatalog().ui_actions
     )
   )
   const agentToolCatalogItems = createMemo(() =>
     normalizeAgentToolCatalog(
-      server.toolchainState()?.agent_tools || toolchainBehaviorCatalog().agent_tools
+      server.toolchainState()?.agent_tools || behaviorCatalog().agent_tools
     )
   )
   const serverSettingsPayload = createMemo(() => {
@@ -3391,9 +3506,11 @@ const refreshAdmin = () => {
     filteredToolchainItems,
     selectedToolchain,
     toolchainSummary,
-    toolchainBehaviorCatalog,
+    behaviorCatalog,
     toolchainBehaviorError,
-    userActionCatalogItems,
+    chatCommandCatalogItems,
+    mentionProviderCatalogItems,
+    uiActionCatalogItems,
     agentToolCatalogItems,
     serverSettingsPayload,
     agentRunsSettings,

@@ -2132,6 +2132,7 @@ button {
   flex-direction: column;
   gap: 6px;
   min-width: 0;
+  overflow-x: auto;
 }
 
 .settings-table-row {
@@ -2145,6 +2146,44 @@ button {
   min-width: 0;
 }
 
+.settings-table-row--user-actions {
+  min-width: 1080px;
+  grid-template-columns:
+    minmax(160px, 1.35fr)
+    minmax(100px, 0.8fr)
+    minmax(150px, 1.1fr)
+    minmax(100px, 0.8fr)
+    minmax(110px, 0.8fr)
+    minmax(160px, 1fr)
+    72px
+    minmax(170px, 1.15fr);
+}
+
+.settings-table-row--mention-providers,
+.settings-table-row--ui-actions {
+  min-width: 940px;
+  grid-template-columns:
+    minmax(170px, 1.35fr)
+    minmax(80px, 0.55fr)
+    minmax(110px, 0.75fr)
+    64px
+    minmax(130px, 0.9fr)
+    minmax(80px, 0.55fr)
+    minmax(190px, 1.2fr);
+}
+
+.settings-table-row--agent-tools {
+  min-width: 1180px;
+  grid-template-columns:
+    minmax(170px, 1.35fr)
+    minmax(110px, 0.75fr)
+    64px
+    minmax(220px, 1.25fr)
+    minmax(210px, 1.1fr)
+    minmax(110px, 0.7fr)
+    minmax(150px, 0.85fr);
+}
+
 .settings-table-row--head {
   color: var(--ez-muted);
   background: color-mix(in srgb, var(--ez-muted) 8%, transparent);
@@ -2156,6 +2195,30 @@ button {
   overflow-wrap: anywhere;
 }
 
+.settings-table-cell {
+  min-width: 0;
+}
+
+.settings-table-cell--center {
+  justify-self: start;
+}
+
+.settings-table-cell--path,
+.settings-table-cell--mode,
+.settings-table-cell--policy {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-table-cell--relations {
+  display: block;
+  max-width: 100%;
+  line-height: 1.35;
+}
+
 .settings-table-row small {
   display: block;
   margin-top: 3px;
@@ -2164,8 +2227,7 @@ button {
 }
 
 .settings-table-row code {
-  grid-column: 1 / -1;
-  white-space: pre-wrap;
+  white-space: normal;
   font-size: 11px;
 }
 
@@ -4268,6 +4330,32 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.settings-system-agent-list {
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--ez-border);
+  color: var(--ez-muted);
+}
+
+.settings-system-agent {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+  min-height: 24px;
+  font-size: 11px;
+}
+
+.settings-system-agent strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ez-fg);
+  font-size: 12px;
 }
 
 .settings-detail-panel {
