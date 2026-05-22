@@ -479,6 +479,10 @@ export class LabrastroRemoteClient {
     return this.authenticatedPost("/remote/admin/toolchains/dashboard", {})
   }
 
+  async toolchainBehaviorCatalog(): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/toolchains/behavior-catalog", {})
+  }
+
   async toolchainRecord(kind: string, payload: JsonObject): Promise<JsonObject> {
     return this.authenticatedPost("/remote/admin/toolchains/record", { kind, payload })
   }

@@ -490,7 +490,18 @@ export class LabrastroController implements vscode.Disposable {
           summary: {},
         }
       }
+      let behaviorCatalog: Record<string, unknown> | undefined
+      try {
+        behaviorCatalog = await this.client.toolchainBehaviorCatalog()
+      } catch (error) {
+        behaviorCatalog = {
+          error: errorMessage(error),
+          user_actions: [],
+          agent_tools: [],
+        }
+      }
       const dashboardPayload = dashboard || {}
+      const behaviorPayload = behaviorCatalog || {}
       this.toolchainState = {
         ...list,
         dashboard: dashboardPayload,
@@ -499,6 +510,10 @@ export class LabrastroController implements vscode.Disposable {
           dashboardPayload.summary && typeof dashboardPayload.summary === "object"
             ? dashboardPayload.summary
             : {},
+        behavior_catalog: behaviorPayload,
+        user_actions: Array.isArray(behaviorPayload.user_actions) ? behaviorPayload.user_actions : [],
+        agent_tools: Array.isArray(behaviorPayload.agent_tools) ? behaviorPayload.agent_tools : [],
+        behavior_catalog_error: typeof behaviorPayload.error === "string" ? behaviorPayload.error : "",
       }
       post({ type: "toolchain.state", payload: this.toolchainState })
     } catch (error) {

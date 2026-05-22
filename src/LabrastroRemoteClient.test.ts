@@ -679,6 +679,57 @@ describe("LabrastroRemoteClient runtime admin API", () => {
     })
   })
 
+  it("posts toolchain behavior catalog reads through the admin endpoint", async () => {
+    vscodeMock.labrastroValue = DEFAULT_TEST_HOST_URL
+    const authSession = JSON.stringify({
+      hostUrl: DEFAULT_TEST_HOST_URL,
+      username: "admin",
+      role: "superadmin",
+      deviceId: "dev-1",
+      refreshToken: "refresh-token-1",
+    })
+    const context = {
+      secrets: {
+        get: vi.fn(async (key: string) => key === DEFAULT_AUTH_SESSION_KEY ? authSession : undefined),
+        store: vi.fn(async () => undefined),
+        delete: vi.fn(async () => undefined),
+      },
+    }
+    const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
+      const url = new URL(String(input))
+      if (url.pathname === "/remote/auth/refresh") {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            access_token: "access-token-1",
+            access_expires_at: Math.floor(Date.now() / 1000) + 3600,
+            refresh_token: "refresh-token-2",
+            user: { id: "usr-1", username: "admin", role: "superadmin" },
+            device: { id: "dev-1" },
+          }),
+          { headers: { "Content-Type": "application/json" } }
+        )
+      }
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          path: url.pathname,
+          body: JSON.parse(String(init?.body || "{}")),
+          authorization: (init?.headers as Record<string, string>).Authorization,
+        }),
+        { headers: { "Content-Type": "application/json" } }
+      )
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    const client = new LabrastroRemoteClient(context as never)
+
+    await expect(client.toolchainBehaviorCatalog()).resolves.toMatchObject({
+      path: "/remote/admin/toolchains/behavior-catalog",
+      body: {},
+      authorization: "Bearer access-token-1",
+    })
+  })
+
   it("posts auth control-plane actions through bearer auth", async () => {
     vscodeMock.labrastroValue = DEFAULT_TEST_HOST_URL
     const authSession = JSON.stringify({
