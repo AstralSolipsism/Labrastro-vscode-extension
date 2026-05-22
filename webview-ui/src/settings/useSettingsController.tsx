@@ -87,6 +87,41 @@ type EnvironmentEntryStatus =
   | "parse_failed"
   | "needs_review"
 type EnvironmentSnapshotStatus = "idle" | "running" | "completed" | "error" | "canceled"
+
+interface BehaviorTriggerView {
+  kind: string
+  value: string
+  uiTargets: string[]
+  requiredCapabilities: string[]
+}
+
+interface UserActionCatalogItem {
+  id: string
+  name: string
+  featureId: string
+  sourceType: string
+  registrationPath: string
+  description: string
+  uiTargets: string[]
+  requiredCapabilities: string[]
+  interactive: boolean
+  triggers: BehaviorTriggerView[]
+}
+
+interface AgentToolCatalogItem {
+  id: string
+  name: string
+  displayName: string
+  sourceType: string
+  sourceLabel: string
+  description: string
+  registrationPath: string
+  enabled: boolean
+  relatedPackageIds: string[]
+  relatedComponents: string[]
+  modeRefs: string[]
+  approvalStatus: string
+}
 
 export interface SettingsViewProps {
   targetTab?: string
@@ -857,6 +892,60 @@ function objectValue(value: unknown): Record<string, unknown> {
 
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : []
+}
+
+function normalizeBehaviorTrigger(value: unknown): BehaviorTriggerView {
+  const item = objectValue(value)
+  return {
+    kind: stringValue(item.kind),
+    value: stringValue(item.value),
+    uiTargets: stringArray(item.ui_targets),
+    requiredCapabilities: stringArray(item.required_capabilities),
+  }
+}
+
+function normalizeUserActionCatalog(value: unknown): UserActionCatalogItem[] {
+  return Array.isArray(value)
+    ? value
+      .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+      .map((item) => ({
+        id: stringValue(item.id),
+        name: stringValue(item.name) || stringValue(item.id),
+        featureId: stringValue(item.feature_id),
+        sourceType: stringValue(item.source_type),
+        registrationPath: stringValue(item.registration_path),
+        description: stringValue(item.description),
+        uiTargets: stringArray(item.ui_targets),
+        requiredCapabilities: stringArray(item.required_capabilities),
+        interactive: item.interactive === true,
+        triggers: Array.isArray(item.triggers)
+          ? item.triggers.map(normalizeBehaviorTrigger)
+          : [],
+      }))
+      .filter((item) => item.id)
+    : []
+}
+
+function normalizeAgentToolCatalog(value: unknown): AgentToolCatalogItem[] {
+  return Array.isArray(value)
+    ? value
+      .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+      .map((item) => ({
+        id: stringValue(item.id),
+        name: stringValue(item.name) || stringValue(item.id),
+        displayName: stringValue(item.display_name) || stringValue(item.name) || stringValue(item.id),
+        sourceType: stringValue(item.source_type),
+        sourceLabel: stringValue(item.source_label) || stringValue(item.source_type),
+        description: stringValue(item.description),
+        registrationPath: stringValue(item.registration_path),
+        enabled: boolValue(item.enabled, true),
+        relatedPackageIds: stringArray(item.related_package_ids),
+        relatedComponents: stringArray(item.related_components),
+        modeRefs: stringArray(item.mode_refs),
+        approvalStatus: stringValue(item.approval_status),
+      }))
+      .filter((item) => item.id)
+    : []
 }
 
 function executorFeatureValue(value: unknown): ExecutorFeatureView {
@@ -1696,6 +1785,23 @@ export function createSettingsController(props: SettingsViewProps) {
     toolchainDashboardItems()[0]
   )
   const toolchainSummary = createMemo(() => summarizeToolchainDashboard(toolchainDashboardItems()))
+  const toolchainBehaviorCatalog = createMemo(() =>
+    objectValue(server.toolchainState()?.behavior_catalog)
+  )
+  const toolchainBehaviorError = createMemo(() =>
+    stringValue(server.toolchainState()?.behavior_catalog_error) ||
+    stringValue(toolchainBehaviorCatalog().error)
+  )
+  const userActionCatalogItems = createMemo(() =>
+    normalizeUserActionCatalog(
+      server.toolchainState()?.user_actions || toolchainBehaviorCatalog().user_actions
+    )
+  )
+  const agentToolCatalogItems = createMemo(() =>
+    normalizeAgentToolCatalog(
+      server.toolchainState()?.agent_tools || toolchainBehaviorCatalog().agent_tools
+    )
+  )
   const serverSettingsPayload = createMemo(() => {
     const direct = server.serverSettingsState()
     if (direct && Object.keys(direct).length) return direct
@@ -3285,6 +3391,10 @@ const refreshAdmin = () => {
     filteredToolchainItems,
     selectedToolchain,
     toolchainSummary,
+    toolchainBehaviorCatalog,
+    toolchainBehaviorError,
+    userActionCatalogItems,
+    agentToolCatalogItems,
     serverSettingsPayload,
     agentRunsSettings,
     agentRunsState,

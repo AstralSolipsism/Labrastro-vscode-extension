@@ -11,12 +11,14 @@ import type { SettingsController } from "../useSettingsController"
 type EnvironmentEntryKind = "cli" | "mcp" | "skill"
 type ToolchainKind = EnvironmentEntryKind
 type ToolchainKindFilter = "all" | ToolchainKind
-type ToolchainSection = "dashboard" | "components" | "packages" | "ingest" | "logs"
+type ToolchainSection = "dashboard" | "components" | "packages" | "actions" | "agentTools" | "ingest" | "logs"
 
 const TOOLCHAIN_SECTIONS: Array<{ id: ToolchainSection; label: string; icon: string }> = [
   { id: "dashboard", label: "环境看板", icon: "dashboard" },
   { id: "components", label: "组件清单", icon: "symbol-method" },
   { id: "packages", label: "能力包", icon: "package" },
+  { id: "actions", label: "用户指令", icon: "terminal" },
+  { id: "agentTools", label: "Agent Tools", icon: "tools" },
   { id: "ingest", label: "导入", icon: "cloud-download" },
   { id: "logs", label: "运行日志", icon: "output" },
 ]
@@ -86,6 +88,9 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
     replyEnvironmentApproval,
     rememberEnvironmentApprovalDecision,
     toolchainSummary,
+    toolchainBehaviorError,
+    userActionCatalogItems,
+    agentToolCatalogItems,
     toolchainStatusFilter,
     setToolchainStatusFilter,
     toolchainIngestState,
@@ -194,6 +199,24 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
   const environmentAgentLabel = () => {
     const agent = environmentAgentCandidates()[0]
     return agent ? stringValue(agent.name) || agent.id : "environment_configurator"
+  }
+  const catalogListText = (items: string[]) => items.length ? items.join("、") : "—"
+  const actionSourceLabel = (source: string) => {
+    if (source === "action_registry") return "ActionRegistry"
+    if (source === "settings_ui") return "设置页"
+    return source || "未知"
+  }
+  const triggerSummary = (action: { triggers: Array<{ kind: string; value: string }> }) => {
+    if (!action.triggers.length) return "—"
+    return action.triggers.map((trigger) => `${trigger.kind}:${trigger.value}`).join("、")
+  }
+  const approvalLabel = (value: string) => {
+    if (value === "allow") return "允许"
+    if (value === "warn") return "警告"
+    if (value === "deny") return "拒绝"
+    if (value === "require_approval") return "需批准"
+    if (value === "inherits_component_policy") return "继承组件策略"
+    return value || "—"
   }
 
   const markCapabilityDirty = () => {
@@ -497,7 +520,7 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
           <div class="settings-empty-note">内建环境 Agent environment_configurator 不可用。请刷新服务器设置或检查后端配置。</div>
         </Show>
 
-        <nav class="settings-subtabs" aria-label="能力组件视图">
+        <nav class="settings-subtabs" aria-label="能力/行为管理视图">
           <For each={TOOLCHAIN_SECTIONS}>
             {(item) => (
               <button
@@ -512,6 +535,89 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
             )}
           </For>
         </nav>
+
+        <Show when={toolchainBehaviorError() && (section() === "actions" || section() === "agentTools")}>
+          <div class="settings-error">行为目录加载失败：{toolchainBehaviorError()}</div>
+        </Show>
+
+        <section class="settings-section settings-section--flat" classList={{ "settings-section--hidden": section() !== "actions" }}>
+          <div class="settings-section-heading">
+            <span>用户指令</span>
+            <StatusBadge>{String(userActionCatalogItems().length)}</StatusBadge>
+          </div>
+          <Show when={userActionCatalogItems().length} fallback={<p class="settings-empty-note">暂无用户指令。</p>}>
+            <div class="settings-table">
+              <div class="settings-table-row settings-table-row--head">
+                <strong>指令</strong>
+                <strong>功能域</strong>
+                <strong>触发方式</strong>
+                <strong>来源</strong>
+                <strong>UI</strong>
+                <strong>交互</strong>
+              </div>
+              <For each={userActionCatalogItems()}>
+                {(action) => (
+                  <div class="settings-table-row">
+                    <div>
+                      <strong>{action.name}</strong>
+                      <Show when={action.description}>
+                        <small>{action.description}</small>
+                      </Show>
+                    </div>
+                    <span>{action.featureId || "—"}</span>
+                    <span>{triggerSummary(action)}</span>
+                    <span>{actionSourceLabel(action.sourceType)}</span>
+                    <span>{catalogListText(action.uiTargets)}</span>
+                    <span>{action.interactive ? "是" : "否"}</span>
+                    <code>{action.registrationPath || "—"}</code>
+                  </div>
+                )}
+              </For>
+            </div>
+          </Show>
+        </section>
+
+        <section class="settings-section settings-section--flat" classList={{ "settings-section--hidden": section() !== "agentTools" }}>
+          <div class="settings-section-heading">
+            <span>Agent Tools</span>
+            <StatusBadge>{String(agentToolCatalogItems().length)}</StatusBadge>
+          </div>
+          <Show when={agentToolCatalogItems().length} fallback={<p class="settings-empty-note">暂无 Agent Tools。</p>}>
+            <div class="settings-table">
+              <div class="settings-table-row settings-table-row--head">
+                <strong>Tool</strong>
+                <strong>来源</strong>
+                <strong>启用</strong>
+                <strong>注册路径</strong>
+                <strong>能力包/组件</strong>
+                <strong>批准</strong>
+              </div>
+              <For each={agentToolCatalogItems()}>
+                {(tool) => (
+                  <div class="settings-table-row">
+                    <div>
+                      <strong>{tool.displayName}</strong>
+                      <Show when={tool.description}>
+                        <small>{tool.description}</small>
+                      </Show>
+                    </div>
+                    <span>{tool.sourceLabel || tool.sourceType}</span>
+                    <span>{tool.enabled ? "是" : "否"}</span>
+                    <span>{tool.registrationPath || "—"}</span>
+                    <span>
+                      {catalogListText([
+                        ...tool.relatedPackageIds.map((id: string) => `包:${id}`),
+                        ...tool.relatedComponents.map((id: string) => `组件:${id}`),
+                      ])}
+                    </span>
+                    <span>{approvalLabel(tool.approvalStatus)}</span>
+                    <code>{catalogListText(tool.modeRefs)}</code>
+                  </div>
+                )}
+              </For>
+            </div>
+          </Show>
+        </section>
 
         <div class="toolchain-summary-grid" classList={{ "settings-section--hidden": section() !== "dashboard" }}>
           <button class="toolchain-summary-card" classList={{ "is-active": toolchainStatusFilter() === "ready" }} onClick={() => setToolchainStatusFilter(toolchainStatusFilter() === "ready" ? "all" : "ready")}>

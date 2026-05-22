@@ -2145,9 +2145,22 @@ button {
   min-width: 0;
 }
 
+.settings-table-row--head {
+  color: var(--ez-muted);
+  background: color-mix(in srgb, var(--ez-muted) 8%, transparent);
+  font-size: 12px;
+}
+
 .settings-table-row > * {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.settings-table-row small {
+  display: block;
+  margin-top: 3px;
+  color: var(--ez-muted);
+  line-height: 1.35;
 }
 
 .settings-table-row code {
