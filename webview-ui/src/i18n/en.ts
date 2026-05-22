@@ -16,7 +16,7 @@ const en: Record<string, string> = {
   "settings.tab.executors": "Executors",
   "settings.tab.accounts": "Accounts",
   "settings.tab.providers": "Providers & Models",
-  "settings.tab.toolchains": "Capability Components",
+  "settings.tab.toolchains": "Capability / Behavior Management",
   "settings.tab.conversation": "Conversation",
   "settings.tab.sessionPolicy": "Context & Memory",
   "settings.tab.serverSettings": "Server",
@@ -144,7 +144,7 @@ const en: Record<string, string> = {
   "model.testing": "Testing…",
 
   // ── SettingsView — Toolchains ──
-  "toolchain.title": "Capability Management",
+  "toolchain.title": "Capability / Behavior Management",
   "toolchain.desc": "Toolchains = CLI commands + MCP servers + Skills. Refresh from manifest, edit manually, or import via Ingest.",
   "toolchain.refreshManifest": "Refresh Manifest",
   "toolchain.add": "Add",

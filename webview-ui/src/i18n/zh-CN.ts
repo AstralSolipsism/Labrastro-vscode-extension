@@ -16,7 +16,7 @@ const zhCN: Record<string, string> = {
   "settings.tab.executors": "执行器",
   "settings.tab.accounts": "账号",
   "settings.tab.providers": "服务商与模型",
-  "settings.tab.toolchains": "能力组件",
+  "settings.tab.toolchains": "能力/行为管理",
   "settings.tab.conversation": "对话体验",
   "settings.tab.sessionPolicy": "上下文与记忆",
   "settings.tab.serverSettings": "服务端",
@@ -144,7 +144,7 @@ const zhCN: Record<string, string> = {
   "model.testing": "正在测试…",
 
   // ── SettingsView — 工具链 ──
-  "toolchain.title": "能力组件管理",
+  "toolchain.title": "能力/行为管理",
   "toolchain.desc": "工具链 = CLI 命令 + MCP 服务器 + Skills。从清单刷新、手动编辑或 Ingest 导入。",
   "toolchain.refreshManifest": "刷新清单",
   "toolchain.add": "新增",
