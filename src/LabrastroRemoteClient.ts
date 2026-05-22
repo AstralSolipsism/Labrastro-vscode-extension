@@ -479,7 +479,7 @@ export class LabrastroRemoteClient {
     return this.authenticatedPost("/remote/admin/toolchains/dashboard", {})
   }
 
-  async toolchainBehaviorCatalog(): Promise<JsonObject> {
+  async behaviorCatalog(): Promise<JsonObject> {
     return this.authenticatedPost("/remote/admin/toolchains/behavior-catalog", {})
   }
 
@@ -572,6 +572,7 @@ export class LabrastroRemoteClient {
       parameters?: JsonObject
       locale?: string
       clientRequestId?: string
+      mentions?: JsonObject[]
     } = {}
   ): Promise<JsonObject> {
     const taskflowId = options.taskflowId?.trim()
@@ -592,6 +593,28 @@ export class LabrastroRemoteClient {
       ...(providerId && modelId ? { provider_id: providerId, model_id: modelId } : {}),
       ...(providerId && modelId && parameters ? { parameters } : {}),
       ...(locale ? { locale } : {}),
+      ...(options.mentions?.length ? { mentions: options.mentions } : {}),
+    }))
+  }
+
+  async dispatchChatCommand(payload: {
+    text: string
+    commandId?: string
+    trigger?: string
+    args?: string
+    sessionId?: string
+    clientRequestId?: string
+    mentions?: JsonObject[]
+  }): Promise<JsonObject> {
+    return this.postPeerJson("/remote/chat/command", (peer) => ({
+      peer_token: peer.peer_token,
+      text: payload.text,
+      ...(payload.commandId ? { command_id: payload.commandId } : {}),
+      ...(payload.trigger ? { trigger: payload.trigger } : {}),
+      ...(payload.args ? { args: payload.args } : {}),
+      ...(payload.sessionId ? { session_hint: payload.sessionId } : {}),
+      ...(payload.clientRequestId ? { client_request_id: payload.clientRequestId } : {}),
+      ...(payload.mentions?.length ? { mentions: payload.mentions } : {}),
     }))
   }
 

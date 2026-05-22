@@ -39,6 +39,7 @@ export interface ChatRunCoordinatorOptions {
       providerId?: string
       modelId?: string
       parameters?: Record<string, unknown>
+      mentions?: Record<string, unknown>[]
     }
   ) => Promise<void>
   cancelChat: (chatId: string | undefined, post: PostMessage) => Promise<void>
@@ -106,6 +107,43 @@ export class ChatRunCoordinator {
 
   async handleMessage(message: WebviewToHostMessage, post: PostMessage): Promise<boolean> {
     switch (message.type) {
+      case "chat.command.dispatch": {
+        const text = typeof message.text === "string" ? message.text : ""
+        if (!text.trim() || !text.startsWith("/")) {
+          post({ type: "chat.error", message: "无效指令：Chat 指令必须以 / 开头。" })
+          return true
+        }
+        const clientRequestId =
+          stringValue(message.clientRequestId) ||
+          stringValue(message.client_request_id) ||
+          stringValue(message.requestId) ||
+          stringValue(message.request_id)
+        try {
+          const result = await this.options.client.dispatchChatCommand({
+            text,
+            commandId: stringValue(message.commandId) || stringValue(message.command_id),
+            trigger: stringValue(message.trigger),
+            args: stringValue(message.args),
+            sessionId: stringValue(message.sessionId) || stringValue(message.session_id),
+            clientRequestId,
+            mentions: arrayValue(message.mentions).filter(
+              (item): item is Record<string, unknown> =>
+                Boolean(item && typeof item === "object" && !Array.isArray(item))
+            ),
+          })
+          const events = arrayValue(result.events)
+          if (events.length) post({ type: "chat.events", events })
+          if (result.ok === false && !events.length) {
+            post({ type: "chat.error", message: stringValue(result.error) || "指令执行失败。" })
+          }
+          post({ type: "chat.done" })
+        } catch (error) {
+          post({ type: "chat.error", message: chatErrorMessage(error) })
+          await this.options.postConnectionStateIfAuthRequired(error, post)
+          post({ type: "chat.done" })
+        }
+        return true
+      }
       case "chat.send":
         if (typeof message.text === "string") {
           const providerId = stringValue(message.providerId) || stringValue(message.provider_id)
@@ -119,6 +157,10 @@ export class ChatRunCoordinator {
             })
             return true
           }
+          const mentions = arrayValue(message.mentions).filter(
+            (item): item is Record<string, unknown> =>
+              Boolean(item && typeof item === "object" && !Array.isArray(item))
+          )
           void this.options.startChat(message.text, stringValue(message.sessionId), post, {
             mode: stringValue(message.mode),
             workflowMode: stringValue(message.workflowMode) || stringValue(message.workflow_mode),
@@ -135,6 +177,7 @@ export class ChatRunCoordinator {
             parameters: message.parameters && typeof message.parameters === "object"
               ? message.parameters as Record<string, unknown>
               : {},
+            ...(mentions.length ? { mentions } : {}),
           })
         }
         return true

@@ -8,6 +8,12 @@ function coordinator() {
       followUpChat: vi.fn(async () => ({ ok: true })),
       cancelChatFollowUp: vi.fn(async () => ({ ok: true })),
       recoverChat: vi.fn(async () => ({ ok: true })),
+      dispatchChatCommand: vi.fn(async () => ({
+        ok: true,
+        action: "continue",
+        session_id: "session-1",
+        events: [{ type: "output", payload: { content: "help" } }],
+      })),
       getTaskflowState: vi.fn(async () => ({ ok: true, taskflow: { id: "taskflow-1" } })),
       getTaskflowWorkspace: vi.fn(async () => ({ ok: true, schema_version: "taskflow.workspace.v1" })),
       getTaskflowRuntime: vi.fn(async () => ({ ok: true, task_runs: [] })),
@@ -63,6 +69,7 @@ describe("ChatRunCoordinator", () => {
       providerId: "p1",
       modelId: "m1",
       parameters: { temperature: 0 },
+      mentions: [{ kind: "file", path: "README.md" }],
     }, post)).resolves.toBe(true)
 
     expect(options.startChat).toHaveBeenCalledWith("hello", "s1", post, {
@@ -74,6 +81,7 @@ describe("ChatRunCoordinator", () => {
       providerId: "p1",
       modelId: "m1",
       parameters: { temperature: 0 },
+      mentions: [{ kind: "file", path: "README.md" }],
     })
   })
 
@@ -92,6 +100,60 @@ describe("ChatRunCoordinator", () => {
       type: "chat.error",
       message: "请选择会话模型后再发送。",
     })
+  })
+
+  it("routes slash commands to chat command dispatch instead of chat.send", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+
+    await expect(subject.handleMessage({
+      type: "chat.command.dispatch",
+      text: "/help",
+      commandId: "system.help",
+      trigger: "/help",
+      sessionId: "session-1",
+      requestId: "cmd-1",
+      mentions: [{ kind: "file", path: "README.md" }],
+    }, post)).resolves.toBe(true)
+
+    expect(options.startChat).not.toHaveBeenCalled()
+    expect(options.client.dispatchChatCommand).toHaveBeenCalledWith({
+      text: "/help",
+      commandId: "system.help",
+      trigger: "/help",
+      args: undefined,
+      sessionId: "session-1",
+      clientRequestId: "cmd-1",
+      mentions: [{ kind: "file", path: "README.md" }],
+    })
+    expect(post).toHaveBeenCalledWith({
+      type: "chat.events",
+      events: [{ type: "output", payload: { content: "help" } }],
+    })
+    expect(post).toHaveBeenCalledWith({ type: "chat.done" })
+  })
+
+  it("rejects non-slash chat command dispatch messages locally", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+
+    await expect(subject.handleMessage({
+      type: "chat.command.dispatch",
+      text: "help",
+    }, post)).resolves.toBe(true)
+
+    expect(options.client.dispatchChatCommand).not.toHaveBeenCalled()
+    expect(post).toHaveBeenCalledWith({
+      type: "chat.error",
+      message: "无效指令：Chat 指令必须以 / 开头。",
+    })
+
+    await expect(subject.handleMessage({
+      type: "chat.command.dispatch",
+      text: " /help",
+    }, post)).resolves.toBe(true)
+
+    expect(options.client.dispatchChatCommand).not.toHaveBeenCalled()
   })
 
   it("uses the active chat id for approval replies when the message omits chatId", async () => {

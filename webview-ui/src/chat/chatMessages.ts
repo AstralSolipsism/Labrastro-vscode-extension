@@ -17,6 +17,17 @@ export interface ChatSendInput {
   providerId?: string
   modelId?: string
   parameters?: Record<string, unknown>
+  mentions?: Record<string, unknown>[]
+}
+
+export interface ChatCommandDispatchInput {
+  text: string
+  commandId?: string
+  trigger?: string
+  args?: string
+  sessionId?: string
+  requestId?: string
+  mentions?: Record<string, unknown>[]
 }
 
 export interface SessionModelSwitchInput {
@@ -58,19 +69,20 @@ export function buildChatSendMessage(input: ChatSendInput): WebviewToHostMessage
   const providerId = input.providerId?.trim()
   const modelId = input.modelId?.trim()
   const locale = input.locale?.trim()
-  return {
-    type: "chat.send",
-    text,
+    return {
+      type: "chat.send",
+      text,
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     ...(input.draftSessionId ? { draftSessionId: input.draftSessionId } : {}),
     ...(input.requestId ? { requestId: input.requestId } : {}),
     ...(locale ? { locale } : {}),
     ...(mode ? { mode } : {}),
     ...(workflowMode ? { workflowMode } : {}),
-    ...(providerId && modelId ? { providerId, modelId } : {}),
-    ...(providerId && modelId && input.parameters && Object.keys(input.parameters).length ? { parameters: input.parameters } : {}),
+      ...(providerId && modelId ? { providerId, modelId } : {}),
+      ...(providerId && modelId && input.parameters && Object.keys(input.parameters).length ? { parameters: input.parameters } : {}),
+      ...(input.mentions?.length ? { mentions: input.mentions } : {}),
+    }
   }
-}
 
 export function buildSessionModelSwitchMessage(input: SessionModelSwitchInput): WebviewToHostMessage {
   const providerId = input.providerId.trim()
@@ -88,6 +100,19 @@ export function buildSessionModelSwitchMessage(input: SessionModelSwitchInput): 
 export const chatMessages = {
   send(port: ChatMessagePort, input: ChatSendInput): void {
     port.postMessage(buildChatSendMessage(input))
+  },
+
+  dispatchCommand(port: ChatMessagePort, input: ChatCommandDispatchInput): void {
+    port.postMessage({
+      type: "chat.command.dispatch",
+      text: input.text.trim(),
+      ...(input.commandId ? { commandId: input.commandId, command_id: input.commandId } : {}),
+      ...(input.trigger ? { trigger: input.trigger } : {}),
+      ...(input.args ? { args: input.args } : {}),
+      ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+      ...(input.requestId ? { requestId: input.requestId } : {}),
+      ...(input.mentions?.length ? { mentions: input.mentions } : {}),
+    })
   },
 
   switchSessionMainModel(port: ChatMessagePort, input: SessionModelSwitchInput): void {

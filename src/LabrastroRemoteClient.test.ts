@@ -723,7 +723,7 @@ describe("LabrastroRemoteClient runtime admin API", () => {
     vi.stubGlobal("fetch", fetchMock)
     const client = new LabrastroRemoteClient(context as never)
 
-    await expect(client.toolchainBehaviorCatalog()).resolves.toMatchObject({
+    await expect(client.behaviorCatalog()).resolves.toMatchObject({
       path: "/remote/admin/toolchains/behavior-catalog",
       body: {},
       authorization: "Bearer access-token-1",
@@ -1031,6 +1031,7 @@ describe("LabrastroRemoteClient chat start", () => {
       modelId: "V4FLASH",
       parameters: { max_context_tokens: 1000000 },
       locale: "zh-CN",
+      mentions: [{ kind: "file", name: "README.md", path: "README.md" }],
     })).resolves.toMatchObject({ chat_id: "chat-1" })
 
     expect(postedBody).toMatchObject({
@@ -1044,6 +1045,57 @@ describe("LabrastroRemoteClient chat start", () => {
       model_id: "V4FLASH",
       parameters: { max_context_tokens: 1000000 },
       locale: "zh-CN",
+      mentions: [{ kind: "file", name: "README.md", path: "README.md" }],
+    })
+  })
+
+  it("posts slash commands to the remote chat command endpoint", async () => {
+    vscodeMock.labrastroValue = "http://127.0.0.1:8765"
+    const context = {
+      secrets: {
+        get: vi.fn(async () => undefined),
+      },
+    }
+    let postedPath = ""
+    let postedBody: Record<string, unknown> | undefined
+    const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
+      postedPath = String(input)
+      postedBody = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>
+      return new Response(JSON.stringify({
+        ok: true,
+        action: "continue",
+        session_id: "session-1",
+        events: [{ type: "output", payload: { content: "help" } }],
+      }), {
+        headers: { "Content-Type": "application/json" },
+      })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    const client = new LabrastroRemoteClient(context as never)
+    attachPeer(client, "peer-token-1")
+
+    await expect(client.dispatchChatCommand({
+      text: "/help",
+      commandId: "system.help",
+      trigger: "/help",
+      sessionId: "session-1",
+      clientRequestId: "cmd-1",
+      mentions: [{ kind: "file", path: "README.md" }],
+    })).resolves.toMatchObject({
+      ok: true,
+      action: "continue",
+      session_id: "session-1",
+    })
+
+    expect(postedPath).toBe("http://127.0.0.1:8765/remote/chat/command")
+    expect(postedBody).toMatchObject({
+      peer_token: "peer-token-1",
+      text: "/help",
+      command_id: "system.help",
+      trigger: "/help",
+      session_hint: "session-1",
+      client_request_id: "cmd-1",
+      mentions: [{ kind: "file", path: "README.md" }],
     })
   })
 

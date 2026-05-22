@@ -9,6 +9,7 @@ export interface PendingPromptItem {
   createdAt: number
   requestId?: string
   followupId?: string
+  mentions?: Record<string, unknown>[]
   error?: string
 }
 
@@ -28,6 +29,7 @@ export interface EnqueuePromptOptions {
   createdAt?: number
   requestId?: string
   followupId?: string
+  mentions?: Record<string, unknown>[]
 }
 
 export function createPromptQueueState(): PromptQueueState {
@@ -53,6 +55,7 @@ export function createPendingPromptItem(
     createdAt: options.createdAt ?? Date.now(),
     ...(options.requestId ? { requestId: options.requestId } : {}),
     ...(options.followupId ? { followupId: options.followupId } : {}),
+    ...(options.mentions?.length ? { mentions: options.mentions } : {}),
   }
 }
 

@@ -23,6 +23,7 @@ describe("chat messages", () => {
       sessionId: "session-1",
       mode: "taskflow",
       workflowMode: "taskflow",
+      mentions: [{ kind: "file", path: "README.md" }],
     })
 
     expect(payload).toEqual({
@@ -31,6 +32,7 @@ describe("chat messages", () => {
       sessionId: "session-1",
       mode: "taskflow",
       workflowMode: "taskflow",
+      mentions: [{ kind: "file", path: "README.md" }],
     })
     expect(payload).not.toHaveProperty("locale")
   })
@@ -59,6 +61,32 @@ describe("chat messages", () => {
       modelId: "V4PRO",
       parameters: { max_tokens: 4096 },
     })
+  })
+
+  it("posts slash command dispatch payloads through the chat message facade", () => {
+    const messages: Record<string, unknown>[] = []
+
+    chatMessages.dispatchCommand({ postMessage: (message) => messages.push(message) }, {
+      text: " /help ",
+      commandId: "system.help",
+      trigger: "/help",
+      sessionId: "session-1",
+      requestId: "cmd-1",
+      mentions: [{ kind: "file", path: "README.md" }],
+    })
+
+    expect(messages).toEqual([
+      {
+        type: "chat.command.dispatch",
+        text: "/help",
+        commandId: "system.help",
+        command_id: "system.help",
+        trigger: "/help",
+        sessionId: "session-1",
+        requestId: "cmd-1",
+        mentions: [{ kind: "file", path: "README.md" }],
+      },
+    ])
   })
 
   it("maps the frontend mode selector to the backend chat route", () => {

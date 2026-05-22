@@ -126,7 +126,7 @@
     "package": "node esbuild.js --production",
     "package:vsix": "npm run package && vsce package --out labrastro-vscode.vsix",
     "test:auto-approval": "vitest run webview-ui/src/utils/command-auto-approval.test.ts",
-    "test:chat": "vitest run webview-ui/src/chat/chatState.test.ts",
+    "test:chat": "vitest run webview-ui/src/chat/chatState.test.ts webview-ui/src/components/chat/promptInputCatalog.test.ts webview-ui/src/components/chat/PromptInput.structure.test.ts",
     "test:settings": "vitest run webview-ui/src/settings/utils.test.ts webview-ui/src/settings/toolchains-label.test.ts"
   },
   "devDependencies": {

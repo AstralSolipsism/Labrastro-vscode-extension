@@ -94,6 +94,7 @@ export type HostToWebviewMessageType =
   | "toolchain.ingest.result"
   | "toolchain.ingest.started"
   | "toolchain.state"
+  | "workspace.files"
   | "taskflow.complexity"
   | "taskflow.complexity.error"
   | "taskflow.workspace"
@@ -134,6 +135,7 @@ export type WebviewToHostMessageType =
   | "capabilityPackage.ingest.start"
   | "capabilityPackage.ingest.status"
   | "chat.cancel"
+  | "chat.command.dispatch"
   | "chat.followup"
   | "chat.followup.cancel"
   | "chat.recover"
@@ -219,6 +221,7 @@ export type WebviewToHostMessageType =
   | "toolchain.ingest.run"
   | "toolchain.record"
   | "toolchain.refresh"
+  | "workspace.files.search"
   | "webviewReady"
 
 export type WebviewToHostMessage =
@@ -293,6 +296,7 @@ const HOST_TO_WEBVIEW_TYPES = new Set<HostToWebviewMessageType>([
   "toolchain.ingest.result",
   "toolchain.ingest.started",
   "toolchain.state",
+  "workspace.files",
   "taskflow.complexity",
   "taskflow.complexity.error",
   "taskflow.workspace",
@@ -328,6 +332,7 @@ const WEBVIEW_TO_HOST_TYPES = new Set<WebviewToHostMessageType>([
   "capabilityPackage.ingest.start",
   "capabilityPackage.ingest.status",
   "chat.cancel",
+  "chat.command.dispatch",
   "chat.followup",
   "chat.followup.cancel",
   "chat.recover",
@@ -413,6 +418,7 @@ const WEBVIEW_TO_HOST_TYPES = new Set<WebviewToHostMessageType>([
   "toolchain.ingest.run",
   "toolchain.record",
   "toolchain.refresh",
+  "workspace.files.search",
   "webviewReady",
 ])
 
