@@ -1,7 +1,8 @@
 import { Component, Match, Show, Switch, createMemo } from "solid-js"
 import { getTraceNodeKindLabel, getTraceStatusLabel } from "../../types/trace"
 import type { TraceNode } from "../../types/trace"
-import type { MockMessage, MockPart, MockTurn } from "../chat/mock-data"
+import type { MockMessage, MockTurn } from "../chat/mock-data"
+import type { TranscriptItem } from "../chat/transcript-model"
 
 interface TranscriptExcerpt {
   anchorId: string
@@ -9,8 +10,8 @@ interface TranscriptExcerpt {
   label: string
   text?: string
   toolName?: string
-  toolInput?: string
-  toolOutput?: string
+  inputText?: string
+  outputText?: string
   traceKindLabel?: string
   traceStatusLabel?: string
 }
@@ -37,16 +38,14 @@ function stringifyValue(value: unknown): string | undefined {
 
 function summarizeAssistantMessage(message: MockMessage): string {
   const textParts = message.parts
-    .filter(part => part.type === "text" && part.text)
-    .map(part => part.text as string)
+    .flatMap(part => part.type === "assistant_text" && part.markdown ? [part.markdown] : [])
 
   if (textParts.length > 0) {
     return truncate(textParts.join("\n\n"))
   }
 
   const reasoningParts = message.parts
-    .filter(part => part.type === "reasoning" && part.reasoningText)
-    .map(part => part.reasoningText as string)
+    .flatMap(part => part.type === "reasoning" && (part.summary || part.raw) ? [part.summary || part.raw || ""] : [])
   if (reasoningParts.length > 0) {
     return truncate(reasoningParts.join("\n\n"))
   }
@@ -62,7 +61,7 @@ function summarizeAssistantMessage(message: MockMessage): string {
   if (parallelParts.length > 0) {
     return truncate(
       parallelParts
-        .map(part => part.parallelSummary || part.parallelTitle || "并发批次")
+        .map(part => (part.type === "parallel_tools" || part.type === "parallel_sessions") ? part.summary || part.title || "并发批次" : "并发批次")
         .join(" · ")
     )
   }
@@ -70,14 +69,14 @@ function summarizeAssistantMessage(message: MockMessage): string {
   return truncate(message.text)
 }
 
-function buildPartExcerpt(part: MockPart): TranscriptExcerpt {
+function buildPartExcerpt(part: TranscriptItem): TranscriptExcerpt {
   if (part.type === "parallel_tools" || part.type === "parallel_sessions") {
-    const itemCount = part.parallelItems?.length || 0
+    const itemCount = part.items?.length || 0
     return {
       anchorId: part.id,
-      title: part.parallelTitle || (part.type === "parallel_sessions" ? "并发会话批次" : "并发工具批次"),
+      title: part.title || (part.type === "parallel_sessions" ? "并发会话批次" : "并发工具批次"),
       label: "批次摘录",
-      text: truncate(part.parallelSummary || `包含 ${itemCount} 个并发子项`),
+      text: truncate(part.summary || `包含 ${itemCount} 个并发子项`),
       traceKindLabel: part.type === "parallel_sessions" ? "并发会话" : "并发工具",
     }
   }
@@ -88,15 +87,15 @@ function buildPartExcerpt(part: MockPart): TranscriptExcerpt {
       title: part.tool || "工具调用",
       label: "工具摘录",
       toolName: part.tool || "未知工具",
-      toolInput: stringifyValue(part.toolInput),
-      toolOutput: truncate(part.toolOutput, 400),
+      inputText: stringifyValue(part.input),
+      outputText: truncate(part.output, 400),
     }
   }
 
   if (part.type === "trace") {
     return {
       anchorId: part.id,
-      title: part.traceTitle || "轨迹事件",
+      title: part.title || "轨迹事件",
       label: "节点摘录",
       text: truncate(part.text),
       traceKindLabel: part.traceNodeKind ? getTraceNodeKindLabel(part.traceNodeKind) : undefined,
@@ -109,7 +108,7 @@ function buildPartExcerpt(part: MockPart): TranscriptExcerpt {
       anchorId: part.id,
       title: "思考过程",
       label: "思考摘录",
-      text: truncate(part.reasoningText),
+      text: truncate(part.summary || part.raw),
       traceKindLabel: "思考摘要",
     }
   }
@@ -118,18 +117,18 @@ function buildPartExcerpt(part: MockPart): TranscriptExcerpt {
     anchorId: part.id,
     title: "文本片段",
     label: "对话摘录",
-    text: truncate(part.text),
+    text: truncate(part.type === "assistant_text" ? part.markdown : "text" in part ? part.text : undefined),
   }
 }
 
-function findPartByAnchor(parts: MockPart[], anchorId: string): MockPart | undefined {
+function findPartByAnchor(parts: TranscriptItem[], anchorId: string): TranscriptItem | undefined {
   for (const part of parts) {
     if (part.id === anchorId) {
       return part
     }
 
-    if (part.parallelItems?.length) {
-      const nested = findPartByAnchor(part.parallelItems, anchorId)
+    if ((part.type === "parallel_tools" || part.type === "parallel_sessions") && part.items?.length) {
+      const nested = findPartByAnchor(part.items, anchorId)
       if (nested) {
         return nested
       }
@@ -208,11 +207,11 @@ export const AgentTranscriptExcerpt: Component<AgentTranscriptExcerptProps> = (p
               <Match when={item().toolName}>
                 <div class="agent-manager-transcript__stack">
                   <p class="agent-manager-transcript__tool">{item().toolName}</p>
-                  <Show when={item().toolInput}>
-                    <pre class="agent-manager-code-block">{item().toolInput}</pre>
+                  <Show when={item().inputText}>
+                    <pre class="agent-manager-code-block">{item().inputText}</pre>
                   </Show>
-                  <Show when={item().toolOutput}>
-                    <pre class="agent-manager-code-block">{item().toolOutput}</pre>
+                  <Show when={item().outputText}>
+                    <pre class="agent-manager-code-block">{item().outputText}</pre>
                   </Show>
                 </div>
               </Match>

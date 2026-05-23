@@ -1,4 +1,5 @@
-import type { MockMessage, MockPart, MockTurn } from "../components/chat/mock-data"
+import type { MockMessage, MockTurn } from "../components/chat/mock-data"
+import type { ToolActivityItem, TranscriptItem } from "../components/chat/transcript-model"
 import { buildShellOutputText, extractShellCommand } from "../utils/shell-tool-output"
 
 function toNumber(value: unknown): number | undefined {
@@ -17,7 +18,7 @@ export function canForkMessage(message: MockMessage): boolean {
   return message.role === "assistant" && toNumber(message.historyCutIndex) !== undefined
 }
 
-export function canForkPart(part: MockPart): boolean {
+export function canForkPart(part: TranscriptItem): boolean {
   return toNumber(part.historyCutIndex) !== undefined
 }
 
@@ -31,7 +32,7 @@ export function keepThroughIndexForMessageFork(message: MockMessage): number | u
   return toNumber(message.historyCutIndex)
 }
 
-export function keepThroughIndexForPartFork(part: MockPart): number | undefined {
+export function keepThroughIndexForPartFork(part: TranscriptItem): number | undefined {
   return toNumber(part.historyCutIndex)
 }
 
@@ -43,15 +44,15 @@ export function copyTextForMessage(message: MockMessage): string {
   return nonEmpty([message.text, ...parts]).join("\n\n")
 }
 
-export function copyTextForToolCommand(part: MockPart): string {
-  return extractShellCommand(part.toolInput) || ""
+export function copyTextForToolCommand(part: ToolActivityItem): string {
+  return extractShellCommand(part.input) || ""
 }
 
-export function copyTextForToolOutput(part: MockPart): string {
-  if (part.toolOutputChunks?.length) {
-    return buildShellOutputText(part.toolOutputChunks)
+export function copyTextForToolOutput(part: ToolActivityItem): string {
+  if (part.outputChunks?.length) {
+    return buildShellOutputText(part.outputChunks)
   }
-  return nonEmpty([part.toolOutput, part.toolFinalOutput]).join("\n\n")
+  return nonEmpty([part.output, part.finalOutput]).join("\n\n")
 }
 
 export function copyTextForTranscript(turns: MockTurn[]): string {
@@ -70,12 +71,16 @@ export function copyTextForTranscript(turns: MockTurn[]): string {
     .join("\n\n")
 }
 
-function serializePartForCopy(part: MockPart): string[] {
-  if (part.type === "text") {
-    return nonEmpty([part.text])
+function serializePartForCopy(part: TranscriptItem): string[] {
+  if (part.type === "assistant_text") {
+    return nonEmpty([part.markdown])
+  }
+  if (part.type === "thinking") {
+    return nonEmpty([part.detail ? `${part.title}\n${part.detail}` : part.title])
   }
   if (part.type === "reasoning") {
-    return nonEmpty([part.reasoningText ? `Reasoning:\n${part.reasoningText}` : undefined])
+    const text = part.summary || part.raw
+    return nonEmpty([text ? `Reasoning:\n${text}` : undefined])
   }
   if (part.type === "tool") {
     const title = part.tool || "tool"
@@ -86,14 +91,17 @@ function serializePartForCopy(part: MockPart): string[] {
       output,
     ])
   }
+  if (part.type === "notice") {
+    return nonEmpty([part.text])
+  }
   if (part.type === "terminal") {
-    return nonEmpty([part.terminalContent])
+    return nonEmpty([part.content])
   }
   if (part.type === "session") {
-    return nonEmpty([part.sessionTitle, part.sessionSummary])
+    return nonEmpty([part.title, part.summary])
   }
   if (part.type === "view") {
-    return nonEmpty([part.viewTitle])
+    return nonEmpty([part.title])
   }
   return []
 }

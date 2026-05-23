@@ -119,8 +119,8 @@ describe("session history", () => {
             parts: [
               {
                 id: "text-1",
-                type: "text",
-                text: "done",
+                type: "assistant_text",
+                markdown: "done",
               },
             ],
             timestamp: 1,
@@ -173,8 +173,8 @@ describe("session history", () => {
             parts: [
               {
                 id: "p2",
-                type: "text",
-                text: "Now writing the comprehensive synthesis document.",
+                type: "assistant_text",
+                markdown: "Now writing the comprehensive synthesis document.",
               },
             ],
             timestamp: 2,

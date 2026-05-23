@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import type { MockPart } from "../components/chat/mock-data"
+import type { ToolActivityItem, TranscriptItem } from "../components/chat/transcript-model"
 import {
   approvalDecisionAfterResolution,
   approvalStatusAfterResolution,
@@ -9,7 +9,7 @@ import {
   upsertToolPartInParts,
 } from "./tool-event-parts"
 
-function toolPart(part: Partial<MockPart>): MockPart {
+function toolPart(part: Partial<ToolActivityItem>): ToolActivityItem {
   return {
     id: "tool-1",
     type: "tool",
@@ -34,12 +34,12 @@ describe("tool event part state helpers", () => {
   })
 
   it("merges a denied final result into the existing tool card", () => {
-    let parts: MockPart[] = []
+    let parts: ToolActivityItem[] = []
     parts = upsertToolPartInParts(parts, "shell", {
       status: "awaiting_approval",
       toolCallId: "call-1",
       approvalId: "approval-1",
-    })
+    }) as ToolActivityItem[]
     parts = parts.map((part) => ({
       ...part,
       approvalDecision: approvalDecisionAfterResolution(part.approvalDecision, "deny_once"),
@@ -48,12 +48,12 @@ describe("tool event part state helpers", () => {
     parts = upsertToolPartInParts(parts, "shell", {
       status: statusAfterToolReturn(parts[0].status),
       toolCallId: "call-1",
-      toolOutput: "denied by operator",
-    }, { fallbackId: "call-1", matchReturn: true })
+      output: "denied by operator",
+    }, { fallbackId: "call-1", matchReturn: true }) as ToolActivityItem[]
 
     expect(parts).toHaveLength(1)
     expect(parts[0].status).toBe("denied")
-    expect(parts[0].toolOutput).toBe("denied by operator")
+    expect(parts[0]).toMatchObject({ output: "denied by operator" })
   })
 
   it("does not attach an unidentified final result to another tool card", () => {

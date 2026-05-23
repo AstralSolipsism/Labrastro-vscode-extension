@@ -5,12 +5,16 @@ import { WelcomeState } from "./WelcomeState"
 import { WorkingIndicator } from "./WorkingIndicator"
 import { IconButton } from "../common/IconButton"
 import { useVirtualMessageList, type UseVirtualMessageListResult, type VirtualTurnItem } from "./useVirtualMessageList"
-import type { MockTurn, MockSession, MockMessage, MockPart } from "./mock-data"
+import type { MockTurn, MockSession, MockMessage } from "./mock-data"
+import type { ToolActivityItem, TranscriptItem } from "./transcript-model"
+import type { SessionListState } from "../../context/trace"
 
 interface MessageListProps {
   turns: MockTurn[]
   recentSessions: MockSession[]
+  sessionListState: SessionListState
   isWorking: boolean
+  showWorkingIndicator?: boolean
   defaultReasoningOpen?: boolean
   workingText?: string
   workingElapsed?: string
@@ -20,9 +24,9 @@ interface MessageListProps {
   onCopyMessage?: (message: MockMessage) => Promise<void> | void
   onEditForkMessage?: (message: MockMessage) => void
   onForkMessage?: (message: MockMessage) => void
-  onCopyToolCommand?: (part: MockPart) => Promise<void> | void
-  onCopyToolOutput?: (part: MockPart) => Promise<void> | void
-  onForkPart?: (part: MockPart) => void
+  onCopyToolCommand?: (part: ToolActivityItem) => Promise<void> | void
+  onCopyToolOutput?: (part: ToolActivityItem) => Promise<void> | void
+  onForkPart?: (part: TranscriptItem) => void
 }
 
 export const MessageList: Component<MessageListProps> = (props) => {
@@ -44,7 +48,11 @@ export const MessageList: Component<MessageListProps> = (props) => {
       >
         <div classList={{ "message-list__empty-wrap": isEmpty() }}>
           <Show when={isEmpty()}>
-            <WelcomeState recentSessions={props.recentSessions} onSelectSession={props.onSelectSession} />
+            <WelcomeState
+              recentSessions={props.recentSessions}
+              sessionListState={props.sessionListState}
+              onSelectSession={props.onSelectSession}
+            />
           </Show>
 
           <Show when={!isEmpty()}>
@@ -67,6 +75,7 @@ export const MessageList: Component<MessageListProps> = (props) => {
                     onCopyToolOutput={props.onCopyToolOutput}
                     onForkPart={props.onForkPart}
                     defaultReasoningOpen={props.defaultReasoningOpen}
+                    runningProcessLabel={props.workingText}
                   />
                 )}
               </Index>
@@ -74,7 +83,7 @@ export const MessageList: Component<MessageListProps> = (props) => {
           </Show>
 
           <WorkingIndicator
-            isWorking={props.isWorking}
+            isWorking={props.showWorkingIndicator ?? props.isWorking}
             text={props.workingText}
             elapsed={props.workingElapsed}
           />
@@ -90,9 +99,10 @@ export const MessageList: Component<MessageListProps> = (props) => {
   )
 }
 
-interface VirtualMessageRowProps extends Omit<MessageListProps, "turns" | "recentSessions" | "isWorking" | "workingText" | "workingElapsed"> {
+interface VirtualMessageRowProps extends Omit<MessageListProps, "turns" | "recentSessions" | "sessionListState" | "isWorking" | "showWorkingIndicator" | "workingText" | "workingElapsed"> {
   item: Accessor<VirtualTurnItem>
   virtualList: UseVirtualMessageListResult
+  runningProcessLabel?: string
 }
 
 const VirtualMessageRow: Component<VirtualMessageRowProps> = (props) => {
@@ -126,6 +136,7 @@ const VirtualMessageRow: Component<VirtualMessageRowProps> = (props) => {
         onCopyToolOutput={props.onCopyToolOutput}
         onForkPart={props.onForkPart}
         defaultReasoningOpen={props.defaultReasoningOpen}
+        runningProcessLabel={props.runningProcessLabel}
       />
     </div>
   )

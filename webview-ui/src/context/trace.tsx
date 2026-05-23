@@ -4,15 +4,20 @@ import type {
   TraceNavigationIntent,
   TraceNavigationPayload,
   TraceNode,
+  ToolExecutionStatus,
 } from "../types/trace"
 import type {
   MockMessage,
-  MockPart,
   MockSession,
   MockSessionBundle,
   MockTaskStats,
   MockTurn,
 } from "../components/chat/mock-data"
+import type {
+  TranscriptItem,
+  TranscriptOutputFormat,
+  TranscriptTextFormat,
+} from "../components/chat/transcript-model"
 import {
   sessionBundleHasContent,
   shouldIgnoreInitialSessionLoad,
@@ -110,7 +115,404 @@ const EMPTY_TRACE_UI: MockSessionBundle["traceUI"] = {
 }
 
 function objectValue(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? value as Record<string, unknown> : {}
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : ""
+}
+
+function numberValue(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : undefined
+  }
+  return undefined
+}
+
+function textContentValue(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === "string") return value
+    if (value !== undefined && value !== null) return String(value)
+  }
+  return ""
+}
+
+function firstNonEmptyTextValue(...values: unknown[]): string {
+  for (const value of values) {
+    if (value === undefined || value === null) continue
+    const text = typeof value === "string" ? value : String(value)
+    if (text.trim()) return text
+  }
+  return ""
+}
+
+function recordFieldValue(payload: Record<string, unknown>, ...keys: string[]): Record<string, unknown> | undefined {
+  for (const key of keys) {
+    const record = objectValue(payload[key])
+    if (Object.keys(record).length > 0) return record
+  }
+  return undefined
+}
+
+function hasMeaningfulPayloadValue(value: unknown): boolean {
+  if (value === undefined || value === null) return false
+  if (typeof value === "string") return value.trim().length > 0
+  if (typeof value === "number" || typeof value === "boolean") return true
+  if (Array.isArray(value)) return value.some(hasMeaningfulPayloadValue)
+  if (typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).some(hasMeaningfulPayloadValue)
+  }
+  return false
+}
+
+function hasMeaningfulRecord(value: Record<string, unknown> | undefined): boolean {
+  if (!value) return false
+  return Object.values(value).some(hasMeaningfulPayloadValue)
+}
+
+function hasMeaningfulStructuredText(
+  payload: Record<string, unknown>,
+  structuredPayload: Record<string, unknown> | undefined,
+  ...keys: string[]
+): boolean {
+  const directText = firstNonEmptyTextValue(...keys.map((key) => payload[key])).trim()
+  if (directText) return true
+  if (!structuredPayload) return false
+  return firstNonEmptyTextValue(
+    structuredPayload.markdown,
+    structuredPayload.content,
+    structuredPayload.message,
+    structuredPayload.summary,
+    structuredPayload.text,
+    structuredPayload.rendered_context,
+  ).trim().length > 0
+}
+
+function arrayFieldValue<T = unknown>(payload: Record<string, unknown>, ...keys: string[]): T[] | undefined {
+  for (const key of keys) {
+    if (Array.isArray(payload[key])) return payload[key] as T[]
+  }
+  return undefined
+}
+
+function textFormatValue(value: unknown): TranscriptTextFormat | undefined {
+  return value === "plain" || value === "markdown" ? value : undefined
+}
+
+function outputFormatValue(value: unknown): TranscriptOutputFormat | undefined {
+  return value === "plain" || value === "markdown" || value === "terminal" || value === "json"
+    ? value
+    : undefined
+}
+
+function toolStatusValue(value: unknown): ToolExecutionStatus | undefined {
+  return value === "pending" ||
+    value === "running" ||
+    value === "awaiting_approval" ||
+    value === "approved" ||
+    value === "denied" ||
+    value === "returned" ||
+    value === "error" ||
+    value === "cancelled" ||
+    value === "protocol_error"
+    ? value
+    : undefined
+}
+
+function sessionItemKindValue(value: unknown): Extract<TranscriptItem, { type: "session" }>["kind"] | undefined {
+  return value === "main" || value === "fork" || value === "delegated_run" ? value : undefined
+}
+
+function sessionItemStateValue(value: unknown): Extract<TranscriptItem, { type: "session" }>["state"] | undefined {
+  return value === "active" ||
+    value === "success" ||
+    value === "streaming" ||
+    value === "abandoned" ||
+    value === "cancelled" ||
+    value === "error"
+    ? value
+    : undefined
+}
+
+function normalizeTranscriptMeta(
+  payload: Record<string, unknown>,
+  fallbackId: string,
+): { id: string } & Record<string, unknown> {
+  const meta: { id: string } & Record<string, unknown> = {
+    id: stringValue(payload.id) || fallbackId,
+  }
+  const eventKey = stringValue(payload.eventKey)
+  const sessionEventSeq = numberValue(payload.sessionEventSeq)
+  const historyCutIndex = numberValue(payload.historyCutIndex)
+  const traceNodeId = stringValue(payload.traceNodeId)
+  const traceNodeKind = stringValue(payload.traceNodeKind)
+  const traceNodeStatus = stringValue(payload.traceNodeStatus)
+  if (eventKey) meta.eventKey = eventKey
+  if (sessionEventSeq !== undefined) meta.sessionEventSeq = sessionEventSeq
+  if (historyCutIndex !== undefined) meta.historyCutIndex = historyCutIndex
+  if (traceNodeId) meta.traceNodeId = traceNodeId
+  if (traceNodeKind) meta.traceNodeKind = traceNodeKind
+  if (traceNodeStatus) meta.traceNodeStatus = traceNodeStatus
+  return meta
+}
+
+function normalizeTranscriptItems(value: unknown, fallbackPrefix: string): TranscriptItem[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((item, index) => normalizeTranscriptItem(item, `${fallbackPrefix}-${index}`))
+    .filter((item): item is TranscriptItem => Boolean(item))
+}
+
+function normalizeTranscriptItem(value: unknown, fallbackId: string): TranscriptItem | undefined {
+  const payload = objectValue(value)
+  const type = stringValue(payload.type)
+  if (!type) return undefined
+  const meta = normalizeTranscriptMeta(payload, fallbackId)
+
+  if (type === "assistant_text" || type === "text") {
+    const markdown = textContentValue(payload.markdown, payload.text).trim()
+    if (!markdown) return undefined
+    return {
+      ...meta,
+      type: "assistant_text",
+      markdown,
+      format: textFormatValue(payload.format) || textFormatValue(payload.textFormat),
+      streaming: payload.streaming === true,
+      streamKey: stringValue(payload.streamKey) || stringValue(payload.textStreamKey) || undefined,
+    } as TranscriptItem
+  }
+
+  if (type === "reasoning") {
+    const raw = textContentValue(payload.raw, payload.reasoningText, payload.text).trim()
+    const summary = textContentValue(payload.summary, payload.reasoningSummary).trim()
+    if (!raw && !summary) return undefined
+    return {
+      ...meta,
+      type: "reasoning",
+      summary: summary || undefined,
+      raw: raw || summary,
+      format: textFormatValue(payload.format) || textFormatValue(payload.reasoningFormat),
+    } as TranscriptItem
+  }
+
+  if (type === "thinking") {
+    const raw = textContentValue(payload.raw, payload.detail, payload.text).trim()
+    return {
+      ...meta,
+      type: "thinking",
+      title: stringValue(payload.title) || "思考过程",
+      detail: stringValue(payload.detail) || undefined,
+      active: payload.active === true,
+      raw: raw || undefined,
+    } as TranscriptItem
+  }
+
+  if (type === "tool") {
+    const output = textContentValue(payload.output, payload.toolOutput)
+    const tool = stringValue(payload.tool) || stringValue(payload.toolName) || "tool"
+    return {
+      ...meta,
+      type: "tool",
+      tool,
+      status: toolStatusValue(payload.status),
+      title: stringValue(payload.title) || undefined,
+      subtitle: stringValue(payload.subtitle) || undefined,
+      toolCallId: stringValue(payload.toolCallId) || undefined,
+      source: stringValue(payload.source) || stringValue(payload.toolSource) || undefined,
+      input: recordFieldValue(payload, "input", "toolInput"),
+      output,
+      outputFormat: outputFormatValue(payload.outputFormat) || outputFormatValue(payload.toolOutputFormat),
+      stream: stringValue(payload.stream) || undefined,
+      outputChunks: arrayFieldValue(payload, "outputChunks", "toolOutputChunks"),
+      finalOutput: textContentValue(payload.finalOutput, payload.toolFinalOutput) || undefined,
+      outputTruncated: payload.outputTruncated === true || payload.toolOutputTruncated === true,
+      resultMeta: recordFieldValue(payload, "resultMeta", "toolResultMeta"),
+      startedAt: numberValue(payload.startedAt) ?? numberValue(payload.toolStartedAt),
+      endedAt: numberValue(payload.endedAt) ?? numberValue(payload.toolEndedAt),
+      approvalId: stringValue(payload.approvalId) || undefined,
+      approvalReason: stringValue(payload.approvalReason) || undefined,
+      approvalResultReason: stringValue(payload.approvalResultReason) || undefined,
+      approvalDecision: stringValue(payload.approvalDecision) || undefined,
+      approvalSections: arrayFieldValue(payload, "approvalSections"),
+      approvalContent: stringValue(payload.approvalContent) || undefined,
+    } as TranscriptItem
+  }
+
+  if (type === "notice") {
+    const text = textContentValue(payload.text, payload.noticeText).trim()
+    if (!text) return undefined
+    return {
+      ...meta,
+      type: "notice",
+      level: stringValue(payload.level) || "info",
+      text,
+      format: textFormatValue(payload.format),
+    } as TranscriptItem
+  }
+
+  if (type === "remote_status") {
+    return {
+      ...meta,
+      type: "remote_status",
+      peerId: stringValue(payload.peerId) || stringValue(payload.remotePeerId) || undefined,
+      sessionId: stringValue(payload.sessionId) || stringValue(payload.remoteSessionId) || undefined,
+      fingerprint: stringValue(payload.fingerprint) || stringValue(payload.remoteFingerprint) || undefined,
+      mode: stringValue(payload.mode) || stringValue(payload.remoteMode) || undefined,
+      model: stringValue(payload.model) || stringValue(payload.remoteModel) || undefined,
+      workspaceRoot: stringValue(payload.workspaceRoot) || stringValue(payload.remoteWorkspaceRoot) || undefined,
+    } as TranscriptItem
+  }
+
+  if (type === "trace") {
+    return {
+      ...meta,
+      type: "trace",
+      title: stringValue(payload.title) || stringValue(payload.traceTitle) || undefined,
+      text: stringValue(payload.text) || stringValue(payload.traceText) || undefined,
+    } as TranscriptItem
+  }
+
+  if (type === "session") {
+    return {
+      ...meta,
+      type: "session",
+      sessionId: stringValue(payload.sessionId) || undefined,
+      title: stringValue(payload.title) || stringValue(payload.sessionTitle) || undefined,
+      kind: sessionItemKindValue(payload.kind) || sessionItemKindValue(payload.sessionKind),
+      state: sessionItemStateValue(payload.state) || sessionItemStateValue(payload.sessionState),
+      summary: stringValue(payload.summary) || stringValue(payload.sessionSummary) || undefined,
+    } as TranscriptItem
+  }
+
+  if (type === "terminal") {
+    const content = textContentValue(payload.content, payload.terminalContent).trim()
+    if (!content) return undefined
+    return {
+      ...meta,
+      type: "terminal",
+      title: stringValue(payload.title) || stringValue(payload.terminalTitle) || undefined,
+      content,
+    } as TranscriptItem
+  }
+
+  if (type === "view") {
+    const viewPayload = recordFieldValue(payload, "payload", "viewPayload")
+    if (!hasMeaningfulRecord(viewPayload)) return undefined
+    return {
+      ...meta,
+      type: "view",
+      title: stringValue(payload.title) || stringValue(payload.viewTitle) || undefined,
+      viewType: stringValue(payload.viewType) || stringValue(payload.view_type) || undefined,
+      level: stringValue(payload.level) || stringValue(payload.viewLevel) || undefined,
+      payload: viewPayload,
+    } as TranscriptItem
+  }
+
+  if (type === "context_event") {
+    const contextPayload = recordFieldValue(payload, "payload", "contextPayload")
+    if (!hasMeaningfulRecord(contextPayload) && !hasMeaningfulStructuredText(payload, contextPayload, "title", "contextTitle", "text", "message", "summary")) {
+      return undefined
+    }
+    return {
+      ...meta,
+      type: "context_event",
+      title: stringValue(payload.title) || stringValue(payload.contextTitle) || undefined,
+      payload: contextPayload,
+    } as TranscriptItem
+  }
+
+  if (type === "memory_context") {
+    const memoryPayload = recordFieldValue(payload, "payload", "memoryPayload")
+    if (!hasMeaningfulRecord(memoryPayload) && !hasMeaningfulStructuredText(payload, memoryPayload, "title", "memoryTitle", "text", "message", "summary")) {
+      return undefined
+    }
+    return {
+      ...meta,
+      type: "memory_context",
+      title: stringValue(payload.title) || stringValue(payload.memoryTitle) || undefined,
+      payload: memoryPayload,
+    } as TranscriptItem
+  }
+
+  if (type === "ui_event") {
+    const uiPayload = recordFieldValue(payload, "payload", "uiEventPayload")
+    if (!hasMeaningfulRecord(uiPayload) && !hasMeaningfulStructuredText(payload, uiPayload, "title", "uiEventTitle", "text", "message", "summary")) {
+      return undefined
+    }
+    return {
+      ...meta,
+      type: "ui_event",
+      kind: stringValue(payload.kind) || stringValue(payload.uiEventKind) || undefined,
+      level: stringValue(payload.level) || stringValue(payload.uiEventLevel) || undefined,
+      title: stringValue(payload.title) || stringValue(payload.uiEventTitle) || undefined,
+      payload: uiPayload,
+    } as TranscriptItem
+  }
+
+  if (type === "parallel_tools" || type === "parallel_sessions") {
+    return {
+      ...meta,
+      type,
+      title: stringValue(payload.title) || stringValue(payload.parallelTitle) || undefined,
+      summary: stringValue(payload.summary) || stringValue(payload.parallelSummary) || undefined,
+      groupId: stringValue(payload.groupId) || undefined,
+      items: normalizeTranscriptItems(
+        Array.isArray(payload.items) ? payload.items : payload.parallelItems,
+        `${fallbackId}-item`,
+      ),
+    } as TranscriptItem
+  }
+
+  return undefined
+}
+
+function normalizeMessage(value: unknown, fallbackId: string, fallbackRole: "user" | "assistant"): MockMessage | undefined {
+  const payload = objectValue(value)
+  const role = payload.role === "user" || payload.role === "assistant" ? payload.role : fallbackRole
+  const text = textContentValue(payload.text)
+  const normalizedParts = normalizeTranscriptItems(payload.parts, `${fallbackId}-part`)
+  const shouldAppendTextPart = role === "assistant" &&
+    text.trim().length > 0 &&
+    !normalizedParts.some((part) => part.type === "assistant_text")
+  const parts = shouldAppendTextPart
+    ? [
+        ...normalizedParts,
+        {
+          ...normalizeTranscriptMeta({ ...payload, id: `${fallbackId}-text` }, `${fallbackId}-text`),
+          type: "assistant_text",
+          markdown: text,
+          format: "markdown",
+        } as TranscriptItem,
+      ]
+    : normalizedParts
+  return {
+    id: stringValue(payload.id) || fallbackId,
+    role,
+    text,
+    parts,
+    timestamp: numberValue(payload.timestamp) ?? Date.now(),
+    historyMessageIndex: numberValue(payload.historyMessageIndex),
+    historyCutIndex: numberValue(payload.historyCutIndex),
+    traceNodeId: stringValue(payload.traceNodeId) || undefined,
+    traceNodeKind: (stringValue(payload.traceNodeKind) || undefined) as MockMessage["traceNodeKind"],
+    traceNodeStatus: (stringValue(payload.traceNodeStatus) || undefined) as MockMessage["traceNodeStatus"],
+  }
+}
+
+function normalizeTurn(value: unknown, index: number): MockTurn | undefined {
+  const payload = objectValue(value)
+  const userMessage = normalizeMessage(payload.userMessage, `user-${index}`, "user")
+  if (!userMessage) return undefined
+  const assistantMessages = Array.isArray(payload.assistantMessages)
+    ? payload.assistantMessages
+      .map((message, messageIndex) => normalizeMessage(message, `assistant-${index}-${messageIndex}`, "assistant"))
+      .filter((message): message is MockMessage => Boolean(message))
+    : []
+  return { userMessage, assistantMessages }
 }
 
 function normalizeSession(value: unknown): MockSession | undefined {
@@ -187,24 +589,84 @@ function normalizeSessionList(value: unknown): MockSession[] {
   return value.map(normalizeSession).filter((item): item is MockSession => Boolean(item))
 }
 
-function normalizeSessionBundle(value: unknown): MockSessionBundle | undefined {
+function normalizeSessionListStatus(value: unknown, sessions: MockSession[]): SessionListStatus {
+  if (
+    value === "idle" ||
+    value === "loading" ||
+    value === "unauthenticated" ||
+    value === "unavailable" ||
+    value === "empty" ||
+    value === "ready" ||
+    value === "error"
+  ) {
+    return value
+  }
+  return sessions.length ? "ready" : "empty"
+}
+
+function normalizeSessionListState(
+  message: Record<string, unknown>,
+  sessions: MockSession[],
+): SessionListState {
+  const status = normalizeSessionListStatus(message.status, sessions)
+  const rawMessage = stringValue(message.message)
+  return {
+    status,
+    message: rawMessage || sessionListStatusMessage(status),
+    updatedAt: new Date().toISOString(),
+    fingerprint: stringValue(message.fingerprint),
+  }
+}
+
+function sessionListReadyState(sessions: MockSession[], fingerprint: unknown): SessionListState {
+  const status: SessionListStatus = sessions.length ? "ready" : "empty"
+  return {
+    status,
+    message: sessionListStatusMessage(status),
+    updatedAt: new Date().toISOString(),
+    fingerprint: stringValue(fingerprint),
+  }
+}
+
+function sessionListStatusMessage(status: SessionListStatus): string {
+  if (status === "loading") return "正在加载会话历史。"
+  if (status === "unauthenticated") return "未登录，无法加载会话历史。"
+  if (status === "unavailable") return "当前后端不支持会话历史。"
+  if (status === "empty") return "当前没有可恢复的历史会话。"
+  if (status === "error") return "会话历史加载失败。"
+  return ""
+}
+
+export function normalizeSessionBundle(value: unknown): MockSessionBundle | undefined {
   const payload = objectValue(value)
+  const trace = objectValue(payload.trace)
   const session = normalizeSession(payload.session)
   if (!session) return undefined
+  const traceNodes = Array.isArray(payload.traceNodes) ? payload.traceNodes : trace.nodes
+  const traceEdges = Array.isArray(payload.traceEdges) ? payload.traceEdges : trace.edges
+  const traceUI = Object.keys(objectValue(payload.traceUI)).length
+    ? objectValue(payload.traceUI)
+    : objectValue(trace.ui)
   return {
     session,
     stats: {
       ...EMPTY_STATS,
       ...objectValue(payload.stats),
     },
-    turns: Array.isArray(payload.turns) ? payload.turns as MockTurn[] : [],
-    traceNodes: Array.isArray(payload.traceNodes) ? payload.traceNodes as TraceNode[] : [],
-    traceEdges: Array.isArray(payload.traceEdges) ? payload.traceEdges as TraceEdge[] : [],
+    turns: Array.isArray(payload.turns)
+      ? payload.turns.map(normalizeTurn).filter((turn): turn is MockTurn => Boolean(turn))
+      : [],
+    traceNodes: Array.isArray(traceNodes) ? traceNodes as TraceNode[] : [],
+    traceEdges: Array.isArray(traceEdges) ? traceEdges as TraceEdge[] : [],
     traceUI: {
       ...EMPTY_TRACE_UI,
-      ...objectValue(payload.traceUI),
+      ...traceUI,
     },
   }
+}
+
+export function normalizeRemoteSessionPayload(message: Record<string, unknown>): MockSessionBundle | undefined {
+  return normalizeSessionBundle(message.bundle) || normalizeSessionBundle(message.document)
 }
 
 interface TraceSnapshotPayload {
@@ -218,9 +680,19 @@ interface TraceSnapshotPayload {
   turns?: MockTurn[]
 }
 
+export type SessionListStatus = "idle" | "loading" | "unauthenticated" | "unavailable" | "empty" | "ready" | "error"
+
+export interface SessionListState {
+  status: SessionListStatus
+  message: string
+  updatedAt?: string
+  fingerprint?: string
+}
+
 interface TraceContextValue {
   recentSessions: () => MockSession[]
   allSessions: () => MockSession[]
+  sessionListState: () => SessionListState
   rootSessionId: () => string | null
   currentSessionId: () => string | null
   currentSession: () => MockSession | undefined
@@ -236,6 +708,7 @@ interface TraceContextValue {
   activeTraceNodeId: () => string | null
   panelIntent: () => TraceNavigationIntent | null
   loadSession: (sessionId: string) => void
+  refreshSessions: () => void
   getSessionBundle: (sessionId: string) => MockSessionBundle | undefined
   clearSession: () => void
   deleteSession: (sessionId: string) => void
@@ -268,6 +741,10 @@ export const TraceProvider: ParentComponent = (props) => {
   const vscode = useVSCode()
 
   const [allSessions, setAllSessions] = createSignal<MockSession[]>([])
+  const [sessionListState, setSessionListState] = createSignal<SessionListState>({
+    status: "idle",
+    message: "",
+  })
   const [sessionBundles, setSessionBundles] = createSignal<Record<string, MockSessionBundle>>({})
   const [currentSessionId, setCurrentSessionId] = createSignal<string | null>(null)
   const [stats, setStats] = createSignal<MockTaskStats>(cloneValue(EMPTY_STATS))
@@ -409,6 +886,17 @@ export const TraceProvider: ParentComponent = (props) => {
     vscode.postMessage({ type: "session.load", sessionId })
   }
 
+  const refreshSessions = () => {
+    setSessionListState({
+      status: "loading",
+      message: "正在加载会话历史。",
+      updatedAt: new Date().toISOString(),
+      fingerprint: sessionListState().fingerprint,
+    })
+    setAllSessions([])
+    vscode.postMessage({ type: "session.list" })
+  }
+
   const clearSession = () => {
     setCurrentSessionId(null)
     setStats(EMPTY_STATS)
@@ -487,10 +975,10 @@ export const TraceProvider: ParentComponent = (props) => {
           id: partId,
           type: "session",
           sessionId: options.childSessionId,
-          sessionTitle: options.childSessionTitle,
-          sessionKind: options.childSessionKind || "fork",
-          sessionState: "active",
-          sessionSummary: options.childSessionSummary,
+          title: options.childSessionTitle,
+          kind: options.childSessionKind || "fork",
+          state: "active",
+          summary: options.childSessionSummary,
           traceNodeId: options.sourceNodeId,
           traceNodeKind: options.childSessionKind === "delegated_run" ? "delegated_run_spawn" : "fork",
           traceNodeStatus: "success",
@@ -583,10 +1071,10 @@ export const TraceProvider: ParentComponent = (props) => {
           id: partId,
           type: "session",
           sessionId,
-          sessionTitle,
-          sessionKind: mode,
-          sessionState: "active",
-          sessionSummary,
+          title: sessionTitle,
+          kind: mode,
+          state: "active",
+          summary: sessionSummary,
           traceNodeId: controlNodeId,
           traceNodeKind: controlNode.kind,
           traceNodeStatus: controlNode.status,
@@ -653,8 +1141,8 @@ export const TraceProvider: ParentComponent = (props) => {
             parts: [
               {
                 id: buildMockId("part-text"),
-                type: "text",
-                text:
+                type: "assistant_text",
+                markdown:
                   mode === "delegated_run"
                     ? "委托运行会话已创建，等待继续补充工具执行与结果回流。"
                     : "Fork 会话已创建，等待继续补充这条分支上的对话与操作。",
@@ -781,7 +1269,7 @@ export const TraceProvider: ParentComponent = (props) => {
         {
           id: rollbackPartId,
           type: "trace",
-          traceTitle: rollbackNode.title,
+          title: rollbackNode.title,
           text: rollbackNode.summary,
           traceNodeId: rollbackNodeId,
           traceNodeKind: "rollback",
@@ -977,14 +1465,18 @@ export const TraceProvider: ParentComponent = (props) => {
   onMount(() => {
     const unsubscribe = vscode.onMessage((msg: ExtensionMessage) => {
       if (msg.type === "session.list") {
-        setAllSessions(normalizeSessionList(msg.sessions))
+        const sessions = normalizeSessionList(msg.sessions)
+        const nextState = normalizeSessionListState(msg as Record<string, unknown>, sessions)
+        setSessionListState(nextState)
+        setAllSessions(nextState.status === "ready" || nextState.status === "empty" ? sessions : [])
       }
 
       if (msg.type === "session.deleted" && typeof msg.sessionId === "string") {
         removeSessionBundle(msg.sessionId)
         const sessions = normalizeSessionList(msg.sessions)
-        if (sessions.length) {
+        if (Object.prototype.hasOwnProperty.call(msg, "sessions")) {
           setAllSessions(sessions)
+          setSessionListState(sessionListReadyState(sessions, msg.fingerprint))
         }
       }
 
@@ -1004,10 +1496,11 @@ export const TraceProvider: ParentComponent = (props) => {
         if (shouldIgnoreInitialSessionLoad(currentSessionId(), msg.sessionId, msg.reason)) {
           return
         }
-        const remoteBundle = normalizeSessionBundle(msg.document || msg.bundle)
+        const remoteBundle = normalizeRemoteSessionPayload(msg as Record<string, unknown>)
         const sessions = normalizeSessionList(msg.sessions)
-        if (sessions.length) {
+        if (Object.prototype.hasOwnProperty.call(msg, "sessions")) {
           setAllSessions(sessions)
+          setSessionListState(sessionListReadyState(sessions, msg.fingerprint))
         }
         if (remoteBundle) {
           writeSessionBundle(msg.sessionId, remoteBundle, {
@@ -1064,6 +1557,7 @@ export const TraceProvider: ParentComponent = (props) => {
   const value: TraceContextValue = {
     recentSessions,
     allSessions,
+    sessionListState,
     rootSessionId,
     currentSessionId,
     currentSession,
@@ -1079,6 +1573,7 @@ export const TraceProvider: ParentComponent = (props) => {
     activeTraceNodeId,
     panelIntent,
     loadSession,
+    refreshSessions,
     getSessionBundle,
     clearSession,
     deleteSession,
