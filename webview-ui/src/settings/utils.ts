@@ -313,6 +313,33 @@ export function isAccountAdminRole(role: unknown): boolean {
   return role === "admin" || role === "superadmin"
 }
 
+export function canUseSettingsAdminData(connectionState: Record<string, unknown>): boolean {
+  return connectionState.authenticated === true && isAccountAdminRole(connectionState.role)
+}
+
+export function settingsAdminRecordList(
+  adminState: Record<string, unknown>,
+  key: string,
+  adminDataUsable: boolean,
+): Record<string, unknown>[] {
+  if (!adminDataUsable) return []
+  const items = adminState[key]
+  return Array.isArray(items) ? items as Record<string, unknown>[] : []
+}
+
+export function providerListEmptyMessageForState(input: {
+  connectionStatus?: unknown
+  authenticated?: unknown
+  adminUsable?: boolean
+  adminError?: unknown
+}): string {
+  if (input.connectionStatus === "checking") return "正在检查登录状态。"
+  if (input.authenticated !== true) return "未登录，无法加载服务商。"
+  if (input.adminUsable !== true) return "当前账号没有管理服务商的权限。"
+  if (input.adminError) return "服务商列表加载失败。"
+  return "暂无服务商"
+}
+
 export function runtimeProfileDraftToPayload(draft: RuntimeProfileDraft): Record<string, unknown> {
   return {
     executor: draft.executor,

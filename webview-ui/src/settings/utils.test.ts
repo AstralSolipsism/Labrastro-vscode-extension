@@ -3,6 +3,7 @@ import {
   PROVIDER_KIND_REGISTRY,
   approvalRuleDraftToPayload,
   agentDefinitionDraftToPayload,
+  canUseSettingsAdminData,
   choiceListToText,
   inferProviderKind,
   isAccountAdminRole,
@@ -10,9 +11,11 @@ import {
   modelProfilePayload,
   normalizeEnvironmentSnapshot,
   providerDraftToPayload,
+  providerListEmptyMessageForState,
   resolveConnectionNotice,
   resolveProviderProtocol,
   runtimeProfileDraftToPayload,
+  settingsAdminRecordList,
   textToChoiceList,
   toolchainEditorToPayload,
   uniqueCommandRules,
@@ -303,5 +306,27 @@ describe("settings utils", () => {
     expect(isAccountAdminRole("superadmin")).toBe(true)
     expect(isAccountAdminRole("user")).toBe(false)
     expect(isAccountAdminRole(undefined)).toBe(false)
+  })
+
+  it("gates provider and profile records by current authenticated admin state", () => {
+    const oldAdminState = {
+      providers: [{ id: "stale-provider" }],
+      model_profiles: [{ profile_id: "stale-profile" }],
+    }
+
+    expect(canUseSettingsAdminData({ authenticated: true, role: "admin" })).toBe(true)
+    expect(canUseSettingsAdminData({ authenticated: false, role: "admin" })).toBe(false)
+    expect(canUseSettingsAdminData({ authenticated: true, role: "user" })).toBe(false)
+    expect(settingsAdminRecordList(oldAdminState, "providers", false)).toEqual([])
+    expect(settingsAdminRecordList(oldAdminState, "model_profiles", false)).toEqual([])
+    expect(settingsAdminRecordList(oldAdminState, "providers", true)).toEqual([{ id: "stale-provider" }])
+  })
+
+  it("explains why provider records are not currently available", () => {
+    expect(providerListEmptyMessageForState({ connectionStatus: "checking" })).toBe("正在检查登录状态。")
+    expect(providerListEmptyMessageForState({ connectionStatus: "ready", authenticated: false })).toBe("未登录，无法加载服务商。")
+    expect(providerListEmptyMessageForState({ connectionStatus: "ready", authenticated: true, adminUsable: false })).toBe("当前账号没有管理服务商的权限。")
+    expect(providerListEmptyMessageForState({ connectionStatus: "ready", authenticated: true, adminUsable: true, adminError: "failed" })).toBe("服务商列表加载失败。")
+    expect(providerListEmptyMessageForState({ connectionStatus: "ready", authenticated: true, adminUsable: true })).toBe("暂无服务商")
   })
 })

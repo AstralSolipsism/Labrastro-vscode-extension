@@ -30,6 +30,15 @@ export interface RequiredChatModelSelection {
   message: string
 }
 
+export type ChatModelAvailabilityStatus = "loading" | "unauthenticated" | "error" | "empty" | "ready"
+
+export interface ChatModelAvailability {
+  status: ChatModelAvailabilityStatus
+  canSelect: boolean
+  label: string
+  message: string
+}
+
 export const FALLBACK_CHAT_MODE_OPTIONS: ChatModeOption[] = [
   {
     id: "coder",
@@ -180,6 +189,62 @@ export function resolveRequiredChatModelSelection(
   return { ok: true, model, message: "" }
 }
 
+export function resolveChatModelAvailability(
+  connectionState: Record<string, unknown>,
+  adminError: string | undefined,
+  options: ChatModelOption[],
+): ChatModelAvailability {
+  const status = stringValue(connectionState.status)
+  const authenticated = connectionState.authenticated === true
+  const connectionMessage = stringValue(connectionState.message)
+  if (!status || status === "checking") {
+    return {
+      status: "loading",
+      canSelect: false,
+      label: "模型加载中",
+      message: "正在检查登录状态，模型列表暂不可用。",
+    }
+  }
+  if (!authenticated || status === "login-required") {
+    return {
+      status: "unauthenticated",
+      canSelect: false,
+      label: "未登录",
+      message: "请先登录 Labrastro Host 后再选择模型。",
+    }
+  }
+  if (status === "error") {
+    return {
+      status: "error",
+      canSelect: false,
+      label: "模型不可用",
+      message: connectionMessage || adminError || "Labrastro Host 不可用，无法加载模型列表。",
+    }
+  }
+  if (adminError) {
+    return {
+      status: "error",
+      canSelect: false,
+      label: "模型不可用",
+      message: `模型列表加载失败：${adminError}`,
+    }
+  }
+  if (!options.length) {
+    return {
+      status: "empty",
+      canSelect: false,
+      label: "无可用模型",
+      message: "已登录，但没有可用模型。请在设置中配置服务商模型。",
+    }
+  }
+  return {
+    status: "ready",
+    canSelect: true,
+    label: "",
+    message: "",
+  }
+}
+
 export function modelLabel(profileId: string, options: ChatModelOption[], fallbackModel = ""): string {
   return options.find((option) => option.id === profileId)?.label || fallbackModel || profileId || "Model"
 }
@@ -225,7 +290,7 @@ export function resolveHostTargetSummary(
   const tone =
     status === "error"
       ? "error"
-      : authenticated || status === "ready"
+      : authenticated && status === "ready"
         ? "ready"
         : hostUrl === "未配置"
           ? "warning"

@@ -12,6 +12,12 @@
 
 import { createContext, useContext, createSignal, onMount, onCleanup, ParentComponent } from "solid-js"
 import { useVSCode, type ExtensionMessage } from "./vscode"
+import {
+  shouldClearAdminForConnectionState,
+  shouldClearAdminForError,
+  shouldSetAdminStateErrorForError,
+  shouldSetModelListErrorForError,
+} from "./server-state"
 import { setLocale, resolveLocale, t } from "../i18n"
 
 // ─────────────────────────────────────────────────────────────
@@ -30,6 +36,8 @@ interface ServerContextValue {
   adminState: () => Record<string, unknown>
   adminStateUpdatedAt: () => string | undefined
   adminError: () => string | undefined
+  adminStateError: () => string | undefined
+  modelListError: () => string | undefined
   actionResult: () => Record<string, unknown> | undefined
   serverSettingsState: () => Record<string, unknown> | undefined
   serverSettingsError: () => string | undefined
@@ -111,6 +119,8 @@ export const ServerProvider: ParentComponent = (props) => {
   const [adminState, setAdminState] = createSignal<Record<string, unknown>>({})
   const [adminStateUpdatedAt, setAdminStateUpdatedAt] = createSignal<string | undefined>()
   const [adminError, setAdminError] = createSignal<string | undefined>()
+  const [adminStateError, setAdminStateError] = createSignal<string | undefined>()
+  const [modelListError, setModelListError] = createSignal<string | undefined>()
   const [actionResult, setActionResult] = createSignal<Record<string, unknown> | undefined>()
   const [serverSettingsState, setServerSettingsState] = createSignal<Record<string, unknown> | undefined>()
   const [serverSettingsError, setServerSettingsError] = createSignal<string | undefined>()
@@ -163,21 +173,50 @@ export const ServerProvider: ParentComponent = (props) => {
         console.log("[labrastro] 已连接到 Extension Host", msg)
       }
       if (msg.type === "connection.state" && typeof msg.payload === "object" && msg.payload) {
-        setConnectionState(msg.payload as Record<string, unknown>)
+        const payload = msg.payload as Record<string, unknown>
+        setConnectionState(payload)
+        if (shouldClearAdminForConnectionState(payload)) {
+          setAdminState({})
+          setAdminStateUpdatedAt(undefined)
+          setModelCapabilitiesState(undefined)
+          setAdminStateError(undefined)
+          setModelListError(undefined)
+        }
       }
       if (msg.type === "connection.result" && typeof msg.payload === "object" && msg.payload) {
         const payload = msg.payload as Record<string, unknown>
         setConnectionSaveResult(payload)
         setConnectionState(payload)
+        if (shouldClearAdminForConnectionState(payload)) {
+          setAdminState({})
+          setAdminStateUpdatedAt(undefined)
+          setModelCapabilitiesState(undefined)
+          setAdminStateError(undefined)
+          setModelListError(undefined)
+        }
       }
       if (msg.type === "admin.state" && typeof msg.payload === "object" && msg.payload) {
         setAdminState(msg.payload as Record<string, unknown>)
         setAdminStateUpdatedAt(new Date().toLocaleString())
         setAdminError(undefined)
+        setAdminStateError(undefined)
+        setModelListError(undefined)
       }
       if (msg.type === "admin.error") {
-        setAdminError(typeof msg.message === "string" ? msg.message : "Admin request failed")
+        const message = typeof msg.message === "string" ? msg.message : "Admin request failed"
+        setAdminError(message)
+        if (shouldSetAdminStateErrorForError(msg)) {
+          setAdminStateError(message)
+        }
+        if (shouldSetModelListErrorForError(msg)) {
+          setModelListError(message)
+        }
         setActionResult(undefined)
+        if (shouldClearAdminForError(msg)) {
+          setAdminState({})
+          setAdminStateUpdatedAt(undefined)
+          setModelCapabilitiesState(undefined)
+        }
       }
       if (msg.type === "admin.actionResult" && typeof msg.payload === "object" && msg.payload) {
         setActionResult(msg.payload as Record<string, unknown>)
@@ -333,6 +372,8 @@ export const ServerProvider: ParentComponent = (props) => {
     adminState,
     adminStateUpdatedAt,
     adminError,
+    adminStateError,
+    modelListError,
     actionResult,
     serverSettingsState,
     serverSettingsError,

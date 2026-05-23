@@ -25,7 +25,15 @@ import {
   sanitizeAutoApproveOptions,
   serverAgentRunSettingsPayload,
 } from "./settingsControllerUtils"
-import { isAccountAdminRole, resolveConnectionNotice, uniqueCommandRules, type ChoiceOption } from "./utils"
+import {
+  canUseSettingsAdminData,
+  isAccountAdminRole,
+  providerListEmptyMessageForState,
+  resolveConnectionNotice,
+  settingsAdminRecordList,
+  uniqueCommandRules,
+  type ChoiceOption,
+} from "./utils"
 import {
   DEFAULT_AUTO_APPROVE_OPTIONS,
   approvalFromPayload,
@@ -1641,14 +1649,14 @@ export function createSettingsController(props: SettingsViewProps) {
 
   const [modelCapabilityDefaultMaxContextTokens, setModelCapabilityDefaultMaxContextTokens] = createSignal(0)
   const [providerValidationError, setProviderValidationError] = createSignal("")
-
-  const providers = createMemo(() => {
-    const items = server.adminState().providers
-    return Array.isArray(items) ? items as Record<string, unknown>[] : []
-  })
+
+  const adminDataUsable = createMemo(() => canUseSettingsAdminData(server.connectionState()))
+
+  const providers = createMemo(() => {
+    return settingsAdminRecordList(server.adminState(), "providers", adminDataUsable())
+  })
   const profiles = createMemo(() => {
-    const items = server.adminState().model_profiles
-    return Array.isArray(items) ? items as Record<string, unknown>[] : []
+    return settingsAdminRecordList(server.adminState(), "model_profiles", adminDataUsable())
   })
   const selectedProvider = createMemo(() =>
     providers().find((provider) => stringValue(provider.id) === providerId())
@@ -1688,7 +1696,15 @@ export function createSettingsController(props: SettingsViewProps) {
   const currentHostUrl = createMemo(() => stringValue(server.connectionState().hostUrl))
   const hostUrlSource = createMemo(() => stringValue(server.connectionState().hostUrlSource, "unknown"))
   const hostUrlConfigured = createMemo(() => server.connectionState().hostUrlConfigured === true)
-  const adminUsable = createMemo(() => server.connectionState().authenticated === true && isAccountAdminRole(server.connectionState().role))
+  const adminUsable = createMemo(() => adminDataUsable())
+  const providerListEmptyMessage = createMemo(() => {
+    return providerListEmptyMessageForState({
+      connectionStatus: connectionStatus(),
+      authenticated: server.connectionState().authenticated,
+      adminUsable: adminUsable(),
+      adminError: server.adminStateError(),
+    })
+  })
   const settingsTabDefsVisible = createMemo(() => settingsTabDefs.filter((tab) => tab.id !== "accounts" || adminUsable()))
   const connectionScopes = createMemo(() => stringArray(server.connectionState().scopes))
   const connectionSecurityWarnings = createMemo(() => stringArray(server.connectionState().securityWarnings))
@@ -3366,6 +3382,7 @@ const refreshAdmin = () => {
     hostUrlSource,
     hostUrlConfigured,
     adminUsable,
+    providerListEmptyMessage,
     connectionScopes,
     connectionSecurityWarnings,
     refreshAccounts,

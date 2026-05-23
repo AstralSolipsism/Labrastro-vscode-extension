@@ -64,6 +64,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
     providerEnabled,
     selectedProvider,
     adminUsable,
+    providerListEmptyMessage,
     toggleProviderEnabled,
     saveProvider,
     providerType,
@@ -448,7 +449,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
             <StatusBadge>{String(providerListCount())}</StatusBadge>
           </div>
           <div class="provider-list">
-            <Show when={providerListCount()} fallback={<p class="settings-empty-note">暂无服务商</p>}>
+            <Show when={providerListCount()} fallback={<p class="settings-empty-note">{providerListEmptyMessage()}</p>}>
               <Show when={draftProviderVisible()}>
                 <button
                   type="button"

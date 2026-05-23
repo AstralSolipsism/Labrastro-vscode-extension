@@ -8,6 +8,7 @@ import {
   modeLabel,
   normalizeModelOptions,
   normalizeModeOptions,
+  resolveChatModelAvailability,
   resolveChatModeOptions,
   resolveHostTargetSummary,
   resolveModelSelection,
@@ -161,6 +162,20 @@ describe("chat state", () => {
     })
   })
 
+  it("does not show a ready host tone without an authenticated ready state", () => {
+    expect(resolveHostTargetSummary(
+      {
+        hostUrl: "http://127.0.0.1:8765",
+        hostUrlSource: "workspace",
+        status: "ready",
+        authenticated: false,
+      },
+      { engine: "labrastro", location: "remote" },
+    )).toMatchObject({
+      tone: "muted",
+    })
+  })
+
   it("detects taskflow capability", () => {
     expect(canUseTaskflow({ taskflow: true })).toBe(true)
     expect(canUseTaskflow({ taskFlow: true })).toBe(true)
@@ -192,6 +207,39 @@ describe("chat state", () => {
     ])
     expect(modelLabel("deepseek::V4PRO", options)).toBe("deepseek：DeepSeek Pro")
     expect(modelDescription("deepseek::V4PRO", options)).toBe("")
+  })
+
+  it("gates chat model availability by login and scoped model request state", () => {
+    const options = normalizeModelOptions({
+      provider_model_catalog: [
+        { provider_id: "deepseek", model_id: "V4FLASH" },
+      ],
+    })
+
+    expect(resolveChatModelAvailability({ status: "checking" }, undefined, options)).toMatchObject({
+      status: "loading",
+      canSelect: false,
+      label: "模型加载中",
+    })
+    expect(resolveChatModelAvailability({ status: "login-required", authenticated: false }, undefined, options)).toMatchObject({
+      status: "unauthenticated",
+      canSelect: false,
+      label: "未登录",
+    })
+    expect(resolveChatModelAvailability({ status: "ready", authenticated: true }, "401 unauthorized", options)).toMatchObject({
+      status: "error",
+      canSelect: false,
+      label: "模型不可用",
+    })
+    expect(resolveChatModelAvailability({ status: "ready", authenticated: true }, undefined, [])).toMatchObject({
+      status: "empty",
+      canSelect: false,
+      label: "无可用模型",
+    })
+    expect(resolveChatModelAvailability({ status: "ready", authenticated: true }, undefined, options)).toMatchObject({
+      status: "ready",
+      canSelect: true,
+    })
   })
 
   it("normalizes provider model arrays from admin providers", () => {
