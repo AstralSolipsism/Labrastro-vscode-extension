@@ -1,5 +1,6 @@
 ﻿import { describe, expect, it, vi } from "vitest"
 import { AdminCoordinator } from "./AdminCoordinator"
+import { RemoteError } from "../remote-errors"
 
 function coordinator() {
   let peerDiagnosticsState = {
@@ -85,6 +86,7 @@ function coordinator() {
     },
     connectionErrorState: vi.fn(),
     postConnectionState: vi.fn(),
+    postConnectionStateIfAuthRequired: vi.fn(),
     postAdminState: vi.fn(),
     refreshBackendFeatures: vi.fn(),
     refreshToolchainState: vi.fn(),
@@ -273,6 +275,64 @@ describe("AdminCoordinator", () => {
     })
   })
 
+  it("classifies peer diagnostics admin errors and refreshes auth state", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    const error = new RemoteError(401, "unauthorized", "401 unauthorized", {})
+    options.client.openPeerDiagnosticsLog.mockRejectedValue(error)
+
+    await expect(subject.handleMessage({ type: "peerDiagnosticsLogging.open" }, post)).resolves.toBe(true)
+
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: "admin.error",
+      message: "401 unauthorized",
+      category: "unauthenticated",
+      scope: "peerDiagnostics",
+      stale: true,
+      clearsState: true,
+      status: 401,
+    }))
+    expect(options.postConnectionStateIfAuthRequired).toHaveBeenCalledWith(error, post)
+  })
+
+  it("classifies unavailable admin errors without reusing stale admin state", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    const error = new RemoteError(503, "service_unavailable", "503 service unavailable", {})
+    options.client.openPeerDiagnosticsLog.mockRejectedValue(error)
+
+    await expect(subject.handleMessage({ type: "peerDiagnosticsLogging.open" }, post)).resolves.toBe(true)
+
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: "admin.error",
+      message: "503 service unavailable",
+      category: "unavailable",
+      scope: "peerDiagnostics",
+      stale: false,
+      clearsState: false,
+      status: 503,
+    }))
+    expect(options.postConnectionStateIfAuthRequired).not.toHaveBeenCalled()
+  })
+
+  it("keeps admin data usable for unknown admin action errors", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    options.client.openPeerDiagnosticsLog.mockRejectedValue(new Error("validation failed"))
+
+    await expect(subject.handleMessage({ type: "peerDiagnosticsLogging.open" }, post)).resolves.toBe(true)
+
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: "admin.error",
+      message: "validation failed",
+      category: "unknown",
+      scope: "peerDiagnostics",
+      stale: false,
+      clearsState: false,
+    }))
+    expect(options.postConnectionStateIfAuthRequired).not.toHaveBeenCalled()
+  })
+
   it("loads and refreshes model capability catalog state", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
@@ -290,6 +350,21 @@ describe("AdminCoordinator", () => {
       },
     })
     expect(options.postAdminState).toHaveBeenCalled()
+  })
+
+  it("refreshes connection state when admin-scoped capability calls lose auth", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    const error = new RemoteError(401, "unauthorized", "401 unauthorized", {})
+    options.client.modelCapabilitiesRefresh.mockRejectedValue(error)
+
+    await expect(subject.handleMessage({ type: "modelCapabilities.refresh" }, post)).resolves.toBe(true)
+
+    expect(post).toHaveBeenCalledWith({
+      type: "modelCapabilities.error",
+      message: "401 unauthorized",
+    })
+    expect(options.postConnectionStateIfAuthRequired).toHaveBeenCalledWith(error, post)
   })
 
   it("refreshes dependent admin state after successful login", async () => {

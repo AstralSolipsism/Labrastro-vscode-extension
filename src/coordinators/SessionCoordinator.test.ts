@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import type * as vscode from "vscode"
 import type { BackendFeatures, LabrastroRemoteClient } from "../LabrastroRemoteClient"
+import { RemoteError } from "../remote-errors"
 import { SessionCoordinator } from "./SessionCoordinator"
 
 const writableFeatures: BackendFeatures = {
@@ -81,6 +82,7 @@ async function coordinator(
     ...clientOverrides,
   } as unknown as LabrastroRemoteClient
   const emitSessionMessage = vi.fn()
+  const postConnectionStateIfAuthRequired = vi.fn()
   const subject = new SessionCoordinator({
     client,
     context,
@@ -89,8 +91,9 @@ async function coordinator(
     ensureBackendFeatures: vi.fn(async () => features),
     getBackendFeatures: vi.fn(() => features),
     isChatActive: vi.fn(() => false),
+    postConnectionStateIfAuthRequired,
   })
-  return { client, context, emitSessionMessage, subject }
+  return { client, context, emitSessionMessage, postConnectionStateIfAuthRequired, subject }
 }
 
 describe("SessionCoordinator", () => {
@@ -189,9 +192,222 @@ describe("SessionCoordinator", () => {
 
     expect(client.loadSession).not.toHaveBeenCalled()
     expect(emitSessionMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "session.list", sessions: [expect.objectContaining({ id: "remote-1" })] }),
+      expect.objectContaining({
+        type: "session.list",
+        status: "ready",
+        sessions: [expect.objectContaining({ id: "remote-1" })],
+      }),
       post
     )
+  })
+
+  it("emits explicit loading and unauthenticated states for session list auth failures", async () => {
+    const error = new RemoteError(401, "unauthorized", "401 unauthorized", {})
+    const { emitSessionMessage, postConnectionStateIfAuthRequired, subject } = await coordinator({
+      listSessions: vi.fn(async () => {
+        throw error
+      }),
+    } as Partial<LabrastroRemoteClient>)
+    const post = vi.fn()
+
+    await subject.postSessionList(post)
+
+    expect(emitSessionMessage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ type: "session.list", status: "loading", sessions: [] }),
+      post
+    )
+    expect(emitSessionMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        type: "session.list",
+        status: "unauthenticated",
+        sessions: [],
+        message: "未登录，无法加载会话历史。",
+      }),
+      post
+    )
+    expect(postConnectionStateIfAuthRequired).toHaveBeenCalledWith(error, post)
+  })
+
+  it("reports session history as unavailable when backend features disable sessions", async () => {
+    const disabledFeatures = { ...writableFeatures, sessions: false }
+    const { client, emitSessionMessage, subject } = await coordinator({}, disabledFeatures)
+    const post = vi.fn()
+
+    await subject.postSessionList(post)
+
+    expect(client.listSessions).not.toHaveBeenCalled()
+    expect(emitSessionMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        type: "session.list",
+        status: "unavailable",
+        sessions: [],
+        message: "当前后端不支持会话历史。",
+      }),
+      post
+    )
+  })
+
+  it("reports session history as unavailable when the session API returns unavailable", async () => {
+    const { emitSessionMessage, subject } = await coordinator({
+      listSessions: vi.fn(async () => {
+        throw new RemoteError(503, "sessions_unavailable", "503 sessions unavailable", {})
+      }),
+    } as Partial<LabrastroRemoteClient>)
+    const post = vi.fn()
+
+    await subject.postSessionList(post)
+
+    expect(emitSessionMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        type: "session.list",
+        status: "unavailable",
+        sessions: [],
+        message: "当前后端不支持会话历史。",
+      }),
+      post
+    )
+  })
+
+  it("reports empty and error session list states without reusing stale sessions", async () => {
+    const empty = await coordinator()
+    const emptyPost = vi.fn()
+
+    await empty.subject.postSessionList(emptyPost)
+
+    expect(empty.emitSessionMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        type: "session.list",
+        status: "empty",
+        sessions: [],
+      }),
+      emptyPost
+    )
+
+    const failed = await coordinator({
+      listSessions: vi.fn(async () => {
+        throw new TypeError("fetch failed")
+      }),
+    } as Partial<LabrastroRemoteClient>)
+    const failedPost = vi.fn()
+
+    await failed.subject.postSessionList(failedPost)
+
+    expect(failed.emitSessionMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        type: "session.list",
+        status: "error",
+        sessions: [],
+      }),
+      failedPost
+    )
+  })
+
+  it("keeps cached sessions after transient list errors so unchanged ETags can recover", async () => {
+    const listSessions = vi.fn()
+      .mockResolvedValueOnce({
+        sessions: [{ id: "remote-1", saved_at: "2026-05-10T00:00:00.000Z", preview: "Remote" }],
+        fingerprint: "fp-1",
+        list_etag: "etag-1",
+      })
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce({
+        sessions_unchanged: true,
+        fingerprint: "fp-1",
+        list_etag: "etag-1",
+      })
+    const { emitSessionMessage, subject } = await coordinator({
+      listSessions,
+    } as Partial<LabrastroRemoteClient>)
+    const post = vi.fn()
+
+    await subject.postSessionList(post)
+    expect(subject.list).toEqual([expect.objectContaining({ id: "remote-1" })])
+
+    emitSessionMessage.mockClear()
+    await subject.postSessionList(post)
+    expect(emitSessionMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        type: "session.list",
+        status: "error",
+        sessions: [],
+      }),
+      post
+    )
+    expect(subject.list).toEqual([expect.objectContaining({ id: "remote-1" })])
+
+    emitSessionMessage.mockClear()
+    await subject.postSessionList(post)
+    expect(listSessions).toHaveBeenLastCalledWith(50, "etag-1")
+    expect(emitSessionMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        type: "session.list",
+        status: "ready",
+        sessions: [expect.objectContaining({ id: "remote-1" })],
+      }),
+      post
+    )
+  })
+
+  it("coalesces concurrent session initialization list refreshes", async () => {
+    const listSessions = vi.fn(async () => {
+      await Promise.resolve()
+      return { sessions: [], fingerprint: "fp-1" }
+    })
+    const { client, emitSessionMessage, subject } = await coordinator({
+      listSessions,
+    } as Partial<LabrastroRemoteClient>)
+    const posts = [vi.fn(), vi.fn(), vi.fn()]
+
+    await Promise.all(posts.map((post) => subject.initializeSessionState(post)))
+
+    expect(client.listSessions).toHaveBeenCalledTimes(1)
+    const sessionListMessages = emitSessionMessage.mock.calls
+      .map(([message]) => message)
+      .filter((message) => message.type === "session.list")
+    expect(sessionListMessages).toHaveLength(3)
+    expect(sessionListMessages).toEqual([
+      expect.objectContaining({ status: "empty", sessions: [] }),
+      expect.objectContaining({ status: "empty", sessions: [] }),
+      expect.objectContaining({ status: "empty", sessions: [] }),
+    ])
+  })
+
+  it("loads the current session for every concurrent session initializer", async () => {
+    const loadSession = vi.fn(async (sessionId: string) => ({
+      metadata: { id: sessionId, saved_at: "2026-05-10T00:00:00.000Z", preview: "Remote" },
+      document: documentFor(sessionId),
+      runtime_state: {},
+    }))
+    const { client, emitSessionMessage, subject } = await coordinator({
+      listSessions: vi.fn(async () => {
+        await Promise.resolve()
+        return {
+          sessions: [{ id: "remote-1", saved_at: "2026-05-10T00:00:00.000Z", preview: "Remote" }],
+          fingerprint: "fp-1",
+        }
+      }),
+      loadSession,
+    } as Partial<LabrastroRemoteClient>)
+    const posts = [vi.fn(), vi.fn(), vi.fn()]
+
+    await Promise.all(posts.map((post) => subject.initializeSessionState(post)))
+
+    expect(client.listSessions).toHaveBeenCalledTimes(1)
+    expect(client.loadSession).toHaveBeenCalledTimes(3)
+    const loadedCalls = emitSessionMessage.mock.calls
+      .filter(([message]) => message.type === "session.loaded")
+    expect(loadedCalls).toHaveLength(3)
+    expect(loadedCalls.map(([message]) => message.sessionId)).toEqual(["remote-1", "remote-1", "remote-1"])
+    expect(loadedCalls.map(([, post]) => post)).toEqual(posts)
+    expect(emitSessionMessage.mock.calls.some(([message]) => message.type === "session.list")).toBe(false)
   })
 
   it("routes model switch requests with the existing request id", async () => {
