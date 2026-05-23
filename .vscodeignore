@@ -1,6 +1,7 @@
 .vscode/**
 .github/**
 .claude/**
+.rcoder/**
 .gitnexus/**
 src/**
 webview-ui/**
