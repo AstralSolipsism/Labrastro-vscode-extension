@@ -77,6 +77,9 @@ describe("SessionTurn source order", () => {
     expect(source).not.toContain("const ProcessSegmentPart")
     expect(source).not.toContain('item.type === "process_segment"')
     expect(source).not.toContain('item.type === "process_group"')
+    expect(source).not.toContain("const RemoteStatusPart")
+    expect(source).not.toContain('props.part.type === "remote_status"')
+    expect(source).not.toContain("tool.remote.connected")
   })
 
   it("uses action labels and a second-level details toggle for tool cards", () => {
@@ -85,6 +88,12 @@ describe("SessionTurn source order", () => {
     expect(source.indexOf("getToolActionLabel(toolName())", toolPartStart)).toBeGreaterThan(toolPartStart)
     expect(source.indexOf("tool:${props.part.id}:details", toolPartStart)).toBeGreaterThan(toolPartStart)
     expect(source.indexOf('class="shell-card__details-toggle"', toolPartStart)).toBeGreaterThan(toolPartStart)
+  })
+
+  it("treats preparing tool calls as active compact tool cards", () => {
+    expect(source).toContain('props.part.status === "preparing"')
+    expect(source).toContain('if (status === "preparing") return t("tool.preparingGeneric")')
+    expect(source).toContain("getToolExecutionStatusLabel(props.part.status)")
   })
 
   it("renders reasoning parts through a collapsible card", () => {

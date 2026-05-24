@@ -29,6 +29,7 @@ describe("ChatView context events", () => {
     expect(source).toContain("updateThinkingFromReasoning")
     expect(source).toContain("const REASONING_STREAM_KEY")
     expect(source).toContain("upsertAssistantStream")
+    expect(source).toContain("appendToolCallDeltaToToolPart")
     expect(source).toContain("appendToolStreamToToolPart")
     expect(source).toContain("archiveActiveTranscriptItems")
     expect(source).toContain("const visibleTurns =")
@@ -46,6 +47,25 @@ describe("ChatView context events", () => {
     expect(source).toContain('"assistant_message"')
     expect(source).toContain('"reasoning_message"')
     expect(source).toContain("appendToolStreamToToolPart(payload, eventMeta)")
+    expect(source).toContain('type === "tool_call_delta"')
+  })
+
+  it("shows streamed tool-call drafts as preparing tool cards before execution starts", () => {
+    expect(source).toContain("const appendToolCallDeltaToToolPart =")
+    expect(source).toContain("preparingToolCallId(payload)")
+    expect(source).toContain('status: "preparing"')
+    expect(source).toContain("arguments_preview")
+    expect(source).toContain("preparingIndex")
+    expect(source).toContain('"tool_call_delta"')
+  })
+
+  it("prevents stale tool-call deltas from downgrading real tool cards", () => {
+    expect(source).toContain("const shouldIgnoreToolCallDelta =")
+    expect(source).toContain('part.status !== "preparing"')
+    expect(source).toContain("if (shouldIgnoreToolCallDelta(realToolCallId, preparingIndex)) return")
+    expect(source).toContain("part.preparingIndex === preparingIndex")
+    expect(source).toContain("preparingIndex: numberValue(payload.index)")
+    expect(source).not.toContain("resultMeta: { preparingIndex")
   })
 
   it("routes final reasoning messages by replacing the latest thinking anchor before clearing active thinking", () => {
@@ -108,13 +128,52 @@ describe("ChatView context events", () => {
 
   it("creates a local draft session before the first send", () => {
     expect(source).toContain("const shouldCreateLocalDraft = !sessionId")
-    expect(source).toContain("trace.startDraftTask(text)")
-    expect(source).toContain("trace.appendTurn({")
+    expect(source).toContain("draftSessionId = trace.startDraftTask(text, createUserTurn(text))")
+    expect(source).toContain("sessionId = draftSessionId")
     expect(source).toContain("setActiveRunSessionId(sessionId || \"\")")
+    expect(source).toContain("draftSessionId,")
+    expect(source).toContain("function createUserTurn")
+    expect(source).toContain("isLocalDraftSessionId(activeRunSessionId())")
+    expect(source).toContain("setActiveRunSessionId(msg.sessionId)")
+  })
+
+  it("validates the selected model before creating a local draft turn", () => {
+    const sendIndex = source.indexOf("const sendChatText = (")
+    const modelIndex = source.indexOf("const activeModelResolution = requiredModelSelection()", sendIndex)
+    const failureIndex = source.indexOf("if (!activeModelResolution.ok || !activeModelResolution.model)", modelIndex)
+    const draftIndex = source.indexOf("draftSessionId = trace.startDraftTask(text, createUserTurn(text))", sendIndex)
+
+    expect(modelIndex).toBeGreaterThan(sendIndex)
+    expect(failureIndex).toBeGreaterThan(modelIndex)
+    expect(failureIndex).toBeLessThan(draftIndex)
   })
 
   it("does not append empty structured view cards", () => {
     expect(source).toContain("function hasMeaningfulPayload")
     expect(source).toContain("if (!hasMeaningfulPayload(viewPayload)) return")
+  })
+
+  it("routes remote peer readiness into the run status bar instead of transcript cards", () => {
+    const branchIndex = source.indexOf('} else if (type === "remote_peer_ready") {')
+
+    expect(source).toContain("setRemotePeerState(remotePeerStateFromReady(payload))")
+    expect(source).toContain("<RunStatusBar")
+    expect(source).not.toContain("appendRemoteStatusPart")
+    expect(source).not.toContain('type: "remote_status"')
+    expect(branchIndex).toBeGreaterThan(0)
+  })
+
+  it("keeps REMOTE PEER READY TUI out of chat transcript and out of status state", () => {
+    expect(source).toContain("function isRemotePeerReadyTui")
+    expect(source).toContain('=== "REMOTE PEER READY"')
+    expect(source).toContain("if (isRemotePeerReadyTui(clean)) return")
+    expect(source).not.toContain("parseTerminalTuiCards")
+  })
+
+  it("routes agent queue runtime status into AgentRun state without notice cards", () => {
+    expect(source).toContain('action.kind === "agent_run_status"')
+    expect(source).toContain("setAgentRunState(action.state)")
+    expect(source).not.toContain("runtime-agent-queue-chat")
+    expect(source).not.toContain("runtime-agent-queue-delegated-run")
   })
 })

@@ -333,4 +333,29 @@ describe("message height estimation", () => {
       misses: 2,
     })
   })
+
+  it("includes preparing tool-call status in the height digest", () => {
+    const preparing = turn("inspect", "working")
+    preparing.assistantMessages[0].traceNodeStatus = "active"
+    preparing.assistantMessages[0].parts.unshift({
+      id: "tool-1",
+      type: "tool",
+      tool: "grep",
+      status: "preparing",
+      toolCallId: "preparing:chat-1:0",
+      preparingIndex: 0,
+    })
+    const running = turn("inspect", "working")
+    running.assistantMessages[0].traceNodeStatus = "active"
+    running.assistantMessages[0].parts.unshift({
+      id: "tool-1",
+      type: "tool",
+      tool: "grep",
+      status: "running",
+      toolCallId: "call-1",
+      input: { pattern: "remotePeerState" },
+    })
+
+    expect(turnHeightCacheKey(preparing, 420)).not.toBe(turnHeightCacheKey(running, 420))
+  })
 })

@@ -136,6 +136,18 @@ describe("transcript presentation", () => {
     expect(timelineGroups(presentation)).toHaveLength(0)
   })
 
+  it("ignores old remote status transcript items instead of rendering remote process groups", () => {
+    const parts = [
+      { id: "remote-1", type: "remote_status", peerId: "peer-1", model: "gpt-4o" },
+      { id: "text-1", type: "assistant_text", markdown: "done", format: "markdown", streamKey: "assistant-message" },
+    ] as unknown as TranscriptItem[]
+
+    const presentation = buildTranscriptPresentation(parts, assistant(parts))
+
+    expect(presentation.map((item) => item.type)).toEqual(["final_answer"])
+    expect(timelineGroups(presentation)).toHaveLength(0)
+  })
+
   it("orders completed turns as process summary, reasoning panel, final answer", () => {
     const parts: TranscriptItem[] = [
       { id: "reasoning-1", type: "reasoning", raw: "plan", format: "markdown" },
@@ -182,6 +194,51 @@ describe("transcript presentation", () => {
       count: 3,
     })
     expect(getToolActionLabel("list_file")).toBe("列出文件")
+  })
+
+  it("treats streamed tool-call drafts as running process groups", () => {
+    const parts: TranscriptItem[] = [
+      {
+        id: "tool-1",
+        type: "tool",
+        tool: "grep",
+        status: "preparing",
+        toolCallId: "preparing:chat-1:0",
+        input: { arguments_preview: '{"pattern":"remotePeerState"}' },
+        preparingIndex: 0,
+      },
+    ]
+
+    const groups = timelineGroups(buildTranscriptPresentation(parts, assistant(parts, "active")))
+
+    expect(groups).toHaveLength(1)
+    expect(groups[0]).toMatchObject({
+      kind: "explore",
+      label: "探索项目",
+      state: "running",
+      currentLabel: "正在准备调用 grep",
+    })
+  })
+
+  it("does not classify unknown tool-call drafts as exploration", () => {
+    const parts: TranscriptItem[] = [
+      {
+        id: "tool-1",
+        type: "tool",
+        tool: "tool",
+        status: "preparing",
+        toolCallId: "preparing:chat-1:0",
+      },
+    ]
+
+    const groups = timelineGroups(buildTranscriptPresentation(parts, assistant(parts, "active")))
+
+    expect(groups[0]).toMatchObject({
+      kind: "other",
+      label: "其他过程",
+      state: "running",
+      currentLabel: "正在准备调用工具",
+    })
   })
 
   it("does not merge same category groups across another category", () => {
