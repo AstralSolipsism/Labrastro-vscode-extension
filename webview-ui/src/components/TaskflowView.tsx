@@ -3,6 +3,18 @@ import { useServer } from "../context/server"
 import { useVSCode, type ExtensionMessage } from "../context/vscode"
 import { normalizeComplexityPanel } from "../taskflow/complexity"
 import {
+  activeTaskflowOperationKeys,
+  initialTaskflowOperationStates,
+  markTaskflowOperationError,
+  markTaskflowOperationStarted,
+  markTaskflowOperationSuccess,
+  taskflowAnyOperationIsBusy,
+  taskflowOperationKeyForAction,
+  taskflowOperationIsBusy,
+  type TaskflowOperationKey,
+} from "../taskflow/taskflowOperations"
+import { taskflowMessages, type TaskflowActionType } from "../taskflow/taskflowMessages"
+import {
   canRequestDispatch,
   latestConfirmedDispatchDecision,
   normalizeTaskflowWorkspace,
@@ -17,20 +29,6 @@ import {
 interface TaskflowViewProps {
   taskflowId?: string
 }
-
-type TaskflowActionType =
-  | "taskflow.reviewCardV1.action"
-  | "taskflow.projectMemory.patch.preview"
-  | "taskflow.projectMemory.patch.apply"
-  | "taskflow.compilerDecision.review"
-  | "taskflow.brief.compile"
-  | "taskflow.brief.ready"
-  | "taskflow.brief.confirm"
-  | "taskflow.goal.compile"
-  | "taskflow.dispatch.request"
-  | "taskflow.dispatch.confirm"
-  | "taskflow.dispatch.reject"
-  | "taskflow.workItem.dispatch"
 
 type TaskflowSection = "discovery" | "memory" | "compiler" | "dispatch" | "trace" | "projectors"
 
@@ -59,7 +57,7 @@ const TaskflowView: Component<TaskflowViewProps> = (props) => {
   const [compilerDecisionInputs, setCompilerDecisionInputs] = createSignal<Record<string, { reason: string; value: string }>>({})
   const [activeSection, setActiveSection] = createSignal<TaskflowSection>("discovery")
   const [error, setError] = createSignal("")
-  const [loading, setLoading] = createSignal(false)
+  const [operationStates, setOperationStates] = createSignal(initialTaskflowOperationStates())
 
   const workspace = createMemo(() => normalizeTaskflowWorkspace({
     workspacePayload: workspacePayload(),
@@ -73,49 +71,74 @@ const TaskflowView: Component<TaskflowViewProps> = (props) => {
     return latestConfirmedDispatchDecision(workspace())
   })
   const dispatchBlocked = createMemo(() => !canRequestDispatch(workspace()))
+  const loading = () => taskflowAnyOperationIsBusy(operationStates())
+  const operationBusy = (key: TaskflowOperationKey) => taskflowOperationIsBusy(operationStates(), key)
+  const startOperation = (key: TaskflowOperationKey) => {
+    setOperationStates((states) => markTaskflowOperationStarted(states, key))
+  }
+  const finishOperation = (key: TaskflowOperationKey) => {
+    setOperationStates((states) => markTaskflowOperationSuccess(states, key))
+  }
+  const failOperation = (key: TaskflowOperationKey, message: string) => {
+    setOperationStates((states) => markTaskflowOperationError(states, key, message))
+  }
+  const failOperations = (keys: TaskflowOperationKey[], message: string) => {
+    setOperationStates((states) =>
+      keys.reduce((next, key) => markTaskflowOperationError(next, key, message), states)
+    )
+  }
+  const failOperationForActionError = (action: unknown, message: string) => {
+    const key = taskflowOperationKeyForAction(action)
+    if (key) {
+      failOperation(key, message)
+      return
+    }
+    const activeKeys = activeTaskflowOperationKeys(operationStates())
+    failOperations(activeKeys.length ? activeKeys : ["action"], message)
+  }
 
   const refreshAll = (taskflowId = activeTaskflowId()) => {
     if (!taskflowId) return
     setError("")
-    setLoading(true)
-    vscode.postMessage({ type: "taskflow.workspace.get", taskflowId })
-    vscode.postMessage({ type: "taskflow.state.get", taskflowId })
-    vscode.postMessage({ type: "taskflow.runtime.get", taskflowId })
-    vscode.postMessage({ type: "taskflow.complexity.get", taskflowId })
+    startOperation("workspace")
+    startOperation("state")
+    startOperation("runtime")
+    startOperation("complexity")
+    taskflowMessages.getWorkspace(vscode, taskflowId)
+    taskflowMessages.getState(vscode, taskflowId)
+    taskflowMessages.getRuntime(vscode, taskflowId)
+    taskflowMessages.getComplexity(vscode, taskflowId)
   }
 
   const requestRuntime = () => {
     const taskflowId = activeTaskflowId()
     if (!taskflowId) return
-    vscode.postMessage({ type: "taskflow.runtime.get", taskflowId })
+    startOperation("runtime")
+    taskflowMessages.getRuntime(vscode, taskflowId)
   }
 
   const sendAction = (type: TaskflowActionType, payload: Record<string, unknown> = {}) => {
     const taskflowId = activeTaskflowId()
     if (!taskflowId) return
     setError("")
-    setLoading(true)
-    vscode.postMessage({ type, taskflowId, ...payload })
+    startOperation("action")
+    taskflowMessages.action(vscode, type, taskflowId, payload)
   }
 
   const scanRepository = () => {
     const taskflowId = activeTaskflowId()
     if (!taskflowId) return
     setError("")
-    setLoading(true)
-    vscode.postMessage({
-      type: "taskflow.complexity.scan",
-      taskflowId,
-      workspacePath: server.workspaceDirectory() || "",
-    })
+    startOperation("complexity")
+    taskflowMessages.scanComplexity(vscode, taskflowId, server.workspaceDirectory() || "")
   }
 
   const focusChatInteraction = () => {
-    vscode.postMessage({
-      type: "taskflow.focusChatInteraction",
-      taskflowId: activeTaskflowId(),
-      reason: "taskflow_view_requested_chat_interaction",
-    })
+    taskflowMessages.focusChatInteraction(
+      vscode,
+      activeTaskflowId(),
+      "taskflow_view_requested_chat_interaction",
+    )
   }
 
   const reviewCardInput = (cardId: string) => reviewCardInputs()[cardId] || { value: "", reason: "" }
@@ -282,42 +305,49 @@ const TaskflowView: Component<TaskflowViewProps> = (props) => {
         const payload = objectValue(message.payload)
         if (payload.taskflow) {
           setTaskflowPayload(payload)
+          finishOperation("state")
         } else {
-          vscode.postMessage({ type: "taskflow.state.get", taskflowId: activeTaskflowId() })
+          startOperation("state")
+          taskflowMessages.getState(vscode, activeTaskflowId())
         }
-        setLoading(false)
+        if (operationBusy("action")) finishOperation("action")
         setError("")
-        vscode.postMessage({ type: "taskflow.runtime.get", taskflowId: activeTaskflowId() })
+        startOperation("runtime")
+        taskflowMessages.getRuntime(vscode, activeTaskflowId())
       }
       if (msg.type === "taskflow.workspace") {
         const payload = objectValue(message.payload)
         if (payload.schema_version) {
           setWorkspacePayload(payload)
+          finishOperation("workspace")
         } else {
           if (payload.taskflow) setTaskflowPayload(payload)
-          vscode.postMessage({ type: "taskflow.workspace.get", taskflowId: activeTaskflowId() })
+          startOperation("workspace")
+          taskflowMessages.getWorkspace(vscode, activeTaskflowId())
         }
         setPendingPatch(undefined)
-        setLoading(false)
+        if (operationBusy("action")) finishOperation("action")
         setError("")
       }
       if (msg.type === "taskflow.runtime") {
         setRuntimePayload(objectValue(message.payload))
-        setLoading(false)
+        finishOperation("runtime")
       }
       if (msg.type === "taskflow.complexity") {
         const payload = objectValue(message.payload)
         setComplexityPayload(objectValue(payload.complexity))
-        setLoading(false)
+        finishOperation("complexity")
       }
       if (msg.type === "taskflow.projectMemory.patchPreview") {
         const proposal = objectValue(objectValue(message.payload).proposal) as unknown as ProjectMemoryPatchProposal
         setPendingPatch(proposal)
-        setLoading(false)
+        finishOperation("action")
       }
       if (msg.type === "taskflow.action.error" || msg.type === "taskflow.complexity.error") {
-        setLoading(false)
-        setError(stringValue(message.message) || "Taskflow action failed")
+        const errorMessage = stringValue(message.message) || "Taskflow action failed"
+        if (msg.type === "taskflow.complexity.error") failOperation("complexity", errorMessage)
+        else failOperationForActionError(message.action, errorMessage)
+        setError(errorMessage)
       }
     })
     onCleanup(unsubscribe)
