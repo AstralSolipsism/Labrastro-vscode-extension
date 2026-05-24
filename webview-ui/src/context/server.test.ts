@@ -14,11 +14,13 @@ describe("server context state guards", () => {
     expect(shouldClearAdminForConnectionState({ status: "checking" })).toBe(true)
   })
 
-  it("clears stale admin data on auth, permission, unavailable, and network admin errors", () => {
+  it("clears stale admin data for auth errors and admin-state refresh failures", () => {
     expect(shouldClearAdminForError({ type: "admin.error", message: "401 unauthorized", category: "unauthenticated" })).toBe(true)
     expect(shouldClearAdminForError({ type: "admin.error", message: "403 forbidden", category: "forbidden" })).toBe(true)
-    expect(shouldClearAdminForError({ type: "admin.error", message: "503 unavailable", category: "unavailable" })).toBe(true)
-    expect(shouldClearAdminForError({ type: "admin.error", message: "fetch failed", category: "network" })).toBe(true)
+    expect(shouldClearAdminForError({ type: "admin.error", message: "503 unavailable", category: "unavailable", scope: "adminState" })).toBe(true)
+    expect(shouldClearAdminForError({ type: "admin.error", message: "fetch failed", category: "network", scope: "adminState" })).toBe(true)
+    expect(shouldClearAdminForError({ type: "admin.error", message: "provider save failed", category: "unavailable", scope: "adminAction", clearsState: false })).toBe(false)
+    expect(shouldClearAdminForError({ type: "admin.error", message: "provider save failed", category: "unavailable", scope: "adminAction", stale: true })).toBe(false)
     expect(shouldClearAdminForError({ type: "admin.error", message: "stale", stale: true })).toBe(true)
     expect(shouldClearAdminForError({ type: "admin.error", message: "clear", clearsState: true })).toBe(true)
     expect(shouldClearAdminForError({ type: "admin.error", message: "diagnostics unavailable", category: "unavailable", scope: "peerDiagnostics", clearsState: false })).toBe(false)

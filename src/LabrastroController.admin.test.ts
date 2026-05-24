@@ -23,6 +23,7 @@ vi.mock("vscode", () => ({
 }))
 
 import { LabrastroController } from "./LabrastroController"
+import { RemoteError } from "./remote-errors"
 
 function context(): vscode.ExtensionContext {
   return {
@@ -74,6 +75,34 @@ describe("LabrastroController admin state errors", () => {
       scope: "adminAction",
       stale: false,
       clearsState: false,
+    }))
+  })
+
+  it("keeps admin data usable and surfaces backend detail for admin action reload failures", async () => {
+    const controller = new LabrastroController(context())
+    const post = vi.fn()
+    const runAdminAction = (controller as unknown as {
+      runAdminAction: (post: (message: Record<string, unknown>) => void, action: () => Promise<Record<string, unknown>>) => Promise<boolean>
+    }).runAdminAction.bind(controller)
+
+    await expect(runAdminAction(post, async () => {
+      throw new RemoteError(
+        500,
+        "config_reload_failed",
+        "500 config_reload_failed",
+        { error: "config_reload_failed", message: "Unknown config field: providers.items.Zenmux.stream_recovery" },
+      )
+    })).resolves.toBe(false)
+
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: "admin.error",
+      message: "500 config_reload_failed: Unknown config field: providers.items.Zenmux.stream_recovery",
+      category: "unavailable",
+      scope: "adminAction",
+      stale: false,
+      clearsState: false,
+      status: 500,
+      code: "config_reload_failed",
     }))
   })
 })
