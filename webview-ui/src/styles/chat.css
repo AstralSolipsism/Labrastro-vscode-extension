@@ -64,6 +64,63 @@
   background: var(--ez-bg);
 }
 
+.run-status-bar {
+  flex: 0 0 auto;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--ez-border);
+  background: color-mix(in srgb, var(--ez-surface-soft) 42%, var(--ez-bg));
+}
+
+.run-status-chip {
+  min-width: 0;
+  max-width: min(360px, 50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, currentColor 28%, var(--ez-border));
+  border-radius: 999px;
+  color: var(--ez-muted);
+  font-size: 11px;
+  line-height: 16px;
+  background: color-mix(in srgb, currentColor 7%, transparent);
+}
+
+.run-status-chip__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-status-chip__dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.run-status-chip--success {
+  color: var(--ez-success);
+}
+
+.run-status-chip--warning {
+  color: var(--ez-warning);
+}
+
+.run-status-chip--error {
+  color: var(--ez-error);
+}
+
+.run-status-chip__spin {
+  animation: ez-spin 1s linear infinite;
+}
+
 .task-header__top,
 .task-header__metrics,
 .prompt-input-toolbar,
@@ -1244,7 +1301,6 @@
 .tool-card,
 .trace-event,
 .session-card,
-.remote-status-card,
 .terminal-card,
 .reasoning-card,
 .thinking-row,
@@ -1276,7 +1332,6 @@
 }
 
 .tool-card__header,
-.remote-status-card__header,
 .terminal-card__header,
 .reasoning-card__header,
 .view-card__header,
@@ -1302,7 +1357,6 @@
 }
 
 .tool-card__header:hover,
-.remote-status-card__header:hover,
 .terminal-card__header:hover,
 .reasoning-card__header:hover,
 .view-card__header:hover,
@@ -1322,7 +1376,6 @@
 }
 
 .tool-card__body,
-.remote-status-card__body,
 .reasoning-card__body,
 .view-card__body,
 .context-event-card__body,
@@ -1340,7 +1393,6 @@
 }
 
 .tool-card__title,
-.remote-status-card__title,
 .reasoning-card__title,
 .view-card__title,
 .context-event-card__title,
@@ -1361,7 +1413,6 @@
 }
 
 .tool-card__subtitle,
-.remote-status-card__meta,
 .reasoning-card__meta,
 .view-card__meta,
 .context-event-card__meta,
@@ -1380,7 +1431,6 @@
 }
 
 .tool-card__subtitle::before,
-.remote-status-card__meta::before,
 .reasoning-card__meta::before,
 .view-card__meta::before,
 .context-event-card__meta::before,
@@ -1393,7 +1443,6 @@
   color: var(--ez-muted);
 }
 
-.remote-status-card__header .codicon,
 .terminal-card__header .codicon,
 .reasoning-card__header .codicon,
 .view-card__header .codicon,
@@ -1404,27 +1453,6 @@
 .process-group-card__header .codicon {
   flex: 0 0 auto;
   color: var(--ez-muted);
-}
-
-.remote-status-card__details {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: 4px 10px;
-  margin: 0;
-  padding: 8px;
-  border-top: 1px solid var(--ez-border);
-  font-size: 11px;
-}
-
-.remote-status-card__details dt {
-  color: var(--ez-muted);
-}
-
-.remote-status-card__details dd {
-  min-width: 0;
-  margin: 0;
-  word-break: break-word;
-  font-family: var(--vscode-editor-font-family, monospace);
 }
 
 .terminal-card__header,

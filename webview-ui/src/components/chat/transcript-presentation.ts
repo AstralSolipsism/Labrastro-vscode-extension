@@ -9,7 +9,6 @@ export type ProcessGroupKind =
   | "mcp"
   | "skill"
   | "context"
-  | "remote"
   | "other"
 
 export type ProcessState = "running" | "completed" | "error"
@@ -287,8 +286,8 @@ interface ProcessGroupInfo {
 function processGroupInfoForPart(part: TranscriptItem): ProcessGroupInfo {
   if (part.type === "tool") return toolGroupInfo(part)
   if (part.type === "terminal") return { key: "run:terminal", kind: "run", label: t("process.group.run") }
-  if (part.type === "remote_status" || part.type === "session") {
-    return { key: "remote", kind: "remote", label: t("process.group.remote") }
+  if (part.type === "session") {
+    return { key: "context:session", kind: "context", label: t("process.group.context") }
   }
   if (
     part.type === "context_event" ||
@@ -328,7 +327,18 @@ function toolGroupInfo(part: ToolActivityItem): ProcessGroupInfo {
 }
 
 function isProcessItem(part: TranscriptItem): boolean {
-  return part.type !== "assistant_text" && part.type !== "thinking" && part.type !== "reasoning" && part.type !== "notice"
+  return (
+    part.type === "tool" ||
+    part.type === "trace" ||
+    part.type === "session" ||
+    part.type === "terminal" ||
+    part.type === "view" ||
+    part.type === "context_event" ||
+    part.type === "memory_context" ||
+    part.type === "ui_event" ||
+    part.type === "parallel_tools" ||
+    part.type === "parallel_sessions"
+  )
 }
 
 function isMcpTool(part: ToolActivityItem): boolean {
@@ -356,11 +366,15 @@ function toolSourceName(part: ToolActivityItem, inputKeys: string[]): string {
 
 function processItemCurrentLabel(item: TranscriptItem): string {
   if (item.type === "tool") {
+    if (item.status === "preparing") {
+      const toolName = (item.tool || "").trim()
+      if (!toolName || toolName === "tool") return t("tool.preparingGeneric")
+      return t("tool.preparingCall", { tool: toolName })
+    }
     return [getToolActionLabel(item.tool), processItemTarget(item)].filter(Boolean).join(" ")
   }
   if (item.type === "terminal") return item.title || t("process.group.run")
-  if (item.type === "remote_status") return t("process.group.remote")
-  if (item.type === "session") return item.title || item.sessionId || t("process.group.remote")
+  if (item.type === "session") return item.title || item.sessionId || t("process.group.context")
   if ("title" in item && item.title) return item.title
   if (item.type === "notice") return item.text
   return processGroupInfoForPart(item).label
@@ -465,7 +479,7 @@ export function processFailureCount(items: TranscriptItem[]): number {
 }
 
 function isRunningTool(part: ToolActivityItem): boolean {
-  return ["pending", "running", "awaiting_approval", "approved"].includes(part.status || "")
+  return ["preparing", "pending", "running", "awaiting_approval", "approved"].includes(part.status || "")
 }
 
 function isParallelItem(part: TranscriptItem): part is Extract<TranscriptItem, { type: "parallel_tools" | "parallel_sessions" }> {

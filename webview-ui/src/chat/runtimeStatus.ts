@@ -1,7 +1,6 @@
-﻿export type RuntimeStatusTextKey =
-  | "tool.shell.queued"
-  | "runtime.agentQueue.chatWaiting"
-  | "runtime.agentQueue.delegatedRunWaiting"
+import { agentRunStateFromRuntimeStatus, type AgentRunState } from "./runtimeState"
+
+export type RuntimeStatusTextKey = "tool.shell.queued"
 
 export type RuntimeStatusUiAction =
   | {
@@ -10,11 +9,7 @@ export type RuntimeStatusUiAction =
     nextStatus: "pending" | "running"
     textKey?: "tool.shell.queued"
   }
-  | {
-    kind: "append_text"
-    prefix: "runtime-agent-queue-chat" | "runtime-agent-queue-delegated-run"
-    textKey: "runtime.agentQueue.chatWaiting" | "runtime.agentQueue.delegatedRunWaiting"
-  }
+  | { kind: "agent_run_status"; state: AgentRunState }
   | { kind: "ignore" }
   | { kind: "fallback_view" }
 
@@ -46,23 +41,8 @@ export function resolveRuntimeStatusUiAction(
   }
 
   if (phase === "agent_queue") {
-    if (status === "running") return { kind: "ignore" }
-    if (status === "queued") {
-      const agentType = stringValue(payload.agent_type) || ""
-      if (agentType.startsWith("delegated_run")) {
-        return {
-          kind: "append_text",
-          prefix: "runtime-agent-queue-delegated-run",
-          textKey: "runtime.agentQueue.delegatedRunWaiting",
-        }
-      }
-      return {
-        kind: "append_text",
-        prefix: "runtime-agent-queue-chat",
-        textKey: "runtime.agentQueue.chatWaiting",
-      }
-    }
-    return { kind: "fallback_view" }
+    const state = agentRunStateFromRuntimeStatus(payload)
+    return state ? { kind: "agent_run_status", state } : { kind: "fallback_view" }
   }
 
   return { kind: "fallback_view" }

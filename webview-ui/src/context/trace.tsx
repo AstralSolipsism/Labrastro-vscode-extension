@@ -19,8 +19,11 @@ import type {
   TranscriptTextFormat,
 } from "../components/chat/transcript-model"
 import {
+  isLocalDraftSessionId,
+  mergeRemoteBundlePreservingLocalContent,
   sessionBundleHasContent,
   shouldIgnoreInitialSessionLoad,
+  shouldPreserveExistingSessionContent,
 } from "../utils/session-history"
 import { buildOrchestrationGraph, getRootSessionId } from "../utils/trace-orchestration"
 import { useVSCode, type ExtensionMessage } from "./vscode"
@@ -210,7 +213,8 @@ function outputFormatValue(value: unknown): TranscriptOutputFormat | undefined {
 }
 
 function toolStatusValue(value: unknown): ToolExecutionStatus | undefined {
-  return value === "pending" ||
+  return value === "preparing" ||
+    value === "pending" ||
     value === "running" ||
     value === "awaiting_approval" ||
     value === "approved" ||
@@ -331,6 +335,7 @@ function normalizeTranscriptItem(value: unknown, fallbackId: string): Transcript
       finalOutput: textContentValue(payload.finalOutput, payload.toolFinalOutput) || undefined,
       outputTruncated: payload.outputTruncated === true || payload.toolOutputTruncated === true,
       resultMeta: recordFieldValue(payload, "resultMeta", "toolResultMeta"),
+      preparingIndex: numberValue(payload.preparingIndex) ?? numberValue(payload.toolPreparingIndex),
       startedAt: numberValue(payload.startedAt) ?? numberValue(payload.toolStartedAt),
       endedAt: numberValue(payload.endedAt) ?? numberValue(payload.toolEndedAt),
       approvalId: stringValue(payload.approvalId) || undefined,
@@ -351,19 +356,6 @@ function normalizeTranscriptItem(value: unknown, fallbackId: string): Transcript
       level: stringValue(payload.level) || "info",
       text,
       format: textFormatValue(payload.format),
-    } as TranscriptItem
-  }
-
-  if (type === "remote_status") {
-    return {
-      ...meta,
-      type: "remote_status",
-      peerId: stringValue(payload.peerId) || stringValue(payload.remotePeerId) || undefined,
-      sessionId: stringValue(payload.sessionId) || stringValue(payload.remoteSessionId) || undefined,
-      fingerprint: stringValue(payload.fingerprint) || stringValue(payload.remoteFingerprint) || undefined,
-      mode: stringValue(payload.mode) || stringValue(payload.remoteMode) || undefined,
-      model: stringValue(payload.model) || stringValue(payload.remoteModel) || undefined,
-      workspaceRoot: stringValue(payload.workspaceRoot) || stringValue(payload.remoteWorkspaceRoot) || undefined,
     } as TranscriptItem
   }
 
@@ -729,7 +721,7 @@ interface TraceContextValue {
   openAgentManager: (options?: TraceNavigationPayload) => void
   applyPanelNavigation: (payload?: TraceNavigationPayload) => void
   createSession: () => void
-  startDraftTask: (taskText: string) => void
+  startDraftTask: (taskText: string, initialTurn?: MockTurn) => string
   appendTurn: (turn: MockTurn) => void
   replaceLastAssistantMessages: (assistantMessages: MockTurn["assistantMessages"]) => void
   patchStats: (patch: Partial<MockTaskStats>) => void
@@ -1398,7 +1390,7 @@ export const TraceProvider: ParentComponent = (props) => {
     })
   }
 
-  const startDraftTask = (taskText: string) => {
+  const startDraftTask = (taskText: string, initialTurn?: MockTurn) => {
     const sessionId = buildMockId("session")
     const bundle: MockSessionBundle = {
       session: {
@@ -1412,7 +1404,7 @@ export const TraceProvider: ParentComponent = (props) => {
         ...EMPTY_STATS,
         taskText,
       },
-      turns: [],
+      turns: initialTurn ? [initialTurn] : [],
       traceNodes: [],
       traceEdges: [],
       traceUI: {
@@ -1424,7 +1416,8 @@ export const TraceProvider: ParentComponent = (props) => {
         viewMode: "compact",
       },
     }
-    writeSessionBundle(sessionId, bundle, { applyToCurrent: true })
+    writeSessionBundle(sessionId, bundle, { applyToCurrent: true, includeInHistory: false })
+    return sessionId
   }
 
   const appendTurn = (turn: MockTurn) => {
@@ -1460,6 +1453,31 @@ export const TraceProvider: ParentComponent = (props) => {
         ...patch,
       },
     }))
+  }
+
+  const mergeIncomingSessionBundle = (
+    incomingSessionId: string,
+    incomingBundle: MockSessionBundle
+  ): MockSessionBundle => {
+    const existingRemoteBundle = getSessionBundle(incomingSessionId)
+    if (shouldPreserveExistingSessionContent(incomingBundle, existingRemoteBundle)) {
+      return mergeRemoteBundlePreservingLocalContent(incomingBundle, existingRemoteBundle as MockSessionBundle)
+    }
+
+    const draftSessionId = currentSessionId()
+    if (
+      draftSessionId &&
+      draftSessionId !== incomingSessionId &&
+      isLocalDraftSessionId(draftSessionId) &&
+      !isLocalDraftSessionId(incomingSessionId)
+    ) {
+      const draftBundle = getSessionBundle(draftSessionId)
+      if (shouldPreserveExistingSessionContent(incomingBundle, draftBundle)) {
+        return mergeRemoteBundlePreservingLocalContent(incomingBundle, draftBundle as MockSessionBundle)
+      }
+    }
+
+    return incomingBundle
   }
 
   onMount(() => {
@@ -1503,12 +1521,13 @@ export const TraceProvider: ParentComponent = (props) => {
           setSessionListState(sessionListReadyState(sessions, msg.fingerprint))
         }
         if (remoteBundle) {
-          writeSessionBundle(msg.sessionId, remoteBundle, {
+          const bundleToWrite = mergeIncomingSessionBundle(msg.sessionId, remoteBundle)
+          writeSessionBundle(msg.sessionId, bundleToWrite, {
             applyToCurrent: true,
             includeInHistory:
               msg.type === "session.forked" ||
               msg.type !== "session.created" ||
-              sessionBundleHasContent(remoteBundle),
+              sessionBundleHasContent(bundleToWrite),
           })
         }
       }

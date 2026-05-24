@@ -142,8 +142,6 @@ function estimatePartHeight(part: TranscriptItem, width: number, metrics: TurnHe
       return estimatePlainCardHeight(part.text || part.title || "", width, 42, metrics)
     case "session":
       return estimatePlainCardHeight(part.summary || part.title || "", width, 44, metrics)
-    case "remote_status":
-      return 42
     case "terminal":
       return 34 + estimateCodeHeight(part.content || "", width, metrics, 88, 220)
     case "view":
@@ -279,11 +277,11 @@ function estimateMarkdownStructuralExtra(text: string, metrics: TurnHeightMetric
 }
 
 function isExpandableToolOpen(status?: string): boolean {
-  return ["pending", "running", "awaiting_approval", "denied", "error", "cancelled"].includes(status || "")
+  return ["preparing", "pending", "running", "awaiting_approval", "denied", "error", "cancelled"].includes(status || "")
 }
 
 function isShellToolOpen(status?: string): boolean {
-  return ["pending", "running", "awaiting_approval", "approved", "denied", "error", "cancelled"].includes(status || "")
+  return ["preparing", "pending", "running", "awaiting_approval", "approved", "denied", "error", "cancelled"].includes(status || "")
 }
 
 function turnContentDigest(turn: MockTurn): string {

@@ -56,6 +56,7 @@ export interface ToolActivityItem extends TranscriptMeta {
   finalOutput?: string
   outputTruncated?: boolean
   resultMeta?: Record<string, unknown>
+  preparingIndex?: number
   startedAt?: number
   endedAt?: number
   approvalId?: string
@@ -71,16 +72,6 @@ export interface NoticeItem extends TranscriptMeta {
   level: NoticeLevel
   text: string
   format?: TranscriptTextFormat
-}
-
-export interface RemoteStatusItem extends TranscriptMeta {
-  type: "remote_status"
-  peerId?: string
-  sessionId?: string
-  fingerprint?: string
-  mode?: string
-  model?: string
-  workspaceRoot?: string
 }
 
 export interface TraceItem extends TranscriptMeta {
@@ -146,7 +137,6 @@ export type TranscriptItem =
   | ReasoningItem
   | ToolActivityItem
   | NoticeItem
-  | RemoteStatusItem
   | TraceItem
   | SessionItem
   | TerminalItem

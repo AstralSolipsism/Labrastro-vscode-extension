@@ -89,6 +89,7 @@ export const TRACE_NAVIGATION_INTENTS = [
 export type TraceNavigationIntent = (typeof TRACE_NAVIGATION_INTENTS)[number]
 
 export const TOOL_EXECUTION_STATUSES = [
+  "preparing",
   "pending",
   "running",
   "awaiting_approval",
@@ -290,6 +291,7 @@ export const TRACE_I18N: TraceGraphI18n = {
       task_dispatch: "任务派发",
     },
     toolStatuses: {
+      preparing: "准备中",
       pending: "等待中",
       running: "执行中",
       awaiting_approval: "等待批准",
@@ -349,6 +351,7 @@ export const TRACE_I18N: TraceGraphI18n = {
       task_dispatch: "Task Dispatch",
     },
     toolStatuses: {
+      preparing: "Preparing",
       pending: "Pending",
       running: "Running",
       awaiting_approval: "Awaiting approval",
@@ -560,6 +563,7 @@ export const TRACE_EDGE_CLASS_MAP: Record<TraceEdgeKind, string> = {
 }
 
 export const TOOL_STATUS_TO_TRACE_STATUS: Record<ToolExecutionStatus, TraceNodeStatus> = {
+  preparing: "active",
   pending: "queued",
   running: "active",
   awaiting_approval: "active",

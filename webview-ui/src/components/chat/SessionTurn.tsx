@@ -202,7 +202,7 @@ const ToolPart: Component<ItemProps<ToolActivityItem>> = (props) => {
       class="tool-card"
       classList={{
         "tool-card--selected": selected(),
-        "tool-card--awaiting": props.part.status === "pending" || props.part.status === "awaiting_approval",
+        "tool-card--awaiting": props.part.status === "preparing" || props.part.status === "pending" || props.part.status === "awaiting_approval",
         "tool-card--error": props.part.status === "error" || props.part.status === "protocol_error",
         "tool-card--cancelled": props.part.status === "cancelled" || props.part.status === "denied",
       }}
@@ -369,6 +369,7 @@ function approvalResultReasonForPart(part: ToolActivityItem): string | undefined
 }
 
 function shellEmptyText(status?: string): string {
+  if (status === "preparing") return t("tool.preparingGeneric")
   if (status === "pending") return t("tool.shell.queued")
   if (status === "awaiting_approval") return t("tool.shell.awaitingApproval")
   if (status === "approved") return t("tool.shell.approved")
@@ -439,7 +440,7 @@ const ShellToolPart: Component<ItemProps<ToolActivityItem>> = (props) => {
       class="tool-card shell-card"
       classList={{
         "tool-card--selected": selected(),
-        "tool-card--awaiting": props.part.status === "pending" || props.part.status === "awaiting_approval",
+        "tool-card--awaiting": props.part.status === "preparing" || props.part.status === "pending" || props.part.status === "awaiting_approval",
         "tool-card--error": props.part.status === "error" || props.part.status === "protocol_error",
         "tool-card--cancelled": props.part.status === "cancelled" || props.part.status === "denied",
       }}
@@ -736,57 +737,6 @@ const NoticePart: Component<ItemProps<NoticeItem>> = (props) => (
     </Show>
   </div>
 )
-
-const RemoteStatusPart: Component<ItemProps<Extract<TranscriptItem, { type: "remote_status" }>>> = (props) => {
-  const [open, setOpen] = createSignal(initialCardOpenState(props.part.id, false))
-  createEffect(() => {
-    CARD_OPEN_STATE.set(props.part.id, open())
-  })
-  const fields = () => [
-    ["Peer", props.part.peerId],
-    ["Session", props.part.sessionId],
-    ["Fingerprint", props.part.fingerprint],
-    ["Workspace", props.part.workspaceRoot],
-  ].filter(([, value]) => value)
-
-  return (
-    <div class="remote-status-card" onClick={(event) => event.stopPropagation()}>
-      <button
-        type="button"
-        class="remote-status-card__header"
-        onClick={(event) => {
-          event.stopPropagation()
-          setOpen((value) => {
-            const next = !value
-            CARD_OPEN_STATE.set(props.part.id, next)
-            return next
-          })
-        }}
-      >
-        <span class="codicon codicon-remote-explorer" aria-hidden="true" />
-        <span class="remote-status-card__body">
-          <span class="remote-status-card__title">{t("tool.remote.connected")}</span>
-          <span class="remote-status-card__meta">
-            {props.part.mode || "-"} · {props.part.model || "-"}
-          </span>
-        </span>
-        <span class={`codicon codicon-chevron-${open() ? "down" : "right"}`} aria-hidden="true" />
-      </button>
-      <Show when={open()}>
-        <dl class="remote-status-card__details">
-          <For each={fields()}>
-            {([label, value]) => (
-              <>
-                <dt>{label}</dt>
-                <dd>{value}</dd>
-              </>
-            )}
-          </For>
-        </dl>
-      </Show>
-    </div>
-  )
-}
 
 const TerminalPart: Component<ItemProps<Extract<TranscriptItem, { type: "terminal" }>>> = (props) => {
   const [open, setOpen] = createSignal(initialCardOpenState(props.part.id, true))
@@ -1139,7 +1089,6 @@ const PROCESS_GROUP_ICONS: Record<ProcessGroup["kind"], string> = {
   mcp: "server-process",
   skill: "symbol-method",
   context: "file-submodule",
-  remote: "remote-explorer",
   other: "list-tree",
 }
 
@@ -1367,9 +1316,6 @@ const TranscriptItemView: Component<PartProps> = (props) => {
       </Match>
       <Match when={props.part.type === "session"}>
         <SessionPart {...props} part={props.part as Extract<TranscriptItem, { type: "session" }>} />
-      </Match>
-      <Match when={props.part.type === "remote_status"}>
-        <RemoteStatusPart {...props} part={props.part as Extract<TranscriptItem, { type: "remote_status" }>} />
       </Match>
       <Match when={props.part.type === "terminal"}>
         <TerminalPart {...props} part={props.part as Extract<TranscriptItem, { type: "terminal" }>} />
