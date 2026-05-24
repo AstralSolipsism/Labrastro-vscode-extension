@@ -1,7 +1,6 @@
-import { Component, For, Show, createMemo, onMount } from "solid-js"
+import { Component, For, Show, createMemo } from "solid-js"
 import { t } from "../../i18n"
 import { RefreshButton } from "../../components/common/RefreshButton"
-import { settingsMessages } from "../settingsMessages"
 import type { SettingsController } from "../useSettingsController"
 
 interface TabProps { controller: SettingsController & Record<string, any> }
@@ -26,8 +25,15 @@ function stringValue(value: unknown): string {
 
 export const DiagnosticsTab: Component<TabProps> = (props) => {
   const {
-    refreshAdmin,
-    vscode,
+    operations,
+    pageRefreshing,
+    refreshPage,
+    readToolDiagnosticsStats,
+    savePeerDiagnosticsLogging,
+    saveDiagnosticsSettings,
+    serverSettingsSaveBusy,
+    openPeerDiagnosticsLog,
+    clearPeerDiagnosticsLog,
     server,
   } = props.controller
   const serverSettings = createMemo(() => {
@@ -64,15 +70,10 @@ export const DiagnosticsTab: Component<TabProps> = (props) => {
   const peerLoggingHttp = createMemo(() => peerDiagnosticsLogging().http !== false)
   const peerLoggingPath = createMemo(() => stringValue(peerDiagnosticsLogging().logPath))
 
-  const refreshDiagnostics = () => settingsMessages.readToolDiagnosticsStats(vscode)
-  const refreshDiagnosticsPage = () => {
-    refreshAdmin()
-    settingsMessages.readServerSettings(vscode)
-    settingsMessages.getPeerDiagnosticsLogging(vscode)
-    refreshDiagnostics()
-  }
+  const refreshDiagnostics = () => readToolDiagnosticsStats()
+  const refreshDiagnosticsPage = () => refreshPage("diagnostics")
   const updatePeerDiagnosticsLogging = (patch: Record<string, boolean>) => {
-    settingsMessages.savePeerDiagnosticsLogging(vscode, {
+    savePeerDiagnosticsLogging({
       enabled: peerLoggingEnabled(),
       lifecycle: peerLoggingLifecycle(),
       processOutput: peerLoggingProcessOutput(),
@@ -81,7 +82,7 @@ export const DiagnosticsTab: Component<TabProps> = (props) => {
     })
   }
   const updateLLMTrace = (patch: Record<string, boolean>) => {
-    settingsMessages.updateServerSettings(vscode, {
+    saveDiagnosticsSettings({
       settings: {
         diagnostics: {
           llm_trace: {
@@ -94,7 +95,7 @@ export const DiagnosticsTab: Component<TabProps> = (props) => {
     })
   }
   const updateToolDiagnosticsTelemetry = (patch: Record<string, boolean>) => {
-    settingsMessages.updateServerSettings(vscode, {
+    saveDiagnosticsSettings({
       settings: {
         diagnostics: {
           tool_diagnostics: {
@@ -107,11 +108,6 @@ export const DiagnosticsTab: Component<TabProps> = (props) => {
     })
   }
 
-  onMount(() => {
-    settingsMessages.readServerSettings(vscode)
-    settingsMessages.getPeerDiagnosticsLogging(vscode)
-  })
-
   return (
     <div class="settings-page settings-page--narrow">
       <div class="settings-page-header">
@@ -119,7 +115,7 @@ export const DiagnosticsTab: Component<TabProps> = (props) => {
           <h2>{t("diagnostics.title")}</h2>
           <p class="setting-description">{t("diagnostics.desc")}</p>
         </div>
-        <RefreshButton class="btn-secondary" onClick={refreshDiagnosticsPage}>
+        <RefreshButton class="btn-secondary" loading={pageRefreshing("diagnostics")} onClick={refreshDiagnosticsPage}>
           {t("common.refresh")}
         </RefreshButton>
       </div>
@@ -184,7 +180,7 @@ export const DiagnosticsTab: Component<TabProps> = (props) => {
           <button
             type="button"
             class="btn-secondary"
-            onClick={() => settingsMessages.openPeerDiagnosticsLog(vscode)}
+            onClick={openPeerDiagnosticsLog}
           >
             <span class="codicon codicon-go-to-file" aria-hidden="true" />
             {t("diagnostics.peerLogging.open")}
@@ -192,7 +188,7 @@ export const DiagnosticsTab: Component<TabProps> = (props) => {
           <button
             type="button"
             class="btn-secondary"
-            onClick={() => settingsMessages.clearPeerDiagnosticsLog(vscode)}
+            onClick={clearPeerDiagnosticsLog}
           >
             <span class="codicon codicon-trash" aria-hidden="true" />
             {t("diagnostics.peerLogging.clear")}
@@ -212,6 +208,7 @@ export const DiagnosticsTab: Component<TabProps> = (props) => {
           <input
             type="checkbox"
             checked={llmTraceEnabled()}
+            disabled={serverSettingsSaveBusy()}
             onChange={(event) => updateLLMTrace({
               enabled: event.currentTarget.checked,
               raw_chunks: event.currentTarget.checked ? llmTraceRawChunks() : false,
@@ -222,7 +219,7 @@ export const DiagnosticsTab: Component<TabProps> = (props) => {
         <label class="field-label field-label--checkbox">
           <input
             type="checkbox"
-            disabled={!llmTraceEnabled()}
+            disabled={!llmTraceEnabled() || serverSettingsSaveBusy()}
             checked={llmTraceRawChunks()}
             onChange={(event) => updateLLMTrace({
               enabled: event.currentTarget.checked ? true : llmTraceEnabled(),
@@ -246,6 +243,7 @@ export const DiagnosticsTab: Component<TabProps> = (props) => {
           <input
             type="checkbox"
             checked={toolDiagnosticsTelemetryEnabled()}
+            disabled={serverSettingsSaveBusy()}
             onChange={(event) => updateToolDiagnosticsTelemetry({ enabled: event.currentTarget.checked })}
           />
           <span>{t("diagnostics.toolArgs.enabled")}</span>
@@ -253,7 +251,7 @@ export const DiagnosticsTab: Component<TabProps> = (props) => {
         <label class="field-label field-label--checkbox">
           <input
             type="checkbox"
-            disabled={!toolDiagnosticsTelemetryEnabled()}
+            disabled={!toolDiagnosticsTelemetryEnabled() || serverSettingsSaveBusy()}
             checked={toolDiagnosticsRecordClean()}
             onChange={(event) => updateToolDiagnosticsTelemetry({ record_clean: event.currentTarget.checked })}
           />
@@ -271,7 +269,7 @@ export const DiagnosticsTab: Component<TabProps> = (props) => {
             {t("diagnostics.toolArgs.stats")}
           </summary>
           <div class="settings-actions settings-actions--right">
-            <RefreshButton class="btn-secondary" onClick={refreshDiagnostics}>
+            <RefreshButton class="btn-secondary" loading={operations.isBusy("toolDiagnostics")} onClick={refreshDiagnostics}>
               {t("diagnostics.toolArgs.refreshStats")}
             </RefreshButton>
           </div>

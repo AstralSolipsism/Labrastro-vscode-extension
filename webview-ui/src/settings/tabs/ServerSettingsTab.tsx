@@ -1,8 +1,7 @@
-import { Component, Show, createEffect, createMemo, createSignal, onMount } from "solid-js"
+import { Component, Show, createEffect, createMemo, createSignal } from "solid-js"
 import { t } from "../../i18n"
 import { RefreshButton } from "../../components/common/RefreshButton"
 import { StatusBadge } from "../components/StatusBadge"
-import { settingsMessages } from "../settingsMessages"
 import type { SettingsController } from "../useSettingsController"
 
 interface TabProps { controller: SettingsController & Record<string, any> }
@@ -18,9 +17,13 @@ function boolValue(value: unknown, fallback = false): boolean {
 export const ServerSettingsTab: Component<TabProps> = (props) => {
   const {
     agentRunsState,
+    operations,
+    pageRefreshing,
     refreshServerSettings,
     saveServerSettings,
+    saveInfrastructureSettings: saveInfrastructureSettingsRequest,
     serverSettingsDirty,
+    serverSettingsSaveBusy,
     server,
     objectValue,
     serverMaxRunningAgents,
@@ -29,7 +32,6 @@ export const ServerSettingsTab: Component<TabProps> = (props) => {
     serverMaxShellsPerAgent,
     setServerMaxShellsPerAgent,
     numberValue,
-    vscode,
   } = props.controller
 
   const [infraDirty, setInfraDirty] = createSignal(false)
@@ -80,10 +82,8 @@ export const ServerSettingsTab: Component<TabProps> = (props) => {
     setPersistenceMaintenanceInterval(Math.max(1, Math.floor(numberValue(persistence.maintenance_interval_sec, 3600))))
   })
 
-  onMount(() => settingsMessages.readServerSettings(vscode))
-
   const saveInfrastructureSettings = () => {
-    settingsMessages.updateServerSettings(vscode, {
+    saveInfrastructureSettingsRequest({
       settings: {
         sandbox_provider: {
           type: sandboxType(),
@@ -118,23 +118,23 @@ export const ServerSettingsTab: Component<TabProps> = (props) => {
             <p class="setting-description">{t("serverSettings.desc")}</p>
           </div>
           <div class="settings-actions settings-actions--right">
-            <RefreshButton class="btn-secondary" onClick={refreshServerSettings}>
+            <RefreshButton class="btn-secondary" loading={pageRefreshing("serverSettings")} onClick={refreshServerSettings}>
               {t("common.refresh")}
             </RefreshButton>
-            <button class="btn btn-primary" onClick={saveServerSettings} disabled={!serverSettingsDirty()}>
+            <button class="btn btn-primary" onClick={saveServerSettings} disabled={!serverSettingsDirty() || serverSettingsSaveBusy()}>
               <span class="codicon codicon-save" aria-hidden="true" />
               {t("common.save")}
             </button>
           </div>
         </div>
 
-        <Show when={server.serverSettingsError()}>
-          <div class="settings-error">{server.serverSettingsError()}</div>
+        <Show when={operations.error("serverSettingsSave") || operations.error("serverSettings")}>
+          <div class="settings-error">{operations.error("serverSettingsSave") || operations.error("serverSettings")}</div>
         </Show>
-        <Show when={server.actionResult()?.ok === true && Object.keys(objectValue(server.actionResult()?.settings)).length > 0 && !serverSettingsDirty()}>
+        <Show when={operations.state("serverSettingsSave").status === "success" && !serverSettingsDirty()}>
           <div class="settings-success">服务端设置已保存并重载。</div>
         </Show>
-        <Show when={infraSaved() && !infraDirty()}>
+        <Show when={infraSaved() && operations.state("serverSettingsSave").status === "success" && !infraDirty()}>
           <div class="settings-success">服务端运行环境设置已保存并重载。</div>
         </Show>
 
@@ -275,7 +275,7 @@ export const ServerSettingsTab: Component<TabProps> = (props) => {
             </label>
           </div>
           <div class="settings-actions settings-actions--right">
-            <button class="btn btn-primary" type="button" disabled={!infraDirty()} onClick={saveInfrastructureSettings}>
+            <button class="btn btn-primary" type="button" disabled={!infraDirty() || serverSettingsSaveBusy()} onClick={saveInfrastructureSettings}>
               <span class="codicon codicon-save" aria-hidden="true" />
               保存运行环境
             </button>

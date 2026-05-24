@@ -20,6 +20,7 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
   const {
     refreshServerSettings,
     saveAgentConfig,
+    serverSettingsSaveBusy,
     agentConfigDirty,
     agentConfigSavePending,
     server,
@@ -91,18 +92,18 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
           <h2>{t("agentConfig.title")}</h2>
         </div>
         <div class="settings-actions settings-actions--right">
-          <RefreshButton class="btn-secondary" onClick={refreshServerSettings}>
+          <RefreshButton class="btn-secondary" loading={props.controller.pageRefreshing("agentConfig")} onClick={refreshServerSettings}>
             刷新
           </RefreshButton>
-          <button class="btn btn-primary" onClick={saveAgentConfig} disabled={!agentConfigDirty() || agentConfigSavePending()}>
+          <button class="btn btn-primary" onClick={saveAgentConfig} disabled={!agentConfigDirty() || serverSettingsSaveBusy()}>
             <span class="codicon codicon-save" aria-hidden="true" />
             {agentConfigSavePending() ? t("agentConfig.saving") : t("agentConfig.save")}
           </button>
         </div>
       </div>
 
-      <Show when={server.serverSettingsError()}>
-        <div class="settings-error">{server.serverSettingsError()}</div>
+      <Show when={props.controller.operations.error("agentConfigSave") || props.controller.operations.error("serverSettings")}>
+        <div class="settings-error">{props.controller.operations.error("agentConfigSave") || props.controller.operations.error("serverSettings")}</div>
       </Show>
       <Show when={agentConfigError()}>
         <div class="settings-error">{agentConfigError()}</div>
@@ -453,14 +454,14 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
               <span class="codicon codicon-play" aria-hidden="true" />
               {agentRunSubmitting() ? t("agentConfig.runtimeTest.submitting") : t("agentConfig.runtimeTest.submit")}
             </button>
-            <button class="btn btn-secondary" onClick={cancelAgentRunTest} disabled={!selectedAgentRunId() || agentRunTerminal()}>
+            <button class="btn btn-secondary" onClick={cancelAgentRunTest} disabled={!selectedAgentRunId() || agentRunTerminal() || agentRunSubmitting()}>
               <span class="codicon codicon-debug-stop" aria-hidden="true" />
               {t("agentConfig.runtimeTest.cancel")}
             </button>
             <RefreshButton
               class="btn-secondary"
               onClick={() => retryAgentRunTest(false)}
-              disabled={!selectedAgentRunId()}
+              disabled={!selectedAgentRunId() || agentRunSubmitting()}
               loading={agentRunSubmitting()}
               loadingLabel={t("agentConfig.runtimeTest.submitting")}
             >

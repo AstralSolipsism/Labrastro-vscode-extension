@@ -1,4 +1,4 @@
-﻿import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from "solid-js"
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from "solid-js"
 import { useVSCode } from "../context/vscode"
 import { useServer } from "../context/server"
 import {
@@ -17,14 +17,34 @@ import {
   toggleAgentConfigListValue,
   validateAgentConfigId,
 } from "../utils/agent-config"
-import { t } from "../i18n"
+import { setLocale, t, type Locale } from "../i18n"
 import { updateCommandRuleLists } from "../utils/command-auto-approval"
 import { settingsMessages } from "./settingsMessages"
 import {
   connectionSaveResultKey,
   sanitizeAutoApproveOptions,
   serverAgentRunSettingsPayload,
+  type SettingsTab,
 } from "./settingsControllerUtils"
+import {
+  getSettingsOperationState,
+  initialSettingsOperationStates,
+  markSettingsOperationError,
+  markSettingsOperationIdle,
+  markSettingsOperationStarted,
+  markSettingsOperationSuccess,
+  settingsAgentRunOperationIsBusy,
+  settingsCapabilityIngestOperationIsBusy,
+  settingsOperationKeysForAdminError,
+  settingsOperationIsBusy,
+  settingsPageIsRefreshing,
+  settingsPageOperationKeys,
+  settingsProviderAdminActionIsBusy,
+  settingsServerSettingsSaveIsBusy,
+  type SettingsOperationKey,
+  type SettingsOperationState,
+  type SettingsOperationStatus,
+} from "./settingsOperations"
 import {
   canUseSettingsAdminData,
   isAccountAdminRole,
@@ -40,11 +60,10 @@ import {
   type ApprovalDecision,
   type ApprovalDetails,
 } from "../components/chat/ApprovalDetailsDialog"
-
-type ProviderType = "openai_chat" | "anthropic_messages" | "openai_responses"
+
+type ProviderType = "openai_chat" | "anthropic_messages" | "openai_responses"
 type ProviderCompat = "generic" | "deepseek" | "kimi" | "glm" | "qwen" | "zenmux"
 
-type SettingsTab = "executors" | "accounts" | "providers" | "toolchains" | "conversation" | "sessionPolicy" | "serverSettings" | "agentConfig" | "autoApproval" | "integrations" | "diagnostics"
 /** 主执行器运行位置 */
 type ExecutorLocation = "local" | "remote"
 
@@ -130,7 +149,7 @@ interface AgentToolCatalogItem {
   modeRefs: string[]
   approvalStatus: string
 }
-
+
 export interface SettingsViewProps {
   targetTab?: string
   onEnvironmentRun?: (request: EnvironmentRunLaunchRequest) => void
@@ -142,10 +161,10 @@ interface EnvironmentRunLaunchRequest {
   executionMode: "serial" | "combined"
   items: Array<{ id: string; name: string; kind: EnvironmentEntryKind }>
 }
-
-interface ProviderModelEntry {
-  id: string
-  owned_by?: string
+
+interface ProviderModelEntry {
+  id: string
+  owned_by?: string
   created?: number
 
   max_tokens?: number
@@ -168,7 +187,7 @@ interface ProviderModelEntry {
 
   supports_parallel_tool_calls?: boolean
 }
-
+
 function knownModelCapabilityDefaults(
   provider: string,
   model: string,
@@ -186,41 +205,41 @@ function knownModelCapabilityDefaults(
 }
 
 interface EnvironmentEntryState {
-  id: string
-  kind: EnvironmentEntryKind
-  name: string
-  description: string
-  source: string
-  version?: string
-  check: string
-  install: string
+  id: string
+  kind: EnvironmentEntryKind
+  name: string
+  description: string
+  source: string
+  version?: string
+  check: string
+  install: string
   command?: string
   alias?: string
-  tags: string[]
-  status: EnvironmentEntryStatus
-  detail?: string
-  lastAction?: string
-  lastUpdated?: string
-}
-
-interface EnvironmentApprovalState extends ApprovalDetails {
-  approvalId: string
-  toolName: string
-  command: string
-  entryId?: string
-}
-
-interface EnvironmentLogState {
-  id: string
-  level: "info" | "warning" | "error"
-  message: string
-  createdAt: string
-  entryId?: string
-}
-
-interface EnvironmentSnapshotState {
-  mode: "check" | "configure" | null
-  running: boolean
+  tags: string[]
+  status: EnvironmentEntryStatus
+  detail?: string
+  lastAction?: string
+  lastUpdated?: string
+}
+
+interface EnvironmentApprovalState extends ApprovalDetails {
+  approvalId: string
+  toolName: string
+  command: string
+  entryId?: string
+}
+
+interface EnvironmentLogState {
+  id: string
+  level: "info" | "warning" | "error"
+  message: string
+  createdAt: string
+  entryId?: string
+}
+
+interface EnvironmentSnapshotState {
+  mode: "check" | "configure" | null
+  running: boolean
   status: EnvironmentSnapshotStatus
   summary: string
   chatId?: string
@@ -229,35 +248,35 @@ interface EnvironmentSnapshotState {
   sessionId?: string
   startedAt?: string
   completedAt?: string
-  lastManifestAt?: string
-  error?: string
-  entries: EnvironmentEntryState[]
-  approvals: EnvironmentApprovalState[]
-  logs: EnvironmentLogState[]
-  lastRunSummary?: string
-  lastRunCompletedAt?: string
-  lastRunStatus?: "completed" | "error" | "canceled"
-}
-
+  lastManifestAt?: string
+  error?: string
+  entries: EnvironmentEntryState[]
+  approvals: EnvironmentApprovalState[]
+  logs: EnvironmentLogState[]
+  lastRunSummary?: string
+  lastRunCompletedAt?: string
+  lastRunStatus?: "completed" | "error" | "canceled"
+}
+
 interface ToolchainRecord {
-  kind: ToolchainKind
-  name: string
-  enabled?: boolean
-  command?: string
+  kind: ToolchainKind
+  name: string
+  enabled?: boolean
+  command?: string
   tags?: string[]
-  args?: string[]
-  env?: Record<string, string>
-  cwd?: string
-  placement?: string
-  distribution?: string
-  requirements?: Record<string, string>
-  scope?: string
-  check?: string
-  install?: string
-  version?: string
-  source?: string
-  description?: string
-  path_hint?: string
+  args?: string[]
+  env?: Record<string, string>
+  cwd?: string
+  placement?: string
+  distribution?: string
+  requirements?: Record<string, string>
+  scope?: string
+  check?: string
+  install?: string
+  version?: string
+  source?: string
+  description?: string
+  path_hint?: string
   docs?: Array<{ title?: string; url?: string }>
   evidence?: Array<Record<string, string>>
   repo_url?: string
@@ -299,7 +318,7 @@ interface ToolchainDashboardItem {
   package_ids: string[]
   managed_by: string
 }
-
+
 interface ExecutorFeatureView {
   installed: boolean
   version: string
@@ -339,22 +358,22 @@ interface CapabilityPackageIngestState {
 }
 
 interface ToolchainEditorState {
-  mode: "create" | "edit"
-  kind: ToolchainKind
-  name: string
-  enabled: boolean
-  command: string
+  mode: "create" | "edit"
+  kind: ToolchainKind
+  name: string
+  enabled: boolean
+  command: string
   tagsText: string
-  argsText: string
-  envText: string
-  cwd: string
-  placement: string
-  distribution: string
-  requirementsText: string
-  scope: string
-  check: string
-  install: string
-  version: string
+  argsText: string
+  envText: string
+  cwd: string
+  placement: string
+  distribution: string
+  requirementsText: string
+  scope: string
+  check: string
+  install: string
+  version: string
   source: string
   description: string
   pathHint: string
@@ -367,10 +386,10 @@ interface ToolchainEditorState {
   verifyPrompt: string
   notesText: string
 }
-
-/* ── Agent 配置类型 ── */
-
-/** Runtime Profile 编辑器状态 */
+
+/* ── Agent 配置类型 ── */
+
+/** Runtime Profile 编辑器状态 */
 interface RuntimeProfileDraft {
   id: string
   executor: string
@@ -383,14 +402,14 @@ interface RuntimeProfileDraft {
   argsText: string
   envText: string
   credentialRefsText: string
-  mcpServersText: string
-}
-
-/** Agent 定义编辑器状态 */
-interface AgentDefinitionDraft {
-  id: string
-  name: string
-  description: string
+  mcpServersText: string
+}
+
+/** Agent 定义编辑器状态 */
+interface AgentDefinitionDraft {
+  id: string
+  name: string
+  description: string
   role: string
   entrypoint: boolean
 
@@ -399,11 +418,11 @@ interface AgentDefinitionDraft {
   dispatchProfileText: string
   dispatchExamplesText: string
   dispatchAvoidText: string
-  systemAppend: string
-  agentMd: string
+  systemAppend: string
+  agentMd: string
   capabilityRefsText: string
-  max_concurrent_tasks: number
-  credentialRefsText: string
+  max_concurrent_tasks: number
+  credentialRefsText: string
 }
 
 interface RuntimeOption {
@@ -442,29 +461,29 @@ const PROFILE_CONFIG_ISOLATION_OPTIONS: RuntimeOption[] = [
   { value: "shared", labelKey: "agentConfig.profile.configIsolation.shared", descKey: "agentConfig.profile.configIsolation.shared.desc" },
   { value: "inherit", labelKey: "agentConfig.profile.configIsolation.inherit", descKey: "agentConfig.profile.configIsolation.inherit.desc" },
 ]
-
-function emptyProfileDraft(id = ""): RuntimeProfileDraft {
-  return {
-    id,
-    executor: "reuleauxcoder",
+
+function emptyProfileDraft(id = ""): RuntimeProfileDraft {
+  return {
+    id,
+    executor: "reuleauxcoder",
     execution_location: "local_workspace",
     runtime_home_policy: "per_task",
     approval_mode: "full",
     config_isolation: "",
-    model: "",
-    command: "",
-    argsText: "",
-    envText: "",
-    credentialRefsText: "",
-    mcpServersText: "",
-  }
-}
-
-function emptyAgentDraft(id = ""): AgentDefinitionDraft {
-  return {
-    id,
-    name: "",
-    description: "",
+    model: "",
+    command: "",
+    argsText: "",
+    envText: "",
+    credentialRefsText: "",
+    mcpServersText: "",
+  }
+}
+
+function emptyAgentDraft(id = ""): AgentDefinitionDraft {
+  return {
+    id,
+    name: "",
+    description: "",
     role: "worker",
     entrypoint: false,
 
@@ -473,35 +492,35 @@ function emptyAgentDraft(id = ""): AgentDefinitionDraft {
     dispatchProfileText: "",
     dispatchExamplesText: "",
     dispatchAvoidText: "",
-    systemAppend: "",
-    agentMd: "",
+    systemAppend: "",
+    agentMd: "",
     capabilityRefsText: "",
-    max_concurrent_tasks: 1,
-    credentialRefsText: "",
-  }
-}
-
-/** 将后端 profile 对象转为编辑器 draft */
-function profileToDraft(id: string, profile: Record<string, unknown>): RuntimeProfileDraft {
-  return {
-    id,
+    max_concurrent_tasks: 1,
+    credentialRefsText: "",
+  }
+}
+
+/** 将后端 profile 对象转为编辑器 draft */
+function profileToDraft(id: string, profile: Record<string, unknown>): RuntimeProfileDraft {
+  return {
+    id,
     executor: stringValue(profile.executor, "reuleauxcoder"),
     execution_location: stringValue(profile.execution_location, "local_workspace"),
     runtime_home_policy: stringValue(profile.runtime_home_policy, "per_task"),
     approval_mode: stringValue(profile.approval_mode, "full"),
     config_isolation: stringValue(profile.config_isolation),
-    model: stringValue(profile.model),
-    command: stringValue(profile.command),
-    argsText: Array.isArray(profile.args) ? JSON.stringify(profile.args) : "",
-    envText: profile.env && typeof profile.env === "object" ? JSON.stringify(profile.env, null, 2) : "",
-    credentialRefsText: kvObjectToText(objectValue(profile.credential_refs)),
-    mcpServersText: profile.mcp && typeof profile.mcp === "object"
-      ? stringArray((profile.mcp as Record<string, unknown>).servers).join("\n")
-      : "",
-  }
-}
-
-/** 将后端 agent 对象转为编辑器 draft */
+    model: stringValue(profile.model),
+    command: stringValue(profile.command),
+    argsText: Array.isArray(profile.args) ? JSON.stringify(profile.args) : "",
+    envText: profile.env && typeof profile.env === "object" ? JSON.stringify(profile.env, null, 2) : "",
+    credentialRefsText: kvObjectToText(objectValue(profile.credential_refs)),
+    mcpServersText: profile.mcp && typeof profile.mcp === "object"
+      ? stringArray((profile.mcp as Record<string, unknown>).servers).join("\n")
+      : "",
+  }
+}
+
+/** 将后端 agent 对象转为编辑器 draft */
 function agentToDraft(id: string, agent: Record<string, unknown>): AgentDefinitionDraft {
   const prompt = objectValue(agent.prompt)
   const model = objectValue(agent.model)
@@ -509,9 +528,9 @@ function agentToDraft(id: string, agent: Record<string, unknown>): AgentDefiniti
   const providerId = stringValue(model.provider || model.provider_id)
   const modelId = stringValue(model.model || model.model_id)
   return {
-    id,
-    name: stringValue(agent.name),
-    description: stringValue(agent.description),
+    id,
+    name: stringValue(agent.name),
+    description: stringValue(agent.description),
     role: stringValue(agent.role, "worker"),
     entrypoint: agent.entrypoint === true,
 
@@ -520,10 +539,10 @@ function agentToDraft(id: string, agent: Record<string, unknown>): AgentDefiniti
     dispatchProfileText: stringValue(dispatch.profile),
     dispatchExamplesText: stringArray(dispatch.examples).join("\n"),
     dispatchAvoidText: stringArray(dispatch.avoid).join("\n"),
-    systemAppend: stringValue(prompt.system_append),
-    agentMd: stringValue(prompt.agent_md),
+    systemAppend: stringValue(prompt.system_append),
+    agentMd: stringValue(prompt.agent_md),
     capabilityRefsText: stringArray(agent.capability_refs).join(", "),
-    max_concurrent_tasks: numberValue(agent.max_concurrent_tasks, 1),
+    max_concurrent_tasks: numberValue(agent.max_concurrent_tasks, 1),
     credentialRefsText: kvObjectToText(objectValue(agent.credential_refs)),
   }
 }
@@ -559,17 +578,17 @@ function profileDraftToPayload(draft: RuntimeProfileDraft): Record<string, unkno
   const credRefs = textToKvObject(draft.credentialRefsText)
   if (Object.keys(credRefs).length) payload.credential_refs = credRefs
   const mcpServers = parseAgentConfigListText(draft.mcpServersText)
-  if (mcpServers.length) payload.mcp = { servers: mcpServers }
-  return payload
-}
-
-/** 将 draft 转回后端 agent payload 格式 */
-function agentDraftToPayload(draft: AgentDefinitionDraft): Record<string, unknown> {
-  const payload: Record<string, unknown> = {
-    name: draft.name || draft.id,
-    max_concurrent_tasks: Math.max(1, Math.floor(draft.max_concurrent_tasks)),
-  }
-  if (draft.description) payload.description = draft.description
+  if (mcpServers.length) payload.mcp = { servers: mcpServers }
+  return payload
+}
+
+/** 将 draft 转回后端 agent payload 格式 */
+function agentDraftToPayload(draft: AgentDefinitionDraft): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    name: draft.name || draft.id,
+    max_concurrent_tasks: Math.max(1, Math.floor(draft.max_concurrent_tasks)),
+  }
+  if (draft.description) payload.description = draft.description
   if (draft.role.trim()) payload.role = draft.role.trim()
   if (draft.entrypoint) payload.entrypoint = true
   if (draft.runtime_profile) payload.runtime_profile = draft.runtime_profile
@@ -583,31 +602,31 @@ function agentDraftToPayload(draft: AgentDefinitionDraft): Record<string, unknow
   if (dispatchAvoid.length) dispatch.avoid = dispatchAvoid
   if (Object.keys(dispatch).length) payload.dispatch = dispatch
   const prompt: Record<string, string> = {}
-  if (draft.systemAppend) prompt.system_append = draft.systemAppend
-  if (draft.agentMd) prompt.agent_md = draft.agentMd
-  if (Object.keys(prompt).length) payload.prompt = prompt
+  if (draft.systemAppend) prompt.system_append = draft.systemAppend
+  if (draft.agentMd) prompt.agent_md = draft.agentMd
+  if (Object.keys(prompt).length) payload.prompt = prompt
   const capabilityRefs = parseAgentConfigListText(draft.capabilityRefsText)
   if (capabilityRefs.length) payload.capability_refs = capabilityRefs
-  const credRefs = textToKvObject(draft.credentialRefsText)
-  if (Object.keys(credRefs).length) payload.credential_refs = credRefs
-  return payload
-}
-
-/** key=value 文本转对象 */
-function textToKvObject(text: string): Record<string, string> {
-  const result: Record<string, string> = {}
-  for (const line of text.split("\n")) {
-    const trimmed = line.trim()
-    if (!trimmed) continue
-    const eq = trimmed.indexOf("=")
-    if (eq > 0) {
-      result[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim()
-    }
-  }
-  return result
-}
-
-/** 对象转 key=value 文本 */
+  const credRefs = textToKvObject(draft.credentialRefsText)
+  if (Object.keys(credRefs).length) payload.credential_refs = credRefs
+  return payload
+}
+
+/** key=value 文本转对象 */
+function textToKvObject(text: string): Record<string, string> {
+  const result: Record<string, string> = {}
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    const eq = trimmed.indexOf("=")
+    if (eq > 0) {
+      result[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim()
+    }
+  }
+  return result
+}
+
+/** 对象转 key=value 文本 */
 function kvObjectToText(obj: Record<string, unknown>): string {
   return Object.entries(obj)
     .filter(([, value]) => value !== undefined && value !== null)
@@ -623,10 +642,10 @@ function runtimeOptionDescription(options: RuntimeOption[], value: string): stri
 function optionValues(options: RuntimeOption[]): string[] {
   return options.map((item) => item.value)
 }
-
-const providerTypes: ProviderType[] = ["openai_chat", "anthropic_messages", "openai_responses"]
-const compats: ProviderCompat[] = ["generic", "deepseek", "kimi", "glm", "qwen", "zenmux"]
-
+
+const providerTypes: ProviderType[] = ["openai_chat", "anthropic_messages", "openai_responses"]
+const compats: ProviderCompat[] = ["generic", "deepseek", "kimi", "glm", "qwen", "zenmux"]
+
 const settingsTabDefs: Array<{ id: SettingsTab; labelKey: string; icon: string }> = [
   { id: "executors", labelKey: "settings.tab.executors", icon: "radio-tower" },
   { id: "providers", labelKey: "settings.tab.providers", icon: "server-process" },
@@ -640,11 +659,11 @@ const settingsTabDefs: Array<{ id: SettingsTab; labelKey: string; icon: string }
   { id: "diagnostics", labelKey: "settings.tab.diagnostics", icon: "pulse" },
   { id: "accounts", labelKey: "settings.tab.accounts", icon: "account" },
 ]
-
+
 export function normalizeSettingsTab(value: unknown): SettingsTab | undefined {
-  switch (value) {
-    case "providers":
-      return "providers"
+  switch (value) {
+    case "providers":
+      return "providers"
     case "executors":
       return "executors"
     case "accounts":
@@ -667,89 +686,89 @@ export function normalizeSettingsTab(value: unknown): SettingsTab | undefined {
       return "diagnostics"
     case "other":
       return "conversation"
-    default:
-      return undefined
-  }
-}
-
-function asProviderType(value: unknown): ProviderType {
-  return providerTypes.includes(value as ProviderType) ? value as ProviderType : "openai_chat"
-}
-
-function asProviderCompat(value: unknown): ProviderCompat {
-  return compats.includes(value as ProviderCompat) ? value as ProviderCompat : "generic"
-}
-
-function stringValue(value: unknown, fallback = ""): string {
-  if (value === undefined || value === null) return fallback
-  return String(value)
-}
-
+    default:
+      return undefined
+  }
+}
+
+function asProviderType(value: unknown): ProviderType {
+  return providerTypes.includes(value as ProviderType) ? value as ProviderType : "openai_chat"
+}
+
+function asProviderCompat(value: unknown): ProviderCompat {
+  return compats.includes(value as ProviderCompat) ? value as ProviderCompat : "generic"
+}
+
+function stringValue(value: unknown, fallback = ""): string {
+  if (value === undefined || value === null) return fallback
+  return String(value)
+}
+
 function numberValue(value: unknown, fallback: number): number {
-  const parsed = typeof value === "number" ? value : Number(value)
-  return Number.isFinite(parsed) ? parsed : fallback
-}
-
-function boolValue(value: unknown, fallback = true): boolean {
-  if (value === undefined || value === null) return fallback
-  if (typeof value === "string") {
-    return !["0", "false", "no", "off"].includes(value.trim().toLowerCase())
-  }
-  return Boolean(value)
-}
-
-function stringListText(value: unknown): string {
-  return Array.isArray(value) ? value.map((item) => String(item)).join("\n") : ""
-}
-
-function parseStringList(value: string): string[] {
-  return value
-    .split(/\r?\n|,/)
-    .map((item) => item.trim())
-    .filter(Boolean)
-}
-
-function mapText(value: unknown): string {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return ""
-  return Object.entries(value as Record<string, unknown>)
-    .map(([key, item]) => `${key}=${String(item)}`)
-    .join("\n")
-}
-
-function parseMapText(value: string): Record<string, string> {
-  const result: Record<string, string> = {}
-  for (const line of value.split(/\r?\n/)) {
-    const trimmed = line.trim()
-    if (!trimmed) continue
-    const index = trimmed.indexOf("=")
-    if (index < 0) {
-      result[trimmed] = ""
-      continue
-    }
-    result[trimmed.slice(0, index).trim()] = trimmed.slice(index + 1).trim()
-  }
-  return result
-}
-
-function docsText(value: unknown): string {
-  if (!Array.isArray(value)) return ""
-  return value
-    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
-    .map((item) => `${stringValue(item.title)} | ${stringValue(item.url)}`.trim())
-    .join("\n")
-}
-
+  const parsed = typeof value === "number" ? value : Number(value)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
+function boolValue(value: unknown, fallback = true): boolean {
+  if (value === undefined || value === null) return fallback
+  if (typeof value === "string") {
+    return !["0", "false", "no", "off"].includes(value.trim().toLowerCase())
+  }
+  return Boolean(value)
+}
+
+function stringListText(value: unknown): string {
+  return Array.isArray(value) ? value.map((item) => String(item)).join("\n") : ""
+}
+
+function parseStringList(value: string): string[] {
+  return value
+    .split(/\r?\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function mapText(value: unknown): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return ""
+  return Object.entries(value as Record<string, unknown>)
+    .map(([key, item]) => `${key}=${String(item)}`)
+    .join("\n")
+}
+
+function parseMapText(value: string): Record<string, string> {
+  const result: Record<string, string> = {}
+  for (const line of value.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    const index = trimmed.indexOf("=")
+    if (index < 0) {
+      result[trimmed] = ""
+      continue
+    }
+    result[trimmed.slice(0, index).trim()] = trimmed.slice(index + 1).trim()
+  }
+  return result
+}
+
+function docsText(value: unknown): string {
+  if (!Array.isArray(value)) return ""
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+    .map((item) => `${stringValue(item.title)} | ${stringValue(item.url)}`.trim())
+    .join("\n")
+}
+
 function parseDocsText(value: string): Array<{ title: string; url: string }> {
-  const docs: Array<{ title: string; url: string }> = []
-  for (const line of value.split(/\r?\n/)) {
-    const trimmed = line.trim()
-    if (!trimmed) continue
-    const [titlePart, ...urlParts] = trimmed.split("|")
-    const title = titlePart.trim()
-    const url = urlParts.join("|").trim()
-    if (!title && !url) continue
-    docs.push({ title, url })
-  }
+  const docs: Array<{ title: string; url: string }> = []
+  for (const line of value.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    const [titlePart, ...urlParts] = trimmed.split("|")
+    const title = titlePart.trim()
+    const url = urlParts.join("|").trim()
+    if (!title && !url) continue
+    docs.push({ title, url })
+  }
   return docs
 }
 
@@ -784,33 +803,33 @@ function parseEvidenceText(value: string): Array<Record<string, string>> {
   }
   return evidence
 }
-
-function normalizeToolchainList(value: unknown, kind: ToolchainKind): ToolchainRecord[] {
-  if (!Array.isArray(value)) return []
-  return value
-    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
-    .map((item) => ({ ...item, kind, name: stringValue(item.name || item.id) } as ToolchainRecord))
-    .filter((item) => item.name)
-}
-
+
+function normalizeToolchainList(value: unknown, kind: ToolchainKind): ToolchainRecord[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+    .map((item) => ({ ...item, kind, name: stringValue(item.name || item.id) } as ToolchainRecord))
+    .filter((item) => item.name)
+}
+
 function emptyToolchainEditor(kind: ToolchainKind): ToolchainEditorState {
   return {
-    mode: "create",
-    kind,
-    name: "",
-    enabled: true,
-    command: "",
+    mode: "create",
+    kind,
+    name: "",
+    enabled: true,
+    command: "",
     tagsText: "",
-    argsText: "",
-    envText: "",
-    cwd: "",
+    argsText: "",
+    envText: "",
+    cwd: "",
     placement: kind === "cli" ? "local" : "peer",
-    distribution: "command",
-    requirementsText: "",
-    scope: "project",
-    check: "",
-    install: "",
-    version: "",
+    distribution: "command",
+    requirementsText: "",
+    scope: "project",
+    check: "",
+    install: "",
+    version: "",
     source: "",
     description: "",
     pathHint: "",
@@ -824,25 +843,25 @@ function emptyToolchainEditor(kind: ToolchainKind): ToolchainEditorState {
     notesText: "",
   }
 }
-
-function toolchainEditorFromRecord(record: ToolchainRecord): ToolchainEditorState {
-  return {
-    ...emptyToolchainEditor(record.kind),
-    mode: "edit",
-    name: record.name,
-    enabled: boolValue(record.enabled, true),
-    command: stringValue(record.command),
+
+function toolchainEditorFromRecord(record: ToolchainRecord): ToolchainEditorState {
+  return {
+    ...emptyToolchainEditor(record.kind),
+    mode: "edit",
+    name: record.name,
+    enabled: boolValue(record.enabled, true),
+    command: stringValue(record.command),
     tagsText: stringListText(record.tags),
-    argsText: stringListText(record.args),
-    envText: mapText(record.env),
-    cwd: stringValue(record.cwd),
-    placement: stringValue(record.placement, "peer"),
-    distribution: stringValue(record.distribution, "command"),
-    requirementsText: mapText(record.requirements),
-    scope: stringValue(record.scope, "project"),
-    check: stringValue(record.check),
-    install: stringValue(record.install),
-    version: stringValue(record.version),
+    argsText: stringListText(record.args),
+    envText: mapText(record.env),
+    cwd: stringValue(record.cwd),
+    placement: stringValue(record.placement, "peer"),
+    distribution: stringValue(record.distribution, "command"),
+    requirementsText: mapText(record.requirements),
+    scope: stringValue(record.scope, "project"),
+    check: stringValue(record.check),
+    install: stringValue(record.install),
+    version: stringValue(record.version),
     source: stringValue(record.source),
     description: stringValue(record.description),
     pathHint: stringValue(record.path_hint),
@@ -856,13 +875,13 @@ function toolchainEditorFromRecord(record: ToolchainRecord): ToolchainEditorStat
     notesText: stringListText(record.notes),
   }
 }
-
-function toolchainPayloadFromEditor(editor: ToolchainEditorState): Record<string, unknown> {
-  const payload: Record<string, unknown> = {
-    name: editor.name.trim(),
-    enabled: editor.enabled,
-    check: editor.check.trim(),
-    install: editor.install.trim(),
+
+function toolchainPayloadFromEditor(editor: ToolchainEditorState): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    name: editor.name.trim(),
+    enabled: editor.enabled,
+    check: editor.check.trim(),
+    install: editor.install.trim(),
     version: editor.version.trim() || undefined,
     source: editor.source.trim(),
     description: editor.description.trim(),
@@ -881,23 +900,23 @@ function toolchainPayloadFromEditor(editor: ToolchainEditorState): Record<string
     payload.placement = editor.placement || "local"
     payload.tags = parseStringList(editor.tagsText)
   } else if (editor.kind === "mcp") {
-    payload.command = editor.command.trim()
-    payload.args = parseStringList(editor.argsText)
-    payload.env = parseMapText(editor.envText)
+    payload.command = editor.command.trim()
+    payload.args = parseStringList(editor.argsText)
+    payload.env = parseMapText(editor.envText)
     payload.cwd = editor.cwd.trim() || undefined
     payload.placement = editor.placement || "peer"
     payload.distribution = editor.distribution || "command"
   } else {
-    payload.scope = editor.scope || "project"
-    payload.path_hint = editor.pathHint.trim() || undefined
-  }
-  return payload
-}
-
-function objectValue(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}
-}
-
+    payload.scope = editor.scope || "project"
+    payload.path_hint = editor.pathHint.trim() || undefined
+  }
+  return payload
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : []
 }
@@ -1231,10 +1250,10 @@ function dashboardItemToRecord(item: ToolchainDashboardItem): ToolchainRecord {
   }
 }
 
-function makeProfileId(providerId: string, modelId: string): string {
-  return `${providerId}-${modelId}`.replace(/[^a-zA-Z0-9_.-]+/g, "-")
-}
-
+function makeProfileId(providerId: string, modelId: string): string {
+  return `${providerId}-${modelId}`.replace(/[^a-zA-Z0-9_.-]+/g, "-")
+}
+
 function modelOptionKey(providerId: string, modelId: string): string {
   return `${providerId.trim()}::${modelId.trim()}`
 }
@@ -1245,11 +1264,11 @@ function splitModelOptionKey(value: string): [string, string] {
 }
 
 function profileMatches(profile: Record<string, unknown>, providerId: string, modelId: string): boolean {
-  return stringValue(profile.provider) === providerId && stringValue(profile.model) === modelId
-}
-
+  return stringValue(profile.provider) === providerId && stringValue(profile.model) === modelId
+}
+
 function environmentStatusLabel(status: EnvironmentEntryStatus): string {
-  switch (status) {
+  switch (status) {
     case "checking":
       return "检查中"
     case "available":
@@ -1276,9 +1295,9 @@ function environmentStatusLabel(status: EnvironmentEntryStatus): string {
       return "未检查"
   }
 }
-
-function environmentStatusTone(status: EnvironmentEntryStatus): "success" | "warning" | "muted" | "error" {
-  switch (status) {
+
+function environmentStatusTone(status: EnvironmentEntryStatus): "success" | "warning" | "muted" | "error" {
+  switch (status) {
     case "available":
     case "configured":
       return "success"
@@ -1295,78 +1314,78 @@ function environmentStatusTone(status: EnvironmentEntryStatus): "success" | "war
       return "error"
     default:
       return "muted"
-  }
-}
-
-function environmentRunStatusLabel(status: EnvironmentSnapshotStatus): string {
-  switch (status) {
-    case "running":
-      return "运行中"
-    case "completed":
-      return "已完成"
-    case "error":
-      return "失败"
-    case "canceled":
-      return "已停止"
-    default:
-      return "未开始"
-  }
-}
-
-function environmentRunTone(status: EnvironmentSnapshotStatus): "success" | "warning" | "muted" | "error" {
-  switch (status) {
-    case "completed":
-      return "success"
-    case "running":
-      return "warning"
-    case "error":
-      return "error"
-    default:
-      return "muted"
-  }
-}
-
-function environmentKindLabel(kind: EnvironmentEntryKind): string {
-  if (kind === "cli") return "CLI"
-  if (kind === "mcp") return "MCP"
-  return "Skills"
-}
-
-function environmentKindIcon(kind: EnvironmentEntryKind): string {
-  if (kind === "cli") return "terminal"
-  if (kind === "mcp") return "plug"
-  return "hubot"
-}
-
-function formatTimestamp(value: unknown): string {
-  const text = stringValue(value)
-  if (!text) return "尚无记录"
-  const parsed = new Date(text)
-  return Number.isNaN(parsed.getTime()) ? text : parsed.toLocaleString()
-}
-
-function normalizeEnvironmentEntries(value: unknown): EnvironmentEntryState[] {
-  if (!Array.isArray(value)) return []
-  return value
-    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
-    .map((item) => ({
-      id: stringValue(item.id),
-      kind: (["cli", "mcp", "skill"].includes(stringValue(item.kind)) ? stringValue(item.kind) : "cli") as EnvironmentEntryKind,
-      name: stringValue(item.name),
-      description: stringValue(item.description),
-      source: stringValue(item.source),
-      version: stringValue(item.version) || undefined,
-      check: stringValue(item.check),
-      install: stringValue(item.install),
-      command: stringValue(item.command) || undefined,
-      tags: stringArray(item.tags),
-      status: ([
-        "unchecked",
-        "checking",
-        "available",
-        "missing",
-        "awaiting_approval",
-        "downloading",
+  }
+}
+
+function environmentRunStatusLabel(status: EnvironmentSnapshotStatus): string {
+  switch (status) {
+    case "running":
+      return "运行中"
+    case "completed":
+      return "已完成"
+    case "error":
+      return "失败"
+    case "canceled":
+      return "已停止"
+    default:
+      return "未开始"
+  }
+}
+
+function environmentRunTone(status: EnvironmentSnapshotStatus): "success" | "warning" | "muted" | "error" {
+  switch (status) {
+    case "completed":
+      return "success"
+    case "running":
+      return "warning"
+    case "error":
+      return "error"
+    default:
+      return "muted"
+  }
+}
+
+function environmentKindLabel(kind: EnvironmentEntryKind): string {
+  if (kind === "cli") return "CLI"
+  if (kind === "mcp") return "MCP"
+  return "Skills"
+}
+
+function environmentKindIcon(kind: EnvironmentEntryKind): string {
+  if (kind === "cli") return "terminal"
+  if (kind === "mcp") return "plug"
+  return "hubot"
+}
+
+function formatTimestamp(value: unknown): string {
+  const text = stringValue(value)
+  if (!text) return "尚无记录"
+  const parsed = new Date(text)
+  return Number.isNaN(parsed.getTime()) ? text : parsed.toLocaleString()
+}
+
+function normalizeEnvironmentEntries(value: unknown): EnvironmentEntryState[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+    .map((item) => ({
+      id: stringValue(item.id),
+      kind: (["cli", "mcp", "skill"].includes(stringValue(item.kind)) ? stringValue(item.kind) : "cli") as EnvironmentEntryKind,
+      name: stringValue(item.name),
+      description: stringValue(item.description),
+      source: stringValue(item.source),
+      version: stringValue(item.version) || undefined,
+      check: stringValue(item.check),
+      install: stringValue(item.install),
+      command: stringValue(item.command) || undefined,
+      tags: stringArray(item.tags),
+      status: ([
+        "unchecked",
+        "checking",
+        "available",
+        "missing",
+        "awaiting_approval",
+        "downloading",
         "installing",
         "configured",
         "failed",
@@ -1374,58 +1393,58 @@ function normalizeEnvironmentEntries(value: unknown): EnvironmentEntryState[] {
         "parse_failed",
         "needs_review",
       ].includes(stringValue(item.status)) ? stringValue(item.status) : "unchecked") as EnvironmentEntryStatus,
-      detail: stringValue(item.detail) || undefined,
-      lastAction: stringValue(item.lastAction) || undefined,
-      lastUpdated: stringValue(item.lastUpdated) || undefined,
-    }))
-}
-
-function normalizeEnvironmentApprovals(value: unknown): EnvironmentApprovalState[] {
-  if (!Array.isArray(value)) return []
-  return value
-    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
-    .map((item) => {
-      const rawPayload = objectValue(item.rawPayload)
-      const localArgs = objectValue(item.toolArgs)
-      const rawArgs = objectValue(rawPayload.tool_args)
-      const detail = approvalFromPayload(rawPayload, {
-        approvalId: stringValue(item.approvalId),
-        toolName: stringValue(item.toolName, "tool"),
-        toolSource: stringValue(item.toolSource) || undefined,
-        command: stringValue(item.command),
-        reason: stringValue(item.reason) || undefined,
-        content: stringValue(item.content) || undefined,
-        toolArgs: localArgs,
-        sections: Array.isArray(item.sections) ? item.sections as Record<string, unknown>[] : [],
-        previewUnavailable: item.previewUnavailable === true,
-        previewError: stringValue(item.previewError) || undefined,
-      })
-      return {
-        ...detail,
-        command: stringValue(item.command) || stringValue(localArgs.command) || stringValue(rawArgs.command) || detail.command || "",
-        entryId: stringValue(item.entryId) || undefined,
-      }
-    })
-}
-
-function normalizeEnvironmentLogs(value: unknown): EnvironmentLogState[] {
-  if (!Array.isArray(value)) return []
-  return value
-    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
-    .map((item) => ({
-      id: stringValue(item.id),
-      level: (["info", "warning", "error"].includes(stringValue(item.level)) ? stringValue(item.level) : "info") as EnvironmentLogState["level"],
-      message: stringValue(item.message),
-      createdAt: stringValue(item.createdAt),
-      entryId: stringValue(item.entryId) || undefined,
-    }))
-}
-
-function normalizeEnvironmentSnapshot(value: unknown): EnvironmentSnapshotState {
-  const item = value && typeof value === "object" ? value as Record<string, unknown> : {}
-  return {
-    mode: ["check", "configure"].includes(stringValue(item.mode)) ? stringValue(item.mode) as "check" | "configure" : null,
-    running: item.running === true,
+      detail: stringValue(item.detail) || undefined,
+      lastAction: stringValue(item.lastAction) || undefined,
+      lastUpdated: stringValue(item.lastUpdated) || undefined,
+    }))
+}
+
+function normalizeEnvironmentApprovals(value: unknown): EnvironmentApprovalState[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+    .map((item) => {
+      const rawPayload = objectValue(item.rawPayload)
+      const localArgs = objectValue(item.toolArgs)
+      const rawArgs = objectValue(rawPayload.tool_args)
+      const detail = approvalFromPayload(rawPayload, {
+        approvalId: stringValue(item.approvalId),
+        toolName: stringValue(item.toolName, "tool"),
+        toolSource: stringValue(item.toolSource) || undefined,
+        command: stringValue(item.command),
+        reason: stringValue(item.reason) || undefined,
+        content: stringValue(item.content) || undefined,
+        toolArgs: localArgs,
+        sections: Array.isArray(item.sections) ? item.sections as Record<string, unknown>[] : [],
+        previewUnavailable: item.previewUnavailable === true,
+        previewError: stringValue(item.previewError) || undefined,
+      })
+      return {
+        ...detail,
+        command: stringValue(item.command) || stringValue(localArgs.command) || stringValue(rawArgs.command) || detail.command || "",
+        entryId: stringValue(item.entryId) || undefined,
+      }
+    })
+}
+
+function normalizeEnvironmentLogs(value: unknown): EnvironmentLogState[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+    .map((item) => ({
+      id: stringValue(item.id),
+      level: (["info", "warning", "error"].includes(stringValue(item.level)) ? stringValue(item.level) : "info") as EnvironmentLogState["level"],
+      message: stringValue(item.message),
+      createdAt: stringValue(item.createdAt),
+      entryId: stringValue(item.entryId) || undefined,
+    }))
+}
+
+function normalizeEnvironmentSnapshot(value: unknown): EnvironmentSnapshotState {
+  const item = value && typeof value === "object" ? value as Record<string, unknown> : {}
+  return {
+    mode: ["check", "configure"].includes(stringValue(item.mode)) ? stringValue(item.mode) as "check" | "configure" : null,
+    running: item.running === true,
     status: (["idle", "running", "completed", "error", "canceled"].includes(stringValue(item.status)) ? stringValue(item.status) : "idle") as EnvironmentSnapshotStatus,
     summary: stringValue(item.summary, "环境清单尚未加载。"),
     chatId: stringValue(item.chatId) || undefined,
@@ -1433,72 +1452,72 @@ function normalizeEnvironmentSnapshot(value: unknown): EnvironmentSnapshotState 
     agentId: stringValue(item.agentId) || undefined,
     sessionId: stringValue(item.sessionId) || undefined,
     startedAt: stringValue(item.startedAt) || undefined,
-    completedAt: stringValue(item.completedAt) || undefined,
-    lastManifestAt: stringValue(item.lastManifestAt) || undefined,
-    error: stringValue(item.error) || undefined,
-    entries: normalizeEnvironmentEntries(item.entries),
-    approvals: normalizeEnvironmentApprovals(item.approvals),
-    logs: normalizeEnvironmentLogs(item.logs),
-    lastRunSummary: stringValue(item.lastRunSummary) || undefined,
-    lastRunCompletedAt: stringValue(item.lastRunCompletedAt) || undefined,
-    lastRunStatus: (["completed", "error", "canceled"].includes(stringValue(item.lastRunStatus)) ? stringValue(item.lastRunStatus) : undefined) as EnvironmentSnapshotState["lastRunStatus"],
-  }
-}
-
-function summarizeEnvironmentEntries(entries: EnvironmentEntryState[]) {
-  return entries.reduce(
-    (summary, entry) => {
-      summary.total += 1
-      if (entry.status === "available") summary.available += 1
-      if (entry.status === "configured") summary.configured += 1
-      if (entry.status === "missing") summary.missing += 1
-      if (entry.status === "failed") summary.failed += 1
-      return summary
-    },
-    { total: 0, available: 0, configured: 0, missing: 0, failed: 0 },
-  )
-}
-
+    completedAt: stringValue(item.completedAt) || undefined,
+    lastManifestAt: stringValue(item.lastManifestAt) || undefined,
+    error: stringValue(item.error) || undefined,
+    entries: normalizeEnvironmentEntries(item.entries),
+    approvals: normalizeEnvironmentApprovals(item.approvals),
+    logs: normalizeEnvironmentLogs(item.logs),
+    lastRunSummary: stringValue(item.lastRunSummary) || undefined,
+    lastRunCompletedAt: stringValue(item.lastRunCompletedAt) || undefined,
+    lastRunStatus: (["completed", "error", "canceled"].includes(stringValue(item.lastRunStatus)) ? stringValue(item.lastRunStatus) : undefined) as EnvironmentSnapshotState["lastRunStatus"],
+  }
+}
+
+function summarizeEnvironmentEntries(entries: EnvironmentEntryState[]) {
+  return entries.reduce(
+    (summary, entry) => {
+      summary.total += 1
+      if (entry.status === "available") summary.available += 1
+      if (entry.status === "configured") summary.configured += 1
+      if (entry.status === "missing") summary.missing += 1
+      if (entry.status === "failed") summary.failed += 1
+      return summary
+    },
+    { total: 0, available: 0, configured: 0, missing: 0, failed: 0 },
+  )
+}
+
 function formatActionResult(
   result: Record<string, unknown> | undefined,
   intent: ModelActionIntent,
 ): string | undefined {
-  if (!result) return undefined
-
-  const provider = result.provider
-  const modelProfile = result.model_profile
-
-  if (result.unsupported === true) {
-    return stringValue(result.message, "当前服务商无法自动获取模型列表。")
-  }
-  if (Array.isArray(result.blockers) && result.blockers.length > 0) {
-    return `操作被阻止：仍有 ${result.blockers.length} 个已保存预设引用该服务商。`
-  }
-  if (Array.isArray(result.models)) {
-    return result.models.length > 0
-      ? `模型列表已刷新：${result.models.length} 个模型。`
-      : "当前服务商未返回模型列表，请使用“自定义模型名”。"
-  }
-  if (provider && typeof provider === "object") {
-    const id = stringValue((provider as Record<string, unknown>).id, stringValue(result.provider_id))
-    return id ? `服务商 ${id} 已保存。` : "服务商已保存。"
-  }
-  if (result.provider_id && result.enabled !== undefined) {
-    return `服务商 ${String(result.provider_id)} 已${result.enabled === false ? "停用" : "启用"}。`
-  }
-  if (result.deleted === true && result.provider_id) {
-    return `服务商 ${String(result.provider_id)} 已删除。`
-  }
-  if (modelProfile && typeof modelProfile === "object") {
-    const profile = modelProfile as Record<string, unknown>
-    const presetId = stringValue(profile.id, stringValue(result.profile_id))
+  if (!result) return undefined
+
+  const provider = result.provider
+  const modelProfile = result.model_profile
+
+  if (result.unsupported === true) {
+    return stringValue(result.message, "当前服务商无法自动获取模型列表。")
+  }
+  if (Array.isArray(result.blockers) && result.blockers.length > 0) {
+    return `操作被阻止：仍有 ${result.blockers.length} 个已保存预设引用该服务商。`
+  }
+  if (Array.isArray(result.models)) {
+    return result.models.length > 0
+      ? `模型列表已刷新：${result.models.length} 个模型。`
+      : "当前服务商未返回模型列表，请使用“自定义模型名”。"
+  }
+  if (provider && typeof provider === "object") {
+    const id = stringValue((provider as Record<string, unknown>).id, stringValue(result.provider_id))
+    return id ? `服务商 ${id} 已保存。` : "服务商已保存。"
+  }
+  if (result.provider_id && result.enabled !== undefined) {
+    return `服务商 ${String(result.provider_id)} 已${result.enabled === false ? "停用" : "启用"}。`
+  }
+  if (result.deleted === true && result.provider_id) {
+    return `服务商 ${String(result.provider_id)} 已删除。`
+  }
+  if (modelProfile && typeof modelProfile === "object") {
+    const profile = modelProfile as Record<string, unknown>
+    const presetId = stringValue(profile.id, stringValue(result.profile_id))
     if (intent === "savePreset") {
-      return presetId ? `预设 ${presetId} 已保存。` : "模型预设已保存。"
-    }
+      return presetId ? `预设 ${presetId} 已保存。` : "模型预设已保存。"
+    }
   }
   if (result.ok === true) {
-    return "操作已完成。"
-  }
+    return "操作已完成。"
+  }
   return undefined
 }
 
@@ -1520,12 +1539,12 @@ function formatConnectionSaveResult(result: Record<string, unknown> | undefined)
   return undefined
 }
 
-export function createSettingsController(props: SettingsViewProps) {
-  const vscode = useVSCode()
-  const server = useServer()
-
-  const [activeTab, setActiveTab] = createSignal<SettingsTab>("providers")
-
+export function createSettingsController(props: SettingsViewProps) {
+  const vscode = useVSCode()
+  const server = useServer()
+
+  const [activeTab, setActiveTab] = createSignal<SettingsTab>("providers")
+
   /* ── 主执行器选择器状态 ── */
   const [executorPickerOpen, setExecutorPickerOpen] = createSignal(false)
   const [pickerLocation, setPickerLocation] = createSignal<ExecutorLocation>("remote")
@@ -1533,10 +1552,11 @@ export function createSettingsController(props: SettingsViewProps) {
 
   /* ── 按钮 loading 状态 ── */
   const [refreshLoading, setRefreshLoading] = createSignal(false)
-  const [saveLoading, setSaveLoading] = createSignal(false)
-  const [saveSuccess, setSaveSuccess] = createSignal(false)
-
-  const [hostUrl, setHostUrl] = createSignal("")
+  const [operationStates, setOperationStates] = createSignal(initialSettingsOperationStates())
+  const [pendingServerSettingsSaveKey, setPendingServerSettingsSaveKey] = createSignal<SettingsOperationKey | undefined>()
+  const [pendingProviderAdminActionKey, setPendingProviderAdminActionKey] = createSignal<SettingsOperationKey | undefined>()
+
+  const [hostUrl, setHostUrl] = createSignal("")
   const [loginUsername, setLoginUsername] = createSignal("")
   const [loginPassword, setLoginPassword] = createSignal("")
   const [currentPassword, setCurrentPassword] = createSignal("")
@@ -1553,24 +1573,24 @@ export function createSettingsController(props: SettingsViewProps) {
   const [hostUrlError, setHostUrlError] = createSignal<string | undefined>()
   const [hostUrlSyncLock, setHostUrlSyncLock] = createSignal<string | undefined>()
   const [dismissedConnectionSaveResultKey, setDismissedConnectionSaveResultKey] = createSignal<string | undefined>()
-
-  const [providerId, setProviderId] = createSignal("deepseek")
-  const [providerType, setProviderType] = createSignal<ProviderType>("openai_chat")
+
+  const [providerId, setProviderId] = createSignal("deepseek")
+  const [providerType, setProviderType] = createSignal<ProviderType>("openai_chat")
   const [providerCompat, setProviderCompat] = createSignal<ProviderCompat>("generic")
-  const [providerBaseUrl, setProviderBaseUrl] = createSignal("https://api.deepseek.com")
-  const [providerApiKey, setProviderApiKey] = createSignal("")
-  const [providerModel, setProviderModel] = createSignal("")
-  const [providerEnabled, setProviderEnabled] = createSignal(true)
-  const [providerCopyId, setProviderCopyId] = createSignal("")
-  const [modelSearch, setModelSearch] = createSignal("")
-  const [fetchedModels, setFetchedModels] = createSignal<ProviderModelEntry[]>([])
-  const [modelFetchMessage, setModelFetchMessage] = createSignal("")
-  const [lastModelFetchProvider, setLastModelFetchProvider] = createSignal("")
-
-  const [modelDetailOpen, setModelDetailOpen] = createSignal(false)
-  const [modelDetailMode, setModelDetailMode] = createSignal<ModelDetailMode>("fetched")
-  const [customModelDialogOpen, setCustomModelDialogOpen] = createSignal(false)
-  const [customModelDraft, setCustomModelDraft] = createSignal("")
+  const [providerBaseUrl, setProviderBaseUrl] = createSignal("https://api.deepseek.com")
+  const [providerApiKey, setProviderApiKey] = createSignal("")
+  const [providerModel, setProviderModel] = createSignal("")
+  const [providerEnabled, setProviderEnabled] = createSignal(true)
+  const [providerCopyId, setProviderCopyId] = createSignal("")
+  const [modelSearch, setModelSearch] = createSignal("")
+  const [fetchedModels, setFetchedModels] = createSignal<ProviderModelEntry[]>([])
+  const [modelFetchMessage, setModelFetchMessage] = createSignal("")
+  const [lastModelFetchProvider, setLastModelFetchProvider] = createSignal("")
+
+  const [modelDetailOpen, setModelDetailOpen] = createSignal(false)
+  const [modelDetailMode, setModelDetailMode] = createSignal<ModelDetailMode>("fetched")
+  const [customModelDialogOpen, setCustomModelDialogOpen] = createSignal(false)
+  const [customModelDraft, setCustomModelDraft] = createSignal("")
   const [actionIntent, setActionIntent] = createSignal<ModelActionIntent>("")
   const [environmentBootstrapped, setEnvironmentBootstrapped] = createSignal(false)
   const [selectedEnvironmentAgentId, setSelectedEnvironmentAgentId] = createSignal("")
@@ -1603,15 +1623,15 @@ export function createSettingsController(props: SettingsViewProps) {
   const [serverMaxShellsPerAgent, setServerMaxShellsPerAgent] = createSignal(1)
   const [serverSettingsDirty, setServerSettingsDirty] = createSignal(false)
   const [autoApprovalOptions, setAutoApprovalOptions] = createSignal<Record<string, boolean>>(DEFAULT_AUTO_APPROVE_OPTIONS)
-  const [allowedCommandInput, setAllowedCommandInput] = createSignal("")
-  const [deniedCommandInput, setDeniedCommandInput] = createSignal("")
-  const [allowedCommands, setAllowedCommands] = createSignal<string[]>([])
-  const [deniedCommands, setDeniedCommands] = createSignal<string[]>([])
-  const [autoApprovalPlatform, setAutoApprovalPlatform] = createSignal("browser")
-
-  /* ── Agent 配置编辑器状态 ── */
-  const [agentConfigBootstrapped, setAgentConfigBootstrapped] = createSignal(false)
-  const [agentConfigDirty, setAgentConfigDirty] = createSignal(false)
+  const [allowedCommandInput, setAllowedCommandInput] = createSignal("")
+  const [deniedCommandInput, setDeniedCommandInput] = createSignal("")
+  const [allowedCommands, setAllowedCommands] = createSignal<string[]>([])
+  const [deniedCommands, setDeniedCommands] = createSignal<string[]>([])
+  const [autoApprovalPlatform, setAutoApprovalPlatform] = createSignal("browser")
+
+  /* ── Agent 配置编辑器状态 ── */
+  const [agentConfigBootstrapped, setAgentConfigBootstrapped] = createSignal(false)
+  const [agentConfigDirty, setAgentConfigDirty] = createSignal(false)
   const [selectedProfileId, setSelectedProfileId] = createSignal("")
   const [selectedAgentId, setSelectedAgentId] = createSignal("")
   const [profileDrafts, setProfileDrafts] = createSignal<Record<string, RuntimeProfileDraft>>({})
@@ -1633,14 +1653,14 @@ export function createSettingsController(props: SettingsViewProps) {
     agentNameInput = element
   }
   const [agentRunPrompt, setAgentRunPrompt] = createSignal("请用一句话回复 Labrastro AgentRun smoke")
-
-  const [profileId, setProfileId] = createSignal("")
-  const [profileProvider, setProfileProvider] = createSignal("deepseek")
-  const [profileModel, setProfileModel] = createSignal("")
+
+  const [profileId, setProfileId] = createSignal("")
+  const [profileProvider, setProfileProvider] = createSignal("deepseek")
+  const [profileModel, setProfileModel] = createSignal("")
   const [maxTokens, setMaxTokens] = createSignal(0)
   const [maxContextTokens, setMaxContextTokens] = createSignal(0)
-  const [temperature, setTemperature] = createSignal(0)
-  const [reasoningEffort, setReasoningEffort] = createSignal("")
+  const [temperature, setTemperature] = createSignal(0)
+  const [reasoningEffort, setReasoningEffort] = createSignal("")
   const [thinkingEnabled, setThinkingEnabled] = createSignal(true)
 
   const [modelCapabilityRecommendation, setModelCapabilityRecommendation] = createSignal<Record<string, unknown>>({})
@@ -1659,27 +1679,27 @@ export function createSettingsController(props: SettingsViewProps) {
     return settingsAdminRecordList(server.adminState(), "model_profiles", adminDataUsable())
   })
   const selectedProvider = createMemo(() =>
-    providers().find((provider) => stringValue(provider.id) === providerId())
-  )
-  const filteredFetchedModels = createMemo(() => {
-    const query = modelSearch().trim().toLowerCase()
-    if (!query) return fetchedModels()
-    return fetchedModels().filter((model) => model.id.toLowerCase().includes(query))
-  })
+    providers().find((provider) => stringValue(provider.id) === providerId())
+  )
+  const filteredFetchedModels = createMemo(() => {
+    const query = modelSearch().trim().toLowerCase()
+    if (!query) return fetchedModels()
+    return fetchedModels().filter((model) => model.id.toLowerCase().includes(query))
+  })
   const actionFeedback = createMemo(() =>
     formatActionResult(server.actionResult(), actionIntent())
   )
-  const providerErrorMessage = createMemo(() => {
+  const providerErrorMessage = createMemo(() => {
     const localMessage = providerValidationError()
     if (localMessage) return localMessage
 
     const message = server.adminError()
-    if (!message) return undefined
-    if (message.includes("config_reload_failed")) {
-      return `${message}。保存已回滚，host 配置未生效。`
-    }
-    return message
-  })
+    if (!message) return undefined
+    if (message.includes("config_reload_failed")) {
+      return `${message}。保存已回滚，host 配置未生效。`
+    }
+    return message
+  })
   const connectionStatus = createMemo(() => stringValue(server.connectionState().status, "login-required"))
   const connectionMessage = createMemo(() => stringValue(server.connectionState().message))
   const connectionNotice = createMemo(() => resolveConnectionNotice({
@@ -1711,6 +1731,42 @@ export function createSettingsController(props: SettingsViewProps) {
   const canManageUsers = createMemo(() => connectionScopes().includes("users:manage"))
   const canReadAudit = createMemo(() => connectionScopes().includes("audit:read"))
   const canManageDevices = createMemo(() => connectionScopes().includes("devices:read") || connectionScopes().includes("devices:revoke"))
+  const operationState = (key: SettingsOperationKey): SettingsOperationState =>
+    getSettingsOperationState(operationStates(), key)
+  const operationError = (key: SettingsOperationKey): string | undefined => operationState(key).error
+  const operationBusy = (key: SettingsOperationKey): boolean =>
+    settingsOperationIsBusy(operationStates(), key)
+  const serverSettingsSaveBusy = (): boolean =>
+    settingsServerSettingsSaveIsBusy(operationStates()) || operationState("serverSettings").status === "loading"
+  const providerAdminActionBusy = (): boolean =>
+    settingsProviderAdminActionIsBusy(operationStates())
+  const agentRunOperationBusy = (): boolean =>
+    settingsAgentRunOperationIsBusy(operationStates())
+  const capabilityIngestOperationBusy = (): boolean =>
+    settingsCapabilityIngestOperationIsBusy(operationStates())
+  const markOperationStarted = (
+    key: SettingsOperationKey,
+    status: Extract<SettingsOperationStatus, "loading" | "saving"> = "loading",
+  ) => {
+    setOperationStates((states) => markSettingsOperationStarted(states, key, status))
+  }
+  const markOperationSuccess = (key: SettingsOperationKey) => {
+    setOperationStates((states) => markSettingsOperationSuccess(states, key))
+  }
+  const markAuthOperationSuccess = (key: "authDevices" | "authUsers" | "authAudit") => {
+    setOperationStates((states) => {
+      const next = markSettingsOperationSuccess(states, key)
+      return ["authDevices", "authUsers", "authAudit"].some((authKey) =>
+        settingsOperationIsBusy(next, authKey as SettingsOperationKey)
+      )
+        ? next
+        : markSettingsOperationSuccess(next, "accounts")
+    })
+  }
+  const markOperationError = (key: SettingsOperationKey, error: string) => {
+    setOperationStates((states) => markSettingsOperationError(states, key, error))
+  }
+  const pageRefreshing = (tab: SettingsTab): boolean => settingsPageIsRefreshing(operationStates(), tab)
   const authUsers = createMemo(() => {
     const items = server.authUsersState()?.users
     return Array.isArray(items) ? items as Record<string, unknown>[] : []
@@ -1728,33 +1784,33 @@ export function createSettingsController(props: SettingsViewProps) {
     const effective = currentHostUrl()
     return Boolean(draft && effective && draft !== effective)
   })
-  const isDefaultLocalHost = createMemo(() => {
-    const host = currentHostUrl()
-    return !hostUrlConfigured() && (host === "http://127.0.0.1:8765" || host === "http://localhost:8765")
-  })
+  const isDefaultLocalHost = createMemo(() => {
+    const host = currentHostUrl()
+    return !hostUrlConfigured() && (host === "http://127.0.0.1:8765" || host === "http://localhost:8765")
+  })
   const showCustomModelFallback = createMemo(() => fetchedModels().length === 0)
-  const emptyModelListMessage = createMemo(() => {
-    if (showCustomModelFallback()) {
-      return modelFetchMessage() || "当前服务商无法自动提供模型列表，请使用“自定义模型名”。"
-    }
-    return "没有匹配的模型。"
-  })
-  const environmentManifest = createMemo(() => server.environmentManifest())
-  const environmentSnapshot = createMemo(() => normalizeEnvironmentSnapshot(server.environmentSnapshot()))
-  const environmentError = createMemo(() =>
-    stringValue(server.environmentError()) || environmentSnapshot().error
-  )
-  const toolchainError = createMemo(() => stringValue(server.toolchainError()))
-  const toolchainActionFeedback = createMemo(() => {
-    const result = server.toolchainActionResult()
-    if (!result?.ok) return undefined
-    const kind = stringValue(result.kind)
-    const name = stringValue(result.name)
+  const emptyModelListMessage = createMemo(() => {
+    if (showCustomModelFallback()) {
+      return modelFetchMessage() || "当前服务商无法自动提供模型列表，请使用“自定义模型名”。"
+    }
+    return "没有匹配的模型。"
+  })
+  const environmentManifest = createMemo(() => server.environmentManifest())
+  const environmentSnapshot = createMemo(() => normalizeEnvironmentSnapshot(server.environmentSnapshot()))
+  const environmentError = createMemo(() =>
+    stringValue(server.environmentError()) || environmentSnapshot().error
+  )
+  const toolchainError = createMemo(() => stringValue(server.toolchainError()))
+  const toolchainActionFeedback = createMemo(() => {
+    const result = server.toolchainActionResult()
+    if (!result?.ok) return undefined
+    const kind = stringValue(result.kind)
+    const name = stringValue(result.name)
     const label = kind === "cli" ? "CLI" : kind === "mcp" ? "MCP" : kind === "skill" ? "Skill" : "能力"
-    if (result.created === true) return `${label} ${name} 已新增。`
-    if (result.toolchain) return `${label} ${name} 已保存。`
-    return `${label} ${name} 操作已完成。`
-  })
+    if (result.created === true) return `${label} ${name} 已新增。`
+    if (result.toolchain) return `${label} ${name} 已保存。`
+    return `${label} ${name} 操作已完成。`
+  })
   const toolchainGroups = createMemo(() => {
     const state = server.toolchainState() || {}
     return {
@@ -1847,7 +1903,7 @@ export function createSettingsController(props: SettingsViewProps) {
   )
   const agentRunsState = createMemo(() =>
     objectValue(serverSettingsPayload().runtime || server.adminState().agent_runs)
-
+
   )
   const modelCapabilitiesStatus = createMemo(() => {
     const direct = objectValue(server.modelCapabilitiesState()?.model_capabilities)
@@ -1872,12 +1928,12 @@ export function createSettingsController(props: SettingsViewProps) {
 
   const agentRunsProfiles = createMemo<Array<Record<string, unknown> & { id: string }>>(() => {
     const settings = agentRunsSettings()
-    const profiles = objectValue(settings.runtime_profiles)
-    return Object.entries(profiles).map(([id, value]) => ({
-      id,
-      ...(typeof value === "object" && value ? value as Record<string, unknown> : {}),
-    }))
-  })
+    const profiles = objectValue(settings.runtime_profiles)
+    return Object.entries(profiles).map(([id, value]) => ({
+      id,
+      ...(typeof value === "object" && value ? value as Record<string, unknown> : {}),
+    }))
+  })
   const agentRunsAgents = createMemo<Array<Record<string, unknown> & { id: string }>>(() => {
     const settings = agentRunsSettings()
     const agents = objectValue(settings.agents)
@@ -1890,8 +1946,8 @@ export function createSettingsController(props: SettingsViewProps) {
     return agentRunsAgents().filter((agent) => agent.id === BUILT_IN_ENVIRONMENT_AGENT_ID)
   })
   const registeredMcpServers = createMemo(() => {
-    const groups = toolchainGroups()
-    return groups.mcp.map((item) => item.name)
+    const groups = toolchainGroups()
+    return groups.mcp.map((item) => item.name)
   })
   const registeredToolOptions = createMemo<ChoiceOption[]>(() => {
     const groups = toolchainGroups()
@@ -2026,15 +2082,15 @@ export function createSettingsController(props: SettingsViewProps) {
   const openModelDetail = (modelId: string, mode: ModelDetailMode) => {
     const existing = profiles().find((profile) => profileMatches(profile, providerId(), modelId))
     setProviderValidationError("")
-    setModelDetailMode(mode)
-    setProviderModel(modelId)
-    if (existing) {
-      setProfileId(stringValue(existing.id))
-      setProfileProvider(stringValue(existing.provider))
-      setProfileModel(stringValue(existing.model))
+    setModelDetailMode(mode)
+    setProviderModel(modelId)
+    if (existing) {
+      setProfileId(stringValue(existing.id))
+      setProfileProvider(stringValue(existing.provider))
+      setProfileModel(stringValue(existing.model))
       setMaxTokens(numberValue(existing.max_tokens, 0))
       setMaxContextTokens(numberValue(existing.max_context_tokens, 0))
-      setTemperature(numberValue(existing.temperature, 0))
+      setTemperature(numberValue(existing.temperature, 0))
       setReasoningEffort(stringValue(existing.reasoning_effort))
       setThinkingEnabled(existing.thinking_enabled !== false)
       const recommendation = objectValue(existing.capability_recommendation)
@@ -2063,41 +2119,41 @@ export function createSettingsController(props: SettingsViewProps) {
       setThinkingEnabled(true)
       setModelCapabilityRecommendation({})
     }
-    setModelDetailOpen(true)
-    setCustomModelDialogOpen(false)
-  }
-
+    setModelDetailOpen(true)
+    setCustomModelDialogOpen(false)
+  }
+
   const openCustomModelDialog = () => {
-    setCustomModelDraft(profileModel() || providerModel() || "")
-    setCustomModelDialogOpen(true)
-  }
-
-  const closeCustomModelDialog = () => setCustomModelDialogOpen(false)
-
-  const confirmCustomModelDialog = () => {
-    const modelId = customModelDraft().trim()
-    if (!modelId) return
-    openModelDetail(modelId, "custom")
-  }
-
-  const closeModelDetail = () => setModelDetailOpen(false)
-
-    /* ── Agent 配置 tab 切换初始化 ── */
-  createEffect(() => {
-    if (activeTab() === "agentConfig" && !agentConfigBootstrapped()) {
-      setAgentConfigBootstrapped(true)
-      refreshServerSettings()
-    }
-  })
+    setCustomModelDraft(profileModel() || providerModel() || "")
+    setCustomModelDialogOpen(true)
+  }
+
+  const closeCustomModelDialog = () => setCustomModelDialogOpen(false)
+
+  const confirmCustomModelDialog = () => {
+    const modelId = customModelDraft().trim()
+    if (!modelId) return
+    openModelDetail(modelId, "custom")
+  }
+
+  const closeModelDetail = () => setModelDetailOpen(false)
+
+    /* ── Agent 配置 tab 切换初始化 ── */
+  createEffect(() => {
+    if (activeTab() === "agentConfig" && !agentConfigBootstrapped()) {
+      setAgentConfigBootstrapped(true)
+      refreshServerSettings()
+    }
+  })
   createEffect(() => {
     const profiles = agentRunsProfiles()
     const agents = agentRunsAgents()
     if (!agentConfigDirty()) {
       const pDrafts: Record<string, RuntimeProfileDraft> = {}
-      for (const p of profiles) pDrafts[p.id] = profileToDraft(p.id, p)
-      setProfileDrafts(pDrafts)
-      const aDrafts: Record<string, AgentDefinitionDraft> = {}
-      for (const a of agents) aDrafts[a.id] = agentToDraft(a.id, a)
+      for (const p of profiles) pDrafts[p.id] = profileToDraft(p.id, p)
+      setProfileDrafts(pDrafts)
+      const aDrafts: Record<string, AgentDefinitionDraft> = {}
+      for (const a of agents) aDrafts[a.id] = agentToDraft(a.id, a)
       setAgentDrafts(aDrafts)
     }
   })
@@ -2115,12 +2171,9 @@ export function createSettingsController(props: SettingsViewProps) {
 
   const requestAgentRunEvents = (taskId: string, afterSeq = agentRunLastSeq()) => {
     if (!taskId) return
-    vscode.postMessage({
-      type: "agentRun.events",
-      payload: {
-        agent_run_id: taskId,
-        after_seq: afterSeq,
-      },
+    settingsMessages.agentRunEvents(vscode, {
+      agent_run_id: taskId,
+      after_seq: afterSeq,
     })
   }
 
@@ -2154,20 +2207,83 @@ export function createSettingsController(props: SettingsViewProps) {
 
   onMount(() => {
     const unsubscribe = vscode.onMessage((msg) => {
-      if (msg.type === "serverSettings.state" && agentConfigSavePending()) {
-        setAgentConfigSavePending(false)
-        setAgentConfigDirty(false)
-        setAgentConfigSaved(true)
-        setAgentConfigError("")
+      const rawMessage = msg as unknown as Record<string, unknown>
+      const message = typeof rawMessage.message === "string" ? rawMessage.message : "Settings request failed"
+      if (msg.type === "admin.state") markOperationSuccess("admin")
+      if (msg.type === "admin.error") {
+        const keys = settingsOperationKeysForAdminError(operationStates())
+        for (const key of keys) markOperationError(key, message)
+        if (pendingProviderAdminActionKey() && keys.includes(pendingProviderAdminActionKey()!)) {
+          setPendingProviderAdminActionKey(undefined)
+        }
+        if (keys.includes("providerModels")) setModelFetchMessage(message || "模型列表刷新失败")
       }
-      if (msg.type === "serverSettings.error" && agentConfigSavePending()) {
-        setAgentConfigSavePending(false)
-        setAgentConfigSaved(false)
-        setAgentConfigError(typeof msg.message === "string" ? msg.message : "Server settings request failed")
+      if (msg.type === "serverSettings.state") {
+        markOperationSuccess("serverSettings")
+        const pending = pendingServerSettingsSaveKey()
+        if (pending) {
+          markOperationSuccess(pending)
+          setPendingServerSettingsSaveKey(undefined)
+          if (pending === "agentConfigSave") {
+            setAgentConfigSavePending(false)
+            setAgentConfigDirty(false)
+            setAgentConfigSaved(true)
+            setAgentConfigError("")
+          }
+        }
+      }
+      if (msg.type === "serverSettings.error") {
+        const pending = pendingServerSettingsSaveKey()
+        if (pending) {
+          markOperationError(pending, message)
+          setPendingServerSettingsSaveKey(undefined)
+          if (pending === "agentConfigSave") {
+            setAgentConfigSavePending(false)
+            setAgentConfigSaved(false)
+            setAgentConfigError(message)
+          }
+        } else {
+          markOperationError("serverSettings", message)
+        }
+      }
+      if (msg.type === "autoApproval.state") markOperationSuccess("autoApproval")
+      if (msg.type === "reasoningDisplay.state") markOperationSuccess("reasoningDisplay")
+      if (msg.type === "chat.sendDuringRunMode.state") markOperationSuccess("chatSendDuringRunMode")
+      if (msg.type === "peerDiagnosticsLogging.state") markOperationSuccess("peerDiagnosticsLogging")
+      if (msg.type === "diagnostics.toolDiagnostics.state") markOperationSuccess("toolDiagnostics")
+      if (msg.type === "diagnostics.toolDiagnostics.error") markOperationError("toolDiagnostics", message)
+      if (msg.type === "modelCapabilities.state") markOperationSuccess("modelCapabilities")
+      if (msg.type === "modelCapabilities.error") markOperationError("modelCapabilities", message)
+      if (msg.type === "toolchain.state" || msg.type === "toolchain.actionResult") markOperationSuccess("toolchains")
+      if (msg.type === "toolchain.error") markOperationError("toolchains", message)
+      if (msg.type === "environment.manifest" || msg.type === "environment.snapshot") markOperationSuccess("environmentManifest")
+      if (msg.type === "environment.run.error") markOperationError("environmentManifest", message)
+      if (msg.type === "auth.devices") markAuthOperationSuccess("authDevices")
+      if (msg.type === "auth.users") markAuthOperationSuccess("authUsers")
+      if (msg.type === "auth.audit") markAuthOperationSuccess("authAudit")
+      if (msg.type === "auth.error") {
+        markOperationError("accounts", message)
+        markOperationError("authDevices", message)
+        markOperationError("authUsers", message)
+        markOperationError("authAudit", message)
+      }
+      if (msg.type === "admin.actionResult") {
+        const payload = objectValue(msg.payload)
+        const result = Object.keys(payload).length ? payload : objectValue(msg)
+        const pendingProvider = pendingProviderAdminActionKey()
+        if (pendingProvider) {
+          markOperationSuccess(pendingProvider)
+          setPendingProviderAdminActionKey(undefined)
+        }
+        if (result.provider_id === providerId() && (Array.isArray(result.models) || result.unsupported === true)) {
+          markOperationSuccess("providerModels")
+        }
       }
       if (msg.type === "agentRun.submitted" && typeof msg.payload === "object" && msg.payload) {
         const payload = objectValue(msg.payload)
         const task = objectValue(payload.agent_run || payload.task)
+        if (operationBusy("agentRunSubmit")) markOperationSuccess("agentRunSubmit")
+        if (operationBusy("agentRunRetry")) markOperationSuccess("agentRunRetry")
         setAgentRun(task)
         setAgentRunEvents([])
         setAgentRunError("")
@@ -2191,18 +2307,23 @@ export function createSettingsController(props: SettingsViewProps) {
         }
       }
       if (msg.type === "agentRun.cancelled" && typeof msg.payload === "object" && msg.payload) {
+        markOperationSuccess("agentRunCancel")
         setAgentRunError("")
         requestAgentRunEvents(selectedAgentRunId())
       }
       if (msg.type === "agentRun.error") {
+        if (operationBusy("agentRunSubmit")) markOperationError("agentRunSubmit", message)
+        if (operationBusy("agentRunRetry")) markOperationError("agentRunRetry", message)
+        if (operationBusy("agentRunCancel")) markOperationError("agentRunCancel", message)
         setAgentRunSubmitting(false)
         stopAgentRunPolling()
-        setAgentRunError(typeof msg.message === "string" ? msg.message : "Runtime request failed")
+        setAgentRunError(message || "Runtime request failed")
       }
       if (msg.type === "capabilityPackage.ingest.started" && typeof msg.payload === "object" && msg.payload) {
         const payload = objectValue(msg.payload)
         const task = objectValue(payload.agent_run)
         const agentRunId = stringValue(task.id || task.agent_run_id)
+        markOperationSuccess("capabilityIngestStart")
         setCapabilityPackageIngestState((current) => ({
           ...current,
           running: true,
@@ -2218,6 +2339,7 @@ export function createSettingsController(props: SettingsViewProps) {
         const task = objectValue(payload.agent_run)
         const status = stringValue(task.status, "queued")
         const draft = objectValue(payload.draft)
+        markOperationSuccess("capabilityIngestStatus")
         setCapabilityPackageIngestState((current) => ({
           ...current,
           running: !["completed", "failed", "cancelled", "blocked"].includes(status),
@@ -2231,11 +2353,13 @@ export function createSettingsController(props: SettingsViewProps) {
         }
       }
       if (msg.type === "capabilityPackage.error") {
+        if (operationBusy("capabilityIngestStart")) markOperationError("capabilityIngestStart", message)
+        if (operationBusy("capabilityIngestStatus")) markOperationError("capabilityIngestStatus", message)
         stopCapabilityIngestPolling()
         setCapabilityPackageIngestState((current) => ({
           ...current,
           running: false,
-          error: typeof msg.message === "string" ? msg.message : "Capability package request failed",
+          error: message || "Capability package request failed",
         }))
       }
     })
@@ -2246,12 +2370,14 @@ export function createSettingsController(props: SettingsViewProps) {
     if (agentRunTerminal()) stopAgentRunPolling()
   })
 
-const switchTab = (tab: SettingsTab) => {
+  const switchTab = (tab: SettingsTab) => {
     if (tab === "accounts" && !adminUsable()) return
     setActiveTab(tab)
     settingsMessages.settingsTabChanged(vscode, tab)
   }
-
+
+  const setConversationLocale = (loc: Locale) => setLocale(loc, vscode.postMessage)
+
     /* ── Agent 配置 CRUD ── */
   const markAgentConfigDirty = () => {
     setAgentConfigDirty(true)
@@ -2307,19 +2433,17 @@ const switchTab = (tab: SettingsTab) => {
     }
     const maxAgents = Math.max(1, Math.floor(serverMaxRunningAgents()))
     const maxShells = Math.max(1, Math.floor(serverMaxShellsPerAgent()))
+    if (serverSettingsSaveBusy()) return
     setAgentConfigSavePending(true)
     setAgentConfigSaved(false)
     setAgentConfigError("")
-    vscode.postMessage({
-      type: "serverSettings.update",
-      payload: {
-        run_limits: {
-          max_running_agents: maxAgents,
-          max_shells_per_agent: maxShells,
-        },
-        runtime_profiles: profiles,
-        agent_registry: { agents },
+    updateServerSettingsForOperation("agentConfigSave", {
+      run_limits: {
+        max_running_agents: maxAgents,
+        max_shells_per_agent: maxShells,
       },
+      runtime_profiles: profiles,
+      agent_registry: { agents },
     })
   }
   const addProfile = () => {
@@ -2517,6 +2641,7 @@ const switchTab = (tab: SettingsTab) => {
   }
 
   const submitAgentRunTest = () => {
+    if (agentRunOperationBusy()) return
     const agentId = selectedAgentId()
     if (!agentId) {
       setAgentRunError("请先选择一个 Agent。")
@@ -2528,13 +2653,12 @@ const switchTab = (tab: SettingsTab) => {
       return
     }
     setAgentRunSubmitting(true)
+    markOperationStarted("agentRunSubmit", "saving")
     setAgentRunError("")
     setAgentRun(undefined)
     setAgentRunEvents([])
     stopAgentRunPolling()
-    vscode.postMessage({
-      type: "agentRun.submit",
-      payload: {
+    settingsMessages.submitAgentRun(vscode, {
         agent_id: agentId,
         source: "manual",
         issue_id: `manual-smoke-${Date.now()}`,
@@ -2543,43 +2667,150 @@ const switchTab = (tab: SettingsTab) => {
           agent_run_source: "manual",
           workspace_root: server.workspaceDirectory() || "",
         },
-      },
     })
   }
 
   const cancelAgentRunTest = () => {
+    if (agentRunOperationBusy()) return
     const taskId = selectedAgentRunId()
     if (!taskId) return
-    vscode.postMessage({
-      type: "agentRun.cancel",
-      payload: {
-        agent_run_id: taskId,
-        reason: "user_cancelled",
-      },
+    markOperationStarted("agentRunCancel", "saving")
+    settingsMessages.cancelAgentRun(vscode, {
+      agent_run_id: taskId,
+      reason: "user_cancelled",
     })
   }
 
   const retryAgentRunTest = (resumeSession = false) => {
+    if (agentRunOperationBusy()) return
     const taskId = selectedAgentRunId()
     if (!taskId) return
     setAgentRunSubmitting(true)
+    markOperationStarted("agentRunRetry", "saving")
     setAgentRunEvents([])
     stopAgentRunPolling()
-    vscode.postMessage({
-      type: "agentRun.retry",
-      payload: {
-        agent_run_id: taskId,
-        new_agent_run_id: `${taskId}-retry-${Date.now()}`,
-        resume_session: resumeSession === true,
-      },
+    settingsMessages.retryAgentRun(vscode, {
+      agent_run_id: taskId,
+      new_agent_run_id: `${taskId}-retry-${Date.now()}`,
+      resume_session: resumeSession === true,
     })
   }
-
-const refreshAdmin = () => {
-    setRefreshLoading(true)
-    settingsMessages.refreshAdmin(vscode)
-    setTimeout(() => setRefreshLoading(false), 1200)
+
+  const refreshOperation = (key: SettingsOperationKey) => {
+    if (operationBusy(key)) return
+    if (key === "providerModels" && providerAdminActionBusy()) return
+    markOperationStarted(key, "loading")
+    switch (key) {
+      case "admin":
+        settingsMessages.refreshAdmin(vscode)
+        return
+      case "serverSettings":
+        if (pendingServerSettingsSaveKey()) {
+          markOperationSuccess(key)
+          return
+        }
+        setServerSettingsBootstrapped(true)
+        settingsMessages.readServerSettings(vscode)
+        return
+      case "autoApproval":
+        settingsMessages.getAutoApproval(vscode)
+        return
+      case "reasoningDisplay":
+        settingsMessages.getReasoningDisplay(vscode)
+        return
+      case "chatSendDuringRunMode":
+        settingsMessages.getChatSendDuringRunMode(vscode)
+        return
+      case "peerDiagnosticsLogging":
+        settingsMessages.getPeerDiagnosticsLogging(vscode)
+        return
+      case "toolDiagnostics":
+        settingsMessages.readToolDiagnosticsStats(vscode)
+        return
+      case "modelCapabilities":
+        settingsMessages.modelCapabilitiesStatus(vscode)
+        return
+      case "providerModels":
+        if (!providerId() || !selectedProvider() || !adminUsable()) {
+          markOperationSuccess(key)
+          return
+        }
+        setFetchedModels([])
+        setModelFetchMessage("正在获取模型列表...")
+        setProviderValidationError("")
+        setActionIntent("")
+        settingsMessages.providerModels(vscode, providerId())
+        return
+      case "toolchains":
+        setToolchainBootstrapped(true)
+        settingsMessages.refreshToolchains(vscode)
+        return
+      case "environmentManifest":
+        setEnvironmentBootstrapped(true)
+        settingsMessages.refreshEnvironmentManifest(vscode)
+        return
+      case "authDevices":
+        if (canManageDevices()) settingsMessages.listAuthDevices(vscode)
+        else markOperationSuccess(key)
+        return
+      case "authUsers":
+        if (canManageUsers()) settingsMessages.listAuthUsers(vscode)
+        else markOperationSuccess(key)
+        return
+      case "authAudit":
+        if (canReadAudit()) {
+          settingsMessages.listAuthAudit(vscode, {
+            limit: 100,
+            event_type: auditEventType().trim() || undefined,
+          })
+        } else {
+          markOperationSuccess(key)
+        }
+        return
+      case "accounts":
+        if (!adminUsable()) {
+          markOperationSuccess(key)
+          return
+        }
+        let requestedAccountResource = false
+        if (canManageDevices()) refreshOperation("authDevices")
+        requestedAccountResource = requestedAccountResource || canManageDevices()
+        if (canManageUsers()) refreshOperation("authUsers")
+        requestedAccountResource = requestedAccountResource || canManageUsers()
+        if (canReadAudit()) refreshOperation("authAudit")
+        requestedAccountResource = requestedAccountResource || canReadAudit()
+        if (!requestedAccountResource) markOperationSuccess(key)
+        return
+      default:
+        markOperationSuccess(key)
+    }
   }
+
+  const refreshPage = (tab: SettingsTab) => {
+    for (const key of settingsPageOperationKeys(tab)) refreshOperation(key)
+  }
+
+  const updateServerSettingsForOperation = (key: SettingsOperationKey, payload: Record<string, unknown>) => {
+    if (pendingServerSettingsSaveKey() || operationState("serverSettings").status === "loading") return
+    markOperationStarted(key, "saving")
+    setPendingServerSettingsSaveKey(key)
+    settingsMessages.updateServerSettings(vscode, payload)
+  }
+
+  const runProviderAdminAction = (
+    key: SettingsOperationKey,
+    intent: ModelActionIntent,
+    action: () => void,
+    status: Extract<SettingsOperationStatus, "loading" | "saving"> = "saving",
+  ) => {
+    if (providerAdminActionBusy()) return
+    setPendingProviderAdminActionKey(key)
+    markOperationStarted(key, status)
+    setActionIntent(intent)
+    action()
+  }
+
+  const refreshAdmin = () => refreshOperation("admin")
 
   /* ── 主执行器相关 ── */
   const executorLocation = createMemo(() => {
@@ -2605,14 +2836,10 @@ const refreshAdmin = () => {
     const selectedEngine = EXECUTOR_ENGINES.find((e) => e.id === pickerEngine())
     if (selectedEngine && !selectedEngine.ready) return
     setExecutorPickerOpen(false)
-    vscode.postMessage({
-      type: "executorType.save",
-      location: pickerLocation(),
-      engine: pickerEngine(),
-    })
+    settingsMessages.saveExecutorType(vscode, pickerLocation(), pickerEngine())
   }
 
-  const refreshEnvironmentManifest = () => settingsMessages.refreshEnvironmentManifest(vscode)
+  const refreshEnvironmentManifest = () => refreshOperation("environmentManifest")
   const environmentRunItems = (entryIds?: string[]) => {
     const selected = entryIds?.length
       ? toolchainDashboardItems().filter((item) => entryIds.includes(item.id))
@@ -2634,11 +2861,12 @@ const refreshAdmin = () => {
   }
   const stopEnvironmentRun = () => settingsMessages.cancelEnvironment(vscode)
 
-  const refreshServerSettings = () => {
-    setServerSettingsBootstrapped(true)
-    settingsMessages.readServerSettings(vscode)
+  const refreshServerSettings = () => refreshOperation("serverSettings")
+  const refreshModelCapabilities = () => {
+    if (operationBusy("modelCapabilities")) return
+    markOperationStarted("modelCapabilities", "loading")
+    settingsMessages.modelCapabilitiesRefresh(vscode)
   }
-  const refreshModelCapabilities = () => settingsMessages.modelCapabilitiesRefresh(vscode)
   const applyModelCapabilityRecommendation = (targetProfileId = profileId()) => {
     const id = targetProfileId.trim()
     if (!id) return
@@ -2650,8 +2878,8 @@ const refreshAdmin = () => {
     setServerMaxRunningAgents(maxAgents)
     setServerMaxShellsPerAgent(maxShells)
     setServerSettingsDirty(false)
-    settingsMessages.updateServerSettings(
-      vscode,
+    updateServerSettingsForOperation(
+      "serverSettingsSave",
       serverAgentRunSettingsPayload(maxAgents, maxShells)
     )
   }
@@ -2667,6 +2895,7 @@ const refreshAdmin = () => {
   }
   const cancelToolchainIngest = () => settingsMessages.cancelToolchainIngest(vscode)
   const startCapabilityPackageIngest = () => {
+    if (capabilityIngestOperationBusy()) return
     const sourceType = capabilitySourceType()
     const url = capabilitySourceUrl().trim()
     const notes = capabilitySourceNotes().trim()
@@ -2678,6 +2907,7 @@ const refreshAdmin = () => {
       status: "starting",
       error: "",
     })
+    markOperationStarted("capabilityIngestStart", "saving")
     settingsMessages.startCapabilityPackageIngest(vscode, {
       source: {
         type: sourceType,
@@ -2690,6 +2920,8 @@ const refreshAdmin = () => {
   const refreshCapabilityPackageIngestStatus = () => {
     const agentRunId = capabilityPackageIngestState().agentRunId
     if (!agentRunId) return
+    if (operationBusy("capabilityIngestStatus")) return
+    markOperationStarted("capabilityIngestStatus", "loading")
     settingsMessages.capabilityPackageIngestStatus(vscode, agentRunId)
   }
   const acceptCapabilityPackageDraft = () => {
@@ -2706,49 +2938,48 @@ const refreshAdmin = () => {
     settingsMessages.enableCapabilityPackage(vscode, packageId, enabled)
   }
   const updateAutoApproval = (patch: {
-    options?: Record<string, boolean>
-    allowedCommands?: string[]
-    deniedCommands?: string[]
-  }) => {
-    settingsMessages.updateAutoApproval(vscode, patch)
-  }
-  const addCommandRule = (kind: "allow" | "deny") => {
-    const value = (kind === "allow" ? allowedCommandInput() : deniedCommandInput()).trim()
-    if (!value) return
-    if (kind === "allow") {
-      const next = uniqueCommandRules([...allowedCommands(), value])
-      setAllowedCommands(next)
-      setAllowedCommandInput("")
-      updateAutoApproval({ allowedCommands: next })
-      return
-    }
-    const next = uniqueCommandRules([...deniedCommands(), value])
-    setDeniedCommands(next)
-    setDeniedCommandInput("")
-    updateAutoApproval({ deniedCommands: next })
-  }
-  const removeCommandRule = (kind: "allow" | "deny", rule: string) => {
-    if (kind === "allow") {
-      const next = allowedCommands().filter((item) => item !== rule)
-      setAllowedCommands(next)
-      updateAutoApproval({ allowedCommands: next })
-      return
-    }
-    const next = deniedCommands().filter((item) => item !== rule)
-    setDeniedCommands(next)
-    updateAutoApproval({ deniedCommands: next })
-  }
+    options?: Record<string, boolean>
+    allowedCommands?: string[]
+    deniedCommands?: string[]
+  }) => {
+    settingsMessages.updateAutoApproval(vscode, patch)
+  }
+  const addCommandRule = (kind: "allow" | "deny") => {
+    const value = (kind === "allow" ? allowedCommandInput() : deniedCommandInput()).trim()
+    if (!value) return
+    if (kind === "allow") {
+      const next = uniqueCommandRules([...allowedCommands(), value])
+      setAllowedCommands(next)
+      setAllowedCommandInput("")
+      updateAutoApproval({ allowedCommands: next })
+      return
+    }
+    const next = uniqueCommandRules([...deniedCommands(), value])
+    setDeniedCommands(next)
+    setDeniedCommandInput("")
+    updateAutoApproval({ deniedCommands: next })
+  }
+  const removeCommandRule = (kind: "allow" | "deny", rule: string) => {
+    if (kind === "allow") {
+      const next = allowedCommands().filter((item) => item !== rule)
+      setAllowedCommands(next)
+      updateAutoApproval({ allowedCommands: next })
+      return
+    }
+    const next = deniedCommands().filter((item) => item !== rule)
+    setDeniedCommands(next)
+    updateAutoApproval({ deniedCommands: next })
+  }
   const replyEnvironmentApproval = (
     approval: EnvironmentApprovalState,
     decision: ApprovalDecision,
-  ) => {
-    if (selectedEnvironmentApproval()?.approvalId === approval.approvalId) {
-      setSelectedEnvironmentApproval(undefined)
-    }
-    vscode.postMessage({
-      type: "approval.reply",
-      chatId: environmentSnapshot().chatId,
-      approvalId: approval.approvalId,
+  ) => {
+    if (selectedEnvironmentApproval()?.approvalId === approval.approvalId) {
+      setSelectedEnvironmentApproval(undefined)
+    }
+    settingsMessages.replyApproval(vscode, {
+      chatId: environmentSnapshot().chatId,
+      approvalId: approval.approvalId,
       decision,
     })
   }
@@ -2776,19 +3007,20 @@ const refreshAdmin = () => {
     replyEnvironmentApproval(approval, decision)
   }
 
-  const requestProviderModels = (message = "正在获取模型列表...") => {
-    const id = providerId()
-    if (!id || !selectedProvider() || !adminUsable()) return
-    setFetchedModels([])
-    setModelFetchMessage(message)
+  const requestProviderModels = (message = "正在获取模型列表..."): boolean => {
+    const id = providerId()
+    if (!id || !selectedProvider() || !adminUsable()) return false
+    if (providerAdminActionBusy()) return false
+    setLastModelFetchProvider(id)
+    markOperationStarted("providerModels", "loading")
+    setFetchedModels([])
+    setModelFetchMessage(message)
     setProviderValidationError("")
     setActionIntent("")
-    vscode.postMessage({
-      type: "provider.models",
-      payload: { provider_id: id },
-    })
-  }
-
+    settingsMessages.providerModels(vscode, id)
+    return true
+  }
+
   const saveConnection = () => {
     const validation = validateHostUrlInput(hostUrl())
     if (!validation.ok) {
@@ -2797,15 +3029,13 @@ const refreshAdmin = () => {
       setPendingHostSave(undefined)
       return
     }
-    setSaveLoading(true)
-    setSaveSuccess(false)
+    markOperationStarted("connectionSave", "saving")
     const requestedHostUrl = validation.value
     setHostUrl(requestedHostUrl)
     setPendingHostSave(requestedHostUrl)
     setHostUrlError(undefined)
     setDismissedConnectionSaveResultKey(undefined)
-    vscode.postMessage({
-      type: "connection.login",
+    settingsMessages.loginConnection(vscode, {
       hostUrl: requestedHostUrl,
       username: loginUsername(),
       password: loginPassword(),
@@ -2814,25 +3044,18 @@ const refreshAdmin = () => {
   }
 
   const logoutConnection = () => {
-    vscode.postMessage({ type: "connection.logout" })
+    settingsMessages.logoutConnection(vscode)
   }
 
-  const refreshAuthDevices = () => settingsMessages.listAuthDevices(vscode)
+  const refreshAuthDevices = () => refreshOperation("authDevices")
   const refreshAuthUsers = () => {
-    if (canManageUsers()) settingsMessages.listAuthUsers(vscode)
+    refreshOperation("authUsers")
   }
   const refreshAuthAudit = () => {
-    if (!canReadAudit()) return
-    settingsMessages.listAuthAudit(vscode, {
-      limit: 100,
-      event_type: auditEventType().trim() || undefined,
-    })
+    refreshOperation("authAudit")
   }
   const refreshAccounts = () => {
-    if (!adminUsable()) return
-    if (canManageDevices()) refreshAuthDevices()
-    refreshAuthUsers()
-    refreshAuthAudit()
+    refreshOperation("accounts")
   }
   const changePassword = () => {
     settingsMessages.changeAuthPassword(vscode, currentPassword(), newPassword())
@@ -2860,107 +3083,96 @@ const refreshAdmin = () => {
   const revokeAuthDevice = (deviceId: string) => settingsMessages.revokeAuthDevice(vscode, deviceId)
 
   const resetProviderForm = () => {
-    setProviderId("")
-    setProviderType("openai_chat")
-    setProviderCompat("generic")
-    setProviderBaseUrl("")
-    setProviderApiKey("")
-    setProviderModel("")
-    setProviderEnabled(true)
-    setProviderCopyId("")
-    setFetchedModels([])
-    setModelSearch("")
-    setModelFetchMessage("")
-    setLastModelFetchProvider("")
-    setModelDetailOpen(false)
-    setCustomModelDialogOpen(false)
-  }
-
-  const selectProvider = (provider: Record<string, unknown>) => {
-    const id = stringValue(provider.id)
-    const firstProfile = profiles().find((profile) => stringValue(profile.provider) === id)
-    setProviderId(id)
-    setProviderBaseUrl(stringValue(provider.base_url))
-    setProviderType(asProviderType(provider.type))
-    setProviderCompat(asProviderCompat(provider.compat))
-    setProviderApiKey("")
-    setProviderEnabled(provider.enabled !== false)
-    setProviderCopyId(`${id}-copy`)
-    setProviderModel(stringValue(firstProfile?.model))
-    setFetchedModels([])
-    setModelSearch("")
-    setModelFetchMessage("")
-    setLastModelFetchProvider("")
-    setModelDetailOpen(false)
-    setCustomModelDialogOpen(false)
-  }
-
-  const saveProvider = () => {
-    setActionIntent("")
-    vscode.postMessage({
-      type: "provider.record",
-      payload: {
-        provider_id: providerId(),
-        type: providerType(),
-        compat: providerCompat(),
-        base_url: providerBaseUrl(),
-        api_key: providerApiKey() || undefined,
-        enabled: providerEnabled(),
-      },
-    })
-  }
-
+    setProviderId("")
+    setProviderType("openai_chat")
+    setProviderCompat("generic")
+    setProviderBaseUrl("")
+    setProviderApiKey("")
+    setProviderModel("")
+    setProviderEnabled(true)
+    setProviderCopyId("")
+    setFetchedModels([])
+    setModelSearch("")
+    setModelFetchMessage("")
+    setLastModelFetchProvider("")
+    setModelDetailOpen(false)
+    setCustomModelDialogOpen(false)
+  }
+
+  const selectProvider = (provider: Record<string, unknown>) => {
+    const id = stringValue(provider.id)
+    const firstProfile = profiles().find((profile) => stringValue(profile.provider) === id)
+    setProviderId(id)
+    setProviderBaseUrl(stringValue(provider.base_url))
+    setProviderType(asProviderType(provider.type))
+    setProviderCompat(asProviderCompat(provider.compat))
+    setProviderApiKey("")
+    setProviderEnabled(provider.enabled !== false)
+    setProviderCopyId(`${id}-copy`)
+    setProviderModel(stringValue(firstProfile?.model))
+    setFetchedModels([])
+    setModelSearch("")
+    setModelFetchMessage("")
+    setLastModelFetchProvider("")
+    setModelDetailOpen(false)
+    setCustomModelDialogOpen(false)
+  }
+
+  const saveProvider = () => {
+    runProviderAdminAction("providerSave", "", () => {
+      settingsMessages.recordProvider(vscode, {
+        provider_id: providerId(),
+        type: providerType(),
+        compat: providerCompat(),
+        base_url: providerBaseUrl(),
+        api_key: providerApiKey() || undefined,
+        enabled: providerEnabled(),
+      })
+    })
+  }
+
   const testProvider = (model = providerModel()) => {
     const modelId = model.trim()
 
     if (!modelId) return
     setProviderModel(modelId)
-    setActionIntent("")
-    vscode.postMessage({
-      type: "provider.test",
-      payload: {
-        provider_id: providerId(),
+    runProviderAdminAction("providerTest", "", () => {
+      settingsMessages.testProvider(vscode, {
+        provider_id: providerId(),
         model: modelId,
-        prompt: "ping",
-      },
-    })
-  }
-
-  const copyProvider = () => {
-    setActionIntent("")
-    vscode.postMessage({
-      type: "provider.copy",
-      payload: {
-        provider_id: providerId(),
-        target_id: providerCopyId() || undefined,
-      },
-    })
-  }
-
-  const deleteProvider = () => {
-    const id = providerId()
-    if (!id) return
-    if (!window.confirm(`删除服务商 "${id}"？已有保存预设引用时后端会阻止删除。`)) {
-      return
-    }
-    setActionIntent("")
-    vscode.postMessage({
-      type: "provider.delete",
-      payload: { provider_id: id },
-    })
-  }
-
-  const toggleProviderEnabled = (enabled: boolean) => {
-    setProviderEnabled(enabled)
-    setActionIntent("")
-    vscode.postMessage({
-      type: "provider.enable",
-      payload: { provider_id: providerId(), enabled },
-    })
-  }
-
-  const saveModelPreset = () => {
-    const provider = profileProvider() || providerId()
+        prompt: "ping",
+      })
+    }, "loading")
+  }
+
+  const copyProvider = () => {
+    runProviderAdminAction("providerCopy", "", () => {
+      settingsMessages.copyProvider(vscode, {
+        provider_id: providerId(),
+        target_id: providerCopyId() || undefined,
+      })
+    })
+  }
+
+  const deleteProvider = () => {
+    const id = providerId()
+    if (!id) return
+    if (!window.confirm(`删除服务商 "${id}"？已有保存预设引用时后端会阻止删除。`)) return
+    runProviderAdminAction("providerDelete", "", () => {
+      settingsMessages.deleteProvider(vscode, id)
+    })
+  }
+
+  const toggleProviderEnabled = (enabled: boolean) => {
+    if (providerAdminActionBusy()) return
+    setProviderEnabled(enabled)
+    runProviderAdminAction("providerEnable", "", () => {
+      settingsMessages.enableProvider(vscode, providerId(), enabled)
+    })
+  }
+
+  const saveModelPreset = () => {
+    const provider = profileProvider() || providerId()
     const model = profileModel().trim()
     if (!provider || !model) return
     if (maxTokens() < 1 || maxContextTokens() < 1) {
@@ -2978,32 +3190,32 @@ const refreshAdmin = () => {
       && maxTokens() === defaultMaxTokens
       && maxContextTokens() === defaultMaxContextTokens
     setProfileId(nextProfileId)
-    setProfileProvider(provider)
-    setProfileModel(model)
-    setActionIntent("savePreset")
-    vscode.postMessage({
-      type: "modelProfile.save",
-      payload: {
-        profile_id: nextProfileId,
-        provider,
-        model,
-        max_tokens: maxTokens(),
-        max_context_tokens: maxContextTokens(),
+    setProfileProvider(provider)
+    setProfileModel(model)
+    runProviderAdminAction("modelProfileSave", "savePreset", () => {
+      settingsMessages.saveModelProfile(vscode, {
+        profile_id: nextProfileId,
+        provider,
+        model,
+        max_tokens: maxTokens(),
+        max_context_tokens: maxContextTokens(),
         temperature: temperature(),
         reasoning_effort: reasoningEffort() || undefined,
         thinking_enabled: thinkingEnabled(),
         capability_user_configured: !usesCapabilityDefaults,
-      },
+      })
     })
   }
-
+
+  const visitedSettingsTabs = new Set<SettingsTab>()
+
   createEffect(() => {
-    const tab = normalizeSettingsTab(props.targetTab)
-    if (tab) {
-      setActiveTab(tab)
-    }
-  })
-
+    const tab = normalizeSettingsTab(props.targetTab)
+    if (tab) {
+      setActiveTab(tab)
+    }
+  })
+
   createEffect(() => {
     if (activeTab() === "accounts" && !adminUsable() && connectionStatus() !== "checking") {
       setActiveTab("executors")
@@ -3012,13 +3224,20 @@ const refreshAdmin = () => {
   })
 
   createEffect(() => {
+    const tab = activeTab()
+    if (visitedSettingsTabs.has(tab)) return
+    visitedSettingsTabs.add(tab)
+    refreshPage(tab)
+  })
+
+  createEffect(() => {
     if (activeTab() !== "toolchains") return
     if (!toolchainBootstrapped()) {
       setToolchainBootstrapped(true)
-      settingsMessages.refreshToolchains(vscode)
-    }
-    if (!environmentBootstrapped()) {
-      setEnvironmentBootstrapped(true)
+      refreshOperation("toolchains")
+    }
+    if (!environmentBootstrapped()) {
+      setEnvironmentBootstrapped(true)
       refreshEnvironmentManifest()
     }
   })
@@ -3027,7 +3246,7 @@ const refreshAdmin = () => {
     if (activeTab() !== "serverSettings") return
     if (!serverSettingsBootstrapped()) {
       setServerSettingsBootstrapped(true)
-      settingsMessages.readServerSettings(vscode)
+      refreshOperation("serverSettings")
     }
   })
 
@@ -3036,7 +3255,7 @@ const refreshAdmin = () => {
     if (!adminUsable()) return
     if (accountsBootstrapped()) return
     setAccountsBootstrapped(true)
-    refreshAccounts()
+    refreshOperation("accounts")
   })
 
   createEffect(() => {
@@ -3080,48 +3299,49 @@ const refreshAdmin = () => {
     setHostUrlDirty(resolved.dirty)
     setHostUrlError(resolved.error)
     setHostUrlSyncLock(resolved.syncLock)
-    setSaveLoading(false)
+    if (resolved.error) markOperationError("connectionSave", resolved.error)
+    else markOperationSuccess("connectionSave")
     const loginSucceeded = stringValue(result.status) === "ready" && result.authenticated === true
-    setSaveSuccess(loginSucceeded)
     if (loginSucceeded) {
-      setTimeout(() => setSaveSuccess(false), 1500)
+      setTimeout(() => {
+        setOperationStates((states) => markSettingsOperationIdle(states, "connectionSave"))
+      }, 1500)
     }
     setPendingHostSave(undefined)
   })
-
-  createEffect(() => {
-    const id = providerId()
-    if (!id || !selectedProvider() || !adminUsable()) return
-    if (lastModelFetchProvider() === id) return
-    setLastModelFetchProvider(id)
-    requestProviderModels("正在读取该服务商的模型列表...")
-  })
-
-  createEffect(() => {
-    const result = server.actionResult()
-    const provider = result?.provider
-    if (
-      result?.ok === true &&
-      provider &&
-      typeof provider === "object" &&
-      stringValue((provider as Record<string, unknown>).id) === providerId()
-    ) {
-      setProviderApiKey("")
-    }
-    if (result?.ok === true && provider && typeof provider === "object") {
-      const id = stringValue((provider as Record<string, unknown>).id)
-      if (id) {
-        setProviderId(id)
-        selectProvider(provider as Record<string, unknown>)
-      }
-    }
-    if (result?.provider_id && result.provider_id === providerId() && Array.isArray(result.models)) {
-      const models: ProviderModelEntry[] = []
-      for (const item of result.models) {
-        if (!item || typeof item !== "object") continue
-        const model = item as Record<string, unknown>
-        const id = stringValue(model.id)
-        if (!id) continue
+
+  createEffect(() => {
+    const id = providerId()
+    if (!id || !selectedProvider() || !adminUsable()) return
+    if (lastModelFetchProvider() === id) return
+    requestProviderModels("正在读取该服务商的模型列表...")
+  })
+
+  createEffect(() => {
+    const result = server.actionResult()
+    const provider = result?.provider
+    if (
+      result?.ok === true &&
+      provider &&
+      typeof provider === "object" &&
+      stringValue((provider as Record<string, unknown>).id) === providerId()
+    ) {
+      setProviderApiKey("")
+    }
+    if (result?.ok === true && provider && typeof provider === "object") {
+      const id = stringValue((provider as Record<string, unknown>).id)
+      if (id) {
+        setProviderId(id)
+        selectProvider(provider as Record<string, unknown>)
+      }
+    }
+    if (result?.provider_id && result.provider_id === providerId() && Array.isArray(result.models)) {
+      const models: ProviderModelEntry[] = []
+      for (const item of result.models) {
+        if (!item || typeof item !== "object") continue
+        const model = item as Record<string, unknown>
+        const id = stringValue(model.id)
+        if (!id) continue
         models.push({
           id,
           owned_by: stringValue(model.owned_by),
@@ -3137,41 +3357,105 @@ const refreshAdmin = () => {
           supports_vision: model.supports_vision === true,
           supports_parallel_tool_calls: model.supports_parallel_tool_calls === true,
         })
-      }
-      setFetchedModels(models)
-      setModelFetchMessage(
-        models.length > 0
-          ? `已获取 ${models.length} 个模型。`
-          : "当前服务商未返回模型列表，请使用“自定义模型名”。"
-      )
-    }
-    if (result?.unsupported === true && result?.provider_id === providerId()) {
-      setFetchedModels([])
-      setModelFetchMessage(stringValue(result.message, "当前服务商无法自动获取模型列表，请使用“自定义模型名”。"))
-    }
-  })
-
+      }
+      setFetchedModels(models)
+      setModelFetchMessage(
+        models.length > 0
+          ? `已获取 ${models.length} 个模型。`
+          : "当前服务商未返回模型列表，请使用“自定义模型名”。"
+      )
+    }
+    if (result?.unsupported === true && result?.provider_id === providerId()) {
+      setFetchedModels([])
+      setModelFetchMessage(stringValue(result.message, "当前服务商无法自动获取模型列表，请使用“自定义模型名”。"))
+    }
+  })
+
   onMount(() => {
-    settingsMessages.refreshAdmin(vscode)
-    settingsMessages.modelCapabilitiesStatus(vscode)
-    settingsMessages.getAutoApproval(vscode)
-    const unsubscribe = vscode.onMessage((msg) => {
-      if (msg.type !== "autoApproval.state") return
-      const payload = objectValue(msg.payload)
-      setAutoApprovalOptions(sanitizeAutoApproveOptions(payload.options))
-      setAllowedCommands(uniqueCommandRules(stringArray(payload.allowedCommands)))
-      setDeniedCommands(uniqueCommandRules(stringArray(payload.deniedCommands)))
-      setAutoApprovalPlatform(stringValue(payload.platform, "browser"))
-    })
-    onCleanup(unsubscribe)
-  })
-
+    refreshOperation("admin")
+    refreshOperation("modelCapabilities")
+    refreshOperation("autoApproval")
+    const unsubscribe = vscode.onMessage((msg) => {
+      if (msg.type !== "autoApproval.state") return
+      const payload = objectValue(msg.payload)
+      setAutoApprovalOptions(sanitizeAutoApproveOptions(payload.options))
+      setAllowedCommands(uniqueCommandRules(stringArray(payload.allowedCommands)))
+      setDeniedCommands(uniqueCommandRules(stringArray(payload.deniedCommands)))
+      setAutoApprovalPlatform(stringValue(payload.platform, "browser"))
+    })
+    onCleanup(unsubscribe)
+  })
+
+  const operations = {
+    state: operationState,
+    isBusy: operationBusy,
+    error: operationError,
+    markStarted: markOperationStarted,
+    markSuccess: markOperationSuccess,
+    markError: markOperationError,
+    refresh: refreshOperation,
+  }
+
+  const saveConversationSettings = (payload: Record<string, unknown>) =>
+    updateServerSettingsForOperation("conversationSave", payload)
+  const saveSessionPolicySettings = (payload: Record<string, unknown>) =>
+    updateServerSettingsForOperation("sessionPolicySave", payload)
+  const saveAutoApprovalServerSettings = (payload: Record<string, unknown>) =>
+    updateServerSettingsForOperation("autoApprovalSave", payload)
+  const saveIntegrationsSettings = (payload: Record<string, unknown>) =>
+    updateServerSettingsForOperation("integrationsSave", payload)
+  const saveInfrastructureSettings = (payload: Record<string, unknown>) =>
+    updateServerSettingsForOperation("serverSettingsSave", payload)
+  const saveToolchainsCapabilitySettings = (payload: Record<string, unknown>) =>
+    updateServerSettingsForOperation("toolchainsCapabilitySave", payload)
+  const saveDiagnosticsSettings = (payload: Record<string, unknown>) =>
+    updateServerSettingsForOperation("diagnosticsSave", payload)
+  const saveCapabilitySyncSettings = (payload: Record<string, unknown>) =>
+    updateServerSettingsForOperation("capabilitySyncSave", payload)
+  const saveReasoningDisplay = (defaultOpen: boolean) => {
+    markOperationStarted("reasoningDisplay", "saving")
+    settingsMessages.saveReasoningDisplay(vscode, defaultOpen)
+  }
+  const updateChatSendDuringRunMode = (mode: "guide" | "queue") => {
+    markOperationStarted("chatSendDuringRunMode", "saving")
+    settingsMessages.updateChatSendDuringRunMode(vscode, mode)
+  }
+  const savePeerDiagnosticsLogging = (payload: Record<string, unknown>) => {
+    markOperationStarted("peerDiagnosticsLogging", "saving")
+    settingsMessages.savePeerDiagnosticsLogging(vscode, payload)
+  }
+  const openPeerDiagnosticsLog = () => settingsMessages.openPeerDiagnosticsLog(vscode)
+  const clearPeerDiagnosticsLog = () => settingsMessages.clearPeerDiagnosticsLog(vscode)
+  const readToolDiagnosticsStats = () => refreshOperation("toolDiagnostics")
+  const refreshToolchains = () => {
+    refreshOperation("toolchains")
+    refreshOperation("environmentManifest")
+  }
+  const recordToolchain = (kind: string, payload: Record<string, unknown>) => {
+    markOperationStarted("toolchains", "saving")
+    settingsMessages.recordToolchain(vscode, kind, payload)
+  }
+  const enableToolchain = (kind: string, name: string, enabled: boolean) => {
+    markOperationStarted("toolchains", "saving")
+    settingsMessages.enableToolchain(vscode, kind, name, enabled)
+  }
+  const deleteToolchainRecord = (kind: string, name: string) => {
+    markOperationStarted("toolchains", "saving")
+    settingsMessages.deleteToolchain(vscode, kind, name)
+  }
+
   return {
     vscode,
+    operations,
+    refreshPage,
+    pageRefreshing,
+    serverSettingsSaveBusy,
+    providerAdminActionBusy,
     server,
     activeTab,
     setActiveTab,
     switchTab,
+    setConversationLocale,
     settingsTabDefs: settingsTabDefsVisible,
     EXECUTOR_ENGINES,
     PROFILE_EXECUTOR_OPTIONS,
@@ -3187,12 +3471,10 @@ const refreshAdmin = () => {
     setPickerLocation,
     pickerEngine,
     setPickerEngine,
-    refreshLoading,
+    refreshLoading: () => operationBusy("admin") || refreshLoading(),
     setRefreshLoading,
-    saveLoading,
-    setSaveLoading,
-    saveSuccess,
-    setSaveSuccess,
+    saveLoading: () => operationBusy("connectionSave"),
+    saveSuccess: () => operationState("connectionSave").status === "success",
     hostUrl,
     setHostUrl,
     loginUsername,
@@ -3345,7 +3627,7 @@ const refreshAdmin = () => {
     setAgentRunEvents,
     agentRunError,
     setAgentRunError,
-    agentRunSubmitting,
+    agentRunSubmitting: () => agentRunSubmitting() || agentRunOperationBusy(),
     setAgentRunSubmitting,
     agentRunPolling,
     setAgentRunPolling,
@@ -3480,6 +3762,24 @@ const refreshAdmin = () => {
     refreshModelCapabilities,
     applyModelCapabilityRecommendation,
     saveServerSettings,
+    saveConversationSettings,
+    saveSessionPolicySettings,
+    saveAutoApprovalServerSettings,
+    saveIntegrationsSettings,
+    saveInfrastructureSettings,
+    saveToolchainsCapabilitySettings,
+    saveDiagnosticsSettings,
+    saveCapabilitySyncSettings,
+    saveReasoningDisplay,
+    updateChatSendDuringRunMode,
+    savePeerDiagnosticsLogging,
+    openPeerDiagnosticsLog,
+    clearPeerDiagnosticsLog,
+    readToolDiagnosticsStats,
+    refreshToolchains,
+    recordToolchain,
+    enableToolchain,
+    deleteToolchainRecord,
     runToolchainIngest,
     cancelToolchainIngest,
     startCapabilityPackageIngest,

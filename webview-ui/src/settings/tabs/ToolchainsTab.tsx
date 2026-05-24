@@ -1,11 +1,10 @@
-import { Component, For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js"
+import { Component, For, Show, createEffect, createMemo, createSignal } from "solid-js"
 import { t } from "../../i18n"
 import { ApprovalDetailsDialog } from "../../components/chat/ApprovalDetailsDialog"
 import { RefreshButton } from "../../components/common/RefreshButton"
 import { DialogSurface } from "../../components/common/interaction"
 import { StatusBadge } from "../components/StatusBadge"
 import { ChoiceMultiSelect } from "../components/ChoiceMultiSelect"
-import { settingsMessages } from "../settingsMessages"
 import type { SettingsController } from "../useSettingsController"
 
 type EnvironmentEntryKind = "cli" | "mcp" | "skill"
@@ -67,8 +66,14 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
     environmentStatusTone,
     environmentStatusLabel,
     formatTimestamp,
-    refreshEnvironmentManifest,
-    vscode,
+    operations,
+    pageRefreshing,
+    serverSettingsSaveBusy,
+    refreshToolchains: refreshToolchainsRequest,
+    saveToolchainsCapabilitySettings,
+    recordToolchain: recordToolchainRequest,
+    enableToolchain: enableToolchainRequest,
+    deleteToolchainRecord,
     toolchainEditor,
     setToolchainEditor,
     emptyToolchainEditor,
@@ -234,10 +239,8 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
     setSkillsDisabledText(stringArrayValue(skills.disabled).join("\n"))
   })
 
-  onMount(() => settingsMessages.readServerSettings(vscode))
-
   const saveSkillsSettings = () => {
-    settingsMessages.updateServerSettings(vscode, {
+    saveToolchainsCapabilitySettings({
       settings: {
         skills: {
           enabled: skillsEnabled(),
@@ -269,8 +272,7 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
   }
 
   const refreshToolchains = () => {
-    settingsMessages.refreshToolchains(vscode)
-    refreshEnvironmentManifest()
+    refreshToolchainsRequest()
   }
 
   const openCreateToolchain = (kind: ToolchainKind) => {
@@ -290,17 +292,17 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
     if (!editor) return
     const payload = toolchainPayloadFromEditor(editor)
     if (!stringValue(payload.name).trim()) return
-    settingsMessages.recordToolchain(vscode, editor.kind, payload)
+    recordToolchainRequest(editor.kind, payload)
     setToolchainEditor(undefined)
   }
 
   const enableToolchain = (record: ToolchainRecord, enabled: boolean) => {
-    settingsMessages.enableToolchain(vscode, record.kind, record.name, enabled)
+    enableToolchainRequest(record.kind, record.name, enabled)
   }
 
   const deleteToolchain = (record: ToolchainRecord) => {
     if (!globalThis.confirm(`删除 ${record.name}？此操作会从服务器能力组件清单移除该条目。`)) return
-    settingsMessages.deleteToolchain(vscode, record.kind, record.name)
+    deleteToolchainRecord(record.kind, record.name)
   }
 
   const renderToolchainEditor = () => {
@@ -493,7 +495,12 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
               <span>环境 Agent</span>
               <input value={environmentAgentLabel()} disabled />
             </label>
-            <RefreshButton class="btn-secondary" onClick={refreshToolchains} disabled={environmentSnapshot().running}>
+            <RefreshButton
+              class="btn-secondary"
+              loading={pageRefreshing("toolchains")}
+              onClick={refreshToolchains}
+              disabled={environmentSnapshot().running}
+            >
               刷新
             </RefreshButton>
             <button class="btn btn-secondary" onClick={() => runEnvironment("check")} disabled={!environmentSnapshot().entries.length || environmentSnapshot().running || !environmentAgentAvailable()}>
@@ -920,11 +927,11 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
           <div class="settings-section-heading">
             <span>能力包生成</span>
             <div class="settings-actions settings-actions--right">
-              <button class="btn btn-secondary" type="button" disabled={!capabilityPackageIngestState().agentRunId} onClick={refreshCapabilityPackageIngestStatus}>
+              <button class="btn btn-secondary" type="button" disabled={!capabilityPackageIngestState().agentRunId || operations.isBusy("capabilityIngestStatus")} onClick={refreshCapabilityPackageIngestStatus}>
                 <span class="codicon codicon-refresh" aria-hidden="true" />
                 刷新草案
               </button>
-              <button class="btn btn-primary" type="button" onClick={startCapabilityPackageIngest}>
+              <button class="btn btn-primary" type="button" disabled={operations.isBusy("capabilityIngestStart")} onClick={startCapabilityPackageIngest}>
                 <span class="codicon codicon-play" aria-hidden="true" />
                 生成草案
               </button>
@@ -934,8 +941,8 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
               </button>
             </div>
           </div>
-          <Show when={server.serverSettingsError()}>
-            <div class="settings-error">{server.serverSettingsError()}</div>
+          <Show when={operations.error("toolchainsCapabilitySave") || operations.error("serverSettings")}>
+            <div class="settings-error">{operations.error("toolchainsCapabilitySave") || operations.error("serverSettings")}</div>
           </Show>
           <Show when={capabilityPackageIngestState().error}>
             <div class="settings-error">{capabilityPackageIngestState().error}</div>
@@ -1100,13 +1107,13 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
             <span>Skills 发现</span>
             <div class="settings-actions settings-actions--right">
               <StatusBadge tone={skillsEnabled() ? "success" : "muted"}>{skillsEnabled() ? "启用" : "关闭"}</StatusBadge>
-              <button class="btn btn-primary" type="button" disabled={!capabilityDirty()} onClick={saveSkillsSettings}>
+              <button class="btn btn-primary" type="button" disabled={!capabilityDirty() || serverSettingsSaveBusy()} onClick={saveSkillsSettings}>
                 <span class="codicon codicon-save" aria-hidden="true" />
                 保存 Skills
               </button>
             </div>
           </div>
-          <Show when={capabilitySaved() && !capabilityDirty()}>
+          <Show when={operations.state("toolchainsCapabilitySave").status === "success" && !capabilityDirty()}>
             <div class="settings-success">Skills 设置已保存并重载。</div>
           </Show>
           <div class="settings-form-grid settings-form-grid--two">

@@ -3,7 +3,6 @@ import { t } from "../../i18n"
 import { DialogSurface } from "../../components/common/interaction"
 import { RefreshButton } from "../../components/common/RefreshButton"
 import { StatusBadge } from "../components/StatusBadge"
-import { settingsMessages } from "../settingsMessages"
 import type { SettingsController } from "../useSettingsController"
 import {
   PROVIDER_COMPAT_OPTIONS,
@@ -44,8 +43,11 @@ function normalizeProviderCompat(value: unknown): ProviderCompat {
 
 export const ProvidersTab: Component<TabProps> = (props) => {
   const {
-    vscode,
-    refreshAdmin,
+    operations,
+    pageRefreshing,
+    refreshPage,
+    serverSettingsSaveBusy,
+    providerAdminActionBusy,
     server,
     resetProviderForm,
     providerErrorMessage,
@@ -108,10 +110,12 @@ export const ProvidersTab: Component<TabProps> = (props) => {
     setThinkingEnabled,
     modelCapabilitiesStatus,
     refreshModelCapabilities,
+    saveCapabilitySyncSettings,
     modelCapabilityRecommendation,
     applyModelCapabilityRecommendation,
     saveModelPreset,
   } = props.controller
+  const providerActionBusy = () => providerAdminActionBusy()
 
   const [draftProviderActive, setDraftProviderActive] = createSignal(false)
   const [providerKind, setProviderKind] = createSignal<ProviderKind>("openai-compatible")
@@ -211,7 +215,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
   }
 
   const saveCapabilitySync = () => {
-    settingsMessages.updateServerSettings(vscode, {
+    saveCapabilitySyncSettings({
       settings: {
         model_capabilities: {
           enabled: capabilitySyncEnabled(),
@@ -415,7 +419,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
             <span class="codicon codicon-add" aria-hidden="true" />
             新增服务商
           </button>
-          <RefreshButton class="btn-secondary" onClick={refreshAdmin}>
+          <RefreshButton class="btn-secondary" loading={pageRefreshing("providers")} onClick={() => refreshPage("providers")}>
             刷新
           </RefreshButton>
         </div>
@@ -507,12 +511,12 @@ export const ProvidersTab: Component<TabProps> = (props) => {
             </div>
             <div class="settings-actions settings-actions--right">
               <Show when={selectedProvider()} fallback={<StatusBadge tone="success">保存后默认启用</StatusBadge>}>
-                <button class="btn btn-secondary" type="button" onClick={() => toggleProviderEnabled(!providerEnabled())} disabled={!adminUsable()}>
+                <button class="btn btn-secondary" type="button" onClick={() => toggleProviderEnabled(!providerEnabled())} disabled={!adminUsable() || providerActionBusy()}>
                   <span class={`codicon codicon-${providerEnabled() ? "circle-slash" : "pass"}`} aria-hidden="true" />
                   {providerEnabled() ? "停用" : "启用"}
                 </button>
               </Show>
-              <button class="btn btn-primary" type="button" onClick={saveProvider} disabled={!providerId().trim() || !adminUsable()}>
+              <button class="btn btn-primary" type="button" onClick={saveProvider} disabled={!providerId().trim() || !adminUsable() || providerActionBusy()}>
                 <span class="codicon codicon-save" aria-hidden="true" />
                 保存服务商
               </button>
@@ -684,7 +688,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
                   aria-expanded={customModelInlineOpen()}
                   aria-controls="provider-custom-model-form"
                   onClick={() => setCustomModelInlineOpen(!customModelInlineOpen())}
-                  disabled={!selectedProvider() || !adminUsable()}
+                  disabled={!selectedProvider() || !adminUsable() || providerActionBusy()}
                 >
                   <span class="codicon codicon-add" aria-hidden="true" />
                   添加自定义模型
@@ -692,9 +696,11 @@ export const ProvidersTab: Component<TabProps> = (props) => {
                 <RefreshButton
                   class="btn-secondary"
                   icon="cloud-download"
-                  onClick={() => requestProviderModels()}
-                  disabled={!selectedProvider() || !adminUsable()}
-                  loading={modelRefreshing()}
+                  onClick={() => {
+                    requestProviderModels()
+                  }}
+                  disabled={!selectedProvider() || !adminUsable() || providerActionBusy()}
+                  loading={operations.isBusy("providerModels") || modelRefreshing()}
                 >
                   刷新模型列表
                 </RefreshButton>
@@ -744,7 +750,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
                   />
                 </Show>
               </label>
-              <button class="btn btn-secondary" type="button" disabled={!capabilitySyncDirty()} onClick={saveCapabilitySync}>
+              <button class="btn btn-secondary" type="button" disabled={!capabilitySyncDirty() || serverSettingsSaveBusy() || providerActionBusy()} onClick={saveCapabilitySync}>
                 <span class="codicon codicon-save" aria-hidden="true" />
                 保存同步设置
               </button>
@@ -752,7 +758,8 @@ export const ProvidersTab: Component<TabProps> = (props) => {
                 class="btn-secondary"
                 icon="sync"
                 onClick={() => refreshModelCapabilities()}
-                disabled={!adminUsable()}
+                disabled={!adminUsable() || providerActionBusy()}
+                loading={operations.isBusy("modelCapabilities")}
               >
                 同步能力表
               </RefreshButton>
@@ -842,7 +849,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
                           </Show>
                         </span>
                         <span class="provider-model-row__actions">
-                          <button class="btn btn-secondary btn--compact" type="button" onClick={() => testProvider(model.id)} disabled={!selectedProvider() || !adminUsable()}>
+                          <button class="btn btn-secondary btn--compact" type="button" onClick={() => testProvider(model.id)} disabled={!selectedProvider() || !adminUsable() || providerActionBusy()}>
                             <span class="codicon codicon-beaker" aria-hidden="true" />
                             测试
                           </button>
@@ -850,7 +857,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
                             class="btn btn-secondary btn--compact"
                             type="button"
                             onClick={() => openModelDetail(model.id, custom ? "custom" : "fetched")}
-                            disabled={!selectedProvider() || !adminUsable()}
+                            disabled={!selectedProvider() || !adminUsable() || providerActionBusy()}
                           >
                             <span class="codicon codicon-settings-gear" aria-hidden="true" />
                             配置参数
@@ -879,7 +886,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
             </summary>
             <div class="settings-inline-form">
               <input class="setting-input" value={providerCopyId()} placeholder="复制后的服务商 ID" onInput={(event) => setProviderCopyId(event.currentTarget.value)} />
-              <button class="btn btn-secondary" type="button" onClick={copyProvider} disabled={!selectedProvider() || !adminUsable()}>
+              <button class="btn btn-secondary" type="button" onClick={copyProvider} disabled={!selectedProvider() || !adminUsable() || providerActionBusy()}>
                 <span class="codicon codicon-copy" aria-hidden="true" />
                 复制服务商
               </button>
@@ -888,7 +895,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
 
           <div class="settings-section settings-section--flat danger-zone">
             <div class="settings-section-heading">危险区</div>
-            <button class="btn btn-danger" type="button" onClick={deleteProvider} disabled={!selectedProvider() || !adminUsable()}>
+            <button class="btn btn-danger" type="button" onClick={deleteProvider} disabled={!selectedProvider() || !adminUsable() || providerActionBusy()}>
               <span class="codicon codicon-trash" aria-hidden="true" />
               删除服务商
             </button>
@@ -981,7 +988,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
                 <span>当前输出 {numberValue(recommendation().current_max_tokens, maxTokens())}</span>
                 <span>推荐输出 {numberValue(recommendation().max_tokens, maxTokens())}</span>
               </div>
-              <button class="btn btn-secondary" type="button" onClick={() => applyModelCapabilityRecommendation(profileId())} disabled={!profileId() || !adminUsable()}>
+              <button class="btn btn-secondary" type="button" onClick={() => applyModelCapabilityRecommendation(profileId())} disabled={!profileId() || !adminUsable() || providerActionBusy()}>
                 <span class="codicon codicon-check" aria-hidden="true" />
                 一键应用推荐值
               </button>
@@ -991,7 +998,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
             <button class="btn btn-secondary" type="button" onClick={closeModelDetail}>
               取消
             </button>
-            <button class="btn btn-primary" type="button" onClick={saveModelParameters} disabled={!profileModel().trim() || !adminUsable()}>
+            <button class="btn btn-primary" type="button" onClick={saveModelParameters} disabled={!profileModel().trim() || !adminUsable() || providerActionBusy()}>
               <span class="codicon codicon-save" aria-hidden="true" />
               保存参数
             </button>
