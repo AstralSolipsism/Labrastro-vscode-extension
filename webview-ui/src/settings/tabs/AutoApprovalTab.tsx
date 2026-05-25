@@ -1,8 +1,7 @@
-import { Component, For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js"
+import { Component, For, Show, createEffect, createMemo, createSignal } from "solid-js"
 import { t } from "../../i18n"
 import { RefreshButton } from "../../components/common/RefreshButton"
 import { StatusBadge } from "../components/StatusBadge"
-import { settingsMessages } from "../settingsMessages"
 import { approvalRuleDraftToPayload } from "../utils"
 import type { SettingsController } from "../useSettingsController"
 
@@ -50,7 +49,10 @@ function serverRulePlaceholder(type: string): string {
 
 export const AutoApprovalTab: Component<TabProps> = (props) => {
   const {
-    vscode,
+    operations,
+    pageRefreshing,
+    refreshPage,
+    saveAutoApprovalServerSettings,
     autoApprovalOptions,
     autoApprovalPlatform,
     allowedCommands,
@@ -97,8 +99,6 @@ export const AutoApprovalTab: Component<TabProps> = (props) => {
       })))
   })
 
-  onMount(() => settingsMessages.readServerSettings(vscode))
-
   const addServerRule = () => {
     setServerApprovalRules((rules) => [...rules, { action: "require_approval" }])
     markServerApprovalDirty()
@@ -132,7 +132,7 @@ export const AutoApprovalTab: Component<TabProps> = (props) => {
 
   const saveServerApproval = () => {
     const rules = serverApprovalRules().map(approvalRuleDraftToPayload)
-    settingsMessages.updateServerSettings(vscode, {
+    saveAutoApprovalServerSettings({
       settings: {
         approval: {
           default_mode: serverApprovalDefaultMode(),
@@ -193,7 +193,11 @@ export const AutoApprovalTab: Component<TabProps> = (props) => {
         <div>
           <h2>自动批准</h2>
         </div>
-        <RefreshButton class="btn-secondary" onClick={() => settingsMessages.getAutoApproval(vscode)}>
+        <RefreshButton
+          class="btn-secondary"
+          loading={pageRefreshing("autoApproval")}
+          onClick={() => refreshPage("autoApproval")}
+        >
           刷新
         </RefreshButton>
       </div>
@@ -277,16 +281,16 @@ export const AutoApprovalTab: Component<TabProps> = (props) => {
             <span class="codicon codicon-add" aria-hidden="true" />
             新增规则
           </button>
-          <button class="btn btn-primary" type="button" disabled={!serverApprovalDirty()} onClick={saveServerApproval}>
+          <button class="btn btn-primary" type="button" disabled={!serverApprovalDirty() || props.controller.serverSettingsSaveBusy()} onClick={saveServerApproval}>
             <span class="codicon codicon-save" aria-hidden="true" />
             保存服务端策略
           </button>
         </div>
-        <Show when={serverApprovalSaved() && !serverApprovalDirty()}>
+        <Show when={operations.state("autoApprovalSave").status === "success" && !serverApprovalDirty()}>
           <div class="settings-success">服务端审批策略已保存并重载。</div>
         </Show>
-        <Show when={server.serverSettingsError()}>
-          <div class="settings-error">{server.serverSettingsError()}</div>
+        <Show when={operations.error("autoApprovalSave") || operations.error("serverSettings")}>
+          <div class="settings-error">{operations.error("autoApprovalSave") || operations.error("serverSettings")}</div>
         </Show>
         <Show when={serverApprovalRules().length} fallback={<p class="settings-empty-note">暂无服务端审批规则，将使用默认动作。</p>}>
           <div class="settings-rule-table">

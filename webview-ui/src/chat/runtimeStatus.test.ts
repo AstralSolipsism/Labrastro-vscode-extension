@@ -27,36 +27,49 @@ describe("resolveRuntimeStatusUiAction", () => {
     })
   })
 
-  it("routes main agent queue waits into a lightweight chat message", () => {
+  it("routes main agent queue waits into AgentRun state", () => {
     expect(resolveRuntimeStatusUiAction({
       phase: "agent_queue",
       status: "queued",
       agent_type: "chat",
     })).toEqual({
-      kind: "append_text",
-      prefix: "runtime-agent-queue-chat",
-      textKey: "runtime.agentQueue.chatWaiting",
+      kind: "agent_run_status",
+      state: {
+        phase: "queued",
+        kind: "chat",
+        updatedAt: expect.any(Number),
+      },
     })
   })
 
-  it("routes Delegated AgentRun queue waits into a lightweight delegated-run message", () => {
+  it("routes Delegated AgentRun queue waits into AgentRun state", () => {
     expect(resolveRuntimeStatusUiAction({
       phase: "agent_queue",
       status: "queued",
       agent_type: "delegated_run:review",
     })).toEqual({
-      kind: "append_text",
-      prefix: "runtime-agent-queue-delegated-run",
-      textKey: "runtime.agentQueue.delegatedRunWaiting",
+      kind: "agent_run_status",
+      state: {
+        phase: "queued",
+        kind: "delegated_run",
+        updatedAt: expect.any(Number),
+      },
     })
   })
 
-  it("ignores agent running slot-acquired notifications", () => {
+  it("routes agent running slot-acquired notifications into AgentRun state", () => {
     expect(resolveRuntimeStatusUiAction({
       phase: "agent_queue",
       status: "running",
       agent_type: "chat",
-    })).toEqual({ kind: "ignore" })
+    })).toEqual({
+      kind: "agent_run_status",
+      state: {
+        phase: "running",
+        kind: "chat",
+        updatedAt: expect.any(Number),
+      },
+    })
   })
 
   it("falls back to generic view rendering when shell queue events cannot be mapped safely", () => {

@@ -23,7 +23,7 @@ export const RefreshButton: Component<RefreshButtonProps> = (props) => {
     if (resetTimer) window.clearTimeout(resetTimer)
   })
 
-  const loading = () => props.loading === true || localLoading()
+  const loading = () => props.loading === true || (props.loading === undefined && localLoading())
   const disabled = () => props.disabled === true || loading()
 
   const scheduleReset = () => {
@@ -36,7 +36,7 @@ export const RefreshButton: Component<RefreshButtonProps> = (props) => {
       event.preventDefault()
       return
     }
-    setLocalLoading(true)
+    if (props.loading === undefined) setLocalLoading(true)
     try {
       const result = props.onClick?.(event)
       if (result && typeof (result as Promise<unknown>).then === "function") {

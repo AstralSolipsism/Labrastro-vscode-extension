@@ -240,6 +240,10 @@ export const settingsMessages = {
     port.postMessage({ type: "agentRun.submit", payload })
   },
 
+  retryAgentRun(port: SettingsMessagePort, payload: Record<string, unknown>): void {
+    port.postMessage({ type: "agentRun.retry", payload })
+  },
+
   agentRunEvents(port: SettingsMessagePort, payload: Record<string, unknown>): void {
     port.postMessage({ type: "agentRun.events", payload })
   },
@@ -248,7 +252,4 @@ export const settingsMessages = {
     port.postMessage({ type: "agentRun.cancel", payload })
   },
 
-  retryAgentRun(port: SettingsMessagePort, payload: Record<string, unknown>): void {
-    port.postMessage({ type: "agentRun.retry", payload })
-  },
 }

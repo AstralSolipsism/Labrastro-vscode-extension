@@ -112,7 +112,7 @@ export const AccountsTab: Component<TabProps> = (props) => {
           </div>
           <div class="account-hero__actions">
             <StatusBadge tone={roleTone(role())}>{role()}</StatusBadge>
-            <RefreshButton class="btn-secondary" onClick={c.refreshAccounts}>
+            <RefreshButton class="btn-secondary" loading={c.pageRefreshing("accounts")} onClick={c.refreshAccounts}>
               刷新
             </RefreshButton>
           </div>
@@ -368,7 +368,7 @@ export const AccountsTab: Component<TabProps> = (props) => {
                     onInput={(e) => c.setAuditEventType(e.currentTarget.value)}
                   />
                 </label>
-                <RefreshButton class="btn-secondary" icon="search" loadingLabel="查询中…" onClick={c.refreshAuthAudit}>
+                <RefreshButton class="btn-secondary" icon="search" loading={c.operations.isBusy("authAudit")} loadingLabel="查询中…" onClick={c.refreshAuthAudit}>
                   查询
                 </RefreshButton>
               </div>

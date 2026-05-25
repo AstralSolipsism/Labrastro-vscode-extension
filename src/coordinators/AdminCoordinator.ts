@@ -3,9 +3,10 @@ import type { ConnectionState, LabrastroRemoteClient } from "../LabrastroRemoteC
 import type { PostMessage } from "../WebviewBus"
 import type { WebviewToHostMessage } from "../protocol/messages"
 import { errorMessage, objectValue, numberValue, postAuthError, stringValue } from "../controller-utils"
-import { isRemoteError } from "../remote-errors"
+import { classifyRemoteError, isRemoteError } from "../remote-errors"
 
 type AutoApprovalOptionKey = "readOnly" | "write" | "delete" | "execute" | "mcp" | "unknown"
+type AdminErrorScope = "adminState" | "adminAction" | "peerDiagnostics"
 
 interface AutoApprovalState {
   options: Record<AutoApprovalOptionKey, boolean>
@@ -39,6 +40,7 @@ export interface AdminCoordinatorOptions {
   context: vscode.ExtensionContext
   connectionErrorState: (message: string, options?: { hostUrlSaveRequested?: string }) => ConnectionState
   postConnectionState: (post: PostMessage) => Promise<void>
+  postConnectionStateIfAuthRequired: (error: unknown, post: PostMessage) => Promise<void>
   postAdminState: (post: PostMessage) => Promise<void>
   refreshBackendFeatures: (post?: PostMessage) => Promise<void>
   refreshToolchainState: (post: PostMessage) => Promise<void>
@@ -237,7 +239,7 @@ export class AdminCoordinator {
           post({ type: "peerDiagnosticsLogging.state", payload })
           post({ type: "admin.actionResult", payload: { ok: true, action: "peerDiagnosticsLogging.open" } })
         } catch (error) {
-          post({ type: "admin.error", message: errorMessage(error) })
+          await this.postAdminError(post, error, "peerDiagnostics")
         }
         return true
       case "peerDiagnosticsLogging.clear":
@@ -246,7 +248,7 @@ export class AdminCoordinator {
           post({ type: "peerDiagnosticsLogging.state", payload })
           post({ type: "admin.actionResult", payload: { ok: true, action: "peerDiagnosticsLogging.clear" } })
         } catch (error) {
-          post({ type: "admin.error", message: errorMessage(error) })
+          await this.postAdminError(post, error, "peerDiagnostics")
         }
         return true
       case "admin.refresh":
@@ -258,6 +260,7 @@ export class AdminCoordinator {
           post({ type: "serverSettings.state", payload: await this.options.client.serverSettingsRead() })
         } catch (error) {
           post({ type: "serverSettings.error", message: errorMessage(error) })
+          await this.refreshConnectionOnAuthBoundary(error, post)
         }
         return true
       case "serverSettings.update":
@@ -268,6 +271,7 @@ export class AdminCoordinator {
           await this.options.postAdminState(post)
         } catch (error) {
           post({ type: "serverSettings.error", message: errorMessage(error) })
+          await this.refreshConnectionOnAuthBoundary(error, post)
         }
         return true
       case "diagnostics.toolDiagnostics.stats":
@@ -278,6 +282,7 @@ export class AdminCoordinator {
           })
         } catch (error) {
           post({ type: "diagnostics.toolDiagnostics.error", message: errorMessage(error) })
+          await this.refreshConnectionOnAuthBoundary(error, post)
         }
         return true
       case "modelCapabilities.status":
@@ -288,6 +293,7 @@ export class AdminCoordinator {
           post({ type: "modelCapabilities.state", payload: await this.options.client.modelCapabilitiesList(objectValue(message.payload)) })
         } catch (error) {
           post({ type: "modelCapabilities.error", message: errorMessage(error) })
+          await this.refreshConnectionOnAuthBoundary(error, post)
         }
         return true
       case "modelCapabilities.refresh":
@@ -298,6 +304,7 @@ export class AdminCoordinator {
           await this.options.postAdminState(post)
         } catch (error) {
           post({ type: "modelCapabilities.error", message: errorMessage(error) })
+          await this.refreshConnectionOnAuthBoundary(error, post)
         }
         return true
       case "modelCapabilities.apply":
@@ -313,6 +320,7 @@ export class AdminCoordinator {
           })
         } catch (error) {
           post({ type: "capabilityPackage.error", message: errorMessage(error) })
+          await this.refreshConnectionOnAuthBoundary(error, post)
         }
         return true
       case "capabilityPackage.ingest.status":
@@ -323,6 +331,7 @@ export class AdminCoordinator {
           })
         } catch (error) {
           post({ type: "capabilityPackage.error", message: errorMessage(error) })
+          await this.refreshConnectionOnAuthBoundary(error, post)
         }
         return true
       case "capabilityPackage.draft.accept":
@@ -432,7 +441,19 @@ export class AdminCoordinator {
       post({ type: "modelCapabilities.state", payload: await this.options.client.modelCapabilitiesStatus() })
     } catch (error) {
       post({ type: "modelCapabilities.error", message: errorMessage(error) })
+      await this.refreshConnectionOnAuthBoundary(error, post)
     }
+  }
+
+  private async refreshConnectionOnAuthBoundary(error: unknown, post: PostMessage): Promise<void> {
+    if (classifyRemoteError(error) === "auth_required" || isRemoteError(error, undefined, 403)) {
+      await this.options.postConnectionStateIfAuthRequired(error, post)
+    }
+  }
+
+  private async postAdminError(post: PostMessage, error: unknown, scope?: AdminErrorScope): Promise<void> {
+    post(adminErrorPayload(error, scope))
+    await this.refreshConnectionOnAuthBoundary(error, post)
   }
 
   private async updateAutoApprovalState(message: Record<string, unknown>): Promise<void> {
@@ -474,6 +495,52 @@ export class AdminCoordinator {
       payload: this.options.client.peerDiagnosticsLoggingState(),
     })
   }
+}
+
+function adminErrorPayload(error: unknown, scope?: AdminErrorScope): Record<string, unknown> {
+  const message = adminErrorMessage(error)
+  const category = adminErrorCategory(error)
+  const clearsState = adminErrorClearsState(category, scope)
+  const payload: Record<string, unknown> = {
+    type: "admin.error",
+    message,
+    category,
+    stale: clearsState,
+    clearsState,
+  }
+  if (scope) {
+    payload.scope = scope
+  }
+  if (isRemoteError(error)) {
+    payload.status = error.status
+    payload.code = error.code
+    payload.body = error.body
+  }
+  return payload
+}
+
+function adminErrorMessage(error: unknown): string {
+  if (!isRemoteError(error)) return errorMessage(error)
+  const detail = stringValue(objectValue(error.body).message)
+  if (!detail || error.message.includes(detail)) return error.message
+  return `${error.message}: ${detail}`
+}
+
+function adminErrorCategory(error: unknown): "unauthenticated" | "forbidden" | "unavailable" | "network" | "unknown" {
+  if (isRemoteError(error) && error.status === 403) return "forbidden"
+  if (classifyRemoteError(error) === "auth_required") return "unauthenticated"
+  if (isRemoteError(error) && [404, 408, 429, 500, 502, 503, 504].includes(error.status)) return "unavailable"
+  if (classifyRemoteError(error) === "transient_network") return "network"
+  return "unknown"
+}
+
+function adminErrorClearsState(
+  category: "unauthenticated" | "forbidden" | "unavailable" | "network" | "unknown",
+  scope?: AdminErrorScope
+): boolean {
+  if (category === "unauthenticated" || category === "forbidden") return true
+  if (scope === "adminAction" || scope === "peerDiagnostics") return false
+  return scope === "adminState" && (category === "unavailable" || category === "network")
 }
 
 function normalizeSendDuringRunMode(value: unknown): "guide" | "queue" {

@@ -72,6 +72,34 @@ describe("session history", () => {
     expect(shouldPreserveExistingSessionContent(bundle([]), undefined)).toBe(false)
   })
 
+  it("adopts remote session metadata while preserving local draft content", () => {
+    const local = bundle([
+      {
+        userMessage: {
+          id: "u1",
+          role: "user",
+          text: "start a fresh chat",
+          parts: [],
+          timestamp: 0,
+        },
+        assistantMessages: [],
+      },
+    ])
+    local.session.id = "session-local"
+    local.session.title = "start a fresh chat"
+
+    const remote = bundle([])
+    remote.session.id = "remote-1"
+    remote.session.title = "remote title"
+
+    const merged = mergeRemoteBundlePreservingLocalContent(remote, local)
+
+    expect(merged.session.id).toBe("remote-1")
+    expect(merged.session.title).toBe("remote title")
+    expect(merged.turns).toHaveLength(1)
+    expect(merged.turns[0].userMessage.text).toBe("start a fresh chat")
+  })
+
   it("preserves structured local transcript when the remote bundle falls back to plain messages", () => {
     const local = bundle([
       {
@@ -119,8 +147,8 @@ describe("session history", () => {
             parts: [
               {
                 id: "text-1",
-                type: "text",
-                text: "done",
+                type: "assistant_text",
+                markdown: "done",
               },
             ],
             timestamp: 1,
@@ -173,8 +201,8 @@ describe("session history", () => {
             parts: [
               {
                 id: "p2",
-                type: "text",
-                text: "Now writing the comprehensive synthesis document.",
+                type: "assistant_text",
+                markdown: "Now writing the comprehensive synthesis document.",
               },
             ],
             timestamp: 2,

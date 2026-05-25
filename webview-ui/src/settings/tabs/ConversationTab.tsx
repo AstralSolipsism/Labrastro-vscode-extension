@@ -1,9 +1,8 @@
-import { Component, For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js"
-import { t, locale, setLocale, LOCALES, type Locale } from "../../i18n"
+import { Component, For, Show, createEffect, createMemo, createSignal } from "solid-js"
+import { t, locale, LOCALES, type Locale } from "../../i18n"
 import { RefreshButton } from "../../components/common/RefreshButton"
 import { ChoiceMultiSelect } from "../components/ChoiceMultiSelect"
 import { StatusBadge } from "../components/StatusBadge"
-import { settingsMessages } from "../settingsMessages"
 import type { SettingsController } from "../useSettingsController"
 
 interface TabProps { controller: SettingsController & Record<string, any> }
@@ -43,9 +42,14 @@ function makeModeId(existing: string[]): string {
 
 export const ConversationTab: Component<TabProps> = (props) => {
   const {
-    refreshAdmin,
+    operations,
+    pageRefreshing,
+    refreshPage,
+    saveConversationSettings: saveConversationSettingsRequest,
+    saveReasoningDisplay,
+    updateChatSendDuringRunMode,
+    setConversationLocale,
     registeredToolOptions,
-    vscode,
     server,
   } = props.controller
 
@@ -107,25 +111,12 @@ export const ConversationTab: Component<TabProps> = (props) => {
     if (selectedMode() && !ids.includes(selectedMode())) setSelectedMode(ids[0] || "")
   })
 
-  onMount(() => {
-    settingsMessages.readServerSettings(vscode)
-    settingsMessages.getReasoningDisplay(vscode)
-    settingsMessages.getChatSendDuringRunMode(vscode)
-  })
-
-  const refreshConversationSettings = () => {
-    refreshAdmin()
-    settingsMessages.readServerSettings(vscode)
-    settingsMessages.getReasoningDisplay(vscode)
-    settingsMessages.getChatSendDuringRunMode(vscode)
-  }
-
   const updateReasoningDefaultOpen = (defaultOpen: boolean) => {
-    settingsMessages.saveReasoningDisplay(vscode, defaultOpen)
+    saveReasoningDisplay(defaultOpen)
   }
 
   const updateSendDuringRunMode = (mode: "guide" | "queue") => {
-    settingsMessages.updateChatSendDuringRunMode(vscode, mode)
+    updateChatSendDuringRunMode(mode)
   }
 
   const updateMode = (patch: Partial<ModeDraft>) => {
@@ -188,7 +179,7 @@ export const ConversationTab: Component<TabProps> = (props) => {
     const active = activeMode() && profiles[activeMode()]
       ? activeMode()
       : Object.keys(profiles)[0]
-    settingsMessages.updateServerSettings(vscode, {
+    saveConversationSettingsRequest({
       settings: {
         modes: { active, profiles },
         prompt: { system_append: globalSystemAppend() },
@@ -206,20 +197,24 @@ export const ConversationTab: Component<TabProps> = (props) => {
           <p class="setting-description">{t("conversation.desc")}</p>
         </div>
         <div class="settings-actions settings-actions--right">
-          <RefreshButton class="btn-secondary" onClick={refreshConversationSettings}>
+          <RefreshButton
+            class="btn-secondary"
+            loading={pageRefreshing("conversation")}
+            onClick={() => refreshPage("conversation")}
+          >
             {t("common.refresh")}
           </RefreshButton>
-          <button class="btn btn-primary" type="button" disabled={!dirty()} onClick={saveConversationSettings}>
+          <button class="btn btn-primary" type="button" disabled={!dirty() || props.controller.serverSettingsSaveBusy()} onClick={saveConversationSettings}>
             <span class="codicon codicon-save" aria-hidden="true" />
             {t("common.save")}
           </button>
         </div>
       </div>
 
-      <Show when={server.serverSettingsError()}>
-        <div class="settings-error">{server.serverSettingsError()}</div>
+      <Show when={operations.error("conversationSave") || operations.error("serverSettings")}>
+        <div class="settings-error">{operations.error("conversationSave") || operations.error("serverSettings")}</div>
       </Show>
-      <Show when={saved() && !dirty()}>
+      <Show when={operations.state("conversationSave").status === "success" && !dirty()}>
         <div class="settings-success">{t("conversation.saved")}</div>
       </Show>
 
@@ -234,7 +229,7 @@ export const ConversationTab: Component<TabProps> = (props) => {
               <button
                 type="button"
                 class={`language-option ${locale() === loc.id ? "language-option--active" : ""}`}
-                onClick={() => setLocale(loc.id as Locale, vscode.postMessage)}
+                onClick={() => setConversationLocale(loc.id as Locale)}
               >
                 <span class="language-option__native">{loc.nativeLabel}</span>
                 <span class="language-option__label">{loc.label}</span>

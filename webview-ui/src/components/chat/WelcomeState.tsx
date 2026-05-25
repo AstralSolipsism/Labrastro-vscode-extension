@@ -1,9 +1,11 @@
 import { Component, For, Show } from "solid-js"
 import { t } from "../../i18n"
 import type { MockSession } from "./mock-data"
+import type { SessionListState } from "../../context/trace"
 
 interface WelcomeStateProps {
   recentSessions: MockSession[]
+  sessionListState: SessionListState
   onSelectSession?: (id: string) => void
 }
 
@@ -19,6 +21,12 @@ function formatRelativeDate(dateStr: string): string {
 }
 
 export const WelcomeState: Component<WelcomeStateProps> = (props) => {
+  const historyNotice = () => {
+    if (props.recentSessions.length > 0) return ""
+    if (props.sessionListState.status === "idle" || props.sessionListState.status === "empty") return ""
+    return props.sessionListState.message
+  }
+
   return (
     <div class="welcome-state">
       <div class="welcome-state__mark">
@@ -43,6 +51,9 @@ export const WelcomeState: Component<WelcomeStateProps> = (props) => {
             )}
           </For>
         </div>
+      </Show>
+      <Show when={historyNotice()}>
+        <p class="welcome-state__history-note">{historyNotice()}</p>
       </Show>
     </div>
   )

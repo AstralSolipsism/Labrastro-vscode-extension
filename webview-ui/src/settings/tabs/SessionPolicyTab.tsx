@@ -1,8 +1,7 @@
-import { Component, Show, createEffect, createMemo, createSignal, onMount } from "solid-js"
+import { Component, Show, createEffect, createMemo, createSignal } from "solid-js"
 import { t } from "../../i18n"
 import { RefreshButton } from "../../components/common/RefreshButton"
 import { StatusBadge } from "../components/StatusBadge"
-import { settingsMessages } from "../settingsMessages"
 import type { SettingsController } from "../useSettingsController"
 
 interface TabProps { controller: SettingsController & Record<string, any> }
@@ -24,7 +23,7 @@ function stringValue(value: unknown, fallback = ""): string {
 }
 
 export const SessionPolicyTab: Component<TabProps> = (props) => {
-  const { vscode, server } = props.controller
+  const { operations, pageRefreshing, refreshPage, saveSessionPolicySettings, server, serverSettingsSaveBusy } = props.controller
   const [dirty, setDirty] = createSignal(false)
   const [saved, setSaved] = createSignal(false)
 
@@ -87,10 +86,8 @@ export const SessionPolicyTab: Component<TabProps> = (props) => {
     syncFromSettings()
   })
 
-  onMount(() => settingsMessages.readServerSettings(vscode))
-
   const save = () => {
-    settingsMessages.updateServerSettings(vscode, {
+    saveSessionPolicySettings({
       settings: {
         tool_output: {
           max_chars: Math.max(1, Math.floor(toolMaxChars())),
@@ -128,20 +125,20 @@ export const SessionPolicyTab: Component<TabProps> = (props) => {
           <p class="setting-description">{t("sessionPolicy.desc")}</p>
         </div>
         <div class="settings-actions settings-actions--right">
-          <RefreshButton class="btn-secondary" onClick={() => settingsMessages.readServerSettings(vscode)}>
+          <RefreshButton class="btn-secondary" loading={pageRefreshing("sessionPolicy")} onClick={() => refreshPage("sessionPolicy")}>
             {t("common.refresh")}
           </RefreshButton>
-          <button class="btn btn-primary" type="button" disabled={!dirty()} onClick={save}>
+          <button class="btn btn-primary" type="button" disabled={!dirty() || serverSettingsSaveBusy()} onClick={save}>
             <span class="codicon codicon-save" aria-hidden="true" />
             {t("common.save")}
           </button>
         </div>
       </div>
 
-      <Show when={server.serverSettingsError()}>
-        <div class="settings-error">{server.serverSettingsError()}</div>
+      <Show when={operations.error("sessionPolicySave") || operations.error("serverSettings")}>
+        <div class="settings-error">{operations.error("sessionPolicySave") || operations.error("serverSettings")}</div>
       </Show>
-      <Show when={saved() && !dirty()}>
+      <Show when={operations.state("sessionPolicySave").status === "success" && !dirty()}>
         <div class="settings-success">{t("sessionPolicy.saved")}</div>
       </Show>
 

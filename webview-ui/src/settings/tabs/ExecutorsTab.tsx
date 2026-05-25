@@ -53,6 +53,7 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
     executorLocationLabel,
     stringValue,
   } = props.controller
+  const connectionReady = () => connectionStatus() === "ready" && server.connectionState().authenticated === true
 
   return (
     <div class="settings-page settings-page--narrow">
@@ -88,14 +89,14 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
         <div class="executor-status-card">
           <div class="executor-status-card__icon">
             <span
-              class={`codicon codicon-${connectionStatus() === "ready" ? "pass-filled" : connectionStatus() === "error" ? "error" : "circle-large-outline"}`}
+              class={`codicon codicon-${connectionReady() ? "pass-filled" : connectionStatus() === "error" ? "error" : "circle-large-outline"}`}
               aria-hidden="true"
-              style={connectionStatus() === "ready" ? "color:var(--ez-success)" : connectionStatus() === "error" ? "color:var(--ez-error)" : "color:var(--ez-muted)"}
+              style={connectionReady() ? "color:var(--ez-success)" : connectionStatus() === "error" ? "color:var(--ez-error)" : "color:var(--ez-muted)"}
             />
           </div>
           <div class="executor-status-card__body">
             <small>{t("executor.status.connectionStatus")}</small>
-            <strong>{connectionStatus() === "ready" ? t("executor.status.connected") : connectionStatus() === "error" ? t("executor.status.unavailable") : t("executor.status.disconnected")}</strong>
+            <strong>{connectionReady() ? t("executor.status.connected") : connectionStatus() === "error" ? t("executor.status.unavailable") : t("executor.status.disconnected")}</strong>
           </div>
         </div>
       </section>

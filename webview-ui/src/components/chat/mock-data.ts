@@ -4,88 +4,19 @@
   TraceNode,
   TraceNodeKind,
   TraceNodeStatus,
-  ToolExecutionStatus,
 } from "../../types/trace"
-import type { ShellOutputChunk } from "../../utils/shell-tool-output"
 import type { TimelineEvent } from "./TaskTimeline"
+import type { TranscriptItem } from "./transcript-model"
+export type { TranscriptItem, ToolActivityItem } from "./transcript-model"
 
 export type MockSessionKind = "main" | "fork" | "delegated_run"
 export type MockSessionState = "active" | "success" | "streaming" | "abandoned" | "cancelled" | "error"
-
-export interface MockPart {
-  id: string
-  type: "text" | "reasoning" | "tool" | "trace" | "session" | "remote_status" | "terminal" | "view" | "context_event" | "memory_context" | "ui_event" | "parallel_tools" | "parallel_sessions"
-  eventKey?: string
-  sessionEventSeq?: number
-  historyCutIndex?: number
-  text?: string
-  textFormat?: "plain" | "markdown"
-  textStreamKey?: string
-  reasoningText?: string
-  reasoningFormat?: "plain" | "markdown"
-  reasoningStreamKey?: string
-  tool?: string
-  toolCallId?: string
-  toolSource?: string
-  toolInput?: Record<string, unknown>
-  toolOutput?: string
-  toolOutputFormat?: "plain" | "markdown" | "terminal" | "json"
-  toolStream?: string
-  toolOutputChunks?: ShellOutputChunk[]
-  toolFinalOutput?: string
-  toolOutputTruncated?: boolean
-  toolResultMeta?: Record<string, unknown>
-  toolStartedAt?: number
-  toolEndedAt?: number
-  approvalId?: string
-  approvalReason?: string
-  approvalResultReason?: string
-  approvalDecision?: string
-  approvalSections?: Record<string, unknown>[]
-  approvalContent?: string
-  status?: ToolExecutionStatus
-  remotePeerId?: string
-  remoteMainAgentId?: string
-  remoteAgentConfigId?: string
-  remoteSessionId?: string
-  remoteFingerprint?: string
-  remoteMode?: string
-  remoteModel?: string
-  remoteWorkspaceRoot?: string
-  terminalTitle?: string
-  terminalContent?: string
-  viewTitle?: string
-  viewType?: string
-  viewLevel?: string
-  viewPayload?: Record<string, unknown>
-  contextTitle?: string
-  contextPayload?: Record<string, unknown>
-  memoryTitle?: string
-  memoryPayload?: Record<string, unknown>
-  uiEventKind?: string
-  uiEventLevel?: string
-  uiEventTitle?: string
-  uiEventPayload?: Record<string, unknown>
-  parallelTitle?: string
-  parallelSummary?: string
-  parallelItems?: MockPart[]
-  parallelGroupId?: string
-  traceNodeId?: string
-  traceNodeKind?: TraceNodeKind
-  traceNodeStatus?: TraceNodeStatus
-  traceTitle?: string
-  sessionId?: string
-  sessionTitle?: string
-  sessionKind?: MockSessionKind
-  sessionState?: MockSessionState
-  sessionSummary?: string
-}
 
 export interface MockMessage {
   id: string
   role: "user" | "assistant"
   text: string
-  parts: MockPart[]
+  parts: TranscriptItem[]
   timestamp: number
   historyMessageIndex?: number
   historyCutIndex?: number
@@ -280,7 +211,7 @@ export const mockTurns: MockTurn[] = [
           {
             id: "part-plan",
             type: "trace",
-            traceTitle: "MVP 方向",
+            title: "MVP 方向",
             text: "侧边栏保持聊天主路径，完整 DAG 延后到独立深查页。",
             traceNodeId: "trace-plan-1",
             traceNodeKind: "plan_update",
@@ -290,8 +221,8 @@ export const mockTurns: MockTurn[] = [
             id: "part-tool-1",
             type: "tool",
             tool: "list_directory",
-            toolInput: { path: "labrastro-vscode" },
-            toolOutput: "已确认 Solid Webview、mock 数据和 Trace 组件位置。",
+            input: { path: "labrastro-vscode" },
+            output: "已确认 Solid Webview、mock 数据和 Trace 组件位置。",
             status: "returned",
             traceNodeId: "trace-tool-1",
             traceNodeKind: "tool_call",
@@ -301,8 +232,8 @@ export const mockTurns: MockTurn[] = [
             id: "part-tool-2",
             type: "tool",
             tool: "apply_patch",
-            toolInput: { files: ["ChatView.tsx", "chat.css"] },
-            toolOutput: "正在收敛布局、图标和轻量轨迹条。",
+            input: { files: ["ChatView.tsx", "chat.css"] },
+            output: "正在收敛布局、图标和轻量轨迹条。",
             status: "running",
             traceNodeId: "trace-edit-1",
             traceNodeKind: "file_edit",
@@ -310,8 +241,8 @@ export const mockTurns: MockTurn[] = [
           },
           {
             id: "part-text",
-            type: "text",
-            text: "主对话区会保持紧凑：任务头、消息流、批准条、输入框和底部控制行。",
+            type: "assistant_text",
+            markdown: "主对话区会保持紧凑：任务头、消息流、批准条、输入框和底部控制行。",
           },
         ],
         timestamp: Date.now() - 90000,

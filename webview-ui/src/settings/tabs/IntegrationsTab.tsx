@@ -1,7 +1,6 @@
-import { Component, Show, createEffect, createMemo, createSignal, onMount } from "solid-js"
+import { Component, Show, createEffect, createMemo, createSignal } from "solid-js"
 import { RefreshButton } from "../../components/common/RefreshButton"
 import { StatusBadge } from "../components/StatusBadge"
-import { settingsMessages } from "../settingsMessages"
 import type { SettingsController } from "../useSettingsController"
 
 interface TabProps { controller: SettingsController & Record<string, any> }
@@ -23,7 +22,7 @@ function boolValue(value: unknown, fallback = false): boolean {
 }
 
 export const IntegrationsTab: Component<TabProps> = (props) => {
-  const { vscode, server, refreshAdmin } = props.controller
+  const { operations, pageRefreshing, refreshPage, saveIntegrationsSettings, server, serverSettingsSaveBusy } = props.controller
   const [dirty, setDirty] = createSignal(false)
   const [saved, setSaved] = createSignal(false)
 
@@ -65,11 +64,6 @@ export const IntegrationsTab: Component<TabProps> = (props) => {
     setReconcileIntervalSec(Math.max(1, Math.floor(numberValue(github.reconcile_interval_sec, 300))))
   })
 
-  onMount(() => {
-    settingsMessages.readServerSettings(vscode)
-    refreshAdmin()
-  })
-
   const save = () => {
     const github: Record<string, unknown> = {
       enabled: enabled(),
@@ -83,7 +77,7 @@ export const IntegrationsTab: Component<TabProps> = (props) => {
     if (webhookSecret().trim()) {
       github.webhook_secret = webhookSecret().trim()
     }
-    settingsMessages.updateServerSettings(vscode, { settings: { github } })
+    saveIntegrationsSettings({ settings: { github } })
     setWebhookSecret("")
     setDirty(false)
     setSaved(true)
@@ -97,20 +91,20 @@ export const IntegrationsTab: Component<TabProps> = (props) => {
           <p class="setting-description">配置可选的外部服务集成。</p>
         </div>
         <div class="settings-actions settings-actions--right">
-          <RefreshButton class="btn-secondary" onClick={() => { settingsMessages.readServerSettings(vscode); refreshAdmin() }}>
+          <RefreshButton class="btn-secondary" loading={pageRefreshing("integrations")} onClick={() => refreshPage("integrations")}>
             刷新
           </RefreshButton>
-          <button class="btn btn-primary" type="button" disabled={!dirty()} onClick={save}>
+          <button class="btn btn-primary" type="button" disabled={!dirty() || serverSettingsSaveBusy()} onClick={save}>
             <span class="codicon codicon-save" aria-hidden="true" />
             保存
           </button>
         </div>
       </div>
 
-      <Show when={server.serverSettingsError()}>
-        <div class="settings-error">{server.serverSettingsError()}</div>
+      <Show when={operations.error("integrationsSave") || operations.error("serverSettings")}>
+        <div class="settings-error">{operations.error("integrationsSave") || operations.error("serverSettings")}</div>
       </Show>
-      <Show when={saved() && !dirty()}>
+      <Show when={operations.state("integrationsSave").status === "success" && !dirty()}>
         <div class="settings-success">集成设置已保存并重载。</div>
       </Show>
 

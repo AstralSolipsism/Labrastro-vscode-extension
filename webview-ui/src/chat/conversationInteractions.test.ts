@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
-import type { MockMessage, MockPart, MockTurn } from "../components/chat/mock-data"
+import type { MockMessage, MockTurn } from "../components/chat/mock-data"
+import type { ToolActivityItem, TranscriptItem } from "../components/chat/transcript-model"
 import {
   canEditForkMessage,
   canForkMessage,
@@ -13,7 +14,7 @@ import {
   keepThroughIndexForUserEdit,
 } from "./conversationInteractions"
 
-function assistant(parts: MockPart[]): MockMessage {
+function assistant(parts: TranscriptItem[]): MockMessage {
   return {
     id: "assistant-1",
     role: "assistant",
@@ -55,20 +56,20 @@ describe("conversation interactions", () => {
     })).toBe(3)
     expect(canForkMessage(assistant([]))).toBe(true)
     expect(keepThroughIndexForMessageFork(assistant([]))).toBe(2)
-    expect(canForkPart({ id: "tool-1", type: "tool", historyCutIndex: 5 })).toBe(true)
-    expect(keepThroughIndexForPartFork({ id: "tool-1", type: "tool", historyCutIndex: 5 })).toBe(5)
+    expect(canForkPart({ id: "tool-1", type: "tool", tool: "shell", historyCutIndex: 5 })).toBe(true)
+    expect(keepThroughIndexForPartFork({ id: "tool-1", type: "tool", tool: "shell", historyCutIndex: 5 })).toBe(5)
   })
 
   it("serializes assistant messages and shell cards for copying", () => {
     const message = assistant([
-      { id: "reasoning-1", type: "reasoning", reasoningText: "I should inspect first." },
-      { id: "text-1", type: "text", text: "Result body" },
+      { id: "reasoning-1", type: "reasoning", raw: "I should inspect first." },
+      { id: "text-1", type: "assistant_text", markdown: "Result body" },
       {
         id: "tool-1",
         type: "tool",
         tool: "shell",
-        toolInput: { command: "npm test" },
-        toolOutputChunks: [
+        input: { command: "npm test" },
+        outputChunks: [
           { stream: "stdout", content: "PASS a.test.ts\n" },
           { stream: "stderr", content: "warn\n" },
         ],
@@ -78,8 +79,8 @@ describe("conversation interactions", () => {
 
     expect(copyTextForMessage(message)).toContain("Reasoning:\nI should inspect first.")
     expect(copyTextForMessage(message)).toContain("Result body")
-    expect(copyTextForToolCommand(message.parts[2])).toBe("npm test")
-    expect(copyTextForToolOutput(message.parts[2])).toContain("PASS a.test.ts")
+    expect(copyTextForToolCommand(message.parts[2] as ToolActivityItem)).toBe("npm test")
+    expect(copyTextForToolOutput(message.parts[2] as ToolActivityItem)).toContain("PASS a.test.ts")
   })
 
   it("serializes the whole transcript in conversation order", () => {
@@ -93,7 +94,7 @@ describe("conversation interactions", () => {
           timestamp: 0,
         },
         assistantMessages: [
-          assistant([{ id: "text-1", type: "text", text: "reply" }]),
+          assistant([{ id: "text-1", type: "assistant_text", markdown: "reply" }]),
         ],
       },
     ]

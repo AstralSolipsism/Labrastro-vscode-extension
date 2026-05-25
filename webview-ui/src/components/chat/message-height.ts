@@ -5,7 +5,14 @@ import {
   estimatePlainTextHeight,
   type TextMeasureMetrics,
 } from "../../utils/text-measure"
-import type { MockMessage, MockPart, MockTurn } from "./mock-data"
+import type { MockMessage, MockTurn } from "./mock-data"
+import type { ToolActivityItem, TranscriptItem } from "./transcript-model"
+import {
+  buildTranscriptPresentation,
+  type ProcessGroup,
+  type ProcessTimelineItem,
+  type TranscriptPresentationItem,
+} from "./transcript-presentation"
 
 export interface TurnHeightMetrics extends TextMeasureMetrics {
   actionRowHeight: number
@@ -101,28 +108,42 @@ function estimateUserMessageHeight(message: MockMessage, width: number, metrics:
 
 function estimateAssistantMessageHeight(message: MockMessage, width: number, metrics: TurnHeightMetrics): number {
   const bodyWidth = Math.max(160, width - metrics.assistantMarkerWidth)
-  const partHeights = message.parts.map((part) => estimatePartHeight(part, bodyWidth, metrics))
+  const partHeights = buildTranscriptPresentation(message.parts, message)
+    .map((item) => estimatePresentationItemHeight(item, bodyWidth, metrics))
   const partGaps = Math.max(0, partHeights.length - 1) * metrics.partGap
   const bodyHeight = partHeights.reduce((sum, height) => sum + height, 0) + partGaps
   return metrics.actionRowHeight + bodyHeight
 }
 
-function estimatePartHeight(part: MockPart, width: number, metrics: TurnHeightMetrics): number {
+function estimatePresentationItemHeight(item: TranscriptPresentationItem, width: number, metrics: TurnHeightMetrics): number {
+  if (item.type === "timeline_text") return estimateTextPartHeight(item.part, width, metrics)
+  if (item.type === "timeline_notice") return estimatePlainCardHeight(item.part.text, width, 32, metrics)
+  if (item.type === "final_answer") {
+    const heights = item.parts.map((part) => estimateTextPartHeight(part, width, metrics))
+    const gaps = Math.max(0, heights.length - 1) * metrics.partGap
+    return heights.reduce((sum, height) => sum + height, 0) + gaps
+  }
+  return 30
+}
+
+function estimatePartHeight(part: TranscriptItem, width: number, metrics: TurnHeightMetrics): number {
   switch (part.type) {
-    case "text":
+    case "assistant_text":
       return estimateTextPartHeight(part, width, metrics)
+    case "thinking":
+      return 30
     case "reasoning":
       return estimateReasoningPartHeight(part, width, metrics)
     case "tool":
       return estimateToolPartHeight(part, width, metrics)
+    case "notice":
+      return estimatePlainCardHeight(part.text, width, 32, metrics)
     case "trace":
-      return estimatePlainCardHeight(part.text || part.traceTitle || "", width, 42, metrics)
+      return estimatePlainCardHeight(part.text || part.title || "", width, 42, metrics)
     case "session":
-      return estimatePlainCardHeight(part.sessionSummary || part.sessionTitle || "", width, 44, metrics)
-    case "remote_status":
-      return 42
+      return estimatePlainCardHeight(part.summary || part.title || "", width, 44, metrics)
     case "terminal":
-      return 34 + estimateCodeHeight(part.terminalContent || "", width, metrics, 88, 220)
+      return 34 + estimateCodeHeight(part.content || "", width, metrics, 88, 220)
     case "view":
     case "context_event":
     case "memory_context":
@@ -136,11 +157,11 @@ function estimatePartHeight(part: MockPart, width: number, metrics: TurnHeightMe
   }
 }
 
-function estimateTextPartHeight(part: MockPart, width: number, metrics: TurnHeightMetrics): number {
-  if (part.textFormat === "markdown") {
-    return estimateMarkdownTextHeight(part.text || "", width, metrics)
+function estimateTextPartHeight(part: Extract<TranscriptItem, { type: "assistant_text" }>, width: number, metrics: TurnHeightMetrics): number {
+  if (part.format === "markdown") {
+    return estimateMarkdownTextHeight(part.markdown || "", width, metrics)
   }
-  return estimatePlainTextHeight(part.text || "", width, {
+  return estimatePlainTextHeight(part.markdown || "", width, {
     font: metrics.font,
     lineHeight: metrics.lineHeight,
     whiteSpace: "pre-wrap",
@@ -148,11 +169,9 @@ function estimateTextPartHeight(part: MockPart, width: number, metrics: TurnHeig
   })
 }
 
-function estimateReasoningPartHeight(part: MockPart, width: number, metrics: TurnHeightMetrics): number {
+function estimateReasoningPartHeight(part: Extract<TranscriptItem, { type: "reasoning" }>, _width: number, _metrics: TurnHeightMetrics): number {
   const headerHeight = 38
-  const text = part.reasoningText || ""
-  if (!text) return headerHeight
-  return headerHeight + Math.min(220, estimateMarkdownTextHeight(text, width, metrics))
+  return part.summary ? headerHeight + 18 : headerHeight
 }
 
 function estimateMarkdownTextHeight(text: string, width: number, metrics: TurnHeightMetrics): number {
@@ -169,53 +188,51 @@ function estimateMarkdownTextHeight(text: string, width: number, metrics: TurnHe
   return proseHeight + codeHeight + structuralExtra
 }
 
-function estimateToolPartHeight(part: MockPart, width: number, metrics: TurnHeightMetrics): number {
-  if (isShellToolName(part.tool, part.toolSource)) {
+function estimateToolPartHeight(part: ToolActivityItem, width: number, metrics: TurnHeightMetrics): number {
+  if (isShellToolName(part.tool, part.source)) {
     return estimateShellToolHeight(part, width, metrics)
   }
 
   const headerHeight = 38
   if (!isExpandableToolOpen(part.status)) return headerHeight
 
-  const inputHeight = part.toolInput && Object.keys(part.toolInput).length > 0
-    ? 24 + estimateCodeHeight(formatJson(part.toolInput), width, metrics, 34, 180)
+  const inputHeight = part.input && Object.keys(part.input).length > 0
+    ? 24 + estimateCodeHeight(formatJson(part.input), width, metrics, 34, 112)
     : 0
-  const outputText = part.toolOutput || ""
+  const outputText = part.output || ""
   const outputHeight = outputText
-    ? 24 + (part.toolOutputFormat === "markdown"
-      ? estimateMarkdownTextHeight(outputText, width, metrics)
-      : estimateCodeHeight(outputText, width, metrics, 34, 260))
+    ? 24 + (part.outputFormat === "markdown"
+      ? Math.min(112, estimateMarkdownTextHeight(outputText, width, metrics))
+      : estimateCodeHeight(outputText, width, metrics, 34, 112))
     : 0
   const approvalHeight = part.approvalId ? 92 : 0
-  const metadataHeight = part.toolResultMeta && Object.keys(part.toolResultMeta).length > 0
-    ? 24 + estimateCodeHeight(formatJson(part.toolResultMeta), width, metrics, 34, 160)
+  const metadataHeight = part.resultMeta && Object.keys(part.resultMeta).length > 0
+    ? 24 + estimateCodeHeight(formatJson(part.resultMeta), width, metrics, 34, 160)
     : 0
 
   return headerHeight + 26 + inputHeight + outputHeight + approvalHeight + metadataHeight
 }
 
-function estimateShellToolHeight(part: MockPart, width: number, metrics: TurnHeightMetrics): number {
+function estimateShellToolHeight(part: ToolActivityItem, width: number, metrics: TurnHeightMetrics): number {
   const headerHeight = 38
   if (!isShellToolOpen(part.status)) return headerHeight
 
-  const outputText = buildShellOutputText(part.toolOutputChunks) || part.toolOutput || part.toolFinalOutput || ""
-  const terminalHeight = estimateCodeHeight(outputText, width, metrics, 88, 360)
+  const outputText = buildShellOutputText(part.outputChunks) || part.output || part.finalOutput || ""
+  const terminalHeight = estimateCodeHeight(outputText, width, metrics, 72, 128)
   const approvalHeight = part.approvalId ? 32 : 0
-  const detailsHintHeight = part.toolResultMeta || part.toolFinalOutput ? 26 : 0
+  const detailsHintHeight = part.resultMeta || part.finalOutput ? 26 : 0
   return headerHeight + 26 + 30 + approvalHeight + terminalHeight + detailsHintHeight
 }
 
-function estimateStructuredCardHeight(part: MockPart, width: number, metrics: TurnHeightMetrics): number {
-  const summary = stringPayload(part.viewPayload?.markdown || part.viewPayload?.content || part.viewPayload?.message) ||
-    stringPayload(part.contextPayload?.markdown || part.contextPayload?.content || part.contextPayload?.message) ||
-    stringPayload(part.memoryPayload?.rendered_context || part.memoryPayload?.message) ||
-    stringPayload(part.uiEventPayload?.markdown || part.uiEventPayload?.content || part.uiEventPayload?.message)
+function estimateStructuredCardHeight(part: TranscriptItem, width: number, metrics: TurnHeightMetrics): number {
+  const payload = "payload" in part ? part.payload : undefined
+  const summary = stringPayload(payload?.markdown || payload?.content || payload?.message || payload?.rendered_context)
 
   return 38 + (summary ? estimateMarkdownTextHeight(summary, width, metrics) : 0)
 }
 
-function estimateParallelHeight(part: MockPart, width: number, metrics: TurnHeightMetrics): number {
-  const items = part.parallelItems || []
+function estimateParallelHeight(part: Extract<TranscriptItem, { type: "parallel_tools" | "parallel_sessions" }>, width: number, metrics: TurnHeightMetrics): number {
+  const items = part.items || []
   if (items.length === 0) return 42
   return 30 + items.reduce((sum, item) => sum + estimatePartHeight(item, width, metrics) + metrics.partGap, 0)
 }
@@ -260,11 +277,11 @@ function estimateMarkdownStructuralExtra(text: string, metrics: TurnHeightMetric
 }
 
 function isExpandableToolOpen(status?: string): boolean {
-  return ["pending", "running", "awaiting_approval", "denied", "error", "cancelled"].includes(status || "")
+  return ["preparing", "pending", "running", "awaiting_approval", "denied", "error", "cancelled"].includes(status || "")
 }
 
 function isShellToolOpen(status?: string): boolean {
-  return ["pending", "running", "awaiting_approval", "approved", "denied", "error", "cancelled"].includes(status || "")
+  return ["preparing", "pending", "running", "awaiting_approval", "approved", "denied", "error", "cancelled"].includes(status || "")
 }
 
 function turnContentDigest(turn: MockTurn): string {
@@ -278,33 +295,133 @@ function turnContentDigest(turn: MockTurn): string {
       id: message.id,
       text: message.text,
       trace: message.traceNodeStatus,
-      parts: message.parts.map(partDigestSource),
+      presentation: buildTranscriptPresentation(message.parts, message).map(presentationDigestSource),
     })),
   })
 }
 
-function partDigestSource(part: MockPart): Record<string, unknown> {
+function presentationDigestSource(item: TranscriptPresentationItem): Record<string, unknown> {
+  if (item.type === "timeline_text") {
+    return {
+      type: item.type,
+      id: item.part.id,
+      markdown: item.part.markdown,
+      format: item.part.format,
+      streaming: item.part.streaming,
+    }
+  }
+  if (item.type === "timeline_notice") {
+    return {
+      type: item.type,
+      id: item.part.id,
+      level: item.part.level,
+      text: item.part.text,
+      format: item.part.format,
+    }
+  }
+  if (item.type === "reasoning_panel") {
+    return {
+      type: item.type,
+      id: item.panel.id,
+      state: item.panel.state,
+      raw: textDigestSource(item.panel.raw),
+      summary: textDigestSource(item.panel.summary || ""),
+      count: item.panel.count,
+    }
+  }
+  if (item.type === "timeline_process_group") {
+    return {
+      type: item.type,
+      group: processGroupDigestSource(item.group),
+    }
+  }
+  if (item.type === "process_summary") {
+    return {
+      type: item.type,
+      id: item.summary.id,
+      state: item.summary.state,
+      count: item.summary.count,
+      failures: item.summary.failureCount,
+      items: item.summary.items.map(processTimelineItemDigestSource),
+    }
+  }
+  return {
+    type: item.type,
+    parts: item.parts.map((part) => ({
+      id: part.id,
+      markdown: part.markdown,
+      format: part.format,
+      streaming: part.streaming,
+      streamKey: part.streamKey,
+    })),
+  }
+}
+
+function processTimelineItemDigestSource(item: ProcessTimelineItem): Record<string, unknown> {
+  if (item.type === "timeline_text") {
+    return {
+      type: item.type,
+      id: item.part.id,
+      markdown: item.part.markdown,
+      format: item.part.format,
+      streaming: item.part.streaming,
+      streamKey: item.part.streamKey,
+    }
+  }
+  if (item.type === "timeline_notice") {
+    return {
+      type: item.type,
+      id: item.part.id,
+      level: item.part.level,
+      text: item.part.text,
+      format: item.part.format,
+    }
+  }
+  return {
+    type: item.type,
+    group: processGroupDigestSource(item.group),
+  }
+}
+
+function processGroupDigestSource(group: ProcessGroup): Record<string, unknown> {
+  return {
+    id: group.id,
+    key: group.groupKey,
+    kind: group.kind,
+    label: group.label,
+    state: group.state,
+    count: group.count,
+    failures: group.failureCount,
+    current: group.currentLabel,
+    items: group.items.map(processPartDigestSource),
+  }
+}
+
+function processPartDigestSource(part: TranscriptItem): Record<string, unknown> {
   return {
     id: part.id,
     type: part.type,
-    text: part.text,
-    textFormat: part.textFormat,
-    reasoningText: part.reasoningText,
-    reasoningFormat: part.reasoningFormat,
-    tool: part.tool,
-    toolSource: part.toolSource,
-    toolInput: part.toolInput,
-    toolOutput: part.toolOutput,
-    toolOutputFormat: part.toolOutputFormat,
-    toolOutputChunks: part.toolOutputChunks,
-    toolFinalOutput: part.toolFinalOutput,
-    status: part.status,
-    terminalContent: part.terminalContent,
-    viewPayload: part.viewPayload,
-    contextPayload: part.contextPayload,
-    memoryPayload: part.memoryPayload,
-    uiEventPayload: part.uiEventPayload,
-    parallelItems: part.parallelItems?.map(partDigestSource),
+    trace: part.traceNodeStatus,
+    title: "title" in part ? part.title : undefined,
+    text: part.type === "notice" ? part.text : undefined,
+    level: "level" in part ? part.level : undefined,
+    summary: part.type === "session" || part.type === "parallel_tools" || part.type === "parallel_sessions" ? part.summary : undefined,
+    tool: part.type === "tool" ? part.tool : undefined,
+    source: part.type === "tool" ? part.source : undefined,
+    outputFormat: part.type === "tool" ? part.outputFormat : undefined,
+    status: part.type === "tool" ? part.status : undefined,
+    state: part.type === "session" ? part.state : undefined,
+    viewType: part.type === "view" ? part.viewType : undefined,
+    kind: part.type === "ui_event" ? part.kind : undefined,
+    itemCount: (part.type === "parallel_tools" || part.type === "parallel_sessions") ? part.items?.length : undefined,
+  }
+}
+
+function textDigestSource(text: string): Record<string, unknown> {
+  return {
+    length: text.length,
+    head: text.slice(0, 256),
+    tail: text.length > 256 ? text.slice(-256) : "",
   }
 }
 

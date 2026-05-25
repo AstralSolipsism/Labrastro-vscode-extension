@@ -1,5 +1,6 @@
 ﻿import { Component, For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { TaskHeader } from "./chat/TaskHeader"
+import { on } from "solid-js"
 import { MessageList } from "./chat/MessageList"
 import { PromptInput } from "./chat/PromptInput"
 import {
@@ -8,6 +9,7 @@ import {
   type PromptCommandSelection,
   type PromptSubmission,
 } from "./chat/promptInputCatalog"
+import { RunStatusBar } from "./chat/RunStatusBar"
 import { AutoApproveMenu } from "./chat/AutoApproveMenu"
 import {
   ApprovalDetailsDialog,
@@ -54,7 +56,21 @@ import {
   type PromptQueueState,
 } from "../chat/promptQueue"
 import { resolveRuntimeStatusUiAction } from "../chat/runtimeStatus"
-import { filterSessionHistory, sessionKindBadge, type SessionHistorySort } from "../chat/sessionHistoryView"
+import {
+  agentRunStateFromDelegatedCompletion,
+  initialAgentRunState,
+  initialRemotePeerState,
+  remotePeerStateFromError,
+  remotePeerStateFromReady,
+  settleAgentRunStateForChatEvent,
+} from "../chat/runtimeState"
+import {
+  filterSessionHistory,
+  sessionOperationErrorAfterMessage,
+  sessionHistoryEmptyMessage,
+  sessionKindBadge,
+  type SessionHistorySort,
+} from "../chat/sessionHistoryView"
 import {
   approvalDecisionAfterResolution,
   approvalStatusAfterResolution,
@@ -72,6 +88,7 @@ import {
   modelSwitchAction,
   modeLabel,
   normalizeModelOptions,
+  resolveChatModelAvailability,
   resolveChatModeOptions,
   resolveHostTargetSummary,
   resolveRequiredChatModelSelection,
@@ -92,8 +109,16 @@ import {
   reconcileShellFinalOutput,
   shellChunksFromText,
 } from "../utils/shell-tool-output"
-import { remoteSessionIdForMutation } from "../utils/session-history"
-import type { MockMessage, MockPart, MockTurn } from "./chat/mock-data"
+import { isLocalDraftSessionId, remoteSessionIdForMutation } from "../utils/session-history"
+import type { MockMessage, MockTurn } from "./chat/mock-data"
+import type {
+  AssistantTextItem,
+  NoticeLevel,
+  ReasoningItem,
+  ThinkingItem,
+  ToolActivityItem,
+  TranscriptItem,
+} from "./chat/transcript-model"
 
 interface PendingApproval extends ApprovalDetails {
   chatId: string
@@ -127,7 +152,15 @@ interface ChatViewProps {
 }
 
 const MODEL_SWITCH_TIMEOUT_MS = 20_000
+const REASONING_STREAM_KEY = "reasoning-stream"
 type ChatRunStatus = "idle" | "running" | "stopping" | "cancelled" | "done" | "error" | "interrupted"
+
+function isReasoningThinkingItem(item: TranscriptItem): item is ThinkingItem {
+  return item.type === "thinking" && (
+    item.streamKey === REASONING_STREAM_KEY ||
+    item.active === true
+  )
+}
 
 const ChatView: Component<ChatViewProps> = (props) => {
   const trace = useTrace()
@@ -179,7 +212,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const [pendingModelProfile, setPendingModelProfile] = createSignal("")
   const [taskflowId, setTaskflowId] = createSignal("")
   const renderedEventKeys = new Set<string>()
-  const [activeStreamParts, setActiveStreamParts] = createSignal<MockPart[]>([])
+  const [activeTranscriptItems, setActiveTranscriptItems] = createSignal<TranscriptItem[]>([])
+  const [remotePeerState, setRemotePeerState] = createSignal(initialRemotePeerState())
+  const [agentRunState, setAgentRunState] = createSignal(initialAgentRunState())
 
   const hasMessages = () => trace.turns().length > 0
   const taskflowAvailable = createMemo(() => canUseTaskflow(server.backendFeatures()))
@@ -188,14 +223,28 @@ const ChatView: Component<ChatViewProps> = (props) => {
     return resolveChatModeOptions(server.adminState(), remoteMode, taskflowAvailable())
   })
   const selectedModeLabel = createMemo(() => modeLabel(selectedMode(), modeOptions()))
-  const modelOptions = createMemo(() => normalizeModelOptions(server.adminState(), sessionRuntimeState()))
+  const rawModelOptions = createMemo(() => normalizeModelOptions(server.adminState(), sessionRuntimeState()))
+  const modelAvailability = createMemo(() =>
+    resolveChatModelAvailability(server.connectionState(), server.modelListError(), rawModelOptions())
+  )
+  const modelOptions = createMemo(() => modelAvailability().canSelect ? rawModelOptions() : [])
   const selectedModelOverrideProfile = createMemo(() => localModelOverrideProfile() || selectedModelProfile())
   const requiredModelSelection = createMemo(() =>
     resolveRequiredChatModelSelection(selectedModelOverrideProfile(), modelOptions())
   )
-  const selectedModelLabel = createMemo(() => modelLabel(selectedModelProfile(), modelOptions(), trace.stats().model))
-  const selectedModelDescription = createMemo(() => modelDescription(selectedModelProfile(), modelOptions(), trace.stats().model))
-  const visibleModelError = createMemo(() => modelSwitchError() || requiredModelSelection().message)
+  const selectedModelLabel = createMemo(() =>
+    modelAvailability().canSelect
+      ? modelLabel(selectedModelProfile(), modelOptions(), trace.stats().model)
+      : modelAvailability().label
+  )
+  const selectedModelDescription = createMemo(() =>
+    modelAvailability().canSelect
+      ? modelDescription(selectedModelProfile(), modelOptions(), trace.stats().model)
+      : modelAvailability().message
+  )
+  const visibleModelError = createMemo(() =>
+    modelSwitchError() || modelAvailability().message || requiredModelSelection().message
+  )
   const sendDuringRunMode = createMemo<PendingPromptMode>(() =>
     server.chatSendDuringRunModeState().mode === "queue" ? "queue" : "guide"
   )
@@ -232,6 +281,10 @@ const ChatView: Component<ChatViewProps> = (props) => {
       showBranches: showBranchSessions(),
     })
   })
+  const historyListState = createMemo(() => trace.sessionListState())
+  const historyEmptyMessage = createMemo(() =>
+    sessionHistoryEmptyMessage(historyListState(), Boolean(historyQuery()))
+  )
   const sessionSyncNotice = createMemo(() => {
     const status = sessionSyncStatus()
     const pending = typeof status.pendingCount === "number" ? status.pendingCount : 0
@@ -381,6 +434,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     nextStatus: "cancelled" | "done" | "error" | "interrupted",
     options: { startNextEnvironment?: boolean } = {},
   ) => {
+    settleAssistantMessageForRunEnd(nextStatus)
     setIsWorking(false)
     setActiveRunSessionId("")
     setChatStatus(nextStatus)
@@ -436,11 +490,11 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const visibleIsWorking = () => isWorking() && currentRunSessionMatches()
   const visiblePendingApprovals = () => (currentRunSessionMatches() ? pendingApprovals() : [])
   const activeStreamMessage = createMemo<MockMessage | undefined>(() => {
-    const parts = activeStreamParts()
+    const parts = activeTranscriptItems()
     if (!parts.length || !currentRunSessionMatches()) return undefined
     const text = parts
-      .filter((part) => part.type === "text")
-      .map((part) => part.text || "")
+      .filter((part): part is AssistantTextItem => part.type === "assistant_text")
+      .map((part) => part.markdown || "")
       .join("")
     return {
       id: `assistant-stream-${activeChatId() || "pending"}`,
@@ -468,7 +522,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const clearCurrentSession = () => {
     trace.clearSession()
     setSelectedApproval(undefined)
-    setActiveStreamParts([])
+    setActiveTranscriptItems([])
   }
 
   createEffect(() => {
@@ -482,6 +536,11 @@ const ChatView: Component<ChatViewProps> = (props) => {
     if (!turns.length) return []
     return turns[turns.length - 1].assistantMessages
   }
+  const hasVisibleRunTranscriptItems = createMemo(() => {
+    if (activeStreamMessage()) return true
+    if (!currentRunSessionMatches()) return false
+    return currentAssistantMessages().some((message) => message.parts.length > 0)
+  })
 
   const ensureAssistantMessage = () => {
     const messages = currentAssistantMessages()
@@ -499,12 +558,15 @@ const ChatView: Component<ChatViewProps> = (props) => {
     return message
   }
 
-  const updateAssistantParts = (updater: (parts: MockPart[]) => MockPart[]) => {
+  const updateAssistantItems = (
+    updater: (items: TranscriptItem[]) => TranscriptItem[],
+    options: { traceNodeStatus?: MockMessage["traceNodeStatus"] } = {},
+  ) => {
     const base = ensureAssistantMessage()
     const next: MockMessage = {
       ...base,
       parts: updater(base.parts),
-      traceNodeStatus: isWorking() ? "active" : "success",
+      traceNodeStatus: options.traceNodeStatus ?? (isWorking() ? "active" : "success"),
     }
     trace.replaceLastAssistantMessages([next])
   }
@@ -547,28 +609,28 @@ const ChatView: Component<ChatViewProps> = (props) => {
     if (meta.eventKey) renderedEventKeys.add(meta.eventKey)
   }
 
-  const withEventMeta = (part: MockPart, meta?: EventRenderMeta): MockPart => ({
-    ...part,
+  const withEventMeta = <T extends TranscriptItem>(item: T, meta?: EventRenderMeta): T => ({
+    ...item,
     ...(meta?.eventKey ? { eventKey: meta.eventKey } : {}),
     ...(meta?.sessionEventSeq !== undefined ? { sessionEventSeq: meta.sessionEventSeq } : {}),
   })
 
-  const appendTextPart = (
+  const appendAssistantTextItem = (
     text: string,
-    prefix = "text",
+    prefix = "assistant-message",
     options: { format?: "plain" | "markdown"; merge?: boolean; trim?: boolean; meta?: EventRenderMeta } = {},
   ) => {
     const clean = stripAnsi(text)
     const content = options.trim === false ? clean : clean.trim()
     if (!content) return
-    updateAssistantParts((parts) => {
+    updateAssistantItems((parts) => {
       if (options.merge) {
         const last = parts[parts.length - 1]
-        if (last?.type === "text" && last.textFormat === options.format && last.textStreamKey === prefix) {
+        if (last?.type === "assistant_text" && last.format === options.format && last.streamKey === prefix) {
           const updated = [...parts]
           updated[updated.length - 1] = {
             ...last,
-            text: `${last.text || ""}${content}`,
+            markdown: `${last.markdown || ""}${content}`,
           }
           return updated
         }
@@ -577,71 +639,49 @@ const ChatView: Component<ChatViewProps> = (props) => {
         ...parts,
         withEventMeta({
           id: `${prefix}-${Date.now()}-${parts.length}`,
-          type: "text",
-          text: content,
-          textFormat: options.format || "plain",
-          textStreamKey: prefix,
+          type: "assistant_text",
+          markdown: content,
+          format: options.format || "plain",
+          streamKey: prefix,
         }, options.meta),
       ]
     })
   }
 
-  const appendReasoningPart = (
+  const appendNotice = (
+    level: NoticeLevel,
     text: string,
-    prefix = "reasoning-stream",
-    options: { format?: "plain" | "markdown"; merge?: boolean; trim?: boolean; meta?: EventRenderMeta } = {},
+    prefix = "notice",
+    options: { format?: "plain" | "markdown"; trim?: boolean; meta?: EventRenderMeta } = {},
   ) => {
     const clean = stripAnsi(text)
     const content = options.trim === false ? clean : clean.trim()
     if (!content) return
-    updateAssistantParts((parts) => {
-      const reasoningIndex = options.merge
-        ? parts.findIndex((part) => part.type === "reasoning" && part.reasoningStreamKey === prefix)
-        : -1
-      if (reasoningIndex >= 0) {
-        const updated = [...parts]
-        const current = updated[reasoningIndex]
-        updated[reasoningIndex] = {
-          ...current,
-          reasoningText: `${current.reasoningText || ""}${content}`,
-          reasoningFormat: options.format || current.reasoningFormat || "markdown",
-        }
-        return updated
-      }
-
-      const next = withEventMeta({
+    updateAssistantItems((parts) => [
+      ...parts,
+      withEventMeta({
         id: `${prefix}-${Date.now()}-${parts.length}`,
-        type: "reasoning",
-        reasoningText: content,
-        reasoningFormat: options.format || "markdown",
-        reasoningStreamKey: prefix,
-      }, options.meta)
-      const firstAssistantTextIndex = parts.findIndex((part) =>
-        part.type === "text" &&
-        ["assistant-stream", "assistant-message", "final"].includes(part.textStreamKey || "")
-      )
-      if (firstAssistantTextIndex < 0) return [...parts, next]
-      return [
-        ...parts.slice(0, firstAssistantTextIndex),
-        next,
-        ...parts.slice(firstAssistantTextIndex),
-      ]
-    })
+        type: "notice",
+        level,
+        text: content,
+        format: options.format || "plain",
+      }, options.meta),
+    ])
   }
 
-  const clearActiveStreamDraft = () => setActiveStreamParts([])
+  const clearActiveStreamDraft = () => setActiveTranscriptItems([])
 
-  const clearActiveStreamParts = (predicate: (part: MockPart) => boolean) => {
-    setActiveStreamParts((parts) => parts.filter((part) => !predicate(part)))
+  const clearActiveTranscriptItems = (predicate: (item: TranscriptItem) => boolean) => {
+    setActiveTranscriptItems((items) => items.filter((item) => !predicate(item)))
   }
 
-  const isArchivableActiveStreamPart = (part: MockPart): boolean =>
-    (part.type === "text" && part.textStreamKey === "assistant-stream") ||
-    (part.type === "reasoning" && part.reasoningStreamKey === "reasoning-stream")
+  const isArchivableActiveTranscriptItem = (item: TranscriptItem): boolean =>
+    (item.type === "assistant_text" && item.streamKey === "assistant-stream") ||
+    isReasoningThinkingItem(item)
 
-  const findLastPartIndex = (
-    parts: MockPart[],
-    predicate: (part: MockPart) => boolean,
+  const findLastItemIndex = (
+    parts: TranscriptItem[],
+    predicate: (item: TranscriptItem) => boolean,
   ): number => {
     for (let index = parts.length - 1; index >= 0; index -= 1) {
       if (predicate(parts[index])) return index
@@ -649,15 +689,78 @@ const ChatView: Component<ChatViewProps> = (props) => {
     return -1
   }
 
-  const archiveActiveStreamParts = () => {
-    const archived = activeStreamParts().filter(isArchivableActiveStreamPart)
+  const archiveActiveTranscriptItems = (
+    options: {
+      normalize?: (item: TranscriptItem) => TranscriptItem
+      traceNodeStatus?: MockMessage["traceNodeStatus"]
+    } = {},
+  ) => {
+    const archived = activeTranscriptItems()
+      .filter(isArchivableActiveTranscriptItem)
+      .map((item) => options.normalize?.(item) ?? item)
     if (!archived.length) return
-    const archivedIds = new Set(archived.map((part) => part.id))
-    updateAssistantParts((parts) => [...parts, ...archived])
-    setActiveStreamParts((parts) => parts.filter((part) => !archivedIds.has(part.id)))
+    const archivedIds = new Set(archived.map((item) => item.id))
+    updateAssistantItems((items) => [...items, ...archived], {
+      traceNodeStatus: options.traceNodeStatus,
+    })
+    setActiveTranscriptItems((items) => items.filter((item) => !archivedIds.has(item.id)))
   }
 
-  const finalizeAssistantStreamTextPart = (
+  const traceStatusForRunEnd = (status: "cancelled" | "done" | "error" | "interrupted"): MockMessage["traceNodeStatus"] => {
+    if (status === "error") return "error"
+    if (status === "cancelled") return "cancelled"
+    return "success"
+  }
+
+  const normalizeTranscriptItemForRunEnd = (
+    item: TranscriptItem,
+    traceNodeStatus: MockMessage["traceNodeStatus"],
+  ): TranscriptItem => {
+    if (item.type === "assistant_text" && item.streamKey === "assistant-stream") {
+      return {
+        ...item,
+        streaming: false,
+        streamKey: "assistant-message",
+        traceNodeStatus,
+      }
+    }
+    if (isReasoningThinkingItem(item)) {
+      return {
+        ...item,
+        active: false,
+        traceNodeStatus,
+      }
+    }
+    if (item.type === "tool" && item.status === "preparing") {
+      return {
+        ...item,
+        status: traceNodeStatus === "error" ? "error" : "cancelled",
+        traceNodeStatus,
+      }
+    }
+    if (item.traceNodeStatus === "active" || item.traceNodeStatus === "streaming") {
+      return {
+        ...item,
+        traceNodeStatus,
+      } as TranscriptItem
+    }
+    return item
+  }
+
+  const settleAssistantMessageForRunEnd = (status: "cancelled" | "done" | "error" | "interrupted") => {
+    if (!currentAssistantMessages().length && !activeTranscriptItems().some(isArchivableActiveTranscriptItem)) return
+    const traceNodeStatus = traceStatusForRunEnd(status)
+    archiveActiveTranscriptItems({
+      normalize: (item) => normalizeTranscriptItemForRunEnd(item, traceNodeStatus),
+      traceNodeStatus,
+    })
+    updateAssistantItems(
+      (parts) => parts.map((part) => normalizeTranscriptItemForRunEnd(part, traceNodeStatus)),
+      { traceNodeStatus },
+    )
+  }
+
+  const finalizeAssistantMessage = (
     text: string,
     prefix = "assistant-message",
     options: { format?: "plain" | "markdown"; trim?: boolean; meta?: EventRenderMeta } = {},
@@ -665,17 +768,18 @@ const ChatView: Component<ChatViewProps> = (props) => {
     const clean = stripAnsi(text)
     const content = options.trim === false ? clean : clean.trim()
     if (!content) return
-    updateAssistantParts((parts) => {
-      const streamIndex = findLastPartIndex(parts, (part) =>
-        part.type === "text" && part.textStreamKey === "assistant-stream"
+    updateAssistantItems((parts) => {
+      const streamIndex = findLastItemIndex(parts, (part) =>
+        part.type === "assistant_text" && part.streamKey === "assistant-stream"
       )
       if (streamIndex >= 0) {
         const updated = [...parts]
         updated[streamIndex] = withEventMeta({
-          ...updated[streamIndex],
-          text: content,
-          textFormat: options.format || "markdown",
-          textStreamKey: prefix,
+          ...updated[streamIndex] as AssistantTextItem,
+          markdown: content,
+          format: options.format || "markdown",
+          streaming: false,
+          streamKey: prefix,
         }, options.meta)
         return updated
       }
@@ -683,111 +787,122 @@ const ChatView: Component<ChatViewProps> = (props) => {
         ...parts,
         withEventMeta({
           id: `${prefix}-${Date.now()}-${parts.length}`,
-          type: "text",
-          text: content,
-          textFormat: options.format || "markdown",
-          textStreamKey: prefix,
+          type: "assistant_text",
+          markdown: content,
+          format: options.format || "markdown",
+          streaming: false,
+          streamKey: prefix,
         }, options.meta),
       ]
     })
   }
 
-  const finalizeReasoningStreamPart = (
-    text: string,
+  const finalizeReasoningMessage = (
+    payload: Record<string, unknown>,
     prefix = "reasoning-message",
     options: { format?: "plain" | "markdown"; trim?: boolean; meta?: EventRenderMeta } = {},
   ) => {
-    const clean = stripAnsi(text)
-    const content = options.trim === false ? clean : clean.trim()
-    if (!content) return
-    updateAssistantParts((parts) => {
-      const streamIndex = findLastPartIndex(parts, (part) =>
-        part.type === "reasoning" && part.reasoningStreamKey === "reasoning-stream"
-      )
-      if (streamIndex >= 0) {
+    const rawValue = stringValue(payload.raw) ?? stringValue(payload.content) ?? ""
+    const summaryValue = stringValue(payload.summary) ?? ""
+    const raw = options.trim === false ? stripAnsi(rawValue) : stripAnsi(rawValue).trim()
+    const summary = options.trim === false ? stripAnsi(summaryValue) : stripAnsi(summaryValue).trim()
+    if (!raw && !summary) return
+    const activeThinkingItems = activeTranscriptItems().filter(isReasoningThinkingItem)
+    const activeThinking = activeThinkingItems[activeThinkingItems.length - 1]
+    updateAssistantItems((parts) => {
+      const createReasoning = (id: string): ReasoningItem => withEventMeta({
+        id,
+        type: "reasoning",
+        summary: summary || undefined,
+        raw: raw || summary,
+        format: options.format || (stringValue(payload.format) === "plain" ? "plain" : "markdown"),
+      } satisfies ReasoningItem, options.meta)
+      const thinkingIndex = findLastItemIndex(parts, isReasoningThinkingItem)
+      if (thinkingIndex >= 0) {
         const updated = [...parts]
-        updated[streamIndex] = withEventMeta({
-          ...updated[streamIndex],
-          reasoningText: content,
-          reasoningFormat: options.format || "markdown",
-          reasoningStreamKey: prefix,
-        }, options.meta)
+        updated[thinkingIndex] = createReasoning(updated[thinkingIndex].id)
         return updated
       }
-
-      const next = withEventMeta({
-        id: `${prefix}-${Date.now()}-${parts.length}`,
-        type: "reasoning",
-        reasoningText: content,
-        reasoningFormat: options.format || "markdown",
-        reasoningStreamKey: prefix,
-      }, options.meta)
-      const firstAssistantTextIndex = parts.findIndex((part) =>
-        part.type === "text" &&
-        ["assistant-stream", "assistant-message", "final"].includes(part.textStreamKey || "")
-      )
-      if (firstAssistantTextIndex < 0) return [...parts, next]
-      return [
-        ...parts.slice(0, firstAssistantTextIndex),
-        next,
-        ...parts.slice(firstAssistantTextIndex),
-      ]
+      return [...parts, createReasoning(`${prefix}-${Date.now()}-${parts.length}`)]
     })
+    if (activeThinking) {
+      clearActiveTranscriptItems((part) => part.id === activeThinking.id)
+    }
   }
 
-  const upsertActiveStreamPart = (
-    predicate: (part: MockPart) => boolean,
-    createPart: (parts: MockPart[]) => MockPart,
-    updatePart: (part: MockPart) => MockPart,
+  const upsertActiveTranscriptItem = (
+    predicate: (item: TranscriptItem) => boolean,
+    createItem: (items: TranscriptItem[]) => TranscriptItem,
+    updateItem: (item: TranscriptItem) => TranscriptItem,
   ) => {
-    setActiveStreamParts((parts) => {
-      const index = parts.findIndex(predicate)
-      if (index < 0) return [...parts, createPart(parts)]
-      const next = [...parts]
-      next[index] = updatePart(next[index])
+    setActiveTranscriptItems((items) => {
+      const index = items.findIndex(predicate)
+      if (index < 0) return [...items, createItem(items)]
+      const next = [...items]
+      next[index] = updateItem(next[index])
       return next
     })
   }
 
-  const appendActiveTextStream = (text: string, meta?: EventRenderMeta) => {
+  const upsertAssistantStream = (text: string, meta?: EventRenderMeta) => {
     const content = stripAnsi(text)
     if (!content) return
-    upsertActiveStreamPart(
-      (part) => part.type === "text" && part.textStreamKey === "assistant-stream",
+    upsertActiveTranscriptItem(
+      (part) => part.type === "assistant_text" && part.streamKey === "assistant-stream",
       (parts) => withEventMeta({
         id: `assistant-stream-${Date.now()}-${parts.length}`,
-        type: "text",
-        text: content,
-        textFormat: "markdown",
-        textStreamKey: "assistant-stream",
+        type: "assistant_text",
+        markdown: content,
+        format: "markdown",
+        streaming: true,
+        streamKey: "assistant-stream",
       }, meta),
       (part) => withEventMeta({
-        ...part,
-        text: `${part.text || ""}${content}`,
-        textFormat: "markdown",
-        textStreamKey: "assistant-stream",
+        ...part as AssistantTextItem,
+        markdown: `${(part as AssistantTextItem).markdown || ""}${content}`,
+        format: "markdown",
+        streaming: true,
+        streamKey: "assistant-stream",
       }, meta),
     )
   }
 
-  const appendActiveReasoningStream = (text: string, meta?: EventRenderMeta) => {
+  const updateThinkingFromReasoning = (text: string, meta?: EventRenderMeta) => {
     const content = stripAnsi(text)
     if (!content) return
-    upsertActiveStreamPart(
-      (part) => part.type === "reasoning" && part.reasoningStreamKey === "reasoning-stream",
-      (parts) => withEventMeta({
-        id: `reasoning-stream-${Date.now()}-${parts.length}`,
-        type: "reasoning",
-        reasoningText: content,
-        reasoningFormat: "plain",
-        reasoningStreamKey: "reasoning-stream",
-      }, meta),
-      (part) => withEventMeta({
+    const updateThinkingItem = (part: ThinkingItem): ThinkingItem => {
+      const raw = `${part.raw || ""}${content}`
+      return withEventMeta({
         ...part,
-        reasoningText: `${part.reasoningText || ""}${content}`,
-        reasoningFormat: "plain",
-        reasoningStreamKey: "reasoning-stream",
+        title: t("chat.thinking"),
+        detail: undefined,
+        active: true,
+        raw,
+        streamKey: REASONING_STREAM_KEY,
+      }, meta)
+    }
+    const currentAssistant = currentAssistantMessages()[0]
+    if (currentAssistant?.parts.some(isReasoningThinkingItem)) {
+      updateAssistantItems((parts) => {
+        const index = findLastItemIndex(parts, isReasoningThinkingItem)
+        if (index < 0) return parts
+        const updated = [...parts]
+        updated[index] = updateThinkingItem(updated[index] as ThinkingItem)
+        return updated
+      })
+      return
+    }
+    upsertActiveTranscriptItem(
+      isReasoningThinkingItem,
+      (parts) => withEventMeta({
+        id: `thinking-${activeChatId() || "pending"}`,
+        type: "thinking",
+        title: t("chat.thinking"),
+        active: true,
+        raw: content,
+        streamKey: REASONING_STREAM_KEY,
       }, meta),
+      (part) => updateThinkingItem(part as ThinkingItem),
     )
   }
 
@@ -800,124 +915,140 @@ const ChatView: Component<ChatViewProps> = (props) => {
     const stream = String(payload.stream || "stdout")
     const outputFormat = stringValue(payload.format) || stringValue(payload.output_format) || stringValue(payload.tool_output_format)
     const toolSource = stringValue(payload.tool_source)
-    archiveActiveStreamParts()
-    updateAssistantParts((parts) => {
+    archiveActiveTranscriptItems()
+    updateAssistantItems((parts) => {
       const existingIndex = resolveToolPartIndex(parts, toolName, toolCallId)
-      const existing = existingIndex >= 0 ? parts[existingIndex] : undefined
-      const resolvedToolSource = toolSource || existing?.toolSource
+      const existing = existingIndex >= 0 ? parts[existingIndex] as ToolActivityItem : undefined
+      const resolvedToolSource = toolSource || existing?.source
       const isShell = isShellToolName(toolName, resolvedToolSource)
       const shellOutput = isShell
-        ? appendShellOutputChunk(existing?.toolOutputChunks, stream, content)
+        ? appendShellOutputChunk(existing?.outputChunks, stream, content)
         : undefined
-      const patch: Partial<MockPart> = {
+      const patch: Partial<ToolActivityItem> = {
         status: "running",
         toolCallId,
-        toolSource: resolvedToolSource,
-        toolStream: stream,
-        toolOutputFormat: inferToolOutputFormat(toolName, resolvedToolSource, outputFormat),
-        toolOutput: shellOutput
+        source: resolvedToolSource,
+        stream,
+        outputFormat: inferToolOutputFormat(toolName, resolvedToolSource, outputFormat),
+        output: shellOutput
           ? buildShellOutputText(shellOutput.chunks)
-          : `${existing?.toolOutput || ""}${content}`,
-        toolOutputChunks: shellOutput?.chunks || existing?.toolOutputChunks,
-        toolOutputTruncated: shellOutput?.truncated || existing?.toolOutputTruncated,
+          : `${existing?.output || ""}${content}`,
+        outputChunks: shellOutput?.chunks || existing?.outputChunks,
+        outputTruncated: shellOutput?.truncated || existing?.outputTruncated,
       }
       return upsertToolPartInParts(parts, toolName, patch, { fallbackId: toolCallId }).map((part) => (
-        part.toolCallId === toolCallId ? withEventMeta(part, meta) : part
+        part.type === "tool" && part.toolCallId === toolCallId ? withEventMeta(part, meta) : part
       ))
     })
   }
 
-  const appendRemoteStatusPart = (payload: Record<string, unknown>, meta?: EventRenderMeta) => {
-    updateAssistantParts((parts) => [
-      ...parts,
-      withEventMeta({
-        id: `remote-${Date.now()}-${parts.length}`,
-        type: "remote_status",
-        remotePeerId: String(payload.peer_id || ""),
-        remoteMainAgentId: String(payload.main_agent_id || ""),
-        remoteAgentConfigId: String(payload.agent_config_id || ""),
-        remoteSessionId: String(payload.session_id || ""),
-        remoteFingerprint: String(payload.fingerprint || ""),
-        remoteMode: String(payload.mode || ""),
-        remoteModel: String(payload.model || ""),
-        remoteWorkspaceRoot: String(payload.workspace_root || ""),
-      }, meta),
-    ])
+  const preparingToolCallId = (payload: Record<string, unknown>): string => {
+    const index = numberValue(payload.index) ?? 0
+    return `preparing:${activeChatId() || "pending"}:${index}`
+  }
+
+  const shouldIgnoreToolCallDelta = (toolCallId: string | undefined, preparingIndex: number): boolean => {
+    return currentAssistantMessages().some((message) =>
+      message.parts.some((part) => {
+        if (part.type !== "tool") return false
+        if (toolCallId && part.toolCallId === toolCallId) return part.status !== "preparing"
+        if (!toolCallId && part.preparingIndex === preparingIndex) return part.status !== "preparing"
+        return false
+      })
+    )
+  }
+
+  const appendToolCallDeltaToToolPart = (payload: Record<string, unknown>, meta?: EventRenderMeta) => {
+    const rawToolName = stringValue(payload.tool_name)
+    const toolName = rawToolName || "tool"
+    const realToolCallId = requiredToolCallId(payload)
+    const toolCallId = realToolCallId || preparingToolCallId(payload)
+    const preparingIndex = numberValue(payload.index) ?? 0
+    if (shouldIgnoreToolCallDelta(realToolCallId, preparingIndex)) return
+    const argumentsPreview = stringValue(payload.arguments_preview)
+    archiveActiveTranscriptItems()
+    upsertToolPart(toolName, {
+      status: "preparing",
+      toolCallId,
+      source: stringValue(payload.tool_source),
+      startedAt: numberValue(payload.started_at),
+      input: argumentsPreview ? { arguments_preview: argumentsPreview } : undefined,
+      preparingIndex,
+    }, toolCallId, { meta, preparingIndex })
   }
 
   const appendTerminalPart = (content: string, title = "终端输出", meta?: EventRenderMeta) => {
     const clean = stripAnsi(content).trim()
     if (!clean) return
-    const parsed = parseTerminalTuiCards(clean)
-    updateAssistantParts((parts) => {
-      if (parsed.length) return [...parts, ...parsed.map((part, index) => withEventMeta({ ...part, id: `${part.id}-${Date.now()}-${parts.length + index}` }, meta))]
-      return [
-        ...parts,
-        withEventMeta({
-          id: `terminal-${Date.now()}-${parts.length}`,
-          type: "terminal",
-          terminalTitle: title,
-          terminalContent: clean,
-        }, meta),
-      ]
-    })
+    if (isRemotePeerReadyTui(clean)) return
+    updateAssistantItems((parts) => [
+      ...parts,
+      withEventMeta({
+        id: `terminal-${Date.now()}-${parts.length}`,
+        type: "terminal",
+        title,
+        content: clean,
+      }, meta),
+    ])
   }
 
   const appendViewPart = (payload: Record<string, unknown>, meta?: EventRenderMeta) => {
     const nestedPayload = objectValue(payload.payload)
-    updateAssistantParts((parts) => [
+    const viewPayload = Object.keys(nestedPayload).length ? nestedPayload : payload
+    if (!hasMeaningfulPayload(viewPayload)) return
+    updateAssistantItems((parts) => [
       ...parts,
       withEventMeta({
         id: `view-${Date.now()}-${parts.length}`,
         type: "view",
-        viewTitle: String(payload.title || payload.message || "结构化视图"),
+        title: String(payload.title || payload.message || "结构化视图"),
         viewType: String(payload.view_type || payload.kind || "view"),
-        viewLevel: String(payload.level || "info"),
-        viewPayload: Object.keys(nestedPayload).length ? nestedPayload : payload,
+        level: String(payload.level || "info"),
+        payload: viewPayload,
       }, meta),
     ])
   }
 
   const appendContextEventPart = (payload: Record<string, unknown>, meta?: EventRenderMeta) => {
-    updateAssistantParts((parts) => [
+    updateAssistantItems((parts) => [
       ...parts,
       withEventMeta({
         id: `context-${Date.now()}-${parts.length}`,
         type: "context_event",
-        contextTitle: String(payload.message || payload.phase || "上下文事件"),
-        contextPayload: payload,
+        title: String(payload.message || payload.phase || "上下文事件"),
+        payload,
       }, meta),
     ])
   }
 
   const appendMemoryContextPart = (payload: Record<string, unknown>, meta?: EventRenderMeta) => {
-    updateAssistantParts((parts) => [
+    updateAssistantItems((parts) => [
       ...parts,
       withEventMeta({
         id: `memory-${Date.now()}-${parts.length}`,
         type: "memory_context",
-        memoryTitle: String(payload.title || t("memoryContext.title")),
-        memoryPayload: payload,
+        title: String(payload.title || t("memoryContext.title")),
+        payload,
       }, meta),
     ])
   }
 
   const appendUiEventPart = (eventType: string, payload: Record<string, unknown>, meta?: EventRenderMeta) => {
-    updateAssistantParts((parts) => [
+    updateAssistantItems((parts) => [
       ...parts,
       withEventMeta({
         id: `${eventType}-${Date.now()}-${parts.length}`,
         type: "ui_event",
-        uiEventKind: String(payload.kind || eventType.replace("_event", "")),
-        uiEventLevel: String(payload.level || "info"),
-        uiEventTitle: String(payload.title || payload.message || uiEventTitle(eventType)),
-        uiEventPayload: payload,
+        kind: String(payload.kind || eventType.replace("_event", "")),
+        level: String(payload.level || "info"),
+        title: String(payload.title || payload.message || uiEventTitle(eventType)),
+        payload,
       }, meta),
     ])
   }
 
   const resolveToolPartIndex = (
-    parts: MockPart[],
+    parts: TranscriptItem[],
     toolName: string,
     toolCallId?: string,
     matchReturn = false,
@@ -929,48 +1060,78 @@ const ChatView: Component<ChatViewProps> = (props) => {
 
   const upsertToolPart = (
     toolName: string,
-    patch: Partial<MockPart>,
+    patch: Partial<ToolActivityItem>,
     fallbackId?: string,
-    options?: { matchReturn?: boolean; meta?: EventRenderMeta },
+    options?: { matchReturn?: boolean; meta?: EventRenderMeta; preparingIndex?: number },
   ) => {
-    updateAssistantParts((parts) =>
-      upsertToolPartInParts(parts, toolName, patch, {
+    updateAssistantItems((parts) => {
+      const toolCallId = patch.toolCallId || fallbackId
+      const existingIndex = resolveToolPartIndex(parts, toolName, toolCallId, options?.matchReturn)
+      if (existingIndex < 0 && options?.preparingIndex !== undefined) {
+        const preparingIndex = options.preparingIndex
+        const draftIndex = parts.findIndex((part) =>
+          part.type === "tool" &&
+            part.status === "preparing" &&
+            (
+              part.toolCallId === toolCallId ||
+              part.preparingIndex === preparingIndex
+            )
+        )
+        if (draftIndex >= 0) {
+          const current = parts[draftIndex] as ToolActivityItem
+          const definedPatch = Object.fromEntries(
+            Object.entries(patch).filter(([, value]) => value !== undefined)
+          ) as Partial<ToolActivityItem>
+          const next = [...parts]
+          next[draftIndex] = withEventMeta({
+            ...current,
+            ...definedPatch,
+            id: current.id,
+            type: "tool",
+            tool: toolName,
+            toolCallId: toolCallId || current.toolCallId,
+            preparingIndex,
+          } as ToolActivityItem, options?.meta)
+          return next
+        }
+      }
+      return upsertToolPartInParts(parts, toolName, patch, {
         fallbackId,
         matchReturn: options?.matchReturn,
       }).map((part) => (
-        part.toolCallId === (patch.toolCallId || fallbackId)
+        part.type === "tool" && part.toolCallId === toolCallId
           ? withEventMeta(part, options?.meta)
           : part
       ))
-    )
+    })
   }
 
   const markActiveToolsCancelled = () => {
     const cancellationMessage = t("tool.cancelRequested")
-    updateAssistantParts((parts) =>
+    updateAssistantItems((parts) =>
       parts.map((part) => {
         if (part.type !== "tool") return part
-        if (!["pending", "running", "awaiting_approval", "approved"].includes(part.status || "")) return part
-        if (!isShellToolName(part.tool, part.toolSource)) {
+        if (!["preparing", "pending", "running", "awaiting_approval", "approved"].includes(part.status || "")) return part
+        if (!isShellToolName(part.tool, part.source)) {
           return {
             ...part,
             status: "cancelled",
-            toolOutput: part.toolOutput || cancellationMessage,
+            output: part.output || cancellationMessage,
           }
         }
-        const existingChunks = part.toolOutputChunks?.length
-          ? part.toolOutputChunks
-          : shellChunksFromText(part.toolOutput || "")
+        const existingChunks = part.outputChunks?.length
+          ? part.outputChunks
+          : shellChunksFromText(part.output || "")
         const lastChunk = existingChunks[existingChunks.length - 1]
         const shellOutput = lastChunk?.stream === "system" && lastChunk.content === cancellationMessage
-          ? { chunks: existingChunks, truncated: Boolean(part.toolOutputTruncated) }
+          ? { chunks: existingChunks, truncated: Boolean(part.outputTruncated) }
           : appendShellOutputChunk(existingChunks, "system", cancellationMessage)
         return {
           ...part,
           status: "cancelled",
-          toolOutput: buildShellOutputText(shellOutput.chunks) || cancellationMessage,
-          toolOutputChunks: shellOutput.chunks,
-          toolOutputTruncated: shellOutput.truncated || part.toolOutputTruncated,
+          output: buildShellOutputText(shellOutput.chunks) || cancellationMessage,
+          outputChunks: shellOutput.chunks,
+          outputTruncated: shellOutput.truncated || part.outputTruncated,
         }
       })
     )
@@ -981,35 +1142,35 @@ const ChatView: Component<ChatViewProps> = (props) => {
     if (action.kind === "shell_tool_update") {
       const parts = ensureAssistantMessage().parts
       const existingIndex = resolveToolPartIndex(parts, "shell", action.toolCallId)
-      const existing = existingIndex >= 0 ? parts[existingIndex] : undefined
-      let nextChunks = existing?.toolOutputChunks
-      let nextOutput = existing?.toolOutput || ""
-      let nextTruncated = existing?.toolOutputTruncated
+      const existing = existingIndex >= 0 ? parts[existingIndex] as ToolActivityItem : undefined
+      let nextChunks = existing?.outputChunks
+      let nextOutput = existing?.output || ""
+      let nextTruncated = existing?.outputTruncated
       if (action.textKey) {
         const systemText = t(action.textKey)
-        const seededChunks = existing?.toolOutputChunks?.length
-          ? existing.toolOutputChunks
-          : shellChunksFromText(existing?.toolOutput || "")
+        const seededChunks = existing?.outputChunks?.length
+          ? existing.outputChunks
+          : shellChunksFromText(existing?.output || "")
         const lastChunk = seededChunks[seededChunks.length - 1]
         const shellOutput = lastChunk?.stream === "system" && lastChunk.content === systemText
-          ? { chunks: seededChunks, truncated: Boolean(existing?.toolOutputTruncated) }
+          ? { chunks: seededChunks, truncated: Boolean(existing?.outputTruncated) }
           : appendShellOutputChunk(seededChunks, "system", systemText)
         nextChunks = shellOutput.chunks
         nextOutput = buildShellOutputText(shellOutput.chunks)
-        nextTruncated = shellOutput.truncated || existing?.toolOutputTruncated
+        nextTruncated = shellOutput.truncated || existing?.outputTruncated
       }
       upsertToolPart("shell", {
         status: action.nextStatus,
         toolCallId: action.toolCallId,
-        toolOutput: nextOutput,
-        toolOutputChunks: nextChunks,
-        toolOutputTruncated: nextTruncated,
-        toolOutputFormat: "terminal",
+        output: nextOutput,
+        outputChunks: nextChunks,
+        outputTruncated: nextTruncated,
+        outputFormat: "terminal",
       }, action.toolCallId, { meta })
       return
     }
-    if (action.kind === "append_text") {
-      appendTextPart(t(action.textKey), action.prefix, { meta })
+    if (action.kind === "agent_run_status") {
+      setAgentRunState(action.state)
       return
     }
     if (action.kind === "ignore") {
@@ -1040,7 +1201,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
 
   const shouldArchiveActiveStreamBeforeEvent = (type: string, payload: Record<string, unknown>): boolean => {
     if (isStructuredUiEventType(type)) return true
-    if (type === "chat_end") return payload.response_rendered === true
+    if (type === "chat_end") return false
     return [
       "assistant_message",
       "reasoning_message",
@@ -1074,9 +1235,11 @@ const ChatView: Component<ChatViewProps> = (props) => {
       }
     }
     if (type === "reasoning_delta") {
-      appendActiveReasoningStream(String(payload.content || ""), eventMeta)
+      updateThinkingFromReasoning(String(payload.content || ""), eventMeta)
     } else if (type === "assistant_delta") {
-      appendActiveTextStream(String(payload.content || ""), eventMeta)
+      upsertAssistantStream(String(payload.content || ""), eventMeta)
+    } else if (type === "tool_call_delta") {
+      appendToolCallDeltaToToolPart(payload, eventMeta)
     } else if (type === "tool_call_stream") {
       appendToolStreamToToolPart(payload, eventMeta)
     }
@@ -1095,15 +1258,15 @@ const ChatView: Component<ChatViewProps> = (props) => {
         setPendingCancel(false)
       }
     }
-    if (type === "assistant_delta" || type === "reasoning_delta" || type === "tool_call_stream") {
+    if (type === "assistant_delta" || type === "reasoning_delta" || type === "tool_call_delta" || type === "tool_call_stream") {
       handleLiveStreamEvent(event)
       return
     }
     if (shouldArchiveActiveStreamBeforeEvent(type, payload)) {
-      archiveActiveStreamParts()
+      archiveActiveTranscriptItems()
     }
     if (type === "events_lost") {
-      appendTextPart("连接恢复后发现部分流式事件已过期，正在刷新会话状态。", "events-lost", { meta: eventMeta })
+      appendNotice("warning", "连接恢复后发现部分流式事件已过期，正在刷新会话状态。", "events-lost", { meta: eventMeta })
       const sessionId = remoteSessionIdForMutation(trace.currentSessionId())
       if (sessionId) trace.loadSession(sessionId)
     } else if (type === "chat_start") {
@@ -1114,7 +1277,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
             id: `u-${eventMeta.sessionEventSeq ?? Date.now()}`,
             role: "user",
             text: prompt,
-            parts: [] as MockPart[],
+            parts: [] as TranscriptItem[],
             timestamp: Date.now(),
             ...(eventMeta.eventKey ? { eventKey: eventMeta.eventKey } : {}),
             ...(eventMeta.sessionEventSeq !== undefined ? { sessionEventSeq: eventMeta.sessionEventSeq } : {}),
@@ -1140,7 +1303,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
         remoteSessionId !== currentSessionId &&
         remoteSessionIdForMutation(currentSessionId)
       ) {
-        appendTextPart(`会话绑定异常：远端返回 ${remoteSessionId}，当前会话是 ${currentSessionId}`, "error", { meta: eventMeta })
+        appendNotice("error", `会话绑定异常：远端返回 ${remoteSessionId}，当前会话是 ${currentSessionId}`, "error", { meta: eventMeta })
+        setRemotePeerState(remotePeerStateFromError("session binding mismatch"))
         setIsWorking(false)
         setActiveRunSessionId("")
         setPendingApprovals([])
@@ -1154,17 +1318,17 @@ const ChatView: Component<ChatViewProps> = (props) => {
         mode: stringValue(payload.mode) || trace.stats().mode,
         runStatus: chatStatus(),
       })
-      appendRemoteStatusPart(payload, eventMeta)
+      setRemotePeerState(remotePeerStateFromReady(payload))
     } else if (type === "reasoning_message") {
-      clearActiveStreamParts((part) => part.type === "reasoning" && part.reasoningStreamKey === "reasoning-stream")
-      finalizeReasoningStreamPart(String(payload.content || ""), "reasoning-message", {
+      finalizeReasoningMessage(payload, "reasoning-message", {
         format: stringValue(payload.format) === "plain" ? "plain" : "markdown",
         trim: false,
         meta: eventMeta,
       })
+      clearActiveTranscriptItems(isReasoningThinkingItem)
     } else if (type === "assistant_message") {
-      clearActiveStreamParts((part) => part.type === "text" && part.textStreamKey === "assistant-stream")
-      finalizeAssistantStreamTextPart(String(payload.content || ""), "assistant-message", {
+      clearActiveTranscriptItems((part) => part.type === "assistant_text" && part.streamKey === "assistant-stream")
+      finalizeAssistantMessage(String(payload.content || ""), "assistant-message", {
         format: "markdown",
         meta: eventMeta,
       })
@@ -1173,7 +1337,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       if (format === "terminal") {
         appendTerminalPart(String(payload.content || ""), "终端输出", eventMeta)
       } else {
-        appendTextPart(String(payload.content || ""), "output", {
+        appendNotice("info", String(payload.content || ""), "output", {
           format: format === "markdown" ? "markdown" : "plain",
           meta: eventMeta,
         })
@@ -1193,11 +1357,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     } else if (isStructuredUiEventType(type)) {
       appendUiEventPart(type, payload, eventMeta)
     } else if (type === "delegated_run_completed") {
-      appendViewPart({
-        title: "委托运行完成",
-        kind: "delegated_run",
-        payload,
-      }, eventMeta)
+      setAgentRunState(agentRunStateFromDelegatedCompletion(payload))
     } else if (type === "usage_update" || type === "run_stats") {
       applyUsageUpdate(payload)
     } else if (type === "chat_follow_up_accepted") {
@@ -1228,7 +1388,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       setStreamRecoveryMessage(message)
       setWorkingText("正在恢复输出")
       trace.patchStats({ runStatus: "running" })
-      appendTextPart("模型输出流中断，正在尝试恢复。", "stream-recovery", { meta: eventMeta })
+      appendNotice("warning", "模型输出流中断，正在尝试恢复。", "stream-recovery", { meta: eventMeta })
     } else if (type === "provider_stream_recovering") {
       setStreamRecoveryMessage(stringValue(payload.message) || "正在恢复输出。")
       setWorkingText("正在恢复输出")
@@ -1249,7 +1409,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
       setChatStatus("interrupted")
       setStreamRecoveryMessage(message)
       trace.patchStats({ runStatus: "interrupted" })
-      appendTextPart(`输出中断：${message}`, "stream-interrupted", { meta: eventMeta })
+      appendNotice("warning", `输出中断：${message}`, "stream-interrupted", { meta: eventMeta })
+      setAgentRunState((current) => settleAgentRunStateForChatEvent(current, type, payload))
       finishChatRun("interrupted")
     } else if (type === "tool_call_start") {
       const toolName = String(payload.tool_name || "tool")
@@ -1258,15 +1419,17 @@ const ChatView: Component<ChatViewProps> = (props) => {
       upsertToolPart(toolName, {
         status: "running",
         toolCallId,
-        toolSource: stringValue(payload.tool_source),
-        toolStartedAt: numberValue(payload.started_at),
-        toolInput: (payload.tool_args || {}) as Record<string, unknown>,
-      }, toolCallId, { meta: eventMeta })
+        source: stringValue(payload.tool_source),
+        startedAt: numberValue(payload.started_at),
+        input: (payload.tool_args || {}) as Record<string, unknown>,
+        resultMeta: {},
+        preparingIndex: numberValue(payload.index),
+      }, toolCallId, { meta: eventMeta, preparingIndex: numberValue(payload.index) })
     } else if (type === "tool_call_protocol_error") {
       const toolName = String(payload.tool_name || "tool")
       const toolCallId = requiredToolCallId(payload)
       if (!toolCallId) return
-      clearActiveStreamParts((part) => part.type === "tool" && part.toolCallId === toolCallId)
+      clearActiveTranscriptItems((part) => part.type === "tool" && part.toolCallId === toolCallId)
       const code = stringValue(payload.code)
       const message = String(payload.message || code || "Remote tool protocol error")
       const output = code ? `[${code}] ${message}` : message
@@ -1276,40 +1439,40 @@ const ChatView: Component<ChatViewProps> = (props) => {
       upsertToolPart(toolName, {
         status: "protocol_error",
         toolCallId,
-        toolOutput: output,
-        toolOutputFormat: "plain",
-        toolResultMeta: resultMeta,
+        output,
+        outputFormat: "plain",
+        resultMeta,
       }, toolCallId, { meta: eventMeta })
     } else if (type === "tool_call_end") {
       const toolName = String(payload.tool_name || "tool")
       const toolCallId = requiredToolCallId(payload)
       if (!toolCallId) return
-      clearActiveStreamParts((part) => part.type === "tool" && part.toolCallId === toolCallId)
+      clearActiveTranscriptItems((part) => part.type === "tool" && part.toolCallId === toolCallId)
       const outputFormat = stringValue(payload.format) || stringValue(payload.output_format) || stringValue(payload.tool_output_format) || stringValue(payload.tool_result_format)
       const toolSource = stringValue(payload.tool_source)
       const finalOutput = String(payload.tool_result || "")
       const parts = ensureAssistantMessage().parts
       const existingIndex = resolveToolPartIndex(parts, toolName, toolCallId, true)
-      const existing = existingIndex >= 0 ? parts[existingIndex] : undefined
-      const resolvedToolSource = toolSource || existing?.toolSource
+      const existing = existingIndex >= 0 ? parts[existingIndex] as ToolActivityItem : undefined
+      const resolvedToolSource = toolSource || existing?.source
       const isShell = isShellToolName(toolName, resolvedToolSource)
       const reconciledShellOutput = isShell
-        ? reconcileShellFinalOutput(existing?.toolOutput, finalOutput, existing?.toolOutputChunks)
+        ? reconcileShellFinalOutput(existing?.output, finalOutput, existing?.outputChunks)
         : finalOutput
       const shellChunks = isShell
-        ? existing?.toolOutputChunks?.length
-          ? existing.toolOutputChunks
+        ? existing?.outputChunks?.length
+          ? existing.outputChunks
           : shellChunksFromText(reconciledShellOutput)
-        : existing?.toolOutputChunks
-      const patch: Partial<MockPart> = {
+        : existing?.outputChunks
+      const patch: Partial<ToolActivityItem> = {
         status: statusAfterToolReturn(existing?.status),
-        toolSource: resolvedToolSource,
-        toolEndedAt: numberValue(payload.ended_at),
-        toolOutput: reconciledShellOutput,
-        toolOutputFormat: inferToolOutputFormat(toolName, resolvedToolSource, outputFormat),
-        toolOutputChunks: shellChunks,
-        toolFinalOutput: isShell ? finalOutput : undefined,
-        toolResultMeta: objectValue(payload.meta),
+        source: resolvedToolSource,
+        endedAt: numberValue(payload.ended_at),
+        output: reconciledShellOutput,
+        outputFormat: inferToolOutputFormat(toolName, resolvedToolSource, outputFormat),
+        outputChunks: shellChunks,
+        finalOutput: isShell ? finalOutput : undefined,
+        resultMeta: objectValue(payload.meta),
       }
       if (toolCallId) patch.toolCallId = toolCallId
       upsertToolPart(toolName, patch, toolCallId, { matchReturn: true, meta: eventMeta })
@@ -1322,8 +1485,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
       upsertToolPart(next.toolName, {
         status: autoDecision.decision === "allow" ? "approved" : autoDecision.decision === "deny" ? "denied" : "awaiting_approval",
         toolCallId: next.toolCallId,
-        toolSource: next.toolSource,
-        toolInput: next.toolArgs,
+        source: next.toolSource,
+        input: next.toolArgs,
         approvalId: next.approvalId,
         approvalReason: autoDecision.reason || next.reason,
         approvalContent: next.content,
@@ -1351,7 +1514,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       const reason = stringValue(payload.reason)
       setPendingApprovals((items) => items.filter((item) => item.approvalId !== approvalId))
       if (selectedApproval()?.approvalId === approvalId) setSelectedApproval(undefined)
-      updateAssistantParts((parts) =>
+      updateAssistantItems((parts) =>
         parts.map((part) => {
           if (part.type !== "tool") return part
           if (toolCallId && part.toolCallId !== toolCallId) return part
@@ -1374,13 +1537,14 @@ const ChatView: Component<ChatViewProps> = (props) => {
       setPendingCancel(false)
       setPendingApprovals([])
       setSelectedApproval(undefined)
+      setAgentRunState(initialAgentRunState())
       markActiveToolsCancelled()
       finishChatRun("cancelled")
     } else if (type === "error") {
       setChatRunSawError(true)
       setChatStatus("error")
       trace.patchStats({ runStatus: "error" })
-      appendTextPart(`错误：${payload.message || "unknown error"}`, "error", { meta: eventMeta })
+      appendNotice("error", `错误：${payload.message || "unknown error"}`, "error", { meta: eventMeta })
     } else if (type === "chat_failed") {
       const alreadyHadError = chatRunSawError()
       setChatRunSawError(true)
@@ -1388,14 +1552,17 @@ const ChatView: Component<ChatViewProps> = (props) => {
       setChatStatus("error")
       trace.patchStats({ runStatus: "error" })
       if (!alreadyHadError) {
-        appendTextPart(`错误：${payload.message || "unknown error"}`, "error", { meta: eventMeta })
+        appendNotice("error", `错误：${payload.message || "unknown error"}`, "error", { meta: eventMeta })
       }
+      setAgentRunState((current) => settleAgentRunStateForChatEvent(current, type, payload))
       finishChatRun("error")
     } else if (type === "chat_end") {
       setChatRunSawTerminal(true)
       if (payload.response && payload.response_rendered !== true) {
-        appendTextPart(String(payload.response), "final", { format: "markdown", meta: eventMeta })
+        clearActiveTranscriptItems((part) => part.type === "assistant_text" && part.streamKey === "assistant-stream")
+        appendAssistantTextItem(String(payload.response), "final", { format: "markdown", meta: eventMeta })
       }
+      setAgentRunState((current) => settleAgentRunStateForChatEvent(current, type, payload))
       finishChatRun(doneStatusFromCurrentRun())
     }
     markRenderedEvent(eventMeta)
@@ -1468,11 +1635,12 @@ const ChatView: Component<ChatViewProps> = (props) => {
     setDeleteSessionId(undefined)
   }
 
-  createEffect(() => {
-    if (props.historyOpen) {
-      vscode.postMessage({ type: "session.list" })
-    }
-  })
+  createEffect(on(
+    () => props.historyOpen,
+    (historyOpen) => {
+      if (historyOpen) trace.refreshSessions()
+    },
+  ))
 
   const writeClipboard = async (text: string) => {
     if (!text.trim()) return
@@ -1483,11 +1651,11 @@ const ChatView: Component<ChatViewProps> = (props) => {
     await writeClipboard(copyTextForMessage(message))
   }
 
-  const copyToolCommand = async (part: MockPart) => {
+  const copyToolCommand = async (part: ToolActivityItem) => {
     await writeClipboard(copyTextForToolCommand(part))
   }
 
-  const copyToolOutput = async (part: MockPart) => {
+  const copyToolOutput = async (part: ToolActivityItem) => {
     await writeClipboard(copyTextForToolOutput(part))
   }
 
@@ -1558,7 +1726,12 @@ const ChatView: Component<ChatViewProps> = (props) => {
   }
 
   const handleModelUnavailable = () => {
-    setModelSwitchError("正在刷新模型列表...")
+    const availability = modelAvailability()
+    if (!availability.canSelect && availability.status !== "empty" && availability.status !== "error") {
+      setModelSwitchError(availability.message)
+      return
+    }
+    setModelSwitchError(availability.message || "正在刷新模型列表...")
     chatMessages.refreshAdmin(vscode)
   }
 
@@ -1622,14 +1795,14 @@ const ChatView: Component<ChatViewProps> = (props) => {
     })
   }
 
-  const forkFromPart = (part: MockPart) => {
+  const forkFromPart = (part: TranscriptItem) => {
     const keepThroughMessageIndex = keepThroughIndexForPartFork(part)
     if (keepThroughMessageIndex === undefined) return
     requestForkSession({
       keepThroughMessageIndex,
       composeText: "",
       composeMode: "fork",
-      sourceLabel: part.sessionTitle || part.terminalTitle || part.viewTitle || part.tool || "会话记录",
+      sourceLabel: transcriptItemSourceLabel(part),
       sourceMessageId: part.id,
       sourceNodeId: part.traceNodeId,
     })
@@ -1643,16 +1816,22 @@ const ChatView: Component<ChatViewProps> = (props) => {
       mentions?: Record<string, unknown>[]
     } = {},
   ) => {
-    const sessionId = trace.currentSessionId()
+    let sessionId = trace.currentSessionId()
     const mode = options.modeOverride === undefined ? selectedMode() : options.modeOverride || ""
     const route = routeSelectedChatMode(mode, { forceDirect: options.forceDirect })
-    const remoteSessionId = remoteSessionIdForMutation(sessionId)
     const activeModelResolution = requiredModelSelection()
     if (!activeModelResolution.ok || !activeModelResolution.model) {
       setModelSwitchError(activeModelResolution.message)
       return
     }
     const activeModelOverride = activeModelResolution.model
+    const shouldCreateLocalDraft = !sessionId
+    let draftSessionId: string | undefined
+    if (shouldCreateLocalDraft) {
+      draftSessionId = trace.startDraftTask(text, createUserTurn(text))
+      sessionId = draftSessionId
+    }
+    const remoteSessionId = remoteSessionIdForMutation(sessionId)
     const activeForkCompose = forkCompose()
 
     const requestId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -1661,10 +1840,12 @@ const ChatView: Component<ChatViewProps> = (props) => {
     setPendingCancel(false)
     setActiveChatId(undefined)
     setChatStatus("running")
+    setAgentRunState(initialAgentRunState())
+    setRemotePeerState(remoteSessionId ? { status: "connecting", updatedAt: Date.now() } : initialRemotePeerState())
     setStreamRecoveryMessage("")
     resetChatRunTerminalState()
     clearActiveStreamDraft()
-    setWorkingText("正在分析请求")
+    setWorkingText("处理中")
     setPendingApprovals([])
     setSelectedApproval(undefined)
     if (activeForkCompose && activeForkCompose.sessionId === sessionId) {
@@ -1675,6 +1856,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     chatMessages.send(vscode, {
       text,
       sessionId: remoteSessionId,
+      draftSessionId,
       requestId,
       locale: locale(),
       providerId: activeModelOverride.providerId,
@@ -1698,7 +1880,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     const command = input.command || findChatCommandByText(chatCommandCatalog(), text)
     if (!command) return false
     if (isWorking() && !command?.availableDuringRun) {
-      appendTextPart("当前运行中不能执行该指令。请等待当前运行结束，或先取消运行。", "error")
+      appendNotice("error", "当前运行中不能执行该指令。请等待当前运行结束，或先取消运行。", "command-unavailable")
       return false
     }
     const sessionId = trace.currentSessionId()
@@ -1810,22 +1992,13 @@ const ChatView: Component<ChatViewProps> = (props) => {
 
   const startEnvironmentQueueItem = (item: EnvironmentQueueItem) => {
     let sessionId = trace.currentSessionId()
+    const userTurn = createUserTurn(item.text)
 
     if (!sessionId) {
-      trace.startDraftTask(item.text)
-      sessionId = trace.currentSessionId()
+      sessionId = trace.startDraftTask(item.text, userTurn)
+    } else {
+      trace.appendTurn(userTurn)
     }
-
-    trace.appendTurn({
-      userMessage: {
-        id: `u-${Date.now()}`,
-        role: "user",
-        text: item.text,
-        parts: [] as MockPart[],
-        timestamp: Date.now(),
-      },
-      assistantMessages: [],
-    })
 
     setIsWorking(true)
     setActiveRunSessionId(sessionId || "")
@@ -2032,6 +2205,10 @@ const ChatView: Component<ChatViewProps> = (props) => {
         setAutoApprovalDeniedCommands(sanitizeStringArray(payload.deniedCommands))
         setAutoApprovalPlatform(String(payload.platform || "browser"))
       }
+      const nextSessionOperationError = sessionOperationErrorAfterMessage(sessionOperationError(), msg)
+      if (nextSessionOperationError !== sessionOperationError()) {
+        setSessionOperationError(nextSessionOperationError)
+      }
       if (
         (
           msg.type === "session.loaded" ||
@@ -2043,6 +2220,17 @@ const ChatView: Component<ChatViewProps> = (props) => {
       ) {
         if (remoteSessionIdForMutation(msg.sessionId)) {
           setLocalModelOverrideProfile("")
+        }
+        if (
+          msg.type === "session.created" &&
+          isWorking() &&
+          (
+            activeRunSessionId() === trace.currentSessionId() ||
+            isLocalDraftSessionId(activeRunSessionId()) ||
+            trace.currentSessionId() === msg.sessionId
+          )
+        ) {
+          setActiveRunSessionId(msg.sessionId)
         }
         const runtime = objectValue(msg.runtimeState || msg.runtime_state)
         if (Object.keys(runtime).length) {
@@ -2129,12 +2317,6 @@ const ChatView: Component<ChatViewProps> = (props) => {
           window.setTimeout(startNextEnvironmentQueueItem, 0)
         }
       }
-      if (msg.type === "session.deleted") {
-        setSessionOperationError("")
-      }
-      if (msg.type === "session.error") {
-        setSessionOperationError(typeof msg.message === "string" ? msg.message : "会话操作失败")
-      }
       if (msg.type === "session.syncStatus" && typeof msg.payload === "object" && msg.payload) {
         setSessionSyncStatus(msg.payload as Record<string, unknown>)
       }
@@ -2219,12 +2401,12 @@ const ChatView: Component<ChatViewProps> = (props) => {
         finishChatRun("cancelled")
       }
       if (msg.type === "environment.run.error" && isWorking()) {
-        appendTextPart(`环境任务失败：${typeof msg.message === "string" ? msg.message : "unknown error"}`, "error")
+        appendNotice("error", `环境任务失败：${typeof msg.message === "string" ? msg.message : "unknown error"}`, "error")
         setEnvironmentRunQueue([])
         finishChatRun("error")
       }
       if (msg.type === "chat.error") {
-        appendTextPart(`连接错误：${typeof msg.message === "string" ? msg.message : "unknown error"}`, "error")
+        appendNotice("error", `连接错误：${typeof msg.message === "string" ? msg.message : "unknown error"}`, "error")
         setEnvironmentRunQueue([])
         finishChatRun("error")
       }
@@ -2326,12 +2508,18 @@ const ChatView: Component<ChatViewProps> = (props) => {
         onStop={chatController.runtime.handleStop}
         onTraceNodeClick={focusTraceNode}
       />
+      <RunStatusBar
+        remotePeer={remotePeerState()}
+        agentRun={agentRunState()}
+      />
 
       <main class="chat-main">
         <MessageList
           turns={visibleTurns()}
           recentSessions={trace.recentSessions()}
+          sessionListState={trace.sessionListState()}
           isWorking={visibleIsWorking()}
+          showWorkingIndicator={visibleIsWorking() && !hasVisibleRunTranscriptItems()}
           defaultReasoningOpen={server.reasoningDisplayState().defaultOpen === true}
           workingText={workingText()}
           workingElapsed={workingElapsed()}
@@ -2596,7 +2784,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
               </Show>
               <Show
                 when={filteredHistorySessions().length > 0}
-                fallback={<p class="session-history-panel__empty">{historyQuery() ? "没有匹配的会话。" : "当前没有可恢复的历史会话。"}</p>}
+                fallback={<p class="session-history-panel__empty">{historyEmptyMessage()}</p>}
               >
                 <For each={filteredHistorySessions()}>
                   {(session) => (
@@ -2667,7 +2855,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
               >
                 复制当前转录
               </button>
-              <RefreshButton class="btn-secondary" onClick={() => vscode.postMessage({ type: "session.list" })}>
+              <RefreshButton class="btn-secondary" onClick={trace.refreshSessions}>
                 刷新
               </RefreshButton>
             </footer>
@@ -2798,6 +2986,16 @@ function objectValue(value: unknown): Record<string, unknown> {
     : {}
 }
 
+function hasMeaningfulPayload(payload: Record<string, unknown>): boolean {
+  return Object.values(payload).some((value) => {
+    if (value === undefined || value === null) return false
+    if (typeof value === "string") return Boolean(value.trim())
+    if (Array.isArray(value)) return value.length > 0
+    if (typeof value === "object") return Object.keys(value as Record<string, unknown>).length > 0
+    return true
+  })
+}
+
 function inferToolOutputFormat(
   toolName: string,
   toolSource?: string,
@@ -2845,6 +3043,19 @@ function isMemoryContextPayload(payload: Record<string, unknown>): boolean {
   return payload.schema === "memory_context.v1" || payload.context_kind === "memory_injection"
 }
 
+function transcriptItemSourceLabel(part: TranscriptItem): string {
+  if (part.type === "tool") return part.title || part.tool || "工具调用"
+  if (part.type === "session") return part.title || part.sessionId || "会话"
+  if (part.type === "terminal") return part.title || "终端输出"
+  if (part.type === "view" || part.type === "context_event" || part.type === "memory_context" || part.type === "ui_event") {
+    return part.title || "运行事件"
+  }
+  if (part.type === "assistant_text") return part.markdown.slice(0, 48) || "助手消息"
+  if (part.type === "reasoning") return part.summary || "思考详情"
+  if (part.type === "notice") return part.text.slice(0, 48) || "提示"
+  return "会话记录"
+}
+
 function uiEventTitle(type: string): string {
   const labels: Record<string, string> = {
     remote_event: "远程事件",
@@ -2860,47 +3071,25 @@ function uiEventTitle(type: string): string {
   return labels[type] || "运行事件"
 }
 
-function parseTerminalTuiCards(content: string): MockPart[] {
+function isRemotePeerReadyTui(content: string): boolean {
   const normalized = content.replace(/\r\n/g, "\n")
   const titleMatch = normalized.match(/╭[─\s]*([A-Z_ ]+?)[─\s]*╮/)
-  if (!titleMatch) return []
-  const title = titleMatch[1].trim()
-  const bodyLines = normalized
-    .split("\n")
-    .map((line) => {
-      const match = line.match(/^│\s?(.*?)\s?│$/)
-      return match ? match[1].trimEnd() : ""
-    })
-    .filter(Boolean)
-
-  if (title === "REMOTE PEER READY") {
-    const fields = parseColonFields(bodyLines)
-    return [
-      {
-        id: "remote-tui",
-        type: "remote_status",
-        remotePeerId: fields.Peer || "",
-        remoteMainAgentId: fields.MainAgent || fields["Main Agent"] || "",
-        remoteAgentConfigId: fields.AgentConfig || fields["Agent Config"] || "",
-        remoteSessionId: fields.Session || "",
-        remoteFingerprint: fields.Fingerprint || "",
-        remoteMode: fields.Mode || "",
-        remoteModel: fields.Model || "",
-      },
-    ]
-  }
-
-  return []
+  return titleMatch?.[1].trim() === "REMOTE PEER READY"
 }
 
-function parseColonFields(lines: string[]): Record<string, string> {
-  const fields: Record<string, string> = {}
-  for (const line of lines) {
-    const index = line.indexOf(":")
-    if (index <= 0) continue
-    fields[line.slice(0, index).trim()] = line.slice(index + 1).trim()
+function createUserTurn(text: string): MockTurn {
+  return {
+    userMessage: {
+      id: `u-${Date.now()}`,
+      role: "user",
+      text,
+      parts: [] as TranscriptItem[],
+      timestamp: Date.now(),
+      traceNodeKind: "user_message",
+      traceNodeStatus: "success",
+    },
+    assistantMessages: [],
   }
-  return fields
 }
 
 function formatSessionDate(dateStr: string): string {

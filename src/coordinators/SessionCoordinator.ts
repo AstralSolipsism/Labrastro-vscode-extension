@@ -5,9 +5,17 @@ import type {
 } from "../LabrastroRemoteClient"
 import type { PostMessage } from "../WebviewBus"
 import type { WebviewToHostMessage } from "../protocol/messages"
-import { isRemoteError } from "../remote-errors"
+import { classifyRemoteError, isRemoteError } from "../remote-errors"
 
 type SessionSyncStatus = "synced" | "pending" | "failed"
+type SessionListStatus = "idle" | "loading" | "unauthenticated" | "unavailable" | "empty" | "ready" | "error"
+
+interface SessionRefreshResult {
+  fingerprint?: string
+  status: SessionListStatus
+  message?: string
+  error?: unknown
+}
 
 interface SessionMetadataState {
   id: string
@@ -44,6 +52,7 @@ export interface SessionCoordinatorOptions {
   ensureBackendFeatures: () => Promise<BackendFeatures | null>
   getBackendFeatures: () => BackendFeatures | null | undefined
   isChatActive: () => boolean
+  postConnectionStateIfAuthRequired: (error: unknown, post: PostMessage) => Promise<void>
 }
 
 const EMPTY_TRACE_UI = {
@@ -76,6 +85,7 @@ export class SessionCoordinator {
   private sessionListEtag: string | undefined
   private sessionInitialization: Promise<void> | undefined
   private sessionInitializationToken = 0
+  private readonly sessionRefreshes = new Map<string, Promise<SessionRefreshResult>>()
   private sessions: SessionMetadataState[] = []
 
   constructor(private readonly options: SessionCoordinatorOptions) {}
@@ -171,14 +181,41 @@ export class SessionCoordinator {
     }, post)
   }
 
+  private sessionListMessage(
+    status: SessionListStatus,
+    options: {
+      message?: string
+      fingerprint?: string
+      sessions?: SessionMetadataState[]
+    } = {}
+  ): Record<string, unknown> {
+    const sessions = status === "ready" || status === "empty"
+      ? options.sessions ?? this.sessions
+      : options.sessions ?? []
+    return {
+      type: "session.list",
+      status,
+      message: options.message || sessionListStatusMessage(status),
+      sessions,
+      fingerprint: options.fingerprint || this.sessionFingerprint,
+    }
+  }
+
+  private clearSessionList(): void {
+    this.sessionFingerprint = undefined
+    this.sessionListEtag = undefined
+    this.sessions = []
+  }
+
+  private markSessionsUnavailable(): void {
+    this.sessionApiAvailable = false
+    this.clearSessionList()
+  }
+
   async initializeSessionState(post: PostMessage): Promise<void> {
     if (this.sessionInitialization) {
       await this.sessionInitialization
-      if (this.currentSessionId) {
-        await this.loadSession(this.currentSessionId, post)
-      } else {
-        await this.postSessionList(post)
-      }
+      await this.postInitializedSessionState(post)
       return
     }
     const token = ++this.sessionInitializationToken
@@ -190,9 +227,72 @@ export class SessionCoordinator {
     }
   }
 
-  async refreshSessions(limit = 20): Promise<{ fingerprint?: string }> {
+  private async postInitializedSessionState(
+    post: PostMessage,
+    options: {
+      targetSessionId?: string
+      status?: SessionListStatus
+      message?: string
+      fingerprint?: string
+      reason?: "initial" | "explicit"
+      isStale?: () => boolean
+    } = {}
+  ): Promise<void> {
+    const targetSessionId = options.targetSessionId || this.currentSessionId
+    if (targetSessionId) {
+      await this.loadSession(targetSessionId, post, {
+        suppressListRefresh: true,
+        reason: options.reason || "initial",
+        isStale: options.isStale,
+      })
+      return
+    }
+
+    this.options.emitSessionMessage(this.sessionListMessage(
+      options.status || (this.sessions.length ? "ready" : "empty"),
+      {
+        message: options.message,
+        fingerprint: options.fingerprint || this.sessionFingerprint,
+      }
+    ), post)
+    await this.postSessionSyncStatus(post)
+  }
+
+  async refreshSessions(limit = 20): Promise<SessionRefreshResult> {
+    const refreshKey = String(limit)
+    const existingRefresh = this.sessionRefreshes.get(refreshKey)
+    if (existingRefresh) return existingRefresh
+    const refresh = this.refreshSessionsCore(limit)
+    this.sessionRefreshes.set(refreshKey, refresh)
+    try {
+      return await refresh
+    } finally {
+      if (this.sessionRefreshes.get(refreshKey) === refresh) {
+        this.sessionRefreshes.delete(refreshKey)
+      }
+    }
+  }
+
+  private async refreshSessionsCore(limit = 20): Promise<SessionRefreshResult> {
     if (this.sessionApiAvailable === false) {
-      return { fingerprint: this.sessionFingerprint }
+      const knownFeatures = this.options.getBackendFeatures()
+      if (knownFeatures?.sessions === true) {
+        this.sessionApiAvailable = undefined
+      } else {
+        return {
+          fingerprint: this.sessionFingerprint,
+          status: "unavailable",
+          message: "当前后端不支持会话历史。",
+        }
+      }
+    }
+    const features = this.options.getBackendFeatures() ?? await this.options.ensureBackendFeatures()
+    if (features && features.sessions !== true) {
+      this.markSessionsUnavailable()
+      return {
+        status: "unavailable",
+        message: "当前后端不支持会话历史。",
+      }
     }
     try {
       let payload = await this.options.client.listSessions(limit, this.sessionListEtag)
@@ -215,25 +315,47 @@ export class SessionCoordinator {
       }
     } catch (error) {
       if (isSessionApiUnavailable(error)) {
-        this.sessionApiAvailable = false
-        this.sessionFingerprint = undefined
-        this.sessionListEtag = undefined
-        this.sessions = []
-        return {}
+        this.markSessionsUnavailable()
+        return {
+          status: "unavailable",
+          message: "当前后端不支持会话历史。",
+        }
       }
-      return { fingerprint: this.sessionFingerprint }
+      if (isSessionAuthError(error)) {
+        this.clearSessionList()
+        return {
+          status: "unauthenticated",
+          message: "未登录，无法加载会话历史。",
+          error,
+        }
+      }
+      return {
+        fingerprint: this.sessionFingerprint,
+        status: "error",
+        message: sessionListErrorMessage(error),
+      }
     }
-    return { fingerprint: this.sessionFingerprint }
+    return {
+      fingerprint: this.sessionFingerprint,
+      status: this.sessions.length ? "ready" : "empty",
+      message: this.sessions.length ? "" : "当前没有可恢复的历史会话。",
+    }
   }
 
   async postSessionList(post: PostMessage): Promise<void> {
     try {
-      await this.refreshSessions(50)
-      this.options.emitSessionMessage({
-        type: "session.list",
-        sessions: this.sessions,
-        fingerprint: this.sessionFingerprint,
-      }, post)
+      this.options.emitSessionMessage(this.sessionListMessage("loading", {
+        message: "正在加载会话历史。",
+        sessions: [],
+      }), post)
+      const result = await this.refreshSessions(50)
+      if (result.status === "unauthenticated") {
+        await this.options.postConnectionStateIfAuthRequired(result.error, post)
+      }
+      this.options.emitSessionMessage(this.sessionListMessage(result.status, {
+        message: result.message,
+        fingerprint: result.fingerprint,
+      }), post)
       await this.postSessionSyncStatus(post)
     } catch (error) {
       post({ type: "session.error", message: errorMessage(error) })
@@ -521,26 +643,41 @@ export class SessionCoordinator {
   }
 
   async reloadCurrentAfterChatDone(post: PostMessage): Promise<void> {
-    await this.refreshSessions()
-    this.options.emitSessionMessage({
-      type: "session.list",
-      sessions: this.sessions,
-      fingerprint: this.sessionFingerprint,
-    }, post)
+    const result = await this.refreshSessions()
+    if (result.status === "unauthenticated") {
+      await this.options.postConnectionStateIfAuthRequired(result.error, post)
+    }
+    this.options.emitSessionMessage(this.sessionListMessage(result.status, {
+      message: result.message,
+      fingerprint: result.fingerprint,
+    }), post)
   }
 
   private async initializeSessionStateCore(post: PostMessage, token: number): Promise<void> {
     try {
       const listPayload = await this.refreshSessions(10)
       if (token !== this.sessionInitializationToken) return
+      if (listPayload.status !== "ready" && listPayload.status !== "empty") {
+        this.currentSessionId = undefined
+        await this.options.context.workspaceState.update("labrastro.currentSessionId", undefined)
+        if (listPayload.status === "unauthenticated") {
+          await this.options.postConnectionStateIfAuthRequired(listPayload.error, post)
+        }
+        await this.postInitializedSessionState(post, {
+          status: listPayload.status,
+          message: listPayload.message,
+          fingerprint: listPayload.fingerprint,
+        })
+        return
+      }
       const storedSessionId = this.options.context.workspaceState.get<string>("labrastro.currentSessionId")
       const storedExists = Boolean(
         storedSessionId && this.sessions.some((session) => session.id === storedSessionId)
       )
       const targetSessionId = storedExists ? storedSessionId : this.sessions[0]?.id
       if (targetSessionId) {
-        await this.loadSession(targetSessionId, post, {
-          suppressListRefresh: true,
+        await this.postInitializedSessionState(post, {
+          targetSessionId,
           reason: "initial",
           isStale: () => token !== this.sessionInitializationToken,
         })
@@ -548,11 +685,11 @@ export class SessionCoordinator {
       }
       this.currentSessionId = undefined
       await this.options.context.workspaceState.update("labrastro.currentSessionId", undefined)
-      this.options.emitSessionMessage({
-        type: "session.list",
-        sessions: this.sessions,
+      await this.postInitializedSessionState(post, {
+        status: listPayload.status,
+        message: listPayload.message,
         fingerprint: listPayload.fingerprint || this.sessionFingerprint,
-      }, post)
+      })
     } catch (error) {
       post({ type: "session.error", message: errorMessage(error) })
     }
@@ -604,6 +741,26 @@ function errorMessage(error: unknown): string {
 
 function isSessionApiUnavailable(error: unknown): boolean {
   return isRemoteError(error, "not_found", 404) || isRemoteError(error, "sessions_unavailable", 503)
+}
+
+function isSessionAuthError(error: unknown): boolean {
+  return classifyRemoteError(error) === "auth_required" || isRemoteError(error, undefined, 403)
+}
+
+function sessionListErrorMessage(error: unknown): string {
+  if (classifyRemoteError(error) === "transient_network") {
+    return `会话历史加载失败：${errorMessage(error)}`
+  }
+  return `会话历史加载失败：${errorMessage(error)}`
+}
+
+function sessionListStatusMessage(status: SessionListStatus): string {
+  if (status === "loading") return "正在加载会话历史。"
+  if (status === "unauthenticated") return "未登录，无法加载会话历史。"
+  if (status === "unavailable") return "当前后端不支持会话历史。"
+  if (status === "empty") return "当前没有可恢复的历史会话。"
+  if (status === "error") return "会话历史加载失败。"
+  return ""
 }
 
 function normalizeSessionMetadata(value: unknown): SessionMetadataState {

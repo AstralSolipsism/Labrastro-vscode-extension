@@ -54,6 +54,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const [selectedPopupIndex, setSelectedPopupIndex] = createSignal(0)
   const [dismissedPopupToken, setDismissedPopupToken] = createSignal("")
   const [lastWorkspaceMentionQuery, setLastWorkspaceMentionQuery] = createSignal("")
+  const [modelSearch, setModelSearch] = createSignal("")
   let textareaRef: HTMLTextAreaElement | undefined
 
   createEffect(() => {
@@ -217,12 +218,29 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   }
   const canOpenModelSelector = () => !props.modelSwitching
   const canShowModelMenu = () => canOpenModelSelector() && hasModelOptions()
+  const filteredModelOptions = createMemo(() => {
+    const query = modelSearch().trim().toLowerCase()
+    const options = props.modelOptions || []
+    if (!query) return options
+    return options.filter((option) => [
+      option.label,
+      option.provider,
+      option.model,
+      option.providerId,
+      option.modelId,
+      option.description,
+    ].join(" ").toLowerCase().includes(query))
+  })
   const modelSelectorTitle = () => {
     if (props.modelError) return props.modelError
     if (props.modelPendingLabel) return props.modelPendingLabel
     if (!hasModelOptions()) return "没有可用模型"
     return props.modelDescription || modelSelectorLabel()
   }
+
+  createEffect(() => {
+    if (!modelMenuOpen()) setModelSearch("")
+  })
 
   return (
     <div class="prompt-input-shell">
@@ -374,26 +392,42 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
             }
           >
             <div class="prompt-menu__section-label">会话模型</div>
-            <For each={props.modelOptions || []}>
-              {(option) => (
-                <button
-                  type="button"
-                  class="prompt-menu__item"
-                  classList={{ "prompt-menu__item--selected": option.id === props.selectedModel }}
-                  role="menuitemradio"
-                  aria-checked={option.id === props.selectedModel}
-                  onClick={() => {
-                    props.onModelChange?.(option.id)
-                    setModelMenuOpen(false)
-                  }}
-                >
-                  <strong>{option.label}</strong>
-                  <Show when={option.description}>
-                    <small>{option.description}</small>
-                  </Show>
-                </button>
-              )}
-            </For>
+            <label class="prompt-menu__search">
+              <span class="codicon codicon-search" aria-hidden="true" />
+              <input
+                value={modelSearch()}
+                placeholder="搜索模型"
+                aria-label="搜索模型"
+                onInput={(event) => setModelSearch(event.currentTarget.value)}
+                onKeyDown={(event) => event.stopPropagation()}
+              />
+            </label>
+            <div class="prompt-menu__scroll">
+              <Show when={filteredModelOptions().length} fallback={
+                <div class="prompt-menu__empty">无匹配模型</div>
+              }>
+                <For each={filteredModelOptions()}>
+                  {(option) => (
+                    <button
+                      type="button"
+                      class="prompt-menu__item"
+                      classList={{ "prompt-menu__item--selected": option.id === props.selectedModel }}
+                      role="menuitemradio"
+                      aria-checked={option.id === props.selectedModel}
+                      onClick={() => {
+                        props.onModelChange?.(option.id)
+                        setModelMenuOpen(false)
+                      }}
+                    >
+                      <strong>{option.label}</strong>
+                      <Show when={option.description}>
+                        <small>{option.description}</small>
+                      </Show>
+                    </button>
+                  )}
+                </For>
+              </Show>
+            </div>
           </DropdownMenu>
         </div>
         <div class="prompt-input-actions">

@@ -1920,10 +1920,15 @@ function remoteStatus(error: unknown, fallback?: number): number | undefined {
 
 function errorDiagnostics(error: unknown): JsonObject {
   if (isRemoteError(error)) {
+    const body = error.body && typeof error.body === "object" && !Array.isArray(error.body)
+      ? error.body as JsonObject
+      : {}
+    const bodyMessage = typeof body.message === "string" ? body.message : undefined
     return {
       status: error.status,
       code: error.code,
       message: error.message,
+      bodyMessage,
     }
   }
   return {

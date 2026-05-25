@@ -5,7 +5,7 @@ function cloneValue<T>(value: T): T {
 }
 
 function messageHasStructuredParts(message: MockSessionBundle["turns"][number]["userMessage"]): boolean {
-  return message.parts.some((part) => part.type !== "text")
+  return message.parts.some((part) => part.type !== "assistant_text")
 }
 
 function bundleHasStructuredContent(bundle: MockSessionBundle): boolean {

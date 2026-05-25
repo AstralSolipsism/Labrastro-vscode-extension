@@ -1,4 +1,4 @@
-import type { MockPart } from "../components/chat/mock-data"
+import type { ToolActivityItem, TranscriptItem } from "../components/chat/transcript-model"
 import type { ToolExecutionStatus } from "../types/trace"
 
 const PRESERVED_AFTER_RETURN = new Set(["denied", "cancelled", "protocol_error"])
@@ -15,7 +15,7 @@ export function requiredToolCallId(payload: Record<string, unknown>): string | u
 }
 
 export function resolveToolPartIndexForReturn(
-  parts: readonly MockPart[],
+  parts: readonly TranscriptItem[],
   _toolName: string,
   toolCallId?: string,
 ): number {
@@ -25,7 +25,7 @@ export function resolveToolPartIndexForReturn(
 }
 
 export function resolveActiveToolPartIndex(
-  parts: readonly MockPart[],
+  parts: readonly TranscriptItem[],
   _toolName: string,
   toolCallId?: string,
 ): number {
@@ -35,11 +35,11 @@ export function resolveActiveToolPartIndex(
 }
 
 export function upsertToolPartInParts(
-  parts: readonly MockPart[],
+  parts: readonly TranscriptItem[],
   toolName: string,
-  patch: Partial<MockPart>,
+  patch: Partial<ToolActivityItem>,
   options: { fallbackId?: string; matchReturn?: boolean; now?: number } = {},
-): MockPart[] {
+): TranscriptItem[] {
   const toolCallId = patch.toolCallId || options.fallbackId
   if (!toolCallId) return [...parts]
   const index = options.matchReturn
@@ -48,18 +48,18 @@ export function upsertToolPartInParts(
   const id = index >= 0
     ? parts[index].id
     : `tool-${toolCallId || `${toolName}-${options.now ?? Date.now()}-${parts.length}`}`
-  const current: MockPart = index >= 0 ? parts[index] : {
+  const current: ToolActivityItem = index >= 0 ? parts[index] as ToolActivityItem : {
     id,
     type: "tool",
     tool: toolName,
     toolCallId,
     status: "running",
-    toolOutput: "",
+    output: "",
   }
   const definedPatch = Object.fromEntries(
     Object.entries(patch).filter(([, value]) => value !== undefined)
-  ) as Partial<MockPart>
-  const next = { ...current, ...definedPatch, id, type: "tool", tool: toolName } as MockPart
+  ) as Partial<ToolActivityItem>
+  const next = { ...current, ...definedPatch, id, type: "tool", tool: toolName } as ToolActivityItem
   if (index < 0) return [...parts, next]
   const updated = [...parts]
   updated[index] = next

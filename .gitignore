@@ -23,5 +23,6 @@ pnpm-debug.log*
 Thumbs.db
 .gitnexus/
 .claude/
+.rcoder/
 AGENTS.md
 CLAUDE.md

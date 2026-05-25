@@ -108,6 +108,8 @@ const CHAT_EVENTS_RECOVERY_DEADLINE_MS = 5 * 60 * 1000
 const CHAT_WEBVIEW_TARGETS: readonly WebviewTarget[] = ["sidebar"]
 const SESSION_WEBVIEW_TARGETS: readonly WebviewTarget[] = ["sidebar", "agentManager"]
 const WORKSPACE_FILE_EXCLUDE_GLOB = "{**/node_modules/**,**/.git/**,**/dist/**,**/out/**,**/build/**,**/.next/**,**/target/**}"
+type AdminErrorScope = "adminState" | "adminAction" | "peerDiagnostics"
+
 export class LabrastroController implements vscode.Disposable {
   private readonly client: LabrastroRemoteClient
   private readonly approvalDocuments: ApprovalDocumentProvider
@@ -129,6 +131,7 @@ export class LabrastroController implements vscode.Disposable {
       context: this.context,
       connectionErrorState: this.connectionErrorState.bind(this),
       postConnectionState: this.postConnectionState.bind(this),
+      postConnectionStateIfAuthRequired: this.postConnectionStateIfAuthRequired.bind(this),
       postAdminState: this.postAdminState.bind(this),
       refreshBackendFeatures: this.refreshBackendFeatures.bind(this),
       refreshToolchainState: this.refreshToolchainState.bind(this),
@@ -159,6 +162,7 @@ export class LabrastroController implements vscode.Disposable {
       ensureBackendFeatures: this.ensureBackendFeatures.bind(this),
       getBackendFeatures: () => this.backendFeatures,
       isChatActive: () => this.chatRunCoordinator.isActive(),
+      postConnectionStateIfAuthRequired: this.postConnectionStateIfAuthRequired.bind(this),
     })
     this.chatRunCoordinator = new ChatRunCoordinator({
       client: this.client,
@@ -512,7 +516,8 @@ export class LabrastroController implements vscode.Disposable {
     try {
       post({ type: "admin.state", payload: await this.client.adminStatus() })
     } catch (error) {
-      post({ type: "admin.error", message: errorMessage(error) })
+      post(adminErrorPayload(error, "adminState"))
+      await this.postConnectionStateIfAuthRequired(error, post)
     }
   }
 
@@ -530,7 +535,7 @@ export class LabrastroController implements vscode.Disposable {
     error: unknown,
     post: PostMessage
   ): Promise<void> {
-    if (classifyRemoteError(error) === "auth_required") {
+    if (classifyRemoteError(error) === "auth_required" || isRemoteError(error, undefined, 403)) {
       if (this.webviewBus.size > 0) {
         await this.broadcastConnectionState()
         return
@@ -1254,12 +1259,7 @@ export class LabrastroController implements vscode.Disposable {
 
   private async refreshEnvironmentSessionList(post: PostMessage): Promise<void> {
     try {
-      await this.sessionCoordinator.refreshSessions()
-      this.emitSessionMessage({
-        type: "session.list",
-        sessions: this.sessionCoordinator.list,
-        fingerprint: this.sessionCoordinator.fingerprint,
-      }, post)
+      await this.sessionCoordinator.postSessionList(post)
     } catch {
       // Session history refresh should not mask the environment run result.
     }
@@ -1583,7 +1583,8 @@ export class LabrastroController implements vscode.Disposable {
       post({ type: "admin.actionResult", payload: await action() })
       return true
     } catch (error) {
-      post({ type: "admin.error", message: errorMessage(error) })
+      post(adminErrorPayload(error, "adminAction"))
+      await this.postConnectionStateIfAuthRequired(error, post)
       return false
     }
   }
@@ -1818,6 +1819,52 @@ function chatErrorMessage(error: unknown): string {
     return "登录已失效，请重新登录。"
   }
   return errorMessage(error)
+}
+
+function adminErrorPayload(error: unknown, scope?: AdminErrorScope): Record<string, unknown> {
+  const message = adminErrorMessage(error)
+  const category = adminErrorCategory(error)
+  const clearsState = adminErrorClearsState(category, scope)
+  const payload: Record<string, unknown> = {
+    type: "admin.error",
+    message,
+    category,
+    stale: clearsState,
+    clearsState,
+  }
+  if (scope) {
+    payload.scope = scope
+  }
+  if (isRemoteError(error)) {
+    payload.status = error.status
+    payload.code = error.code
+    payload.body = error.body
+  }
+  return payload
+}
+
+function adminErrorMessage(error: unknown): string {
+  if (!isRemoteError(error)) return errorMessage(error)
+  const detail = stringValue(objectValue(error.body).message)
+  if (!detail || error.message.includes(detail)) return error.message
+  return `${error.message}: ${detail}`
+}
+
+function adminErrorCategory(error: unknown): "unauthenticated" | "forbidden" | "unavailable" | "network" | "unknown" {
+  if (isRemoteError(error) && error.status === 403) return "forbidden"
+  if (classifyRemoteError(error) === "auth_required") return "unauthenticated"
+  if (isRemoteError(error) && [404, 408, 429, 500, 502, 503, 504].includes(error.status)) return "unavailable"
+  if (classifyRemoteError(error) === "transient_network") return "network"
+  return "unknown"
+}
+
+function adminErrorClearsState(
+  category: "unauthenticated" | "forbidden" | "unavailable" | "network" | "unknown",
+  scope?: AdminErrorScope
+): boolean {
+  if (category === "unauthenticated" || category === "forbidden") return true
+  if (scope === "adminAction" || scope === "peerDiagnostics") return false
+  return scope === "adminState" && (category === "unavailable" || category === "network")
 }
 
 function postAuthError(post: (message: Record<string, unknown>) => void, error: unknown): void {
