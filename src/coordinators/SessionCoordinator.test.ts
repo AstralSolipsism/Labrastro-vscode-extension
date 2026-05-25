@@ -42,6 +42,27 @@ function documentFor(id: string, title = "Remote") {
   }
 }
 
+function recordFor(
+  id: string,
+  title = "Remote",
+  runtimeState: Record<string, unknown> = {}
+) {
+  return {
+    schema_version: 2,
+    metadata: {
+      id,
+      model: "m1",
+      saved_at: "2026-05-10T00:00:00.000Z",
+      preview: title,
+      fingerprint: "fp-1",
+    },
+    runtime_state: runtimeState,
+    history: { messages: [], active_mode: undefined },
+    transcript: documentFor(id, title),
+    events: [],
+  }
+}
+
 async function coordinator(
   clientOverrides: Partial<LabrastroRemoteClient> = {},
   features: BackendFeatures | null = writableFeatures
@@ -56,26 +77,18 @@ async function coordinator(
     hostUrl: "http://localhost:8000",
     listSessions: vi.fn(async () => ({ sessions: [], fingerprint: "fp-1" })),
     newSession: vi.fn(async () => ({
-      metadata: { id: "remote-1", saved_at: "2026-05-10T00:00:00.000Z", preview: "Remote" },
-      document: documentFor("remote-1"),
-      runtime_state: {},
+      record: recordFor("remote-1"),
       fingerprint: "fp-1",
     })),
     loadSession: vi.fn(async () => ({
-      metadata: { id: "remote-1", saved_at: "2026-05-10T00:00:00.000Z", preview: "Remote" },
-      document: documentFor("remote-1"),
-      runtime_state: {},
+      record: recordFor("remote-1"),
     })),
     switchSessionMainModel: vi.fn(async () => ({
-      metadata: { id: "remote-1", saved_at: "2026-05-10T00:00:00.000Z", preview: "Remote" },
-      document: documentFor("remote-1"),
-      runtime_state: { active_model_provider: "p1", active_model: "m1" },
+      record: recordFor("remote-1", "Remote", { active_model_provider: "p1", active_model: "m1" }),
       active_model: { provider_id: "p1", model_id: "m1" },
     })),
     forkSession: vi.fn(async () => ({
-      metadata: { id: "fork-1", saved_at: "2026-05-10T00:00:00.000Z", preview: "Fork" },
-      document: documentFor("fork-1", "Fork"),
-      runtime_state: {},
+      record: recordFor("fork-1", "Fork"),
       fingerprint: "fp-1",
     })),
     deleteSession: vi.fn(),
@@ -107,7 +120,7 @@ describe("SessionCoordinator", () => {
     expect(loadSession).toHaveBeenCalledWith("s1", post)
   })
 
-  it("hydrates loaded sessions from server document", async () => {
+  it("hydrates loaded sessions from server record", async () => {
     const { emitSessionMessage, subject } = await coordinator()
     const post = vi.fn()
 
@@ -117,6 +130,7 @@ describe("SessionCoordinator", () => {
     expect(loaded).toMatchObject({
       type: "session.loaded",
       sessionId: "remote-1",
+      record: { schema_version: 2 },
       document: { last_event_seq: 5 },
       bundle: {
         session: { id: "remote-1", title: "Remote" },
@@ -382,9 +396,7 @@ describe("SessionCoordinator", () => {
 
   it("loads the current session for every concurrent session initializer", async () => {
     const loadSession = vi.fn(async (sessionId: string) => ({
-      metadata: { id: sessionId, saved_at: "2026-05-10T00:00:00.000Z", preview: "Remote" },
-      document: documentFor(sessionId),
-      runtime_state: {},
+      record: recordFor(sessionId),
     }))
     const { client, emitSessionMessage, subject } = await coordinator({
       listSessions: vi.fn(async () => {

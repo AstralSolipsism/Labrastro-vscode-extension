@@ -378,8 +378,9 @@ export class SessionCoordinator {
     try {
       const payload = await this.options.client.loadSession(sessionId)
       if (options.isStale?.()) return
-      const metadata = normalizeSessionMetadata(payload.metadata)
+      const metadata = normalizePayloadSessionMetadata(payload)
       const bundle = buildSessionBundle(payload, metadata)
+      const record = sessionRecordFromPayload(payload)
       this.currentSessionId = metadata.id
       void this.options.context.workspaceState.update("labrastro.currentSessionId", metadata.id)
       if (!options.suppressListRefresh) {
@@ -390,9 +391,10 @@ export class SessionCoordinator {
         sessionId: metadata.id,
         reason: options.reason,
         metadata,
-        document: objectValue(payload.document),
+        record,
+        document: sessionDocumentFromPayload(payload),
         bundle,
-        runtimeState: objectValue(payload.runtime_state),
+        runtimeState: sessionRuntimeStateFromPayload(payload),
         sessions: this.sessions,
         fingerprint: this.sessionFingerprint,
       }, post)
@@ -408,8 +410,9 @@ export class SessionCoordinator {
     try {
       const payload = await this.options.client.newSession()
       this.sessionApiAvailable = true
-      const metadata = normalizeSessionMetadata(payload.metadata)
+      const metadata = normalizePayloadSessionMetadata(payload)
       const bundle = buildSessionBundle(payload, metadata)
+      const record = sessionRecordFromPayload(payload)
       this.currentSessionId = metadata.id
       void this.options.context.workspaceState.update("labrastro.currentSessionId", metadata.id)
       if (!options.suppressListRefresh) {
@@ -422,9 +425,10 @@ export class SessionCoordinator {
         type: "session.created",
         sessionId: metadata.id,
         metadata,
-        document: objectValue(payload.document),
+        record,
+        document: sessionDocumentFromPayload(payload),
         bundle,
-        runtimeState: objectValue(payload.runtime_state),
+        runtimeState: sessionRuntimeStateFromPayload(payload),
         sessions: this.sessions,
         fingerprint: this.sessionFingerprint,
       }, post)
@@ -464,7 +468,8 @@ export class SessionCoordinator {
         request.keepThroughMessageIndex
       )
       this.sessionApiAvailable = true
-      const metadata = normalizeSessionMetadata(payload.metadata)
+      const metadata = normalizePayloadSessionMetadata(payload)
+      const record = sessionRecordFromPayload(payload)
       if (metadata.id) {
         this.currentSessionId = metadata.id
         await this.options.context.workspaceState.update("labrastro.currentSessionId", metadata.id)
@@ -474,9 +479,10 @@ export class SessionCoordinator {
         type: "session.forked",
         sessionId: metadata.id,
         metadata,
-        document: objectValue(payload.document),
+        record,
+        document: sessionDocumentFromPayload(payload),
         bundle: buildSessionBundle(payload, metadata),
-        runtimeState: objectValue(payload.runtime_state),
+        runtimeState: sessionRuntimeStateFromPayload(payload),
         sessions: this.sessions,
         fingerprint: this.sessionFingerprint || stringValue(payload.fingerprint),
         sourceSessionId,
@@ -578,7 +584,8 @@ export class SessionCoordinator {
       try {
         const created = await this.options.client.newSession()
         this.sessionApiAvailable = true
-        const metadata = normalizeSessionMetadata(created.metadata)
+        const metadata = normalizePayloadSessionMetadata(created)
+        const record = sessionRecordFromPayload(created)
         sessionId = metadata.id
         this.currentSessionId = metadata.id
         await this.options.context.workspaceState.update("labrastro.currentSessionId", metadata.id)
@@ -586,9 +593,10 @@ export class SessionCoordinator {
           type: "session.created",
           sessionId: metadata.id,
           metadata,
-          document: objectValue(created.document),
+          record,
+          document: sessionDocumentFromPayload(created),
           bundle: buildSessionBundle(created, metadata),
-          runtimeState: objectValue(created.runtime_state),
+          runtimeState: sessionRuntimeStateFromPayload(created),
           sessions: this.sessions,
           fingerprint: this.sessionFingerprint || stringValue(created.fingerprint),
         }, post)
@@ -704,7 +712,8 @@ export class SessionCoordinator {
     post: PostMessage
   ): Promise<SessionMetadataState> {
     this.sessionApiAvailable = true
-    const metadata = normalizeSessionMetadata(payload.metadata)
+    const metadata = normalizePayloadSessionMetadata(payload)
+    const record = sessionRecordFromPayload(payload)
     if (metadata.id) {
       this.currentSessionId = metadata.id
       await this.options.context.workspaceState.update("labrastro.currentSessionId", metadata.id)
@@ -715,9 +724,10 @@ export class SessionCoordinator {
         type: "session.state",
         sessionId: metadata.id,
         metadata,
-        document: objectValue(payload.document),
+        record,
+        document: sessionDocumentFromPayload(payload),
         bundle: buildSessionBundle(payload, metadata),
-        runtimeState: objectValue(payload.runtime_state),
+        runtimeState: sessionRuntimeStateFromPayload(payload),
         sessions: this.sessions,
         fingerprint: this.sessionFingerprint || stringValue(payload.fingerprint),
       }, post)
@@ -726,7 +736,7 @@ export class SessionCoordinator {
       type: "session.model.state",
       sessionId: metadata.id || fallbackSessionId,
       payload,
-      runtimeState: objectValue(payload.runtime_state),
+      runtimeState: sessionRuntimeStateFromPayload(payload),
       providerId,
       modelId,
       requestId,
@@ -784,6 +794,32 @@ function normalizeSessionMetadata(value: unknown): SessionMetadataState {
   }
 }
 
+function normalizePayloadSessionMetadata(payload: Record<string, unknown>): SessionMetadataState {
+  const recordMetadata = objectValue(sessionRecordFromPayload(payload).metadata)
+  return normalizeSessionMetadata({
+    ...recordMetadata,
+    ...objectValue(payload.metadata),
+  })
+}
+
+function sessionRecordFromPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  return objectValue(payload.record)
+}
+
+function sessionDocumentFromPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  const transcript = objectValue(sessionRecordFromPayload(payload).transcript)
+  if (Object.keys(transcript).length > 0) return transcript
+  return objectValue(payload.document)
+}
+
+function sessionRuntimeStateFromPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  const runtimeState = objectValue(payload.runtime_state)
+  if (Object.keys(runtimeState).length > 0) return runtimeState
+  const camelRuntimeState = objectValue(payload.runtimeState)
+  if (Object.keys(camelRuntimeState).length > 0) return camelRuntimeState
+  return objectValue(sessionRecordFromPayload(payload).runtime_state)
+}
+
 function normalizeSessionMetadataList(value: unknown): SessionMetadataState[] {
   if (!Array.isArray(value)) return []
   return value
@@ -795,11 +831,11 @@ function buildSessionBundle(
   payload: Record<string, unknown>,
   metadata: SessionMetadataState
 ): Record<string, unknown> {
-  const document = objectValue(payload.document)
+  const document = sessionDocumentFromPayload(payload)
   const documentSession = objectValue(document.session)
   const documentStats = objectValue(document.stats)
   const trace = objectValue(document.trace)
-  const runtimeState = objectValue(payload.runtime_state)
+  const runtimeState = sessionRuntimeStateFromPayload(payload)
   const modelProfile = objectValue(payload.model_profile)
   const session = {
     id: metadata.id,

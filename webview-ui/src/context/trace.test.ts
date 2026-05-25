@@ -223,4 +223,29 @@ describe("trace session normalization", () => {
     expect(bundle?.session.title).toBe("bundle")
     expect(bundle?.turns[0].userMessage.text).toBe("bundle-user")
   })
+
+  it("uses the unified session record transcript when no bundle is present", () => {
+    const bundle = normalizeRemoteSessionPayload({
+      record: {
+        schema_version: 2,
+        metadata: { id: "session-1", preview: "record" },
+        transcript: {
+          session: {
+            id: "session-1",
+            title: "record",
+            updatedAt: "2026-05-23T00:00:00.000Z",
+          },
+          turns: [
+            {
+              userMessage: { id: "user-1", role: "user", text: "record-user", parts: [] },
+              assistantMessages: [],
+            },
+          ],
+        },
+      },
+    })
+
+    expect(bundle?.session.title).toBe("record")
+    expect(bundle?.turns[0].userMessage.text).toBe("record-user")
+  })
 })

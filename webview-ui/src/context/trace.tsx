@@ -658,7 +658,12 @@ export function normalizeSessionBundle(value: unknown): MockSessionBundle | unde
 }
 
 export function normalizeRemoteSessionPayload(message: Record<string, unknown>): MockSessionBundle | undefined {
-  return normalizeSessionBundle(message.bundle) || normalizeSessionBundle(message.document)
+  const record = objectValue(message.record)
+  return (
+    normalizeSessionBundle(message.bundle) ||
+    normalizeSessionBundle(record.transcript) ||
+    normalizeSessionBundle(message.document)
+  )
 }
 
 interface TraceSnapshotPayload {

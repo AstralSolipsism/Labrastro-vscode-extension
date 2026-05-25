@@ -2232,7 +2232,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         ) {
           setActiveRunSessionId(msg.sessionId)
         }
-        const runtime = objectValue(msg.runtimeState || msg.runtime_state)
+        const runtime = sessionRuntimeStateFromMessage(msg as Record<string, unknown>)
         if (Object.keys(runtime).length) {
           setSessionRuntimeState(runtime)
         }
@@ -2276,7 +2276,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         const payload = objectValue(msg.payload)
         const requestId = stringValue(msg.requestId) || stringValue(payload.requestId) || stringValue(payload.request_id) || ""
         if (!shouldAcceptModelSwitchResponse(modelSwitchRequestId(), requestId)) return
-        const runtime = objectValue(payload.runtime_state || msg.runtimeState || msg.runtime_state)
+        const runtime = sessionRuntimeStateFromMessage(msg as Record<string, unknown>, payload)
         const activeModel = objectValue(payload.active_model)
         const providerId =
           stringValue(activeModel.provider_id) ||
@@ -2984,6 +2984,19 @@ function objectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {}
+}
+
+function sessionRuntimeStateFromMessage(
+  message: Record<string, unknown>,
+  payload: Record<string, unknown> = objectValue(message.payload)
+): Record<string, unknown> {
+  const direct = objectValue(message.runtimeState || message.runtime_state)
+  if (Object.keys(direct).length > 0) return direct
+  const payloadRuntime = objectValue(payload.runtime_state || payload.runtimeState)
+  if (Object.keys(payloadRuntime).length > 0) return payloadRuntime
+  const recordRuntime = objectValue(objectValue(message.record).runtime_state)
+  if (Object.keys(recordRuntime).length > 0) return recordRuntime
+  return objectValue(objectValue(payload.record).runtime_state)
 }
 
 function hasMeaningfulPayload(payload: Record<string, unknown>): boolean {
