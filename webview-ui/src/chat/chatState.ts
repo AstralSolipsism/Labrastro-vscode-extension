@@ -141,8 +141,6 @@ export function normalizeModelOptions(
 ): ChatModelOption[] {
   return uniqueModels([
     ...modelOptionsFromProfiles(adminState.model_profiles, adminState.active_main),
-    ...modelOptionsFromCatalog(adminState.provider_model_catalog),
-    ...modelOptionsFromProviders(adminState.providers),
     ...modelOptionsFromRuntime(runtimeState),
   ])
 }
@@ -369,68 +367,6 @@ function modelOptionsFromProfiles(value: unknown, activeMain: unknown): ChatMode
         ...(Object.keys(parameters).length ? { parameters } : {}),
       }
     })
-}
-
-function modelOptionsFromCatalog(value: unknown): ChatModelOption[] {
-  if (!Array.isArray(value)) return []
-  return value
-    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
-    .map((item) => {
-      const providerId = stringValue(item.provider_id) || stringValue(item.providerId) || stringValue(item.provider)
-      const modelId = stringValue(item.model_id) || stringValue(item.modelId) || stringValue(item.model) || stringValue(item.id)
-      const modelName = stringValue(item.label) || stringValue(item.display_name) || modelId
-      const parameters = objectValue(item.parameters)
-      return {
-        id: modelOptionId(providerId, modelId),
-        providerId,
-        modelId,
-        label: modelDisplayLabel(providerId, modelName),
-        model: modelId,
-        provider: providerId,
-        description: "",
-        activeDefault: item.active_default === true,
-        activeSession: item.active_session === true,
-        ...(Object.keys(parameters).length ? { parameters } : {}),
-      }
-    })
-}
-
-function modelOptionsFromProviders(value: unknown): ChatModelOption[] {
-  if (!Array.isArray(value)) return []
-  const options: ChatModelOption[] = []
-  for (const provider of value) {
-    if (!provider || typeof provider !== "object") continue
-    const providerRecord = provider as Record<string, unknown>
-    if (providerRecord.enabled === false) continue
-    const providerId = stringValue(providerRecord.id) || stringValue(providerRecord.provider_id)
-    const rawModels = Array.isArray(providerRecord.models) ? providerRecord.models : []
-    for (const rawModel of rawModels) {
-      const modelRecord = typeof rawModel === "string"
-        ? { id: rawModel }
-        : rawModel && typeof rawModel === "object"
-          ? rawModel as Record<string, unknown>
-          : {}
-      const modelId = stringValue(modelRecord.model_id) || stringValue(modelRecord.model) || stringValue(modelRecord.id)
-      if (!modelId) continue
-      const parameters = objectValue(modelRecord.parameters)
-      options.push({
-        id: modelOptionId(providerId, modelId),
-        providerId,
-        modelId,
-        label: modelDisplayLabel(
-          providerId,
-          stringValue(modelRecord.label) || stringValue(modelRecord.display_name) || modelId,
-        ),
-        model: modelId,
-        provider: providerId,
-        description: "",
-        activeDefault: modelRecord.active_default === true,
-        activeSession: modelRecord.active_session === true,
-        ...(Object.keys(parameters).length ? { parameters } : {}),
-      })
-    }
-  }
-  return options
 }
 
 function modelOptionsFromRuntime(value: unknown): ChatModelOption[] {

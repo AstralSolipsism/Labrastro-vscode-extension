@@ -182,7 +182,7 @@ describe("chat state", () => {
     expect(canUseTaskflow({})).toBe(false)
   })
 
-  it("normalizes provider model catalog options from admin state", () => {
+  it("keeps provider model catalog out of chat selectable models", () => {
     const options = normalizeModelOptions({
       provider_model_catalog: [
         { provider_id: "deepseek", model_id: "V4FLASH" },
@@ -190,29 +190,15 @@ describe("chat state", () => {
       ],
     })
 
-    expect(options).toMatchObject([
-      {
-        id: "deepseek::V4FLASH",
-        providerId: "deepseek",
-        modelId: "V4FLASH",
-        label: "deepseek：V4FLASH",
-        description: "",
-      },
-      {
-        id: "deepseek::V4PRO",
-        providerId: "deepseek",
-        modelId: "V4PRO",
-        label: "deepseek：DeepSeek Pro",
-      },
-    ])
-    expect(modelLabel("deepseek::V4PRO", options)).toBe("deepseek：DeepSeek Pro")
+    expect(options).toEqual([])
+    expect(modelLabel("deepseek::V4PRO", options)).toBe("deepseek::V4PRO")
     expect(modelDescription("deepseek::V4PRO", options)).toBe("")
   })
 
   it("gates chat model availability by login and scoped model request state", () => {
     const options = normalizeModelOptions({
-      provider_model_catalog: [
-        { provider_id: "deepseek", model_id: "V4FLASH" },
+      model_profiles: [
+        { provider: "deepseek", model: "V4FLASH" },
       ],
     })
 
@@ -242,7 +228,7 @@ describe("chat state", () => {
     })
   })
 
-  it("normalizes provider model arrays from admin providers", () => {
+  it("keeps provider cached model arrays out of chat selectable models", () => {
     const options = normalizeModelOptions({
       providers: [
         {
@@ -256,11 +242,7 @@ describe("chat state", () => {
       ],
     })
 
-    expect(options.map((option) => option.id)).toEqual([
-      "deepseek::V4FLASH",
-      "deepseek::V4PRO",
-    ])
-    expect(modelLabel("deepseek::V4PRO", options)).toBe("deepseek：V4 Pro")
+    expect(options).toEqual([])
   })
 
   it("uses saved model profile parameters before raw catalog entries", () => {
@@ -300,6 +282,35 @@ describe("chat state", () => {
     expect(modelDescription("deepseek::deepseek-chat", options)).toContain("上下文 1M")
   })
 
+  it("keeps saved model profiles selectable without provider catalog cache", () => {
+    const options = normalizeModelOptions({
+      active_main: "manual-profile",
+      model_profiles: [
+        {
+          id: "manual-profile",
+          provider: "custom-provider",
+          model: "manual-model",
+          max_tokens: 4096,
+          max_context_tokens: 64000,
+        },
+      ],
+      providers: [
+        {
+          id: "custom-provider",
+          enabled: true,
+          models: [],
+        },
+      ],
+    })
+
+    expect(options).toHaveLength(1)
+    expect(options[0]).toMatchObject({
+      id: "custom-provider::manual-model",
+      activeDefault: true,
+    })
+    expect(resolveRequiredChatModelSelection("custom-provider::manual-model", options).ok).toBe(true)
+  })
+
   it("keeps the active runtime model available when provider catalog is absent", () => {
     const options = normalizeModelOptions({}, {
       active_model_provider: "deepseek",
@@ -320,13 +331,13 @@ describe("chat state", () => {
     })).toBe("deepseek::V4PRO")
   })
 
-  it("selects current, session active model, agent default, then first provider model", () => {
+  it("selects current, session active model, agent default, then first saved model profile", () => {
     const options = normalizeModelOptions({
       active_mode: "coder",
       active_agent_model: { provider: "openai", model: "gpt-5.4" },
-      provider_model_catalog: [
-        { provider_id: "openai", model_id: "gpt-5.4" },
-        { provider_id: "anthropic", model_id: "claude-sonnet" },
+      model_profiles: [
+        { provider: "openai", model: "gpt-5.4" },
+        { provider: "anthropic", model: "claude-sonnet" },
       ],
     })
 
@@ -338,8 +349,8 @@ describe("chat state", () => {
 
   it("requires a resolved model before chat can start", () => {
     const options = normalizeModelOptions({
-      provider_model_catalog: [
-        { provider_id: "deepseek", model_id: "V4FLASH" },
+      model_profiles: [
+        { provider: "deepseek", model: "V4FLASH" },
       ],
     })
 
@@ -360,9 +371,9 @@ describe("chat state", () => {
 
   it("routes model selection to immediate switch or queued switch", () => {
     const options = normalizeModelOptions({
-      provider_model_catalog: [
-        { provider_id: "deepseek", model_id: "V4FLASH" },
-        { provider_id: "deepseek", model_id: "V4PRO" },
+      model_profiles: [
+        { provider: "deepseek", model: "V4FLASH" },
+        { provider: "deepseek", model: "V4PRO" },
       ],
     })
 
