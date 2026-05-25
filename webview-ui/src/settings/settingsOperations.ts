@@ -1,6 +1,7 @@
 import type { SettingsTab } from "./settingsControllerUtils"
 
 export type SettingsOperationStatus = "idle" | "loading" | "saving" | "success" | "error"
+export type SettingsRefreshMode = "foreground" | "background"
 
 export type SettingsOperationKey =
   | "admin"
@@ -45,9 +46,12 @@ export interface SettingsOperationState {
   error?: string
   lastStartedAt?: number
   lastCompletedAt?: number
+  targetId?: string
+  requestId?: string
 }
 
 export type SettingsOperationStates = Record<SettingsOperationKey, SettingsOperationState>
+export type SettingsBackgroundRefreshes = Partial<Record<SettingsOperationKey, true>>
 
 export const SETTINGS_SERVER_SETTINGS_SAVE_KEYS: SettingsOperationKey[] = [
   "conversationSave",
@@ -61,14 +65,17 @@ export const SETTINGS_SERVER_SETTINGS_SAVE_KEYS: SettingsOperationKey[] = [
   "capabilitySyncSave",
 ]
 
-export const SETTINGS_PROVIDER_ADMIN_ACTION_KEYS: SettingsOperationKey[] = [
-  "providerModels",
+export const SETTINGS_PROVIDER_WRITE_KEYS: SettingsOperationKey[] = [
   "providerSave",
-  "providerTest",
   "providerCopy",
   "providerDelete",
   "providerEnable",
   "modelProfileSave",
+]
+
+export const SETTINGS_PROVIDER_ACTION_RESULT_KEYS: SettingsOperationKey[] = [
+  ...SETTINGS_PROVIDER_WRITE_KEYS,
+  "providerTest",
 ]
 
 export const SETTINGS_AGENT_RUN_OPERATION_KEYS: SettingsOperationKey[] = [
@@ -157,12 +164,92 @@ export function settingsOperationIsBusy(
   return status === "loading" || status === "saving"
 }
 
+export function settingsBackgroundRefreshIsBusy(
+  backgroundRefreshes: SettingsBackgroundRefreshes,
+  key: SettingsOperationKey,
+): boolean {
+  return backgroundRefreshes[key] === true
+}
+
+export function markSettingsBackgroundRefreshStarted(
+  backgroundRefreshes: SettingsBackgroundRefreshes,
+  key: SettingsOperationKey,
+): SettingsBackgroundRefreshes {
+  return {
+    ...backgroundRefreshes,
+    [key]: true,
+  }
+}
+
+export function markSettingsBackgroundRefreshFinished(
+  backgroundRefreshes: SettingsBackgroundRefreshes,
+  key: SettingsOperationKey,
+): SettingsBackgroundRefreshes {
+  if (!backgroundRefreshes[key]) return backgroundRefreshes
+  const next = { ...backgroundRefreshes }
+  delete next[key]
+  return next
+}
+
+export function settingsRefreshShouldSendRequest(
+  states: SettingsOperationStates,
+  backgroundRefreshes: SettingsBackgroundRefreshes,
+  key: SettingsOperationKey,
+  mode: SettingsRefreshMode,
+): boolean {
+  if (key === "providerModels" && mode === "background") return false
+  if (settingsOperationIsBusy(states, key)) return false
+  if (settingsBackgroundRefreshIsBusy(backgroundRefreshes, key)) return false
+  return true
+}
+
+export function settingsRefreshShouldMarkForeground(
+  states: SettingsOperationStates,
+  backgroundRefreshes: SettingsBackgroundRefreshes,
+  key: SettingsOperationKey,
+  mode: SettingsRefreshMode,
+): boolean {
+  if (mode !== "foreground") return false
+  if (settingsOperationIsBusy(states, key)) return false
+  return key === "providerModels" || settingsBackgroundRefreshIsBusy(backgroundRefreshes, key)
+    || settingsRefreshShouldSendRequest(states, backgroundRefreshes, key, mode)
+}
+
 export function settingsServerSettingsSaveIsBusy(states: SettingsOperationStates): boolean {
   return SETTINGS_SERVER_SETTINGS_SAVE_KEYS.some((key) => settingsOperationIsBusy(states, key))
 }
 
-export function settingsProviderAdminActionIsBusy(states: SettingsOperationStates): boolean {
-  return SETTINGS_PROVIDER_ADMIN_ACTION_KEYS.some((key) => settingsOperationIsBusy(states, key))
+export function settingsServerSettingsWriteIsBusy(states: SettingsOperationStates): boolean {
+  return settingsServerSettingsSaveIsBusy(states)
+}
+
+export function settingsServerSettingsReadIsBusy(states: SettingsOperationStates): boolean {
+  return settingsOperationIsBusy(states, "serverSettings")
+}
+
+export function settingsProviderWriteIsBusy(states: SettingsOperationStates): boolean {
+  return SETTINGS_PROVIDER_WRITE_KEYS.some((key) => settingsOperationIsBusy(states, key))
+}
+
+export function settingsProviderActionResultIsBusy(states: SettingsOperationStates): boolean {
+  return SETTINGS_PROVIDER_ACTION_RESULT_KEYS.some((key) => settingsOperationIsBusy(states, key))
+}
+
+export function settingsProviderModelReadIsBusy(
+  states: SettingsOperationStates,
+  providerId?: string,
+): boolean {
+  const state = getSettingsOperationState(states, "providerModels")
+  if (!(state.status === "loading" || state.status === "saving")) return false
+  return !providerId || !state.targetId || state.targetId === providerId
+}
+
+export function settingsOperationIsProviderWrite(key: SettingsOperationKey): boolean {
+  return SETTINGS_PROVIDER_WRITE_KEYS.includes(key)
+}
+
+export function settingsOperationUsesProviderActionResult(key: SettingsOperationKey): boolean {
+  return SETTINGS_PROVIDER_ACTION_RESULT_KEYS.includes(key)
 }
 
 export function settingsAgentRunOperationIsBusy(states: SettingsOperationStates): boolean {
@@ -173,25 +260,19 @@ export function settingsCapabilityIngestOperationIsBusy(states: SettingsOperatio
   return SETTINGS_CAPABILITY_INGEST_OPERATION_KEYS.some((key) => settingsOperationIsBusy(states, key))
 }
 
-export function settingsOperationKeysForAdminError(states: SettingsOperationStates): SettingsOperationKey[] {
-  const keys: SettingsOperationKey[] = ["admin"]
-  for (const key of SETTINGS_PROVIDER_ADMIN_ACTION_KEYS) {
-    if (settingsOperationIsBusy(states, key)) keys.push(key)
-  }
-  return keys
-}
-
 export function markSettingsOperationStarted(
   states: SettingsOperationStates,
   key: SettingsOperationKey,
   status: Extract<SettingsOperationStatus, "loading" | "saving"> = "loading",
   now = Date.now(),
+  metadata: Pick<SettingsOperationState, "targetId" | "requestId"> = {},
 ): SettingsOperationStates {
   return {
     ...states,
     [key]: {
       status,
       lastStartedAt: now,
+      ...metadata,
     },
   }
 }

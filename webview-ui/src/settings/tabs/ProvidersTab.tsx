@@ -47,7 +47,8 @@ export const ProvidersTab: Component<TabProps> = (props) => {
     pageRefreshing,
     refreshPage,
     serverSettingsSaveBusy,
-    providerAdminActionBusy,
+    providerWriteBusy,
+    providerModelRefreshBusy,
     server,
     resetProviderForm,
     providerErrorMessage,
@@ -67,6 +68,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
     selectedProvider,
     adminUsable,
     providerListEmptyMessage,
+    profiles,
     toggleProviderEnabled,
     saveProvider,
     providerType,
@@ -115,7 +117,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
     applyModelCapabilityRecommendation,
     saveModelPreset,
   } = props.controller
-  const providerActionBusy = () => providerAdminActionBusy()
+  const providerActionBusy = () => providerWriteBusy()
 
   const [draftProviderActive, setDraftProviderActive] = createSignal(false)
   const [providerKind, setProviderKind] = createSignal<ProviderKind>("openai-compatible")
@@ -134,6 +136,24 @@ export const ProvidersTab: Component<TabProps> = (props) => {
   let copyResetTimer: number | undefined
 
   const savedProviderIds = createMemo(() => new Set(providers().map((provider: Record<string, unknown>) => stringValue(provider.id))))
+  const savedModelIds = createMemo(() => {
+    const currentProvider = providerId()
+    const ids = new Set<string>()
+    if (!currentProvider) return ids
+    for (const profile of profiles()) {
+      const profileProvider =
+        stringValue(profile.provider) ||
+        stringValue(profile.provider_id) ||
+        stringValue(profile.providerId)
+      const profileModel =
+        stringValue(profile.model) ||
+        stringValue(profile.model_id) ||
+        stringValue(profile.modelId)
+      if (profileProvider === currentProvider && profileModel) ids.add(profileModel)
+    }
+    return ids
+  })
+  const modelHasSavedProfile = (modelId: string) => savedModelIds().has(modelId)
   const draftProviderVisible = createMemo(() => draftProviderActive() && (!providerId() || !savedProviderIds().has(providerId())))
   const providerListCount = createMemo(() => providers().length + (draftProviderVisible() ? 1 : 0))
   const selectedProviderKind = createMemo(() => PROVIDER_KIND_REGISTRY.find((item) => item.id === providerKind()))
@@ -146,7 +166,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
     const provider = selectedProvider()
     return provider ? `${stringValue(provider.id)}\n${savedApiKeyHint()}` : ""
   })
-  const modelRefreshing = createMemo(() => modelFetchMessage().startsWith("正在"))
+  const modelRefreshing = () => providerModelRefreshBusy(providerId())
   const filteredProviderKinds = createMemo(() => {
     const query = kindSearch().trim().toLowerCase()
     if (!query) return PROVIDER_KIND_REGISTRY
@@ -699,8 +719,8 @@ export const ProvidersTab: Component<TabProps> = (props) => {
                   onClick={() => {
                     requestProviderModels()
                   }}
-                  disabled={!selectedProvider() || !adminUsable() || providerActionBusy()}
-                  loading={operations.isBusy("providerModels") || modelRefreshing()}
+                  disabled={!selectedProvider() || !adminUsable() || modelRefreshing()}
+                  loading={modelRefreshing()}
                 >
                   刷新模型列表
                 </RefreshButton>
@@ -829,6 +849,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
                     const custom = model.owned_by === "custom"
                     const flags = modelCapabilityFlags(model)
                     const owner = modelOwnerDisplay(model.owned_by, providerId())
+                    const added = modelHasSavedProfile(model.id)
                     return (
                       <div class={`provider-model-row ${custom ? "provider-model-row--custom" : ""}`}>
                         <span class="provider-model-row__body">
@@ -845,22 +866,30 @@ export const ProvidersTab: Component<TabProps> = (props) => {
                           <Show when={flags.length}>
                             <span class="settings-badge-group provider-model-row__flags">
                               <For each={flags}>{(flag) => <StatusBadge tone="muted">{flag}</StatusBadge>}</For>
+                              <Show when={added}>
+                                <StatusBadge tone="success">已添加</StatusBadge>
+                              </Show>
+                            </span>
+                          </Show>
+                          <Show when={added && !flags.length}>
+                            <span class="settings-badge-group provider-model-row__flags">
+                              <StatusBadge tone="success">已添加</StatusBadge>
                             </span>
                           </Show>
                         </span>
                         <span class="provider-model-row__actions">
-                          <button class="btn btn-secondary btn--compact" type="button" onClick={() => testProvider(model.id)} disabled={!selectedProvider() || !adminUsable() || providerActionBusy()}>
-                            <span class="codicon codicon-beaker" aria-hidden="true" />
-                            测试
-                          </button>
                           <button
-                            class="btn btn-secondary btn--compact"
+                            class={`btn ${added ? "btn-secondary" : "btn-primary"} btn--compact`}
                             type="button"
                             onClick={() => openModelDetail(model.id, custom ? "custom" : "fetched")}
                             disabled={!selectedProvider() || !adminUsable() || providerActionBusy()}
                           >
-                            <span class="codicon codicon-settings-gear" aria-hidden="true" />
-                            配置参数
+                            <span class={`codicon codicon-${added ? "settings-gear" : "add"}`} aria-hidden="true" />
+                            {added ? "配置" : "添加"}
+                          </button>
+                          <button class="btn btn-secondary btn--compact" type="button" onClick={() => testProvider(model.id)} disabled={!selectedProvider() || !adminUsable() || providerActionBusy()}>
+                            <span class="codicon codicon-beaker" aria-hidden="true" />
+                            测试
                           </button>
                           <button class="ez-icon-button" type="button" title="复制模型名" onClick={() => void copyModelId(model.id)}>
                             <span class="codicon codicon-copy" aria-hidden="true" />

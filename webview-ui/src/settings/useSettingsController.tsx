@@ -21,6 +21,12 @@ import { setLocale, t, type Locale } from "../i18n"
 import { updateCommandRuleLists } from "../utils/command-auto-approval"
 import { settingsMessages } from "./settingsMessages"
 import {
+  normalizeProviderModelEntries,
+  providerModelCacheMessage,
+  providerModelRefreshMessage,
+  type ProviderModelEntry,
+} from "./providerModels"
+import {
   connectionSaveResultKey,
   sanitizeAutoApproveOptions,
   serverAgentRunSettingsPayload,
@@ -29,21 +35,32 @@ import {
 import {
   getSettingsOperationState,
   initialSettingsOperationStates,
+  markSettingsBackgroundRefreshFinished,
+  markSettingsBackgroundRefreshStarted,
   markSettingsOperationError,
   markSettingsOperationIdle,
   markSettingsOperationStarted,
   markSettingsOperationSuccess,
+  settingsBackgroundRefreshIsBusy,
   settingsAgentRunOperationIsBusy,
   settingsCapabilityIngestOperationIsBusy,
-  settingsOperationKeysForAdminError,
+  settingsOperationIsProviderWrite,
+  settingsOperationUsesProviderActionResult,
   settingsOperationIsBusy,
   settingsPageIsRefreshing,
   settingsPageOperationKeys,
-  settingsProviderAdminActionIsBusy,
+  settingsProviderActionResultIsBusy,
+  settingsProviderModelReadIsBusy,
+  settingsProviderWriteIsBusy,
+  settingsRefreshShouldMarkForeground,
+  settingsRefreshShouldSendRequest,
+  settingsServerSettingsReadIsBusy,
   settingsServerSettingsSaveIsBusy,
+  type SettingsBackgroundRefreshes,
   type SettingsOperationKey,
   type SettingsOperationState,
   type SettingsOperationStatus,
+  type SettingsRefreshMode,
 } from "./settingsOperations"
 import {
   canUseSettingsAdminData,
@@ -162,30 +179,9 @@ interface EnvironmentRunLaunchRequest {
   items: Array<{ id: string; name: string; kind: EnvironmentEntryKind }>
 }
 
-interface ProviderModelEntry {
-  id: string
-  owned_by?: string
-  created?: number
-
-  max_tokens?: number
-
-  max_context_tokens?: number
-
-  capability_source?: string
-
-  capability?: Record<string, unknown>
-
-  supports_tools?: boolean
-
-  supports_structured_outputs?: boolean
-
-  supports_json_output?: boolean
-
-  supports_reasoning?: boolean
-
-  supports_vision?: boolean
-
-  supports_parallel_tool_calls?: boolean
+interface RefreshOperationOptions {
+  mode?: SettingsRefreshMode
+  skip?: readonly SettingsOperationKey[]
 }
 
 function knownModelCapabilityDefaults(
@@ -1521,6 +1517,38 @@ function formatActionResult(
   return undefined
 }
 
+function isProviderModelResult(result: Record<string, unknown>): boolean {
+  return Boolean(
+    stringValue(result.provider_id)
+    && (Array.isArray(result.models) || result.unsupported === true)
+  )
+}
+
+function providerActionKeyForResult(
+  result: Record<string, unknown>,
+  pendingKeys: SettingsOperationKey[],
+): SettingsOperationKey | undefined {
+  if (pendingKeys.includes("providerTest") && result.model && result.response !== undefined) {
+    return "providerTest"
+  }
+  if (pendingKeys.includes("modelProfileSave") && result.model_profile && typeof result.model_profile === "object") {
+    return "modelProfileSave"
+  }
+  if (pendingKeys.includes("providerCopy") && result.provider && result.copied_from !== undefined) {
+    return "providerCopy"
+  }
+  if (pendingKeys.includes("providerSave") && result.provider && Object.prototype.hasOwnProperty.call(result, "created")) {
+    return "providerSave"
+  }
+  if (pendingKeys.includes("providerEnable") && result.provider && !Object.prototype.hasOwnProperty.call(result, "created")) {
+    return "providerEnable"
+  }
+  if (pendingKeys.includes("providerDelete") && result.provider_id && !result.model && !result.provider) {
+    return "providerDelete"
+  }
+  return pendingKeys.length === 1 ? pendingKeys[0] : undefined
+}
+
 function formatConnectionSaveResult(result: Record<string, unknown> | undefined): string | undefined {
   if (!result) return undefined
   const requested = stringValue(result.hostUrlSaveRequested)
@@ -1553,8 +1581,11 @@ export function createSettingsController(props: SettingsViewProps) {
   /* ── 按钮 loading 状态 ── */
   const [refreshLoading, setRefreshLoading] = createSignal(false)
   const [operationStates, setOperationStates] = createSignal(initialSettingsOperationStates())
+  const [backgroundRefreshes, setBackgroundRefreshes] = createSignal<SettingsBackgroundRefreshes>({})
   const [pendingServerSettingsSaveKey, setPendingServerSettingsSaveKey] = createSignal<SettingsOperationKey | undefined>()
-  const [pendingProviderAdminActionKey, setPendingProviderAdminActionKey] = createSignal<SettingsOperationKey | undefined>()
+  const [pendingProviderActionKeys, setPendingProviderActionKeys] = createSignal<Partial<Record<SettingsOperationKey, true>>>({})
+  const [pendingProviderModelRequests, setPendingProviderModelRequests] = createSignal<Record<string, { providerId: string; requestId: string }>>({})
+  let providerModelRequestSeq = 0
 
   const [hostUrl, setHostUrl] = createSignal("")
   const [loginUsername, setLoginUsername] = createSignal("")
@@ -1585,7 +1616,6 @@ export function createSettingsController(props: SettingsViewProps) {
   const [modelSearch, setModelSearch] = createSignal("")
   const [fetchedModels, setFetchedModels] = createSignal<ProviderModelEntry[]>([])
   const [modelFetchMessage, setModelFetchMessage] = createSignal("")
-  const [lastModelFetchProvider, setLastModelFetchProvider] = createSignal("")
 
   const [modelDetailOpen, setModelDetailOpen] = createSignal(false)
   const [modelDetailMode, setModelDetailMode] = createSignal<ModelDetailMode>("fetched")
@@ -1736,10 +1766,21 @@ export function createSettingsController(props: SettingsViewProps) {
   const operationError = (key: SettingsOperationKey): string | undefined => operationState(key).error
   const operationBusy = (key: SettingsOperationKey): boolean =>
     settingsOperationIsBusy(operationStates(), key)
+  const backgroundRefreshBusy = (key: SettingsOperationKey): boolean =>
+    settingsBackgroundRefreshIsBusy(backgroundRefreshes(), key)
   const serverSettingsSaveBusy = (): boolean =>
-    settingsServerSettingsSaveIsBusy(operationStates()) || operationState("serverSettings").status === "loading"
-  const providerAdminActionBusy = (): boolean =>
-    settingsProviderAdminActionIsBusy(operationStates())
+    settingsServerSettingsSaveIsBusy(operationStates())
+    || settingsServerSettingsReadIsBusy(operationStates())
+    || backgroundRefreshBusy("serverSettings")
+  const providerWriteBusy = (): boolean =>
+    settingsProviderWriteIsBusy(operationStates())
+  const providerActionResultBusy = (): boolean =>
+    settingsProviderActionResultIsBusy(operationStates())
+  const providerModelRefreshBusy = (targetProviderId = providerId()): boolean => {
+    const id = targetProviderId.trim()
+    if (id && pendingProviderModelRequests()[id]) return true
+    return settingsProviderModelReadIsBusy(operationStates(), id || undefined)
+  }
   const agentRunOperationBusy = (): boolean =>
     settingsAgentRunOperationIsBusy(operationStates())
   const capabilityIngestOperationBusy = (): boolean =>
@@ -1747,14 +1788,17 @@ export function createSettingsController(props: SettingsViewProps) {
   const markOperationStarted = (
     key: SettingsOperationKey,
     status: Extract<SettingsOperationStatus, "loading" | "saving"> = "loading",
+    metadata: Pick<SettingsOperationState, "targetId" | "requestId"> = {},
   ) => {
-    setOperationStates((states) => markSettingsOperationStarted(states, key, status))
+    setOperationStates((states) => markSettingsOperationStarted(states, key, status, Date.now(), metadata))
   }
   const markOperationSuccess = (key: SettingsOperationKey) => {
     setOperationStates((states) => markSettingsOperationSuccess(states, key))
   }
   const markAuthOperationSuccess = (key: "authDevices" | "authUsers" | "authAudit") => {
+    clearBackgroundRefresh(key)
     setOperationStates((states) => {
+      if (!settingsOperationIsBusy(states, key)) return states
       const next = markSettingsOperationSuccess(states, key)
       return ["authDevices", "authUsers", "authAudit"].some((authKey) =>
         settingsOperationIsBusy(next, authKey as SettingsOperationKey)
@@ -1765,6 +1809,98 @@ export function createSettingsController(props: SettingsViewProps) {
   }
   const markOperationError = (key: SettingsOperationKey, error: string) => {
     setOperationStates((states) => markSettingsOperationError(states, key, error))
+  }
+  const markBackgroundRefreshStarted = (key: SettingsOperationKey) => {
+    setBackgroundRefreshes((states) => markSettingsBackgroundRefreshStarted(states, key))
+  }
+  const clearBackgroundRefresh = (key: SettingsOperationKey) => {
+    setBackgroundRefreshes((states) => markSettingsBackgroundRefreshFinished(states, key))
+  }
+  const settleRefreshSuccess = (key: SettingsOperationKey) => {
+    clearBackgroundRefresh(key)
+    if (operationBusy(key)) markOperationSuccess(key)
+  }
+  const settleRefreshError = (key: SettingsOperationKey, error: string) => {
+    clearBackgroundRefresh(key)
+    if (operationBusy(key)) markOperationError(key, error)
+  }
+  const settleAuthOperationError = (message: string) => {
+    clearBackgroundRefresh("authDevices")
+    clearBackgroundRefresh("authUsers")
+    clearBackgroundRefresh("authAudit")
+    for (const key of ["authDevices", "authUsers", "authAudit"] as const) {
+      if (operationBusy(key)) markOperationError(key, message)
+    }
+    if (operationBusy("accounts")) markOperationError("accounts", message)
+  }
+  const pendingProviderActionKeyList = (): SettingsOperationKey[] =>
+    Object.keys(pendingProviderActionKeys()) as SettingsOperationKey[]
+  const addPendingProviderActionKey = (key: SettingsOperationKey) => {
+    setPendingProviderActionKeys((current) => ({ ...current, [key]: true }))
+  }
+  const clearPendingProviderActionKey = (key: SettingsOperationKey) => {
+    setPendingProviderActionKeys((current) => {
+      const next = { ...current }
+      delete next[key]
+      return next
+    })
+  }
+  const settlePendingProviderActionError = (message: string) => {
+    for (const key of pendingProviderActionKeyList()) {
+      markOperationError(key, message)
+    }
+    setPendingProviderActionKeys({})
+  }
+  const providerModelReadRequestIds = createMemo(() => Object.keys(pendingProviderModelRequests()))
+  const beginProviderModelRead = (targetProviderId: string, message: string): boolean => {
+    const id = targetProviderId.trim()
+    if (!id || !selectedProvider() || !adminUsable()) return false
+    if (pendingProviderModelRequests()[id]) return false
+    const requestId = `${id}:${++providerModelRequestSeq}`
+    setPendingProviderModelRequests((current) => ({
+      ...current,
+      [id]: { providerId: id, requestId },
+    }))
+    markOperationStarted("providerModels", "loading", { targetId: id, requestId })
+    setFetchedModels([])
+    setModelFetchMessage(message)
+    setProviderValidationError("")
+    setActionIntent("")
+    settingsMessages.providerModels(vscode, id)
+    return true
+  }
+  const finishProviderModelRead = (targetProviderId: string, message?: string) => {
+    const id = targetProviderId.trim()
+    let remainingRequests: Record<string, { providerId: string; requestId: string }> = {}
+    setPendingProviderModelRequests((current) => {
+      const next = { ...current }
+      delete next[id]
+      remainingRequests = next
+      return next
+    })
+    const remaining = Object.keys(remainingRequests)
+    if (remaining.length === 0) markOperationSuccess("providerModels")
+    else {
+      const nextId = remaining[0]
+      const nextRequest = remainingRequests[nextId]
+      if (nextRequest) markOperationStarted("providerModels", "loading", {
+        targetId: nextRequest.providerId,
+        requestId: nextRequest.requestId,
+      })
+    }
+    if (message && id === providerId()) setModelFetchMessage(message)
+  }
+  const failPendingProviderModelReads = (message: string) => {
+    const pendingIds = providerModelReadRequestIds()
+    if (!pendingIds.length) return
+    setPendingProviderModelRequests({})
+    markOperationError("providerModels", message)
+    if (pendingIds.includes(providerId())) setModelFetchMessage(message || "模型列表刷新失败")
+  }
+  const loadProviderModelCache = (provider: Record<string, unknown>) => {
+    const models = normalizeProviderModelEntries(provider.models)
+    setFetchedModels(models)
+    setModelFetchMessage(providerModelCacheMessage(models))
   }
   const pageRefreshing = (tab: SettingsTab): boolean => settingsPageIsRefreshing(operationStates(), tab)
   const authUsers = createMemo(() => {
@@ -2142,7 +2278,7 @@ export function createSettingsController(props: SettingsViewProps) {
   createEffect(() => {
     if (activeTab() === "agentConfig" && !agentConfigBootstrapped()) {
       setAgentConfigBootstrapped(true)
-      refreshServerSettings()
+      refreshOperation("serverSettings", { mode: "background" })
     }
   })
   createEffect(() => {
@@ -2209,17 +2345,14 @@ export function createSettingsController(props: SettingsViewProps) {
     const unsubscribe = vscode.onMessage((msg) => {
       const rawMessage = msg as unknown as Record<string, unknown>
       const message = typeof rawMessage.message === "string" ? rawMessage.message : "Settings request failed"
-      if (msg.type === "admin.state") markOperationSuccess("admin")
+      if (msg.type === "admin.state") settleRefreshSuccess("admin")
       if (msg.type === "admin.error") {
-        const keys = settingsOperationKeysForAdminError(operationStates())
-        for (const key of keys) markOperationError(key, message)
-        if (pendingProviderAdminActionKey() && keys.includes(pendingProviderAdminActionKey()!)) {
-          setPendingProviderAdminActionKey(undefined)
-        }
-        if (keys.includes("providerModels")) setModelFetchMessage(message || "模型列表刷新失败")
+        settleRefreshError("admin", message)
+        settlePendingProviderActionError(message)
+        failPendingProviderModelReads(message)
       }
       if (msg.type === "serverSettings.state") {
-        markOperationSuccess("serverSettings")
+        settleRefreshSuccess("serverSettings")
         const pending = pendingServerSettingsSaveKey()
         if (pending) {
           markOperationSuccess(pending)
@@ -2243,40 +2376,38 @@ export function createSettingsController(props: SettingsViewProps) {
             setAgentConfigError(message)
           }
         } else {
-          markOperationError("serverSettings", message)
+          settleRefreshError("serverSettings", message)
         }
       }
-      if (msg.type === "autoApproval.state") markOperationSuccess("autoApproval")
-      if (msg.type === "reasoningDisplay.state") markOperationSuccess("reasoningDisplay")
-      if (msg.type === "chat.sendDuringRunMode.state") markOperationSuccess("chatSendDuringRunMode")
-      if (msg.type === "peerDiagnosticsLogging.state") markOperationSuccess("peerDiagnosticsLogging")
-      if (msg.type === "diagnostics.toolDiagnostics.state") markOperationSuccess("toolDiagnostics")
-      if (msg.type === "diagnostics.toolDiagnostics.error") markOperationError("toolDiagnostics", message)
-      if (msg.type === "modelCapabilities.state") markOperationSuccess("modelCapabilities")
-      if (msg.type === "modelCapabilities.error") markOperationError("modelCapabilities", message)
-      if (msg.type === "toolchain.state" || msg.type === "toolchain.actionResult") markOperationSuccess("toolchains")
-      if (msg.type === "toolchain.error") markOperationError("toolchains", message)
-      if (msg.type === "environment.manifest" || msg.type === "environment.snapshot") markOperationSuccess("environmentManifest")
-      if (msg.type === "environment.run.error") markOperationError("environmentManifest", message)
+      if (msg.type === "autoApproval.state") settleRefreshSuccess("autoApproval")
+      if (msg.type === "reasoningDisplay.state") settleRefreshSuccess("reasoningDisplay")
+      if (msg.type === "chat.sendDuringRunMode.state") settleRefreshSuccess("chatSendDuringRunMode")
+      if (msg.type === "peerDiagnosticsLogging.state") settleRefreshSuccess("peerDiagnosticsLogging")
+      if (msg.type === "diagnostics.toolDiagnostics.state") settleRefreshSuccess("toolDiagnostics")
+      if (msg.type === "diagnostics.toolDiagnostics.error") settleRefreshError("toolDiagnostics", message)
+      if (msg.type === "modelCapabilities.state") settleRefreshSuccess("modelCapabilities")
+      if (msg.type === "modelCapabilities.error") settleRefreshError("modelCapabilities", message)
+      if (msg.type === "toolchain.state" || msg.type === "toolchain.actionResult") settleRefreshSuccess("toolchains")
+      if (msg.type === "toolchain.error") settleRefreshError("toolchains", message)
+      if (msg.type === "environment.manifest" || msg.type === "environment.snapshot") settleRefreshSuccess("environmentManifest")
+      if (msg.type === "environment.run.error") settleRefreshError("environmentManifest", message)
       if (msg.type === "auth.devices") markAuthOperationSuccess("authDevices")
       if (msg.type === "auth.users") markAuthOperationSuccess("authUsers")
       if (msg.type === "auth.audit") markAuthOperationSuccess("authAudit")
       if (msg.type === "auth.error") {
-        markOperationError("accounts", message)
-        markOperationError("authDevices", message)
-        markOperationError("authUsers", message)
-        markOperationError("authAudit", message)
+        settleAuthOperationError(message)
       }
       if (msg.type === "admin.actionResult") {
         const payload = objectValue(msg.payload)
         const result = Object.keys(payload).length ? payload : objectValue(msg)
-        const pendingProvider = pendingProviderAdminActionKey()
-        if (pendingProvider) {
-          markOperationSuccess(pendingProvider)
-          setPendingProviderAdminActionKey(undefined)
-        }
-        if (result.provider_id === providerId() && (Array.isArray(result.models) || result.unsupported === true)) {
-          markOperationSuccess("providerModels")
+        if (isProviderModelResult(result)) {
+          finishProviderModelRead(stringValue(result.provider_id))
+        } else {
+          const key = providerActionKeyForResult(result, pendingProviderActionKeyList())
+          if (key) {
+            markOperationSuccess(key)
+            clearPendingProviderActionKey(key)
+          }
         }
       }
       if (msg.type === "agentRun.submitted" && typeof msg.payload === "object" && msg.payload) {
@@ -2696,17 +2827,46 @@ export function createSettingsController(props: SettingsViewProps) {
     })
   }
 
-  const refreshOperation = (key: SettingsOperationKey) => {
-    if (operationBusy(key)) return
-    if (key === "providerModels" && providerAdminActionBusy()) return
-    markOperationStarted(key, "loading")
+  const refreshOperation = (key: SettingsOperationKey, options: RefreshOperationOptions = {}) => {
+    if (options.skip?.includes(key)) return
+    const mode = options.mode || "foreground"
+    const completeWithoutRequest = () => {
+      if (mode === "background") clearBackgroundRefresh(key)
+      else markOperationSuccess(key)
+    }
+
+    if (key === "accounts") {
+      if (mode === "foreground") {
+        if (operationBusy(key)) return
+        markOperationStarted(key, "loading")
+      }
+    } else if (key === "providerModels") {
+      if (mode === "background" || providerModelRefreshBusy()) return
+    } else {
+      const shouldMarkForeground = settingsRefreshShouldMarkForeground(
+        operationStates(),
+        backgroundRefreshes(),
+        key,
+        mode,
+      )
+      const shouldSendRequest = settingsRefreshShouldSendRequest(
+        operationStates(),
+        backgroundRefreshes(),
+        key,
+        mode,
+      )
+      if (shouldMarkForeground) markOperationStarted(key, "loading")
+      if (!shouldSendRequest) return
+      if (mode === "background") markBackgroundRefreshStarted(key)
+    }
+
     switch (key) {
       case "admin":
         settingsMessages.refreshAdmin(vscode)
         return
       case "serverSettings":
         if (pendingServerSettingsSaveKey()) {
-          markOperationSuccess(key)
+          completeWithoutRequest()
           return
         }
         setServerSettingsBootstrapped(true)
@@ -2735,11 +2895,9 @@ export function createSettingsController(props: SettingsViewProps) {
           markOperationSuccess(key)
           return
         }
-        setFetchedModels([])
-        setModelFetchMessage("正在获取模型列表...")
-        setProviderValidationError("")
-        setActionIntent("")
-        settingsMessages.providerModels(vscode, providerId())
+        if (!beginProviderModelRead(providerId(), "正在获取模型列表...")) {
+          markOperationSuccess(key)
+        }
         return
       case "toolchains":
         setToolchainBootstrapped(true)
@@ -2751,11 +2909,11 @@ export function createSettingsController(props: SettingsViewProps) {
         return
       case "authDevices":
         if (canManageDevices()) settingsMessages.listAuthDevices(vscode)
-        else markOperationSuccess(key)
+        else completeWithoutRequest()
         return
       case "authUsers":
         if (canManageUsers()) settingsMessages.listAuthUsers(vscode)
-        else markOperationSuccess(key)
+        else completeWithoutRequest()
         return
       case "authAudit":
         if (canReadAudit()) {
@@ -2764,34 +2922,38 @@ export function createSettingsController(props: SettingsViewProps) {
             event_type: auditEventType().trim() || undefined,
           })
         } else {
-          markOperationSuccess(key)
+          completeWithoutRequest()
         }
         return
       case "accounts":
         if (!adminUsable()) {
-          markOperationSuccess(key)
+          completeWithoutRequest()
           return
         }
         let requestedAccountResource = false
-        if (canManageDevices()) refreshOperation("authDevices")
+        if (canManageDevices()) refreshOperation("authDevices", options)
         requestedAccountResource = requestedAccountResource || canManageDevices()
-        if (canManageUsers()) refreshOperation("authUsers")
+        if (canManageUsers()) refreshOperation("authUsers", options)
         requestedAccountResource = requestedAccountResource || canManageUsers()
-        if (canReadAudit()) refreshOperation("authAudit")
+        if (canReadAudit()) refreshOperation("authAudit", options)
         requestedAccountResource = requestedAccountResource || canReadAudit()
-        if (!requestedAccountResource) markOperationSuccess(key)
+        if (!requestedAccountResource) completeWithoutRequest()
         return
       default:
-        markOperationSuccess(key)
+        completeWithoutRequest()
     }
   }
 
-  const refreshPage = (tab: SettingsTab) => {
-    for (const key of settingsPageOperationKeys(tab)) refreshOperation(key)
+  const refreshPage = (tab: SettingsTab, options: RefreshOperationOptions = {}) => {
+    for (const key of settingsPageOperationKeys(tab)) refreshOperation(key, options)
   }
 
   const updateServerSettingsForOperation = (key: SettingsOperationKey, payload: Record<string, unknown>) => {
-    if (pendingServerSettingsSaveKey() || operationState("serverSettings").status === "loading") return
+    if (
+      pendingServerSettingsSaveKey()
+      || operationState("serverSettings").status === "loading"
+      || backgroundRefreshBusy("serverSettings")
+    ) return
     markOperationStarted(key, "saving")
     setPendingServerSettingsSaveKey(key)
     settingsMessages.updateServerSettings(vscode, payload)
@@ -2803,8 +2965,10 @@ export function createSettingsController(props: SettingsViewProps) {
     action: () => void,
     status: Extract<SettingsOperationStatus, "loading" | "saving"> = "saving",
   ) => {
-    if (providerAdminActionBusy()) return
-    setPendingProviderAdminActionKey(key)
+    if (!settingsOperationUsesProviderActionResult(key)) return
+    if (settingsOperationIsProviderWrite(key) && providerWriteBusy()) return
+    if (!settingsOperationIsProviderWrite(key) && operationBusy(key)) return
+    addPendingProviderActionKey(key)
     markOperationStarted(key, status)
     setActionIntent(intent)
     action()
@@ -3010,15 +3174,8 @@ export function createSettingsController(props: SettingsViewProps) {
   const requestProviderModels = (message = "正在获取模型列表..."): boolean => {
     const id = providerId()
     if (!id || !selectedProvider() || !adminUsable()) return false
-    if (providerAdminActionBusy()) return false
-    setLastModelFetchProvider(id)
-    markOperationStarted("providerModels", "loading")
-    setFetchedModels([])
-    setModelFetchMessage(message)
-    setProviderValidationError("")
-    setActionIntent("")
-    settingsMessages.providerModels(vscode, id)
-    return true
+    if (providerModelRefreshBusy(id)) return false
+    return beginProviderModelRead(id, message)
   }
 
   const saveConnection = () => {
@@ -3094,7 +3251,6 @@ export function createSettingsController(props: SettingsViewProps) {
     setFetchedModels([])
     setModelSearch("")
     setModelFetchMessage("")
-    setLastModelFetchProvider("")
     setModelDetailOpen(false)
     setCustomModelDialogOpen(false)
   }
@@ -3110,10 +3266,8 @@ export function createSettingsController(props: SettingsViewProps) {
     setProviderEnabled(provider.enabled !== false)
     setProviderCopyId(`${id}-copy`)
     setProviderModel(stringValue(firstProfile?.model))
-    setFetchedModels([])
     setModelSearch("")
-    setModelFetchMessage("")
-    setLastModelFetchProvider("")
+    loadProviderModelCache(provider)
     setModelDetailOpen(false)
     setCustomModelDialogOpen(false)
   }
@@ -3164,7 +3318,7 @@ export function createSettingsController(props: SettingsViewProps) {
   }
 
   const toggleProviderEnabled = (enabled: boolean) => {
-    if (providerAdminActionBusy()) return
+    if (providerWriteBusy()) return
     setProviderEnabled(enabled)
     runProviderAdminAction("providerEnable", "", () => {
       settingsMessages.enableProvider(vscode, providerId(), enabled)
@@ -3227,18 +3381,18 @@ export function createSettingsController(props: SettingsViewProps) {
     const tab = activeTab()
     if (visitedSettingsTabs.has(tab)) return
     visitedSettingsTabs.add(tab)
-    refreshPage(tab)
+    refreshPage(tab, { mode: "background", skip: ["admin"] })
   })
 
   createEffect(() => {
     if (activeTab() !== "toolchains") return
     if (!toolchainBootstrapped()) {
       setToolchainBootstrapped(true)
-      refreshOperation("toolchains")
+      refreshOperation("toolchains", { mode: "background" })
     }
     if (!environmentBootstrapped()) {
       setEnvironmentBootstrapped(true)
-      refreshEnvironmentManifest()
+      refreshOperation("environmentManifest", { mode: "background" })
     }
   })
 
@@ -3246,7 +3400,7 @@ export function createSettingsController(props: SettingsViewProps) {
     if (activeTab() !== "serverSettings") return
     if (!serverSettingsBootstrapped()) {
       setServerSettingsBootstrapped(true)
-      refreshOperation("serverSettings")
+      refreshOperation("serverSettings", { mode: "background" })
     }
   })
 
@@ -3255,7 +3409,7 @@ export function createSettingsController(props: SettingsViewProps) {
     if (!adminUsable()) return
     if (accountsBootstrapped()) return
     setAccountsBootstrapped(true)
-    refreshOperation("accounts")
+    refreshOperation("accounts", { mode: "background" })
   })
 
   createEffect(() => {
@@ -3311,13 +3465,6 @@ export function createSettingsController(props: SettingsViewProps) {
   })
 
   createEffect(() => {
-    const id = providerId()
-    if (!id || !selectedProvider() || !adminUsable()) return
-    if (lastModelFetchProvider() === id) return
-    requestProviderModels("正在读取该服务商的模型列表...")
-  })
-
-  createEffect(() => {
     const result = server.actionResult()
     const provider = result?.provider
     if (
@@ -3336,34 +3483,9 @@ export function createSettingsController(props: SettingsViewProps) {
       }
     }
     if (result?.provider_id && result.provider_id === providerId() && Array.isArray(result.models)) {
-      const models: ProviderModelEntry[] = []
-      for (const item of result.models) {
-        if (!item || typeof item !== "object") continue
-        const model = item as Record<string, unknown>
-        const id = stringValue(model.id)
-        if (!id) continue
-        models.push({
-          id,
-          owned_by: stringValue(model.owned_by),
-          created: numberValue(model.created, 0),
-          max_tokens: numberValue(model.max_tokens, 0) || undefined,
-          max_context_tokens: numberValue(model.max_context_tokens, 0) || undefined,
-          capability_source: stringValue(model.capability_source),
-          capability: objectValue(model.capability),
-          supports_tools: model.supports_tools === true,
-          supports_structured_outputs: model.supports_structured_outputs === true,
-          supports_json_output: model.supports_json_output === true,
-          supports_reasoning: model.supports_reasoning === true,
-          supports_vision: model.supports_vision === true,
-          supports_parallel_tool_calls: model.supports_parallel_tool_calls === true,
-        })
-      }
+      const models = normalizeProviderModelEntries(result.models)
       setFetchedModels(models)
-      setModelFetchMessage(
-        models.length > 0
-          ? `已获取 ${models.length} 个模型。`
-          : "当前服务商未返回模型列表，请使用“自定义模型名”。"
-      )
+      setModelFetchMessage(providerModelRefreshMessage(models))
     }
     if (result?.unsupported === true && result?.provider_id === providerId()) {
       setFetchedModels([])
@@ -3372,9 +3494,6 @@ export function createSettingsController(props: SettingsViewProps) {
   })
 
   onMount(() => {
-    refreshOperation("admin")
-    refreshOperation("modelCapabilities")
-    refreshOperation("autoApproval")
     const unsubscribe = vscode.onMessage((msg) => {
       if (msg.type !== "autoApproval.state") return
       const payload = objectValue(msg.payload)
@@ -3450,7 +3569,9 @@ export function createSettingsController(props: SettingsViewProps) {
     refreshPage,
     pageRefreshing,
     serverSettingsSaveBusy,
-    providerAdminActionBusy,
+    providerWriteBusy,
+    providerModelRefreshBusy,
+    providerActionResultBusy,
     server,
     activeTab,
     setActiveTab,
@@ -3529,8 +3650,6 @@ export function createSettingsController(props: SettingsViewProps) {
     setFetchedModels,
     modelFetchMessage,
     setModelFetchMessage,
-    lastModelFetchProvider,
-    setLastModelFetchProvider,
     modelDetailOpen,
     setModelDetailOpen,
     modelDetailMode,
