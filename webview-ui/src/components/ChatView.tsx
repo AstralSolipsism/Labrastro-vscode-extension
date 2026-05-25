@@ -218,14 +218,20 @@ const ChatView: Component<ChatViewProps> = (props) => {
 
   const hasMessages = () => trace.turns().length > 0
   const taskflowAvailable = createMemo(() => canUseTaskflow(server.backendFeatures()))
+  const chatConfigState = createMemo(() => server.chatConfigState() || {})
+  const modelProfilesState = createMemo(() => server.modelProfilesState() || {})
   const modeOptions = createMemo(() => {
     const remoteMode = trace.stats().mode?.trim()
-    return resolveChatModeOptions(server.adminState(), remoteMode, taskflowAvailable())
+    return resolveChatModeOptions(chatConfigState(), remoteMode, taskflowAvailable())
   })
   const selectedModeLabel = createMemo(() => modeLabel(selectedMode(), modeOptions()))
-  const rawModelOptions = createMemo(() => normalizeModelOptions(server.adminState(), sessionRuntimeState()))
+  const rawModelOptions = createMemo(() => normalizeModelOptions(chatConfigState(), modelProfilesState(), sessionRuntimeState()))
   const modelAvailability = createMemo(() =>
-    resolveChatModelAvailability(server.connectionState(), server.modelListError(), rawModelOptions())
+    resolveChatModelAvailability(
+      server.connectionState(),
+      server.chatConfigError() || server.modelProfilesError(),
+      rawModelOptions(),
+    )
   )
   const modelOptions = createMemo(() => modelAvailability().canSelect ? rawModelOptions() : [])
   const selectedModelOverrideProfile = createMemo(() => localModelOverrideProfile() || selectedModelProfile())
@@ -319,10 +325,12 @@ const ChatView: Component<ChatViewProps> = (props) => {
       name: "first-chat-render",
       elapsedMs: Math.round(performance.now()),
     })
+    chatMessages.readChatConfig(vscode)
+    chatMessages.readModelProfiles(vscode)
   })
 
   createEffect(() => {
-    const nextMode = resolveModeSelection(selectedMode(), modeOptions(), server.adminState(), trace.stats().mode)
+    const nextMode = resolveModeSelection(selectedMode(), modeOptions(), chatConfigState(), trace.stats().mode)
     if (nextMode !== selectedMode()) setSelectedMode(nextMode)
   })
 
@@ -330,7 +338,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     const nextProfile = resolveModelSelection(
       selectedModelProfile(),
       modelOptions(),
-      server.adminState(),
+      chatConfigState(),
       sessionRuntimeState(),
     )
     if (nextProfile !== selectedModelProfile()) setSelectedModelProfile(nextProfile)
@@ -1732,7 +1740,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
       return
     }
     setModelSwitchError(availability.message || "正在刷新模型列表...")
-    chatMessages.refreshAdmin(vscode)
+    chatMessages.readChatConfig(vscode)
+    chatMessages.readModelProfiles(vscode)
   }
 
   const requestForkSession = (options: {

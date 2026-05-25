@@ -197,7 +197,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
   const serverSettings = createMemo(() => {
     const direct = objectValue(server.serverSettingsState()?.settings)
     if (Object.keys(direct).length > 0) return direct
-    return objectValue(server.adminState().server_settings)
+    return {}
   })
   const capabilitySettings = createMemo(() => objectValue(serverSettings().model_capabilities))
   const capabilityUpdatedAt = createMemo(() => stringValue(capabilityStatus().updated_at))
@@ -435,7 +435,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
           <h2>{t("provider.title")}</h2>
           <p class="setting-description">
             实际请求 Host：{stringValue(server.connectionState().hostUrl, "未配置")} · Admin：
-            {adminUsable() ? "可用" : t("executor.status.unavailable")} · 最近刷新：{server.adminStateUpdatedAt() || "尚未刷新"}
+            {adminUsable() ? "可用" : t("executor.status.unavailable")} · 最近刷新：{server.providersUpdatedAt() || "尚未刷新"}
           </p>
         </div>
         <div class="settings-actions settings-actions--right">

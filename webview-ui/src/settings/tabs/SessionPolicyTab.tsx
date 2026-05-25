@@ -49,7 +49,7 @@ export const SessionPolicyTab: Component<TabProps> = (props) => {
   const serverSettings = createMemo(() => {
     const direct = objectValue(server.serverSettingsState()?.settings)
     if (Object.keys(direct).length > 0) return direct
-    return objectValue(server.adminState().server_settings)
+    return {}
   })
 
   const markDirty = () => {

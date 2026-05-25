@@ -29,10 +29,25 @@ import {
 describe("settings operations", () => {
   it("maps conversation refresh to shared conversation resources", () => {
     expect(settingsPageOperationKeys("conversation")).toEqual([
-      "admin",
+      "chatConfig",
       "serverSettings",
       "reasoningDisplay",
       "chatSendDuringRunMode",
+    ])
+  })
+
+  it("maps providers refresh to provider, profile, and capability resources", () => {
+    expect(settingsPageOperationKeys("providers")).toEqual([
+      "providers",
+      "modelProfiles",
+      "modelCapabilities",
+    ])
+  })
+
+  it("maps integrations refresh to github and server settings resources", () => {
+    expect(settingsPageOperationKeys("integrations")).toEqual([
+      "serverSettings",
+      "github",
     ])
   })
 

@@ -136,12 +136,21 @@ export function modeLabel(modeId: string, options: ChatModeOption[]): string {
 }
 
 export function normalizeModelOptions(
-  adminState: Record<string, unknown>,
+  chatConfig: Record<string, unknown>,
+  modelProfilesState?: Record<string, unknown>,
   runtimeState?: Record<string, unknown>,
 ): ChatModelOption[] {
+  const profilePayload = Array.isArray(modelProfilesState?.model_profiles)
+    ? modelProfilesState
+    : chatConfig
+  const runtimePayload = runtimeState || (
+    modelProfilesState && !Array.isArray(modelProfilesState.model_profiles)
+      ? modelProfilesState
+      : undefined
+  )
   return uniqueModels([
-    ...modelOptionsFromProfiles(adminState.model_profiles, adminState.active_main),
-    ...modelOptionsFromRuntime(runtimeState),
+    ...modelOptionsFromProfiles(profilePayload.model_profiles, chatConfig.active_main),
+    ...modelOptionsFromRuntime(runtimePayload),
   ])
 }
 
@@ -399,18 +408,13 @@ function modelOptionsFromRuntime(value: unknown): ChatModelOption[] {
 }
 
 function resolveActiveAgentModel(
-  adminState: Record<string, unknown>,
+  chatConfig: Record<string, unknown>,
   runtimeState?: Record<string, unknown>,
 ): Record<string, unknown> {
-  const explicit = objectValue(adminState.active_agent_model)
+  const explicit = objectValue(chatConfig.active_agent_model)
   if (Object.keys(explicit).length) return explicit
-  const settings = objectValue(adminState.server_settings)
-  const agentRegistry = objectValue(settings.agent_registry)
-  const agents = Object.keys(objectValue(adminState.agent_profiles)).length
-    ? objectValue(adminState.agent_profiles)
-    : objectValue(agentRegistry.agents)
-  const activeMode = stringValue(runtimeState?.active_mode) || stringValue(adminState.active_mode)
-  return objectValue(objectValue(agents[activeMode]).model)
+  void runtimeState
+  return {}
 }
 
 function modelSelectionId(value: unknown): string {

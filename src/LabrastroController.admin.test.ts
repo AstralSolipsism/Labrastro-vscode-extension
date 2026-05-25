@@ -88,6 +88,61 @@ describe("LabrastroController admin state errors", () => {
     expect(sidebarPost).toHaveBeenCalledWith({ type: "admin.state", payload })
   })
 
+  it("broadcasts providers state to all registered webviews", async () => {
+    const controller = new LabrastroController(context())
+    const payload = {
+      ok: true,
+      providers: [{ id: "Zenmux", type: "openai_chat" }],
+    }
+    const providersList = vi.fn(async () => payload)
+    ;(controller as unknown as { client: { providersList: typeof providersList } }).client = { providersList }
+    const sidebarPost = vi.fn()
+    const settingsPost = vi.fn()
+    controller.registerWebviewPost(sidebarPost, "sidebar")
+    controller.registerWebviewPost(settingsPost, "settings")
+
+    await controller.postProvidersState(settingsPost)
+
+    expect(settingsPost).toHaveBeenCalledWith({ type: "providers.state", payload })
+    expect(sidebarPost).toHaveBeenCalledWith({ type: "providers.state", payload })
+  })
+
+  it("resolves the startup chat model from chat config instead of full admin status", async () => {
+    const controller = new LabrastroController(context())
+    const chatConfigRead = vi.fn(async () => ({
+      ok: true,
+      active_agent_model: {},
+      active_main: "Zenmux-anthropic-claude-opus-4.6",
+      model_profiles: [
+        {
+          id: "Zenmux-anthropic-claude-opus-4.6",
+          provider: "Zenmux",
+          model: "anthropic/claude-opus-4.6",
+          max_tokens: 32000,
+        },
+      ],
+    }))
+    const adminStatus = vi.fn(async () => {
+      throw new Error("admin status should not be used")
+    })
+    ;(controller as unknown as {
+      client: {
+        chatConfigRead: typeof chatConfigRead
+        adminStatus: typeof adminStatus
+      }
+    }).client = { chatConfigRead, adminStatus }
+
+    await expect((controller as unknown as {
+      resolveConfiguredDefaultChatModel: () => Promise<Record<string, unknown> | undefined>
+    }).resolveConfiguredDefaultChatModel()).resolves.toEqual({
+      providerId: "Zenmux",
+      modelId: "anthropic/claude-opus-4.6",
+      parameters: { max_tokens: 32000 },
+    })
+    expect(chatConfigRead).toHaveBeenCalled()
+    expect(adminStatus).not.toHaveBeenCalled()
+  })
+
   it("emits adminAction-scoped admin errors when admin actions fail", async () => {
     const controller = new LabrastroController(context())
     const post = vi.fn()

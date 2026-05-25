@@ -38,6 +38,16 @@ interface ServerContextValue {
   adminError: () => string | undefined
   adminStateError: () => string | undefined
   modelListError: () => string | undefined
+  providersState: () => Record<string, unknown> | undefined
+  providersUpdatedAt: () => string | undefined
+  providersError: () => string | undefined
+  modelProfilesState: () => Record<string, unknown> | undefined
+  modelProfilesUpdatedAt: () => string | undefined
+  modelProfilesError: () => string | undefined
+  chatConfigState: () => Record<string, unknown> | undefined
+  chatConfigError: () => string | undefined
+  githubState: () => Record<string, unknown> | undefined
+  githubError: () => string | undefined
   actionResult: () => Record<string, unknown> | undefined
   serverSettingsState: () => Record<string, unknown> | undefined
   serverSettingsError: () => string | undefined
@@ -121,6 +131,16 @@ export const ServerProvider: ParentComponent = (props) => {
   const [adminError, setAdminError] = createSignal<string | undefined>()
   const [adminStateError, setAdminStateError] = createSignal<string | undefined>()
   const [modelListError, setModelListError] = createSignal<string | undefined>()
+  const [providersState, setProvidersState] = createSignal<Record<string, unknown> | undefined>()
+  const [providersUpdatedAt, setProvidersUpdatedAt] = createSignal<string | undefined>()
+  const [providersError, setProvidersError] = createSignal<string | undefined>()
+  const [modelProfilesState, setModelProfilesState] = createSignal<Record<string, unknown> | undefined>()
+  const [modelProfilesUpdatedAt, setModelProfilesUpdatedAt] = createSignal<string | undefined>()
+  const [modelProfilesError, setModelProfilesError] = createSignal<string | undefined>()
+  const [chatConfigState, setChatConfigState] = createSignal<Record<string, unknown> | undefined>()
+  const [chatConfigError, setChatConfigError] = createSignal<string | undefined>()
+  const [githubState, setGithubState] = createSignal<Record<string, unknown> | undefined>()
+  const [githubError, setGithubError] = createSignal<string | undefined>()
   const [actionResult, setActionResult] = createSignal<Record<string, unknown> | undefined>()
   const [serverSettingsState, setServerSettingsState] = createSignal<Record<string, unknown> | undefined>()
   const [serverSettingsError, setServerSettingsError] = createSignal<string | undefined>()
@@ -178,9 +198,19 @@ export const ServerProvider: ParentComponent = (props) => {
         if (shouldClearAdminForConnectionState(payload)) {
           setAdminState({})
           setAdminStateUpdatedAt(undefined)
+          setProvidersState(undefined)
+          setProvidersUpdatedAt(undefined)
+          setModelProfilesState(undefined)
+          setModelProfilesUpdatedAt(undefined)
+          setChatConfigState(undefined)
+          setGithubState(undefined)
           setModelCapabilitiesState(undefined)
           setAdminStateError(undefined)
           setModelListError(undefined)
+          setProvidersError(undefined)
+          setModelProfilesError(undefined)
+          setChatConfigError(undefined)
+          setGithubError(undefined)
         }
       }
       if (msg.type === "connection.result" && typeof msg.payload === "object" && msg.payload) {
@@ -190,9 +220,19 @@ export const ServerProvider: ParentComponent = (props) => {
         if (shouldClearAdminForConnectionState(payload)) {
           setAdminState({})
           setAdminStateUpdatedAt(undefined)
+          setProvidersState(undefined)
+          setProvidersUpdatedAt(undefined)
+          setModelProfilesState(undefined)
+          setModelProfilesUpdatedAt(undefined)
+          setChatConfigState(undefined)
+          setGithubState(undefined)
           setModelCapabilitiesState(undefined)
           setAdminStateError(undefined)
           setModelListError(undefined)
+          setProvidersError(undefined)
+          setModelProfilesError(undefined)
+          setChatConfigError(undefined)
+          setGithubError(undefined)
         }
       }
       if (msg.type === "admin.state" && typeof msg.payload === "object" && msg.payload) {
@@ -215,8 +255,44 @@ export const ServerProvider: ParentComponent = (props) => {
         if (shouldClearAdminForError(msg)) {
           setAdminState({})
           setAdminStateUpdatedAt(undefined)
+          setProvidersState(undefined)
+          setProvidersUpdatedAt(undefined)
+          setModelProfilesState(undefined)
+          setModelProfilesUpdatedAt(undefined)
+          setChatConfigState(undefined)
+          setGithubState(undefined)
           setModelCapabilitiesState(undefined)
         }
+      }
+      if (msg.type === "providers.state" && typeof msg.payload === "object" && msg.payload) {
+        setProvidersState(msg.payload as Record<string, unknown>)
+        setProvidersUpdatedAt(new Date().toLocaleString())
+        setProvidersError(undefined)
+      }
+      if (msg.type === "providers.error") {
+        setProvidersError(typeof msg.message === "string" ? msg.message : "Providers request failed")
+      }
+      if (msg.type === "modelProfiles.state" && typeof msg.payload === "object" && msg.payload) {
+        setModelProfilesState(msg.payload as Record<string, unknown>)
+        setModelProfilesUpdatedAt(new Date().toLocaleString())
+        setModelProfilesError(undefined)
+      }
+      if (msg.type === "modelProfiles.error") {
+        setModelProfilesError(typeof msg.message === "string" ? msg.message : "Model profiles request failed")
+      }
+      if (msg.type === "chatConfig.state" && typeof msg.payload === "object" && msg.payload) {
+        setChatConfigState(msg.payload as Record<string, unknown>)
+        setChatConfigError(undefined)
+      }
+      if (msg.type === "chatConfig.error") {
+        setChatConfigError(typeof msg.message === "string" ? msg.message : "Chat config request failed")
+      }
+      if (msg.type === "github.state" && typeof msg.payload === "object" && msg.payload) {
+        setGithubState(msg.payload as Record<string, unknown>)
+        setGithubError(undefined)
+      }
+      if (msg.type === "github.error") {
+        setGithubError(typeof msg.message === "string" ? msg.message : "GitHub status request failed")
       }
       if (msg.type === "admin.actionResult" && typeof msg.payload === "object" && msg.payload) {
         setActionResult(msg.payload as Record<string, unknown>)
@@ -374,6 +450,16 @@ export const ServerProvider: ParentComponent = (props) => {
     adminError,
     adminStateError,
     modelListError,
+    providersState,
+    providersUpdatedAt,
+    providersError,
+    modelProfilesState,
+    modelProfilesUpdatedAt,
+    modelProfilesError,
+    chatConfigState,
+    chatConfigError,
+    githubState,
+    githubError,
     actionResult,
     serverSettingsState,
     serverSettingsError,

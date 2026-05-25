@@ -132,7 +132,10 @@ export class LabrastroController implements vscode.Disposable {
       connectionErrorState: this.connectionErrorState.bind(this),
       postConnectionState: this.postConnectionState.bind(this),
       postConnectionStateIfAuthRequired: this.postConnectionStateIfAuthRequired.bind(this),
-      postAdminState: this.postAdminState.bind(this),
+      postProvidersState: this.postProvidersState.bind(this),
+      postModelProfilesState: this.postModelProfilesState.bind(this),
+      postChatConfigState: this.postChatConfigState.bind(this),
+      postGithubState: this.postGithubState.bind(this),
       refreshBackendFeatures: this.refreshBackendFeatures.bind(this),
       refreshToolchainState: this.refreshToolchainState.bind(this),
       refreshEnvironmentManifest: this.refreshEnvironmentManifest.bind(this),
@@ -339,7 +342,10 @@ export class LabrastroController implements vscode.Disposable {
     if (options.includeAdminState) {
       tasks.push(
         run("connection-state", () => this.postConnectionState(post)),
-        run("admin-state", () => this.postAdminState(post)),
+        run("providers-state", () => this.postProvidersState(post)),
+        run("model-profiles-state", () => this.postModelProfilesState(post)),
+        run("chat-config-state", () => this.postChatConfigState(post)),
+        run("github-state", () => this.postGithubState(post)),
         run("backend-features", () => this.refreshBackendFeatures(post))
       )
     } else if (options.includeSession) {
@@ -525,6 +531,64 @@ export class LabrastroController implements vscode.Disposable {
       this.postWebviewMessage(post, payload)
     } catch (error) {
       post(adminErrorPayload(error, "adminState"))
+      await this.postConnectionStateIfAuthRequired(error, post)
+    }
+  }
+
+  async postProvidersState(post: PostMessage): Promise<void> {
+    await this.postBroadcastRemoteState(
+      post,
+      "providers.state",
+      "providers.error",
+      () => this.client.providersList()
+    )
+  }
+
+  async postModelProfilesState(post: PostMessage): Promise<void> {
+    await this.postBroadcastRemoteState(
+      post,
+      "modelProfiles.state",
+      "modelProfiles.error",
+      () => this.client.modelProfilesList()
+    )
+  }
+
+  async postChatConfigState(post: PostMessage): Promise<void> {
+    await this.postBroadcastRemoteState(
+      post,
+      "chatConfig.state",
+      "chatConfig.error",
+      () => this.client.chatConfigRead()
+    )
+  }
+
+  async postGithubState(post: PostMessage): Promise<void> {
+    await this.postBroadcastRemoteState(
+      post,
+      "github.state",
+      "github.error",
+      () => this.client.githubStatus()
+    )
+  }
+
+  private async postBroadcastRemoteState(
+    post: PostMessage,
+    stateType: string,
+    errorType: string,
+    fetchState: () => Promise<Record<string, unknown>>
+  ): Promise<void> {
+    try {
+      const payload = { type: stateType, payload: await fetchState() }
+      if (this.webviewBus.size > 0) {
+        this.broadcastWebviewMessage(payload)
+        if (!this.webviewBus.targetOf(post)) {
+          this.postWebviewMessage(post, payload)
+        }
+        return
+      }
+      this.postWebviewMessage(post, payload)
+    } catch (error) {
+      post({ type: errorType, message: errorMessage(error) })
       await this.postConnectionStateIfAuthRequired(error, post)
     }
   }
@@ -1561,8 +1625,7 @@ export class LabrastroController implements vscode.Disposable {
     modelId: string
     parameters?: Record<string, unknown>
   } | undefined> {
-    const adminState = await this.client.adminStatus()
-    return defaultChatModelFromAdminState(adminState)
+    return defaultChatModelFromChatConfig(await this.client.chatConfigRead())
   }
 
   private async cancelChat(chatId: string | undefined, post: PostMessage): Promise<void> {
@@ -1717,16 +1780,16 @@ function chatStartupModelError(options: {
   return "请选择会话模型后再发送。"
 }
 
-function defaultChatModelFromAdminState(adminState: Record<string, unknown>): {
+function defaultChatModelFromChatConfig(chatConfig: Record<string, unknown>): {
   providerId: string
   modelId: string
   parameters?: Record<string, unknown>
 } | undefined {
-  const activeAgentModel = chatModelFromRecord(objectValue(adminState.active_agent_model))
+  const activeAgentModel = chatModelFromRecord(objectValue(chatConfig.active_agent_model))
   if (activeAgentModel) return activeAgentModel
 
-  const activeMain = stringValue(adminState.active_main)?.trim() || ""
-  const profiles = arrayOfRecords(adminState.model_profiles)
+  const activeMain = stringValue(chatConfig.active_main)?.trim() || ""
+  const profiles = arrayOfRecords(chatConfig.model_profiles)
   if (activeMain) {
     const profile = profiles.find((item) =>
       [item.id, item.name, item.profile_id].some((value) => stringValue(value)?.trim() === activeMain)
@@ -1735,9 +1798,7 @@ function defaultChatModelFromAdminState(adminState: Record<string, unknown>): {
     if (profileModel) return profileModel
   }
 
-  const catalogDefault = arrayOfRecords(adminState.provider_model_catalog)
-    .find((item) => item.active_default === true)
-  return chatModelFromRecord(catalogDefault)
+  return undefined
 }
 
 function chatModelFromRecord(record: Record<string, unknown> | undefined): {

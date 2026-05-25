@@ -39,10 +39,10 @@ export const IntegrationsTab: Component<TabProps> = (props) => {
   const serverSettings = createMemo(() => {
     const direct = objectValue(server.serverSettingsState()?.settings)
     if (Object.keys(direct).length > 0) return direct
-    return objectValue(server.adminState().server_settings)
+    return {}
   })
   const githubSettings = createMemo(() => objectValue(serverSettings().github))
-  const githubStatus = createMemo(() => objectValue(server.adminState().github))
+  const githubStatus = createMemo(() => objectValue(server.githubState()))
   const githubApiStatus = createMemo(() => objectValue(githubStatus().api))
 
   const markDirty = () => {

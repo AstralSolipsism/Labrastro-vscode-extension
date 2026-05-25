@@ -118,16 +118,20 @@ describe("chat messages", () => {
     })
   })
 
-  it("posts admin refresh through the chat message facade", () => {
+  it("posts chat config refresh through the chat message facade", () => {
     const messages: Record<string, unknown>[] = []
-    chatMessages.refreshAdmin({ postMessage: (message) => messages.push(message) })
+    chatMessages.readChatConfig({ postMessage: (message) => messages.push(message) })
+    chatMessages.readModelProfiles({ postMessage: (message) => messages.push(message) })
 
-    expect(messages).toEqual([{ type: "admin.refresh" }])
+    expect(messages).toEqual([
+      { type: "chatConfig.read" },
+      { type: "modelProfiles.list" },
+    ])
   })
 })
 
 describe("chat state", () => {
-  it("normalizes mode lists from admin state", () => {
+  it("normalizes mode lists from chat config", () => {
     const modes = normalizeModeOptions({
       modes: [
         { name: "coder", description: "Code changes" },
@@ -151,7 +155,7 @@ describe("chat state", () => {
     expect(resolveModeSelection("", modes, {})).toBe("coder")
   })
 
-  it("keeps the mode selector usable before admin modes arrive", () => {
+  it("keeps the mode selector usable before chat config modes arrive", () => {
     expect(resolveChatModeOptions({}, "")).toEqual([
       { id: "coder", label: "Coder", description: "代码实现与验证" },
       { id: "planner", label: "Planner", description: "规划、分析与拆解" },

@@ -4,7 +4,10 @@ export type SettingsOperationStatus = "idle" | "loading" | "saving" | "success" 
 export type SettingsRefreshMode = "foreground" | "background"
 
 export type SettingsOperationKey =
-  | "admin"
+  | "providers"
+  | "modelProfiles"
+  | "chatConfig"
+  | "github"
   | "serverSettings"
   | "autoApproval"
   | "reasoningDisplay"
@@ -92,7 +95,10 @@ export const SETTINGS_CAPABILITY_INGEST_OPERATION_KEYS: SettingsOperationKey[] =
 ]
 
 export const SETTINGS_OPERATION_KEYS: SettingsOperationKey[] = [
-  "admin",
+  "providers",
+  "modelProfiles",
+  "chatConfig",
+  "github",
   "serverSettings",
   "autoApproval",
   "reasoningDisplay",
@@ -132,17 +138,17 @@ export const SETTINGS_OPERATION_KEYS: SettingsOperationKey[] = [
 ]
 
 export const SETTINGS_PAGE_RESOURCES: Record<SettingsTab, SettingsOperationKey[]> = {
-  executors: ["admin"],
+  executors: [],
   accounts: ["accounts"],
-  providers: ["admin", "modelCapabilities"],
+  providers: ["providers", "modelProfiles", "modelCapabilities"],
   toolchains: ["serverSettings", "toolchains", "environmentManifest"],
-  conversation: ["admin", "serverSettings", "reasoningDisplay", "chatSendDuringRunMode"],
+  conversation: ["chatConfig", "serverSettings", "reasoningDisplay", "chatSendDuringRunMode"],
   sessionPolicy: ["serverSettings"],
   serverSettings: ["serverSettings"],
-  agentConfig: ["serverSettings"],
+  agentConfig: ["serverSettings", "chatConfig"],
   autoApproval: ["serverSettings", "autoApproval"],
-  integrations: ["admin", "serverSettings"],
-  diagnostics: ["admin", "serverSettings", "peerDiagnosticsLogging", "toolDiagnostics"],
+  integrations: ["serverSettings", "github"],
+  diagnostics: ["serverSettings", "peerDiagnosticsLogging", "toolDiagnostics"],
 }
 
 export function initialSettingsOperationStates(): SettingsOperationStates {

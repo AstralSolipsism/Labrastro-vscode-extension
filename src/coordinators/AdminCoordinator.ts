@@ -41,7 +41,10 @@ export interface AdminCoordinatorOptions {
   connectionErrorState: (message: string, options?: { hostUrlSaveRequested?: string }) => ConnectionState
   postConnectionState: (post: PostMessage) => Promise<void>
   postConnectionStateIfAuthRequired: (error: unknown, post: PostMessage) => Promise<void>
-  postAdminState: (post: PostMessage) => Promise<void>
+  postProvidersState: (post: PostMessage) => Promise<void>
+  postModelProfilesState: (post: PostMessage) => Promise<void>
+  postChatConfigState: (post: PostMessage) => Promise<void>
+  postGithubState: (post: PostMessage) => Promise<void>
   refreshBackendFeatures: (post?: PostMessage) => Promise<void>
   refreshToolchainState: (post: PostMessage) => Promise<void>
   refreshEnvironmentManifest: (post: PostMessage) => Promise<void>
@@ -93,7 +96,7 @@ export class AdminCoordinator {
           })
           post({ type: "connection.result", payload: state })
           post({ type: "connection.state", payload: state })
-          await this.options.postAdminState(post)
+          await this.refreshModularAdminState(post)
           await this.postModelCapabilitiesStatus(post)
           await this.options.refreshBackendFeatures(post)
           await this.options.refreshToolchainState(post)
@@ -113,7 +116,6 @@ export class AdminCoordinator {
         const state = await this.options.client.logout()
         post({ type: "connection.result", payload: state })
         post({ type: "connection.state", payload: state })
-        await this.options.postAdminState(post)
         return true
       }
       case "connection.host.save": {
@@ -251,9 +253,17 @@ export class AdminCoordinator {
           await this.postAdminError(post, error, "peerDiagnostics")
         }
         return true
-      case "admin.refresh":
-        await this.options.postConnectionState(post)
-        await this.options.postAdminState(post)
+      case "providers.list":
+        await this.options.postProvidersState(post)
+        return true
+      case "modelProfiles.list":
+        await this.options.postModelProfilesState(post)
+        return true
+      case "chatConfig.read":
+        await this.options.postChatConfigState(post)
+        return true
+      case "github.status":
+        await this.options.postGithubState(post)
         return true
       case "serverSettings.read":
         try {
@@ -268,7 +278,8 @@ export class AdminCoordinator {
           const payload = await this.options.client.serverSettingsUpdate(objectValue(message.payload))
           post({ type: "serverSettings.state", payload })
           post({ type: "admin.actionResult", payload })
-          await this.options.postAdminState(post)
+          await this.options.postChatConfigState(post)
+          await this.options.postGithubState(post)
         } catch (error) {
           post({ type: "serverSettings.error", message: errorMessage(error) })
           await this.refreshConnectionOnAuthBoundary(error, post)
@@ -301,7 +312,7 @@ export class AdminCoordinator {
           const payload = await this.options.client.modelCapabilitiesRefresh()
           post({ type: "modelCapabilities.state", payload })
           post({ type: "admin.actionResult", payload })
-          await this.options.postAdminState(post)
+          await this.refreshModelConfigState(post)
         } catch (error) {
           post({ type: "modelCapabilities.error", message: errorMessage(error) })
           await this.refreshConnectionOnAuthBoundary(error, post)
@@ -309,7 +320,7 @@ export class AdminCoordinator {
         return true
       case "modelCapabilities.apply":
         if (await this.options.runAdminAction(post, () => this.options.client.modelCapabilitiesApply(objectValue(message.payload)))) {
-          await this.options.postAdminState(post)
+          await this.refreshModelConfigState(post)
         }
         return true
       case "capabilityPackage.ingest.start":
@@ -336,21 +347,21 @@ export class AdminCoordinator {
         return true
       case "capabilityPackage.draft.accept":
         if (await this.options.runAdminAction(post, () => this.options.client.capabilityPackageDraftAccept(objectValue(message.payload)))) {
-          await this.options.postAdminState(post)
+          await this.postServerSettingsState(post)
           await this.options.refreshToolchainState(post)
           await this.options.refreshEnvironmentManifest(post)
         }
         return true
       case "capabilityPackage.delete":
         if (await this.options.runAdminAction(post, () => this.options.client.capabilityPackageDelete(objectValue(message.payload)))) {
-          await this.options.postAdminState(post)
+          await this.postServerSettingsState(post)
           await this.options.refreshToolchainState(post)
           await this.options.refreshEnvironmentManifest(post)
         }
         return true
       case "capabilityPackage.enable":
         if (await this.options.runAdminAction(post, () => this.options.client.capabilityPackageEnable(objectValue(message.payload)))) {
-          await this.options.postAdminState(post)
+          await this.postServerSettingsState(post)
           await this.options.refreshToolchainState(post)
           await this.options.refreshEnvironmentManifest(post)
         }
@@ -364,7 +375,7 @@ export class AdminCoordinator {
         return true
       case "provider.record":
         if (await this.options.runAdminAction(post, () => this.options.client.providerRecord(objectValue(message.payload)))) {
-          await this.options.postAdminState(post)
+          await this.refreshProviderConfigState(post)
         }
         return true
       case "provider.test":
@@ -372,37 +383,37 @@ export class AdminCoordinator {
         return true
       case "provider.delete":
         if (await this.options.runAdminAction(post, () => this.options.client.providerDelete(objectValue(message.payload)))) {
-          await this.options.postAdminState(post)
+          await this.refreshProviderConfigState(post)
         }
         return true
       case "provider.copy":
         if (await this.options.runAdminAction(post, () => this.options.client.providerCopy(objectValue(message.payload)))) {
-          await this.options.postAdminState(post)
+          await this.refreshProviderConfigState(post)
         }
         return true
       case "provider.enable":
         if (await this.options.runAdminAction(post, () => this.options.client.providerEnable(objectValue(message.payload)))) {
-          await this.options.postAdminState(post)
+          await this.refreshProviderConfigState(post)
         }
         return true
       case "provider.models":
         if (await this.options.runAdminAction(post, () => this.options.client.providerModels(objectValue(message.payload)))) {
-          await this.options.postAdminState(post)
+          await this.refreshProviderConfigState(post)
         }
         return true
       case "modelProfile.save":
         if (await this.options.runAdminAction(post, () => this.options.client.modelProfileRecord(objectValue(message.payload)))) {
-          await this.options.postAdminState(post)
+          await this.refreshModelConfigState(post)
         }
         return true
       case "modelProfile.delete":
         if (await this.options.runAdminAction(post, () => this.options.client.modelProfileDelete(objectValue(message.payload)))) {
-          await this.options.postAdminState(post)
+          await this.refreshModelConfigState(post)
         }
         return true
       case "modelProfile.activate":
         if (await this.options.runAdminAction(post, () => this.options.client.modelProfileActivate(objectValue(message.payload)))) {
-          await this.options.postAdminState(post)
+          await this.refreshModelConfigState(post)
         }
         return true
       case "modelProfile.saveAndActivate":
@@ -420,7 +431,7 @@ export class AdminCoordinator {
             return saved
           })
         ) {
-          await this.options.postAdminState(post)
+          await this.refreshModelConfigState(post)
         }
         return true
       case "executorType.save":
@@ -438,6 +449,33 @@ export class AdminCoordinator {
         return true
       default:
         return false
+    }
+  }
+
+  private async refreshModularAdminState(post: PostMessage): Promise<void> {
+    await this.options.postProvidersState(post)
+    await this.options.postModelProfilesState(post)
+    await this.options.postChatConfigState(post)
+    await this.options.postGithubState(post)
+  }
+
+  private async refreshProviderConfigState(post: PostMessage): Promise<void> {
+    await this.options.postProvidersState(post)
+    await this.options.postModelProfilesState(post)
+    await this.options.postChatConfigState(post)
+  }
+
+  private async refreshModelConfigState(post: PostMessage): Promise<void> {
+    await this.options.postModelProfilesState(post)
+    await this.options.postChatConfigState(post)
+  }
+
+  private async postServerSettingsState(post: PostMessage): Promise<void> {
+    try {
+      post({ type: "serverSettings.state", payload: await this.options.client.serverSettingsRead() })
+    } catch (error) {
+      post({ type: "serverSettings.error", message: errorMessage(error) })
+      await this.refreshConnectionOnAuthBoundary(error, post)
     }
   }
 

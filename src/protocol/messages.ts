@@ -54,6 +54,8 @@ export type HostToWebviewMessageType =
   | "chat.session"
   | "chat.started"
   | "chat.stream"
+  | "chatConfig.error"
+  | "chatConfig.state"
   | "connection.result"
   | "connection.state"
   | "diagnostics.toolDiagnostics.error"
@@ -64,10 +66,16 @@ export type HostToWebviewMessageType =
   | "environment.run.started"
   | "environment.snapshot"
   | "executorType.state"
+  | "github.error"
+  | "github.state"
   | "locale.state"
   | "modelCapabilities.error"
   | "modelCapabilities.state"
+  | "modelProfiles.error"
+  | "modelProfiles.state"
   | "peerDiagnosticsLogging.state"
+  | "providers.error"
+  | "providers.state"
   | "reasoningDisplay.state"
   | "agentRun.cancelled"
   | "agentRun.error"
@@ -115,7 +123,6 @@ export type HostToWebviewMessage =
   | ({ type: Exclude<HostToWebviewMessageType, "ready" | "navigate" | "action"> } & Record<string, unknown>)
 
 export type WebviewToHostMessageType =
-  | "admin.refresh"
   | "approval.openDetails"
   | "approval.reply"
   | "auth.audit.list"
@@ -136,6 +143,7 @@ export type WebviewToHostMessageType =
   | "capabilityPackage.ingest.status"
   | "chat.cancel"
   | "chat.command.dispatch"
+  | "chatConfig.read"
   | "chat.followup"
   | "chat.followup.cancel"
   | "chat.recover"
@@ -152,11 +160,13 @@ export type WebviewToHostMessageType =
   | "environment.run"
   | "executorType.get"
   | "executorType.save"
+  | "github.status"
   | "locale.save"
   | "modelCapabilities.apply"
   | "modelCapabilities.list"
   | "modelCapabilities.refresh"
   | "modelCapabilities.status"
+  | "modelProfiles.list"
   | "peerDiagnosticsLogging.clear"
   | "peerDiagnosticsLogging.get"
   | "peerDiagnosticsLogging.open"
@@ -176,6 +186,7 @@ export type WebviewToHostMessageType =
   | "provider.copy"
   | "provider.delete"
   | "provider.enable"
+  | "providers.list"
   | "provider.models"
   | "provider.record"
   | "provider.test"
@@ -257,6 +268,8 @@ const HOST_TO_WEBVIEW_TYPES = new Set<HostToWebviewMessageType>([
   "chat.session",
   "chat.started",
   "chat.stream",
+  "chatConfig.error",
+  "chatConfig.state",
   "connection.result",
   "connection.state",
   "diagnostics.toolDiagnostics.error",
@@ -267,10 +280,16 @@ const HOST_TO_WEBVIEW_TYPES = new Set<HostToWebviewMessageType>([
   "environment.run.started",
   "environment.snapshot",
   "executorType.state",
+  "github.error",
+  "github.state",
   "locale.state",
   "modelCapabilities.error",
   "modelCapabilities.state",
+  "modelProfiles.error",
+  "modelProfiles.state",
   "peerDiagnosticsLogging.state",
+  "providers.error",
+  "providers.state",
   "reasoningDisplay.state",
   "agentRun.cancelled",
   "agentRun.error",
@@ -313,7 +332,6 @@ const HOST_TO_WEBVIEW_TYPES = new Set<HostToWebviewMessageType>([
 ])
 
 const WEBVIEW_TO_HOST_TYPES = new Set<WebviewToHostMessageType>([
-  "admin.refresh",
   "approval.openDetails",
   "approval.reply",
   "auth.audit.list",
@@ -334,6 +352,7 @@ const WEBVIEW_TO_HOST_TYPES = new Set<WebviewToHostMessageType>([
   "capabilityPackage.ingest.status",
   "chat.cancel",
   "chat.command.dispatch",
+  "chatConfig.read",
   "chat.followup",
   "chat.followup.cancel",
   "chat.recover",
@@ -350,11 +369,13 @@ const WEBVIEW_TO_HOST_TYPES = new Set<WebviewToHostMessageType>([
   "environment.run",
   "executorType.get",
   "executorType.save",
+  "github.status",
   "locale.save",
   "modelCapabilities.apply",
   "modelCapabilities.list",
   "modelCapabilities.refresh",
   "modelCapabilities.status",
+  "modelProfiles.list",
   "peerDiagnosticsLogging.clear",
   "peerDiagnosticsLogging.get",
   "peerDiagnosticsLogging.open",
@@ -374,6 +395,7 @@ const WEBVIEW_TO_HOST_TYPES = new Set<WebviewToHostMessageType>([
   "provider.copy",
   "provider.delete",
   "provider.enable",
+  "providers.list",
   "provider.models",
   "provider.record",
   "provider.test",

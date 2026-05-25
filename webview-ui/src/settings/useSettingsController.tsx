@@ -67,7 +67,6 @@ import {
   isAccountAdminRole,
   providerListEmptyMessageForState,
   resolveConnectionNotice,
-  settingsAdminRecordList,
   uniqueCommandRules,
   type ChoiceOption,
 } from "./utils"
@@ -1846,10 +1845,14 @@ export function createSettingsController(props: SettingsViewProps) {
   const adminDataUsable = createMemo(() => canUseSettingsAdminData(server.connectionState()))
 
   const providers = createMemo(() => {
-    return settingsAdminRecordList(server.adminState(), "providers", adminDataUsable())
+    if (!adminDataUsable()) return []
+    const items = server.providersState()?.providers
+    return Array.isArray(items) ? items as Record<string, unknown>[] : []
   })
   const profiles = createMemo(() => {
-    return settingsAdminRecordList(server.adminState(), "model_profiles", adminDataUsable())
+    if (!adminDataUsable()) return []
+    const items = server.modelProfilesState()?.model_profiles
+    return Array.isArray(items) ? items as Record<string, unknown>[] : []
   })
   const selectedProvider = createMemo(() =>
     providers().find((provider) => stringValue(provider.id) === providerId())
@@ -1895,7 +1898,8 @@ export function createSettingsController(props: SettingsViewProps) {
       connectionStatus: connectionStatus(),
       authenticated: server.connectionState().authenticated,
       adminUsable: adminUsable(),
-      adminError: server.adminStateError(),
+      loading: operationBusy("providers") || backgroundRefreshBusy("providers"),
+      adminError: server.providersError() || server.modelProfilesError(),
     })
   })
   const settingsTabDefsVisible = createMemo(() => settingsTabDefs.filter((tab) => tab.id !== "accounts" || adminUsable()))
@@ -2165,12 +2169,13 @@ export function createSettingsController(props: SettingsViewProps) {
   )
   const serverSettingsPayload = createMemo(() => {
     const direct = server.serverSettingsState()
-    if (direct && Object.keys(direct).length) return direct
-    const admin = server.adminState()
-    return {
-      settings: objectValue(admin.server_settings),
-      runtime: objectValue(admin.agent_runs),
+    if (direct && Object.keys(direct).length) {
+      return {
+        ...direct,
+        runtime: objectValue(direct.runtime || direct.agent_runs),
+      }
     }
+    return { settings: {}, runtime: {} }
   })
   const agentRunsSettings = createMemo<Record<string, unknown>>(() => {
     const settings = objectValue(serverSettingsPayload().settings)
@@ -2190,15 +2195,10 @@ export function createSettingsController(props: SettingsViewProps) {
   const capabilityPackageOptions = createMemo(() =>
     capabilityPackageViews().map((item) => item.id)
   )
-  const agentRunsState = createMemo(() =>
-    objectValue(serverSettingsPayload().runtime || server.adminState().agent_runs)
-
-  )
+  const agentRunsState = createMemo(() => objectValue(serverSettingsPayload().runtime))
   const modelCapabilitiesStatus = createMemo(() => {
     const direct = objectValue(server.modelCapabilitiesState()?.model_capabilities)
     if (Object.keys(direct).length) return direct
-    const admin = objectValue(server.adminState().model_capabilities)
-    if (Object.keys(admin).length) return admin
     const settings = objectValue(serverSettingsPayload().settings)
     const modelCapabilities = objectValue(settings.model_capabilities)
     return objectValue(modelCapabilities.status)
@@ -2281,9 +2281,7 @@ export function createSettingsController(props: SettingsViewProps) {
   const runtimeModelOptions = createMemo(() => {
     const seen = new Set<string>()
     const result: Array<{ value: string; label: string; detail: string }> = []
-    const catalog = server.adminState().provider_model_catalog
-    const items = Array.isArray(catalog) ? catalog as Record<string, unknown>[] : []
-    for (const item of items) {
+    for (const item of profiles()) {
       const provider = stringValue(item.provider_id || item.provider)
       const model = stringValue(item.model_id || item.model || item.id)
       const value = modelOptionKey(provider, model)
@@ -2291,7 +2289,7 @@ export function createSettingsController(props: SettingsViewProps) {
       seen.add(value)
       result.push({
         value,
-        label: stringValue(item.label || item.display_name, model),
+        label: stringValue(item.label || item.display_name || item.id, model),
         detail: `${provider} / ${model}`,
       })
     }
@@ -2498,12 +2496,18 @@ export function createSettingsController(props: SettingsViewProps) {
     const unsubscribe = vscode.onMessage((msg) => {
       const rawMessage = msg as unknown as Record<string, unknown>
       const message = typeof rawMessage.message === "string" ? rawMessage.message : "Settings request failed"
-      if (msg.type === "admin.state") settleRefreshSuccess("admin")
       if (msg.type === "admin.error") {
-        settleRefreshError("admin", message)
         settlePendingProviderActionError(message)
         failPendingProviderModelReads(message)
       }
+      if (msg.type === "providers.state") settleRefreshSuccess("providers")
+      if (msg.type === "providers.error") settleRefreshError("providers", message)
+      if (msg.type === "modelProfiles.state") settleRefreshSuccess("modelProfiles")
+      if (msg.type === "modelProfiles.error") settleRefreshError("modelProfiles", message)
+      if (msg.type === "chatConfig.state") settleRefreshSuccess("chatConfig")
+      if (msg.type === "chatConfig.error") settleRefreshError("chatConfig", message)
+      if (msg.type === "github.state") settleRefreshSuccess("github")
+      if (msg.type === "github.error") settleRefreshError("github", message)
       if (msg.type === "serverSettings.state") {
         settleRefreshSuccess("serverSettings")
         const pending = pendingServerSettingsSaveKey()
@@ -3014,8 +3018,17 @@ export function createSettingsController(props: SettingsViewProps) {
     }
 
     switch (key) {
-      case "admin":
-        settingsMessages.refreshAdmin(vscode)
+      case "providers":
+        settingsMessages.readProviders(vscode)
+        return
+      case "modelProfiles":
+        settingsMessages.readModelProfiles(vscode)
+        return
+      case "chatConfig":
+        settingsMessages.readChatConfig(vscode)
+        return
+      case "github":
+        settingsMessages.readGithubStatus(vscode)
         return
       case "serverSettings":
         if (pendingServerSettingsSaveKey()) {
@@ -3127,7 +3140,13 @@ export function createSettingsController(props: SettingsViewProps) {
     action()
   }
 
-  const refreshAdmin = () => refreshOperation("admin")
+  const refreshExecutorStatus = () => {
+    if (refreshLoading()) return
+    setRefreshLoading(true)
+    settingsMessages.getExecutorType(vscode)
+    settingsMessages.readChatConfig(vscode)
+    setTimeout(() => setRefreshLoading(false), 250)
+  }
 
   /* ── 主执行器相关 ── */
   const executorLocation = createMemo(() => {
@@ -3552,7 +3571,7 @@ export function createSettingsController(props: SettingsViewProps) {
     const tab = activeTab()
     if (visitedSettingsTabs.has(tab)) return
     visitedSettingsTabs.add(tab)
-    refreshPage(tab, { mode: "background", skip: ["admin"] })
+    refreshPage(tab, { mode: "background" })
   })
 
   createEffect(() => {
@@ -3763,7 +3782,7 @@ export function createSettingsController(props: SettingsViewProps) {
     setPickerLocation,
     pickerEngine,
     setPickerEngine,
-    refreshLoading: () => operationBusy("admin") || refreshLoading(),
+    refreshLoading,
     setRefreshLoading,
     saveLoading: () => operationBusy("connectionSave"),
     saveSuccess: () => operationState("connectionSave").status === "success",
@@ -4039,7 +4058,7 @@ export function createSettingsController(props: SettingsViewProps) {
     submitAgentRunTest,
     cancelAgentRunTest,
     retryAgentRunTest,
-    refreshAdmin,
+    refreshExecutorStatus,
     executorLocation,
     executorEngine,
     executorEngineOption,

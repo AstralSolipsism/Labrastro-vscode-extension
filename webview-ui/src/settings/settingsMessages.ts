@@ -9,8 +9,20 @@ export const settingsMessages = {
     port.postMessage({ type: "settingsTabChanged", tab })
   },
 
-  refreshAdmin(port: SettingsMessagePort): void {
-    port.postMessage({ type: "admin.refresh" })
+  readProviders(port: SettingsMessagePort): void {
+    port.postMessage({ type: "providers.list" })
+  },
+
+  readModelProfiles(port: SettingsMessagePort): void {
+    port.postMessage({ type: "modelProfiles.list" })
+  },
+
+  readChatConfig(port: SettingsMessagePort): void {
+    port.postMessage({ type: "chatConfig.read" })
+  },
+
+  readGithubStatus(port: SettingsMessagePort): void {
+    port.postMessage({ type: "github.status" })
   },
 
   getAutoApproval(port: SettingsMessagePort): void {
@@ -58,6 +70,10 @@ export const settingsMessages = {
 
   saveExecutorType(port: SettingsMessagePort, location: string, engine: string): void {
     port.postMessage({ type: "executorType.save", location, engine })
+  },
+
+  getExecutorType(port: SettingsMessagePort): void {
+    port.postMessage({ type: "executorType.get" })
   },
 
   refreshEnvironmentManifest(port: SettingsMessagePort): void {

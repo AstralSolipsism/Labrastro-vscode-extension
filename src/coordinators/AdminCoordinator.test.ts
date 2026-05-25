@@ -88,7 +88,10 @@ function coordinator() {
     connectionErrorState: vi.fn(),
     postConnectionState: vi.fn(),
     postConnectionStateIfAuthRequired: vi.fn(),
-    postAdminState: vi.fn(),
+    postProvidersState: vi.fn(),
+    postModelProfilesState: vi.fn(),
+    postChatConfigState: vi.fn(),
+    postGithubState: vi.fn(),
     refreshBackendFeatures: vi.fn(),
     refreshToolchainState: vi.fn(),
     refreshEnvironmentManifest: vi.fn(),
@@ -334,7 +337,7 @@ describe("AdminCoordinator", () => {
     expect(options.postConnectionStateIfAuthRequired).not.toHaveBeenCalled()
   })
 
-  it("loads and refreshes model capability catalog state", async () => {
+  it("loads and refreshes model capability catalog state without refreshing full admin status", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
 
@@ -350,7 +353,8 @@ describe("AdminCoordinator", () => {
         model_capabilities: { enabled: true, model_count: 2 },
       },
     })
-    expect(options.postAdminState).toHaveBeenCalled()
+    expect(options.postModelProfilesState).toHaveBeenCalledWith(post)
+    expect(options.postChatConfigState).toHaveBeenCalledWith(post)
   })
 
   it("refreshes connection state when admin-scoped capability calls lose auth", async () => {
@@ -368,7 +372,7 @@ describe("AdminCoordinator", () => {
     expect(options.postConnectionStateIfAuthRequired).toHaveBeenCalledWith(error, post)
   })
 
-  it("refreshes dependent admin state after successful login", async () => {
+  it("refreshes modular admin state after successful login", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
     options.client.login.mockResolvedValue({
@@ -385,6 +389,10 @@ describe("AdminCoordinator", () => {
     }, post)).resolves.toBe(true)
 
     expect(options.client.modelCapabilitiesStatus).toHaveBeenCalled()
+    expect(options.postProvidersState).toHaveBeenCalledWith(post)
+    expect(options.postModelProfilesState).toHaveBeenCalledWith(post)
+    expect(options.postChatConfigState).toHaveBeenCalledWith(post)
+    expect(options.postGithubState).toHaveBeenCalledWith(post)
     expect(options.refreshBackendFeatures).toHaveBeenCalledWith(post)
     expect(options.refreshToolchainState).toHaveBeenCalledWith(post)
     expect(options.refreshEnvironmentManifest).toHaveBeenCalledWith(post)
@@ -420,7 +428,7 @@ describe("AdminCoordinator", () => {
     expect(options.client.modelCapabilitiesStatus).not.toHaveBeenCalled()
   })
 
-  it("applies selected model capability recommendation through admin action", async () => {
+  it("applies selected model capability recommendation and refreshes model modules", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
 
@@ -432,10 +440,11 @@ describe("AdminCoordinator", () => {
     expect(options.client.modelCapabilitiesApply).toHaveBeenCalledWith({
       profile_id: "deepseek-v4-pro-main",
     })
-    expect(options.postAdminState).toHaveBeenCalledWith(post)
+    expect(options.postModelProfilesState).toHaveBeenCalledWith(post)
+    expect(options.postChatConfigState).toHaveBeenCalledWith(post)
   })
 
-  it("deletes a saved model profile and refreshes admin state", async () => {
+  it("deletes a saved model profile and refreshes model modules", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
 
@@ -447,6 +456,25 @@ describe("AdminCoordinator", () => {
     expect(options.client.modelProfileDelete).toHaveBeenCalledWith({
       profile_id: "Zenmux-anthropic-claude-opus-4.6",
     })
-    expect(options.postAdminState).toHaveBeenCalledWith(post)
+    expect(options.postModelProfilesState).toHaveBeenCalledWith(post)
+    expect(options.postChatConfigState).toHaveBeenCalledWith(post)
+  })
+
+  it("records a provider and refreshes provider, model, and chat modules", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+
+    await expect(subject.handleMessage({
+      type: "provider.record",
+      payload: { provider_id: "zenmux", type: "openai_chat" },
+    }, post)).resolves.toBe(true)
+
+    expect(options.client.providerRecord).toHaveBeenCalledWith({
+      provider_id: "zenmux",
+      type: "openai_chat",
+    })
+    expect(options.postProvidersState).toHaveBeenCalledWith(post)
+    expect(options.postModelProfilesState).toHaveBeenCalledWith(post)
+    expect(options.postChatConfigState).toHaveBeenCalledWith(post)
   })
 })

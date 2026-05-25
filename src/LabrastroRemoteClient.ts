@@ -366,6 +366,22 @@ export class LabrastroRemoteClient {
     return this.authenticatedPost("/remote/admin/status", {})
   }
 
+  async providersList(): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/providers/list", {})
+  }
+
+  async modelProfilesList(): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/models/list", {})
+  }
+
+  async chatConfigRead(): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/chat-config/read", {})
+  }
+
+  async githubStatus(): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/github/status", {})
+  }
+
   async serverSettingsRead(): Promise<JsonObject> {
     return this.authenticatedPost("/remote/admin/server-settings/read", {})
   }

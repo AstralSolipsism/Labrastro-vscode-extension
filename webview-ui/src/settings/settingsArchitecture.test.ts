@@ -96,7 +96,7 @@ describe("settings architecture", () => {
   it("uses background refresh for first tab load without tracking refresh buttons", () => {
     const source = readFileSync(controllerPath, "utf8")
 
-    expect(source).toContain('refreshPage(tab, { mode: "background", skip: ["admin"] })')
+    expect(source).toContain('refreshPage(tab, { mode: "background" })')
     expect(source).not.toContain("refreshPage(tab)")
     expect(source).not.toContain("track: false")
   })
@@ -120,13 +120,23 @@ describe("settings architecture", () => {
   it("keeps provider model refresh out of background initialization", () => {
     const source = readFileSync(controllerPath, "utf8")
     const operationsSource = readFileSync(operationsPath, "utf8")
-    const backgroundRefreshIndex = source.indexOf('refreshPage(tab, { mode: "background", skip: ["admin"] })')
+    const backgroundRefreshIndex = source.indexOf('refreshPage(tab, { mode: "background" })')
     const providerModelsCaseIndex = source.indexOf('case "providerModels":')
 
     expect(backgroundRefreshIndex).toBeGreaterThanOrEqual(0)
     expect(providerModelsCaseIndex).toBeGreaterThanOrEqual(0)
     expect(operationsSource).toContain('if (key === "providerModels" && mode === "background") return false')
     expect(source).toContain('if (mode === "background" || providerModelRefreshBusy()) return')
+  })
+
+  it("keeps settings business refreshes off the legacy admin status channel", () => {
+    const source = readFileSync(controllerPath, "utf8")
+    const operationsSource = readFileSync(operationsPath, "utf8")
+
+    expect(operationsSource).not.toContain('| "admin"')
+    expect(operationsSource).not.toContain('"admin",')
+    expect(source).not.toContain('case "admin":')
+    expect(source).not.toContain("settingsMessages.refreshAdmin(vscode)")
   })
 
   it("keeps provider catalog models behind an explicit add or configure action", () => {

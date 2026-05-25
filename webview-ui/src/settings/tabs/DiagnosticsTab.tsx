@@ -39,7 +39,7 @@ export const DiagnosticsTab: Component<TabProps> = (props) => {
   const serverSettings = createMemo(() => {
     const direct = objectValue(server.serverSettingsState()?.settings)
     if (Object.keys(direct).length > 0) return direct
-    return objectValue(server.adminState().server_settings)
+    return {}
   })
   const diagnosticsSettings = createMemo(() =>
     objectValue(objectValue(serverSettings().diagnostics).tool_diagnostics)
@@ -377,7 +377,14 @@ export const DiagnosticsTab: Component<TabProps> = (props) => {
           <span class="codicon codicon-server-process" aria-hidden="true" />
           {t("diagnostics.adminState")}
         </summary>
-        <pre class="settings-result">{JSON.stringify(server.adminState(), null, 2)}</pre>
+        <pre class="settings-result">{JSON.stringify({
+          providers: server.providersState(),
+          modelProfiles: server.modelProfilesState(),
+          chatConfig: server.chatConfigState(),
+          github: server.githubState(),
+          serverSettings: server.serverSettingsState(),
+          modelCapabilities: server.modelCapabilitiesState(),
+        }, null, 2)}</pre>
       </details>
     </div>
   )

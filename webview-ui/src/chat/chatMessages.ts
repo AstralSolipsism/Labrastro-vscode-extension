@@ -168,8 +168,12 @@ export const chatMessages = {
     })
   },
 
-  refreshAdmin(port: ChatMessagePort): void {
-    port.postMessage({ type: "admin.refresh" })
+  readChatConfig(port: ChatMessagePort): void {
+    port.postMessage({ type: "chatConfig.read" })
+  },
+
+  readModelProfiles(port: ChatMessagePort): void {
+    port.postMessage({ type: "modelProfiles.list" })
   },
 
   sessionCommand(port: ChatMessagePort, input: Omit<ChatSendInput, "workflowMode">): void {

@@ -10,7 +10,7 @@ interface TabProps { controller: SettingsController & Record<string, any> }
 export const ExecutorsTab: Component<TabProps> = (props) => {
   const {
     refreshLoading,
-    refreshAdmin,
+    refreshExecutorStatus,
     executorLocation,
     executorEngineOption,
     connectionStatus,
@@ -61,7 +61,7 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
         <div>
           <h2>{t("executor.title")}</h2>
         </div>
-        <RefreshButton class="btn-secondary" onClick={refreshAdmin} loading={refreshLoading()} loadingLabel={t("executor.refreshing")}>
+        <RefreshButton class="btn-secondary" onClick={refreshExecutorStatus} loading={refreshLoading()} loadingLabel={t("executor.refreshing")}>
           {t("executor.refreshStatus")}
         </RefreshButton>
       </div>
@@ -351,7 +351,7 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
                 {saveLoading() ? "登录中…" : saveSuccess() ? "已登录" : "登录"}
               </button>
               </Show>
-              <RefreshButton class="btn-secondary" onClick={refreshAdmin} loading={refreshLoading()} loadingLabel={t("executor.refreshing")}>
+              <RefreshButton class="btn-secondary" onClick={refreshExecutorStatus} loading={refreshLoading()} loadingLabel={t("executor.refreshing")}>
                 {t("executor.remote.testConnection")}
               </RefreshButton>
             </div>
