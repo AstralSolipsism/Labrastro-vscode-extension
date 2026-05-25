@@ -13,17 +13,17 @@
  * - 前端据此切换模式：隐藏侧边栏导航栏、显示面板顶部返回按钮
  */
 
-import { Component, createSignal, Switch, Match, onMount, onCleanup, Show, Suspense, lazy } from "solid-js"
+import { Component, createSignal, Switch, Match, onMount, onCleanup, Show, Suspense, lazy, ErrorBoundary } from "solid-js"
 import { TraceProvider, useTrace } from "./context/trace"
 import { VSCodeProvider, useVSCode, type ExtensionMessage } from "./context/vscode"
 import { ServerProvider } from "./context/server"
 import type { TraceNavigationIntent } from "./types/trace"
 import ChatView from "./components/ChatView"
+import SettingsView from "./components/SettingsView"
 import { IconButton } from "./components/common/IconButton"
 import { t } from "./i18n"
 import "./styles/main.css"
 
-const SettingsView = lazy(() => import("./components/SettingsView"))
 const AboutView = lazy(() => import("./components/AboutView"))
 const AgentManagerView = lazy(() => import("./components/AgentManagerView"))
 const TaskflowView = lazy(() => import("./components/TaskflowView"))
@@ -160,12 +160,24 @@ const AppContent: Component = () => {
           />
         </Match>
         <Match when={currentView() === "settings"}>
-          <Suspense fallback={null}>
+          <ErrorBoundary fallback={(error) => (
+            <div class="settings-view">
+              <div class="settings-shell-header">
+                <div>
+                  <h1>
+                    <span class="codicon codicon-warning" aria-hidden="true" />
+                    设置页加载失败
+                  </h1>
+                  <p>{String(error instanceof Error ? error.message : error)}</p>
+                </div>
+              </div>
+            </div>
+          )}>
             <SettingsView
               targetTab={settingsTab()}
               onEnvironmentRun={handleEnvironmentRun}
             />
-          </Suspense>
+          </ErrorBoundary>
         </Match>
         <Match when={currentView() === "about"}>
           <Suspense fallback={null}>
