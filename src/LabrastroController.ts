@@ -514,7 +514,15 @@ export class LabrastroController implements vscode.Disposable {
 
   async postAdminState(post: PostMessage): Promise<void> {
     try {
-      post({ type: "admin.state", payload: await this.client.adminStatus() })
+      const payload = { type: "admin.state", payload: await this.client.adminStatus() }
+      if (this.webviewBus.size > 0) {
+        this.broadcastWebviewMessage(payload)
+        if (!this.webviewBus.targetOf(post)) {
+          this.postWebviewMessage(post, payload)
+        }
+        return
+      }
+      this.postWebviewMessage(post, payload)
     } catch (error) {
       post(adminErrorPayload(error, "adminState"))
       await this.postConnectionStateIfAuthRequired(error, post)

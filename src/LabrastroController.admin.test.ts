@@ -3,11 +3,18 @@ import { describe, expect, it, vi } from "vitest"
 
 const vscodeMock = vi.hoisted(() => ({
   registerTextDocumentContentProvider: vi.fn(() => ({ dispose: vi.fn() })),
+  createFileSystemWatcher: vi.fn(() => ({
+    onDidChange: vi.fn(),
+    onDidCreate: vi.fn(),
+    onDidDelete: vi.fn(),
+    dispose: vi.fn(),
+  })),
 }))
 
 vi.mock("vscode", () => ({
   workspace: {
     registerTextDocumentContentProvider: vscodeMock.registerTextDocumentContentProvider,
+    createFileSystemWatcher: vscodeMock.createFileSystemWatcher,
     workspaceFolders: [],
   },
   window: {},
@@ -55,6 +62,30 @@ describe("LabrastroController admin state errors", () => {
       stale: false,
       clearsState: false,
     }))
+  })
+
+  it("broadcasts refreshed admin state to all registered webviews", async () => {
+    const controller = new LabrastroController(context())
+    const payload = {
+      model_profiles: [
+        {
+          id: "Zenmux-anthropic-claude-opus-4.6",
+          provider: "Zenmux",
+          model: "anthropic/claude-opus-4.6",
+        },
+      ],
+    }
+    const adminStatus = vi.fn(async () => payload)
+    ;(controller as unknown as { client: { adminStatus: typeof adminStatus } }).client = { adminStatus }
+    const sidebarPost = vi.fn()
+    const settingsPost = vi.fn()
+    controller.registerWebviewPost(sidebarPost, "sidebar")
+    controller.registerWebviewPost(settingsPost, "settings")
+
+    await controller.postAdminState(settingsPost)
+
+    expect(settingsPost).toHaveBeenCalledWith({ type: "admin.state", payload })
+    expect(sidebarPost).toHaveBeenCalledWith({ type: "admin.state", payload })
   })
 
   it("emits adminAction-scoped admin errors when admin actions fail", async () => {
