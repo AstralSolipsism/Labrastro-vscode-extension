@@ -2205,7 +2205,8 @@ button {
 
 .settings-table-cell--path,
 .settings-table-cell--mode,
-.settings-table-cell--policy {
+.settings-table-cell--policy,
+.settings-table-cell--permission {
   display: block;
   max-width: 100%;
   overflow: hidden;

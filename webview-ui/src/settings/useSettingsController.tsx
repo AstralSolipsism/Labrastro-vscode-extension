@@ -149,6 +149,17 @@ interface AgentToolCatalogItem {
   modeRefs: string[]
   approvalStatus: string
   executionPolicy: string
+  permission: AgentToolPermissionDecision
+}
+
+interface AgentToolPermissionDecision {
+  action: string
+  authorized: boolean
+  reason: string
+  warning: string
+  capabilityMatched: string
+  policyMatched: string
+  approvalAction: string
 }
 
 export interface SettingsViewProps {
@@ -1047,9 +1058,23 @@ function normalizeAgentToolCatalog(value: unknown): AgentToolCatalogItem[] {
         modeRefs: stringArray(item.mode_refs),
         approvalStatus: stringValue(item.approval_status),
         executionPolicy: stringValue(item.execution_policy) || stringValue(item.approval_status),
+        permission: normalizeAgentToolPermission(item.permission),
       }))
       .filter((item) => item.id)
     : []
+}
+
+function normalizeAgentToolPermission(value: unknown): AgentToolPermissionDecision {
+  const item = objectValue(value)
+  return {
+    action: stringValue(item.action),
+    authorized: item.authorized === true,
+    reason: stringValue(item.reason),
+    warning: stringValue(item.warning),
+    capabilityMatched: stringValue(item.capability_matched || item.capabilityMatched),
+    policyMatched: stringValue(item.policy_matched || item.policyMatched),
+    approvalAction: stringValue(item.approval_action || item.approvalAction),
+  }
 }
 
 function executorFeatureValue(value: unknown): ExecutorFeatureView {

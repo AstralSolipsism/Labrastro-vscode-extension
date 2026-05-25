@@ -6,7 +6,7 @@ import { DialogSurface } from "../../components/common/interaction"
 import { StatusBadge } from "../components/StatusBadge"
 import { ChoiceMultiSelect } from "../components/ChoiceMultiSelect"
 import { settingsMessages } from "../settingsMessages"
-import { agentToolExecutionPolicyLabel, agentToolExecutionPolicyTitle } from "../toolchainCatalogLabels"
+import { agentToolPermissionLabel, agentToolPermissionTitle } from "../toolchainCatalogLabels"
 import { TOOLCHAIN_SECTIONS, type ToolchainSection } from "../toolchainSections"
 import type { SettingsController } from "../useSettingsController"
 
@@ -618,7 +618,7 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
                 <strong>注册路径</strong>
                 <strong>能力包/组件</strong>
                 <strong>模式</strong>
-                <strong title="运行时执行授权策略，不是每次后台任务都弹窗批准。">执行策略</strong>
+                <strong title="后端 PermissionGateway 返回的真实运行时权限裁决。">权限</strong>
               </div>
               <For each={agentToolCatalogItems()}>
                 {(tool) => (
@@ -639,8 +639,8 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
                       ])}
                     </span>
                     <code class="settings-table-cell settings-table-cell--mode">{catalogListText(tool.modeRefs)}</code>
-                    <span class="settings-table-cell settings-table-cell--policy" title={agentToolExecutionPolicyTitle(tool.executionPolicy || tool.approvalStatus)}>
-                      {agentToolExecutionPolicyLabel(tool.executionPolicy || tool.approvalStatus)}
+                    <span class="settings-table-cell settings-table-cell--permission" title={agentToolPermissionTitle(tool.permission.action ? tool.permission : tool.executionPolicy || tool.approvalStatus)}>
+                      {agentToolPermissionLabel(tool.permission.action || tool.executionPolicy || tool.approvalStatus)}
                     </span>
                   </div>
                 )}
