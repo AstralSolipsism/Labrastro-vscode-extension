@@ -61,6 +61,7 @@ function coordinator() {
       providerModels: vi.fn(),
       modelProfileRecord: vi.fn(),
       modelProfileActivate: vi.fn(),
+      modelProfileDelete: vi.fn(),
       modelCapabilitiesStatus: vi.fn(async () => ({
         ok: true,
         model_capabilities: { enabled: true, model_count: 2 },
@@ -430,6 +431,21 @@ describe("AdminCoordinator", () => {
 
     expect(options.client.modelCapabilitiesApply).toHaveBeenCalledWith({
       profile_id: "deepseek-v4-pro-main",
+    })
+    expect(options.postAdminState).toHaveBeenCalledWith(post)
+  })
+
+  it("deletes a saved model profile and refreshes admin state", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+
+    await expect(subject.handleMessage({
+      type: "modelProfile.delete",
+      payload: { profile_id: "Zenmux-anthropic-claude-opus-4.6" },
+    }, post)).resolves.toBe(true)
+
+    expect(options.client.modelProfileDelete).toHaveBeenCalledWith({
+      profile_id: "Zenmux-anthropic-claude-opus-4.6",
     })
     expect(options.postAdminState).toHaveBeenCalledWith(post)
   })

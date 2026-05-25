@@ -395,6 +395,11 @@ export class AdminCoordinator {
           await this.options.postAdminState(post)
         }
         return true
+      case "modelProfile.delete":
+        if (await this.options.runAdminAction(post, () => this.options.client.modelProfileDelete(objectValue(message.payload)))) {
+          await this.options.postAdminState(post)
+        }
+        return true
       case "modelProfile.activate":
         if (await this.options.runAdminAction(post, () => this.options.client.modelProfileActivate(objectValue(message.payload)))) {
           await this.options.postAdminState(post)

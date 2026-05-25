@@ -55,6 +55,21 @@ export function normalizeProviderModelEntries(value: unknown): ProviderModelEntr
   return entries
 }
 
+export function prioritizeProviderModelEntries(
+  models: ProviderModelEntry[],
+  savedModelIds: ReadonlySet<string>,
+): ProviderModelEntry[] {
+  return [...models].sort((left, right) => {
+    const leftSaved = savedModelIds.has(left.id)
+    const rightSaved = savedModelIds.has(right.id)
+    if (leftSaved !== rightSaved) return leftSaved ? -1 : 1
+    const leftCustom = left.owned_by === "custom"
+    const rightCustom = right.owned_by === "custom"
+    if (leftCustom !== rightCustom) return leftCustom ? -1 : 1
+    return 0
+  })
+}
+
 export function providerModelCacheMessage(models: ProviderModelEntry[]): string {
   return models.length > 0
     ? `已加载缓存模型目录：${models.length} 个模型。`

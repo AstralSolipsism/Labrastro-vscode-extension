@@ -19,6 +19,7 @@ export type SettingsOperationKey =
   | "providerDelete"
   | "providerEnable"
   | "modelProfileSave"
+  | "modelProfileDelete"
   | "toolchains"
   | "environmentManifest"
   | "authUsers"
@@ -71,6 +72,7 @@ export const SETTINGS_PROVIDER_WRITE_KEYS: SettingsOperationKey[] = [
   "providerDelete",
   "providerEnable",
   "modelProfileSave",
+  "modelProfileDelete",
 ]
 
 export const SETTINGS_PROVIDER_ACTION_RESULT_KEYS: SettingsOperationKey[] = [
@@ -105,6 +107,7 @@ export const SETTINGS_OPERATION_KEYS: SettingsOperationKey[] = [
   "providerDelete",
   "providerEnable",
   "modelProfileSave",
+  "modelProfileDelete",
   "toolchains",
   "environmentManifest",
   "authUsers",

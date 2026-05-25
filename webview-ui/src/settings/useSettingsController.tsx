@@ -111,7 +111,7 @@ function executorEngineLabel(engine: ExecutorEngine): string {
   return EXECUTOR_ENGINES.find((e) => e.id === engine)?.label || engine
 }
 type ModelDetailMode = "fetched" | "custom"
-type ModelActionIntent = "" | "savePreset"
+type ModelActionIntent = "" | "savePreset" | "deletePreset"
 type EnvironmentEntryKind = "cli" | "mcp" | "skill"
 type ToolchainKind = EnvironmentEntryKind
 type ToolchainKindFilter = "all" | ToolchainKind
@@ -1392,7 +1392,9 @@ function splitModelOptionKey(value: string): [string, string] {
 }
 
 function profileMatches(profile: Record<string, unknown>, providerId: string, modelId: string): boolean {
-  return stringValue(profile.provider) === providerId && stringValue(profile.model) === modelId
+  const profileProvider = stringValue(profile.provider) || stringValue(profile.provider_id) || stringValue(profile.providerId)
+  const profileModel = stringValue(profile.model) || stringValue(profile.model_id) || stringValue(profile.modelId)
+  return profileProvider === providerId && profileModel === modelId
 }
 
 function environmentStatusLabel(status: EnvironmentEntryStatus): string {
@@ -1636,6 +1638,12 @@ function formatActionResult(
   if (result.deleted === true && result.provider_id) {
     return `服务商 ${String(result.provider_id)} 已删除。`
   }
+  if (result.deleted === true && (result.profile_id || result.id)) {
+    const presetId = stringValue(result.profile_id, stringValue(result.id))
+    return presetId
+      ? `预设 ${presetId} 已移除。模型仍保留在服务商模型目录中。`
+      : "模型预设已移除。模型仍保留在服务商模型目录中。"
+  }
   if (modelProfile && typeof modelProfile === "object") {
     const profile = modelProfile as Record<string, unknown>
     const presetId = stringValue(profile.id, stringValue(result.profile_id))
@@ -1665,6 +1673,9 @@ function providerActionKeyForResult(
   }
   if (pendingKeys.includes("modelProfileSave") && result.model_profile && typeof result.model_profile === "object") {
     return "modelProfileSave"
+  }
+  if (pendingKeys.includes("modelProfileDelete") && result.deleted === true && (result.profile_id || result.id)) {
+    return "modelProfileDelete"
   }
   if (pendingKeys.includes("providerCopy") && result.provider && result.copied_from !== undefined) {
     return "providerCopy"
@@ -3503,6 +3514,24 @@ export function createSettingsController(props: SettingsViewProps) {
     })
   }
 
+  const deleteModelPreset = (profileIdOverride = profileId()) => {
+    const id = profileIdOverride.trim()
+    if (!id || providerWriteBusy()) return
+    if (!window.confirm(`移除预设 "${id}"？只删除模型预设，不删除服务商模型目录。`)) return
+    setProviderValidationError("")
+    runProviderAdminAction("modelProfileDelete", "deletePreset", () => {
+      settingsMessages.deleteModelProfile(vscode, id)
+    })
+    setModelDetailOpen(false)
+  }
+
+  const deleteModelPresetByModel = (modelId: string) => {
+    const provider = providerId()
+    const existing = profiles().find((profile) => profileMatches(profile, provider, modelId))
+    const id = existing ? stringValue(existing.id || existing.profile_id) : ""
+    deleteModelPreset(id)
+  }
+
   const visitedSettingsTabs = new Set<SettingsTab>()
 
   createEffect(() => {
@@ -4075,6 +4104,8 @@ export function createSettingsController(props: SettingsViewProps) {
     deleteProvider,
     toggleProviderEnabled,
     saveModelPreset,
+    deleteModelPreset,
+    deleteModelPresetByModel,
     executorLocationLabel,
     executorEngineLabel,
     environmentStatusLabel,

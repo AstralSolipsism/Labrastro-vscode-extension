@@ -133,9 +133,12 @@ describe("settings architecture", () => {
     const providersSource = readFileSync(join(tabsDir, "ProvidersTab.tsx"), "utf8")
 
     expect(providersSource).toContain("modelHasSavedProfile")
+    expect(providersSource).toContain("visibleProviderModels")
+    expect(providersSource).toContain("prioritizeProviderModelEntries")
     expect(providersSource).toContain('StatusBadge tone="success">已添加')
-    expect(providersSource).toContain('{added ? "配置" : "添加"}')
+    expect(providersSource).toContain('{added() ? "配置" : "添加"}')
     expect(providersSource).toContain('onClick={() => openModelDetail(model.id, custom ? "custom" : "fetched")}')
+    expect(providersSource).toContain('onClick={() => deleteModelPresetByModel(model.id)}')
     expect(providersSource).not.toContain("配置参数")
   })
 })

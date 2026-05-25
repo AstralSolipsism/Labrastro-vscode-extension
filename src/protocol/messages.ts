@@ -164,6 +164,7 @@ export type WebviewToHostMessageType =
   | "reasoningDisplay.get"
   | "reasoningDisplay.save"
   | "modelProfile.activate"
+  | "modelProfile.delete"
   | "modelProfile.save"
   | "modelProfile.saveAndActivate"
   | "openAbout"
@@ -361,6 +362,7 @@ const WEBVIEW_TO_HOST_TYPES = new Set<WebviewToHostMessageType>([
   "reasoningDisplay.get",
   "reasoningDisplay.save",
   "modelProfile.activate",
+  "modelProfile.delete",
   "modelProfile.save",
   "modelProfile.saveAndActivate",
   "openAbout",

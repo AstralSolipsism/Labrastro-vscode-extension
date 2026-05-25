@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   normalizeProviderModelEntries,
+  prioritizeProviderModelEntries,
   providerModelCacheMessage,
   providerModelRefreshMessage,
 } from "./providerModels"
@@ -50,5 +51,27 @@ describe("provider model catalog helpers", () => {
     expect(providerModelCacheMessage(models)).toBe("已加载缓存模型目录：1 个模型。")
     expect(providerModelCacheMessage([])).toBe("尚未同步模型目录，可刷新模型列表或手动添加模型。")
     expect(providerModelRefreshMessage(models)).toBe("已获取 1 个模型。")
+  })
+
+  it("prioritizes saved profiles without removing catalog models", () => {
+    const models = normalizeProviderModelEntries([
+      "model-a",
+      { id: "model-b", owned_by: "custom" },
+      "model-c",
+      "model-d",
+    ])
+
+    expect(prioritizeProviderModelEntries(models, new Set(["model-c"])).map((model) => model.id)).toEqual([
+      "model-c",
+      "model-b",
+      "model-a",
+      "model-d",
+    ])
+    expect(prioritizeProviderModelEntries(models, new Set()).map((model) => model.id)).toEqual([
+      "model-b",
+      "model-a",
+      "model-c",
+      "model-d",
+    ])
   })
 })

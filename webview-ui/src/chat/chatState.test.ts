@@ -273,6 +273,32 @@ describe("chat state", () => {
     expect(options).toEqual([])
   })
 
+  it("removes deleted profiles from chat options while provider catalog still contains the model", () => {
+    const options = normalizeModelOptions({
+      model_profiles: [
+        { id: "sonnet-profile", provider: "zenmux", model: "anthropic/claude-sonnet-4.5" },
+      ],
+      providers: [
+        {
+          id: "zenmux",
+          enabled: true,
+          models: [
+            { id: "anthropic/claude-opus-4.6" },
+            { id: "anthropic/claude-sonnet-4.5" },
+          ],
+        },
+      ],
+    })
+
+    expect(options.map((option) => option.id)).toEqual([
+      "zenmux::anthropic/claude-sonnet-4.5",
+    ])
+    expect(resolveRequiredChatModelSelection("zenmux::anthropic/claude-opus-4.6", options)).toMatchObject({
+      ok: false,
+      message: "当前选择的模型不可用，请刷新模型列表或重新选择模型。",
+    })
+  })
+
   it("uses saved model profile parameters before raw catalog entries", () => {
     const options = normalizeModelOptions({
       active_main: "deepseek-chat-profile",

@@ -3,6 +3,7 @@ import { t } from "../../i18n"
 import { DialogSurface } from "../../components/common/interaction"
 import { RefreshButton } from "../../components/common/RefreshButton"
 import { StatusBadge } from "../components/StatusBadge"
+import { prioritizeProviderModelEntries } from "../providerModels"
 import type { SettingsController } from "../useSettingsController"
 import {
   PROVIDER_COMPAT_OPTIONS,
@@ -116,6 +117,8 @@ export const ProvidersTab: Component<TabProps> = (props) => {
     modelCapabilityRecommendation,
     applyModelCapabilityRecommendation,
     saveModelPreset,
+    deleteModelPreset,
+    deleteModelPresetByModel,
   } = props.controller
   const providerActionBusy = () => providerWriteBusy()
 
@@ -154,6 +157,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
     return ids
   })
   const modelHasSavedProfile = (modelId: string) => savedModelIds().has(modelId)
+  const visibleProviderModels = createMemo(() => prioritizeProviderModelEntries(filteredFetchedModels(), savedModelIds()))
   const draftProviderVisible = createMemo(() => draftProviderActive() && (!providerId() || !savedProviderIds().has(providerId())))
   const providerListCount = createMemo(() => providers().length + (draftProviderVisible() ? 1 : 0))
   const selectedProviderKind = createMemo(() => PROVIDER_KIND_REGISTRY.find((item) => item.id === providerKind()))
@@ -825,7 +829,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
             <Show when={modelCopyMessage()}>
               <p class={`settings-empty-note ${copiedModelId() === "__error__" ? "settings-empty-note--error" : ""}`}>{modelCopyMessage()}</p>
             </Show>
-            <Show when={filteredFetchedModels().length} fallback={
+            <Show when={visibleProviderModels().length} fallback={
               <div class="settings-empty-state">
                 <span class="codicon codicon-symbol-string" aria-hidden="true" />
                 <strong>{modelEmptyTitle()}</strong>
@@ -844,12 +848,12 @@ export const ProvidersTab: Component<TabProps> = (props) => {
               </div>
             }>
               <div class="provider-model-list">
-                <For each={filteredFetchedModels()}>
+                <For each={visibleProviderModels()}>
                   {(model) => {
                     const custom = model.owned_by === "custom"
                     const flags = modelCapabilityFlags(model)
                     const owner = modelOwnerDisplay(model.owned_by, providerId())
-                    const added = modelHasSavedProfile(model.id)
+                    const added = () => modelHasSavedProfile(model.id)
                     return (
                       <div class={`provider-model-row ${custom ? "provider-model-row--custom" : ""}`}>
                         <span class="provider-model-row__body">
@@ -866,12 +870,12 @@ export const ProvidersTab: Component<TabProps> = (props) => {
                           <Show when={flags.length}>
                             <span class="settings-badge-group provider-model-row__flags">
                               <For each={flags}>{(flag) => <StatusBadge tone="muted">{flag}</StatusBadge>}</For>
-                              <Show when={added}>
+                              <Show when={added()}>
                                 <StatusBadge tone="success">已添加</StatusBadge>
                               </Show>
                             </span>
                           </Show>
-                          <Show when={added && !flags.length}>
+                          <Show when={added() && !flags.length}>
                             <span class="settings-badge-group provider-model-row__flags">
                               <StatusBadge tone="success">已添加</StatusBadge>
                             </span>
@@ -879,13 +883,13 @@ export const ProvidersTab: Component<TabProps> = (props) => {
                         </span>
                         <span class="provider-model-row__actions">
                           <button
-                            class={`btn ${added ? "btn-secondary" : "btn-primary"} btn--compact`}
+                            class={`btn ${added() ? "btn-secondary" : "btn-primary"} btn--compact`}
                             type="button"
                             onClick={() => openModelDetail(model.id, custom ? "custom" : "fetched")}
                             disabled={!selectedProvider() || !adminUsable() || providerActionBusy()}
                           >
-                            <span class={`codicon codicon-${added ? "settings-gear" : "add"}`} aria-hidden="true" />
-                            {added ? "配置" : "添加"}
+                            <span class={`codicon codicon-${added() ? "settings-gear" : "add"}`} aria-hidden="true" />
+                            {added() ? "配置" : "添加"}
                           </button>
                           <button class="btn btn-secondary btn--compact" type="button" onClick={() => testProvider(model.id)} disabled={!selectedProvider() || !adminUsable() || providerActionBusy()}>
                             <span class="codicon codicon-beaker" aria-hidden="true" />
@@ -894,6 +898,17 @@ export const ProvidersTab: Component<TabProps> = (props) => {
                           <button class="ez-icon-button" type="button" title="复制模型名" onClick={() => void copyModelId(model.id)}>
                             <span class="codicon codicon-copy" aria-hidden="true" />
                           </button>
+                          <Show when={added()}>
+                            <button
+                              class="ez-icon-button"
+                              type="button"
+                              title="移除预设"
+                              onClick={() => deleteModelPresetByModel(model.id)}
+                              disabled={!selectedProvider() || !adminUsable() || providerActionBusy()}
+                            >
+                              <span class="codicon codicon-trash" aria-hidden="true" />
+                            </button>
+                          </Show>
                           <Show when={custom}>
                             <button class="ez-icon-button" type="button" title="移除自定义模型" onClick={() => removeCustomModel(model.id)}>
                               <span class="codicon codicon-trash" aria-hidden="true" />
@@ -1024,6 +1039,12 @@ export const ProvidersTab: Component<TabProps> = (props) => {
             </div>
           </Show>
           <div class="settings-actions settings-actions--right">
+            <Show when={modelHasSavedProfile(profileModel())}>
+              <button class="btn btn-danger" type="button" onClick={() => deleteModelPreset(profileId())} disabled={!profileId() || !adminUsable() || providerActionBusy()}>
+                <span class="codicon codicon-trash" aria-hidden="true" />
+                移除预设
+              </button>
+            </Show>
             <button class="btn btn-secondary" type="button" onClick={closeModelDetail}>
               取消
             </button>

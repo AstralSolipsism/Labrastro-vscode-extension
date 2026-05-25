@@ -447,6 +447,10 @@ export class LabrastroRemoteClient {
     return this.authenticatedPost("/remote/admin/models/record", payload)
   }
 
+  async modelProfileDelete(payload: JsonObject): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/models/delete", payload)
+  }
+
   async modelProfileActivate(payload: JsonObject): Promise<JsonObject> {
     return this.authenticatedPost("/remote/admin/models/activate", payload)
   }

@@ -224,6 +224,10 @@ export const settingsMessages = {
     port.postMessage({ type: "modelProfile.save", payload })
   },
 
+  deleteModelProfile(port: SettingsMessagePort, profileId: string): void {
+    port.postMessage({ type: "modelProfile.delete", payload: { profile_id: profileId } })
+  },
+
   replyApproval(
     port: SettingsMessagePort,
     input: { chatId?: string; approvalId: string; decision: string },
