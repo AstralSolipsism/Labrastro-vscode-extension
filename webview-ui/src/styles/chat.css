@@ -2691,7 +2691,11 @@
 }
 
 .prompt-menu--model {
-  width: min(320px, calc(100vw - 24px));
+  width: min(360px, calc(100vw - 24px));
+  max-height: min(360px, calc(100vh - 180px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .prompt-menu__item {
@@ -2710,6 +2714,13 @@
   text-align: left;
 }
 
+.prompt-menu__item strong {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .prompt-menu__item:hover,
 .prompt-menu__item--selected {
   background: var(--ez-hover);
@@ -2724,10 +2735,47 @@
 }
 
 .prompt-menu__section-label {
+  flex: 0 0 auto;
   padding: 4px 8px 3px;
   color: var(--ez-muted);
   font-size: 11px;
   font-weight: 700;
+}
+
+.prompt-menu__search {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 4px 6px;
+  padding: 4px 6px;
+  border: 1px solid var(--ez-border);
+  border-radius: 4px;
+  color: var(--ez-muted);
+  background: var(--vscode-input-background, var(--ez-surface-soft));
+}
+
+.prompt-menu__search input {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  color: var(--ez-fg);
+  background: transparent;
+  font: inherit;
+}
+
+.prompt-menu__scroll {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.prompt-menu__empty {
+  padding: 12px 8px;
+  color: var(--ez-muted);
+  font-size: 12px;
+  text-align: center;
 }
 
 .prompt-menu__divider {
