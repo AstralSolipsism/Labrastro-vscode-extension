@@ -231,7 +231,7 @@ function mockPeerFetch(artifactContent = Buffer.from("peer-binary"), serverVersi
     }
     if (url.endsWith("/remote/environment/manifest")) {
       return new Response(
-        JSON.stringify({ ok: true, cli_tools: [], mcp_servers: [], skills: [] }),
+        JSON.stringify({ ok: true, environment_requirements: [], mcp_servers: [] }),
         { headers: { "Content-Type": "application/json" } }
       )
     }
@@ -742,7 +742,7 @@ describe("LabrastroRemoteClient runtime admin API", () => {
     })
   })
 
-  it("posts toolchain behavior catalog reads through the admin endpoint", async () => {
+  it("posts capability component admin reads and writes through split endpoints", async () => {
     vscodeMock.labrastroValue = DEFAULT_TEST_HOST_URL
     const authSession = JSON.stringify({
       hostUrl: DEFAULT_TEST_HOST_URL,
@@ -786,9 +786,59 @@ describe("LabrastroRemoteClient runtime admin API", () => {
     vi.stubGlobal("fetch", fetchMock)
     const client = new LabrastroRemoteClient(context as never)
 
-    await expect(client.behaviorCatalog()).resolves.toMatchObject({
-      path: "/remote/admin/toolchains/behavior-catalog",
+    await expect(client.environmentRequirementsList()).resolves.toMatchObject({
+      path: "/remote/admin/environment-requirements/list",
       body: {},
+      authorization: "Bearer access-token-1",
+    })
+    await expect(client.environmentRequirementsDashboard()).resolves.toMatchObject({
+      path: "/remote/admin/environment-requirements/dashboard",
+      body: {},
+      authorization: "Bearer access-token-1",
+    })
+    await expect(client.environmentRequirementsBehaviorCatalog()).resolves.toMatchObject({
+      path: "/remote/admin/environment-requirements/behavior-catalog",
+      body: {},
+      authorization: "Bearer access-token-1",
+    })
+    await expect(client.environmentRequirementRecord({ kind: "executable", name: "gh", command: "gh" })).resolves.toMatchObject({
+      path: "/remote/admin/environment-requirements/record",
+      body: { environment_requirement: { kind: "executable", name: "gh", command: "gh" } },
+      authorization: "Bearer access-token-1",
+    })
+    await expect(client.environmentRequirementDelete("envreq:executable:gh")).resolves.toMatchObject({
+      path: "/remote/admin/environment-requirements/delete",
+      body: { id: "envreq:executable:gh" },
+      authorization: "Bearer access-token-1",
+    })
+    await expect(client.environmentRequirementEnable("envreq:executable:gh", false)).resolves.toMatchObject({
+      path: "/remote/admin/environment-requirements/enable",
+      body: { id: "envreq:executable:gh", enabled: false },
+      authorization: "Bearer access-token-1",
+    })
+    await expect(client.mcpServersList()).resolves.toMatchObject({
+      path: "/remote/admin/mcp-servers/list",
+      body: {},
+      authorization: "Bearer access-token-1",
+    })
+    await expect(client.mcpServersDashboard()).resolves.toMatchObject({
+      path: "/remote/admin/mcp-servers/dashboard",
+      body: {},
+      authorization: "Bearer access-token-1",
+    })
+    await expect(client.mcpServerRecord({ name: "github", command: "github-mcp" })).resolves.toMatchObject({
+      path: "/remote/admin/mcp-servers/record",
+      body: { mcp_server: { name: "github", command: "github-mcp" } },
+      authorization: "Bearer access-token-1",
+    })
+    await expect(client.mcpServerDelete("github")).resolves.toMatchObject({
+      path: "/remote/admin/mcp-servers/delete",
+      body: { name: "github" },
+      authorization: "Bearer access-token-1",
+    })
+    await expect(client.mcpServerEnable("github", true)).resolves.toMatchObject({
+      path: "/remote/admin/mcp-servers/enable",
+      body: { name: "github", enabled: true },
       authorization: "Bearer access-token-1",
     })
   })

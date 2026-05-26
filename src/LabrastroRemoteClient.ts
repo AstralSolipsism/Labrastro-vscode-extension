@@ -491,28 +491,48 @@ export class LabrastroRemoteClient {
     return this.authenticatedPost("/remote/admin/capability-packages/enable", payload)
   }
 
-  async toolchainList(): Promise<JsonObject> {
-    return this.authenticatedPost("/remote/admin/toolchains/list", {})
+  async environmentRequirementsList(): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/environment-requirements/list", {})
   }
 
-  async toolchainDashboard(): Promise<JsonObject> {
-    return this.authenticatedPost("/remote/admin/toolchains/dashboard", {})
+  async environmentRequirementsDashboard(): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/environment-requirements/dashboard", {})
   }
 
-  async behaviorCatalog(): Promise<JsonObject> {
-    return this.authenticatedPost("/remote/admin/toolchains/behavior-catalog", {})
+  async environmentRequirementsBehaviorCatalog(): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/environment-requirements/behavior-catalog", {})
   }
 
-  async toolchainRecord(kind: string, payload: JsonObject): Promise<JsonObject> {
-    return this.authenticatedPost("/remote/admin/toolchains/record", { kind, payload })
+  async environmentRequirementRecord(payload: JsonObject): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/environment-requirements/record", { environment_requirement: payload })
   }
 
-  async toolchainDelete(kind: string, name: string): Promise<JsonObject> {
-    return this.authenticatedPost("/remote/admin/toolchains/delete", { kind, name })
+  async environmentRequirementDelete(id: string): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/environment-requirements/delete", { id })
   }
 
-  async toolchainEnable(kind: string, name: string, enabled: boolean): Promise<JsonObject> {
-    return this.authenticatedPost("/remote/admin/toolchains/enable", { kind, name, enabled })
+  async environmentRequirementEnable(id: string, enabled: boolean): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/environment-requirements/enable", { id, enabled })
+  }
+
+  async mcpServersList(): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/mcp-servers/list", {})
+  }
+
+  async mcpServersDashboard(): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/mcp-servers/dashboard", {})
+  }
+
+  async mcpServerRecord(payload: JsonObject): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/mcp-servers/record", { mcp_server: payload })
+  }
+
+  async mcpServerDelete(name: string): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/mcp-servers/delete", { name })
+  }
+
+  async mcpServerEnable(name: string, enabled: boolean): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/mcp-servers/enable", { name, enabled })
   }
 
   async environmentManifest(): Promise<JsonObject> {
