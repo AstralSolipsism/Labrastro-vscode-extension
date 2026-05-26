@@ -13,11 +13,12 @@
  * - 前端据此切换模式：隐藏侧边栏导航栏、显示面板顶部返回按钮
  */
 
-import { Component, createSignal, Switch, Match, onMount, onCleanup, Show, Suspense, lazy, ErrorBoundary } from "solid-js"
+import { Component, createSignal, Switch, Match, onMount, onCleanup, Show, Suspense, lazy, ErrorBoundary, ParentComponent } from "solid-js"
 import { TraceProvider, useTrace } from "./context/trace"
 import { VSCodeProvider, useVSCode, type ExtensionMessage } from "./context/vscode"
 import { ServerProvider } from "./context/server"
 import type { TraceNavigationIntent } from "./types/trace"
+import { resolveNavigateViewState, type ViewType } from "./appNavigation"
 import ChatView from "./components/ChatView"
 import SettingsView from "./components/SettingsView"
 import { IconButton } from "./components/common/IconButton"
@@ -29,11 +30,15 @@ const AgentManagerView = lazy(() => import("./components/AgentManagerView"))
 const TaskflowView = lazy(() => import("./components/TaskflowView"))
 
 // ─────────────────────────────────────────────────────────────
-// 视图类型
+// 路由元数据
 // ─────────────────────────────────────────────────────────────
 
-type ViewType = "chat" | "settings" | "about" | "agentManager" | "taskflow"
-const VALID_VIEWS = new Set<string>(["chat", "settings", "about", "agentManager", "taskflow"])
+const ROUTE_TITLES: Record<Exclude<ViewType, "chat">, string> = {
+  settings: "设置页",
+  about: "关于页",
+  agentManager: "Trace Preview",
+  taskflow: "Taskflow",
+}
 
 interface EnvironmentRunRequest {
   id: string
@@ -41,6 +46,40 @@ interface EnvironmentRunRequest {
   executionMode: "serial" | "combined"
   items: Array<{ id: string; name: string; kind: "cli" | "mcp" | "skill" }>
 }
+
+const RouteLoading: Component<{ title: string }> = (props) => (
+  <div class="route-state route-state--loading" role="status" aria-live="polite">
+    <span class="codicon codicon-loading codicon-modifier-spin" aria-hidden="true" />
+    <div>
+      <h1>{props.title}</h1>
+      <p>正在加载页面...</p>
+    </div>
+  </div>
+)
+
+const RouteErrorFallback: Component<{ title: string; error: unknown }> = (props) => (
+  <div class="route-state route-state--error" role="alert">
+    <span class="codicon codicon-warning" aria-hidden="true" />
+    <div>
+      <h1>{props.title}加载失败</h1>
+      <p>{String(props.error instanceof Error ? props.error.message : props.error)}</p>
+      <small>关闭后重新打开当前面板，或切回聊天页后再试。</small>
+    </div>
+  </div>
+)
+
+const RouteBoundary: ParentComponent<{ title: string; suspense?: boolean }> = (props) => (
+  <ErrorBoundary fallback={(error) => <RouteErrorFallback title={props.title} error={error} />}>
+    <Show
+      when={props.suspense}
+      fallback={props.children}
+    >
+      <Suspense fallback={<RouteLoading title={props.title} />}>
+        {props.children}
+      </Suspense>
+    </Show>
+  </ErrorBoundary>
+)
 
 // ─────────────────────────────────────────────────────────────
 // 内部内容组件（在 Context Provider 树内部使用）
@@ -71,18 +110,19 @@ const AppContent: Component = () => {
   onMount(() => {
     const unsubscribe = vscode.onMessage((msg: ExtensionMessage) => {
       // ① 视图导航（来自 SettingsPanelProvider 或侧边栏命令）
-      if (msg.type === "navigate" && typeof msg.view === "string" && VALID_VIEWS.has(msg.view)) {
-        console.log("[labrastro] 导航到视图:", msg.view, msg.tab ? `tab=${msg.tab}` : "")
-        setCurrentView(msg.view as ViewType)
-        setPanelNodeId(typeof msg.nodeId === "string" ? msg.nodeId : undefined)
-        setPanelBranchId(typeof msg.branchId === "string" ? msg.branchId : undefined)
-        setPanelSessionId(typeof msg.sessionId === "string" ? msg.sessionId : undefined)
-        setPanelTaskflowId(typeof msg.taskflowId === "string" ? msg.taskflowId : undefined)
-        setPanelIntent(typeof msg.intent === "string" ? msg.intent as TraceNavigationIntent : undefined)
-        setSettingsTab(msg.view === "settings" && typeof msg.tab === "string" ? msg.tab : undefined)
+      const navigationState = resolveNavigateViewState(msg)
+      if (navigationState) {
+        console.log("[labrastro] 导航到视图:", navigationState.currentView, navigationState.settingsTab ? `tab=${navigationState.settingsTab}` : "")
+        setCurrentView(navigationState.currentView)
+        setPanelNodeId(navigationState.panelNodeId)
+        setPanelBranchId(navigationState.panelBranchId)
+        setPanelSessionId(navigationState.panelSessionId)
+        setPanelTaskflowId(navigationState.panelTaskflowId)
+        setPanelIntent(navigationState.panelIntent)
+        setSettingsTab(navigationState.settingsTab)
 
         // 如果导航到 settings 或 about，说明是面板模式
-        setIsPanelMode(msg.view !== "chat")
+        setIsPanelMode(navigationState.isPanelMode)
       }
 
       // ② 动作触发（侧边栏按钮）
@@ -160,44 +200,32 @@ const AppContent: Component = () => {
           />
         </Match>
         <Match when={currentView() === "settings"}>
-          <ErrorBoundary fallback={(error) => (
-            <div class="settings-view">
-              <div class="settings-shell-header">
-                <div>
-                  <h1>
-                    <span class="codicon codicon-warning" aria-hidden="true" />
-                    设置页加载失败
-                  </h1>
-                  <p>{String(error instanceof Error ? error.message : error)}</p>
-                </div>
-              </div>
-            </div>
-          )}>
+          <RouteBoundary title={ROUTE_TITLES.settings}>
             <SettingsView
               targetTab={settingsTab()}
               onEnvironmentRun={handleEnvironmentRun}
             />
-          </ErrorBoundary>
+          </RouteBoundary>
         </Match>
         <Match when={currentView() === "about"}>
-          <Suspense fallback={null}>
+          <RouteBoundary title={ROUTE_TITLES.about} suspense>
             <AboutView />
-          </Suspense>
+          </RouteBoundary>
         </Match>
         <Match when={currentView() === "agentManager"}>
-          <Suspense fallback={null}>
+          <RouteBoundary title={ROUTE_TITLES.agentManager} suspense>
             <AgentManagerView
               nodeId={panelNodeId()}
               branchId={panelBranchId()}
               sessionId={panelSessionId()}
               intent={panelIntent()}
             />
-          </Suspense>
+          </RouteBoundary>
         </Match>
         <Match when={currentView() === "taskflow"}>
-          <Suspense fallback={null}>
+          <RouteBoundary title={ROUTE_TITLES.taskflow} suspense>
             <TaskflowView taskflowId={panelTaskflowId()} />
-          </Suspense>
+          </RouteBoundary>
         </Match>
       </Switch>
     </>

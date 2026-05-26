@@ -169,7 +169,8 @@ button {
 }
 
 .panel-header + .settings-view,
-.panel-header + .taskflow-view {
+.panel-header + .taskflow-view,
+.panel-header + .route-state {
   height: calc(100% - 34px);
 }
 
@@ -186,6 +187,51 @@ button {
   overflow: auto;
   padding: 14px;
   background: var(--ez-bg);
+}
+
+.route-state {
+  height: 100%;
+  min-height: 180px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 18px;
+  overflow: auto;
+  background: var(--ez-bg);
+}
+
+.route-state > .codicon {
+  min-width: 22px;
+  margin-top: 2px;
+  font-size: 20px;
+}
+
+.route-state h1 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.route-state p {
+  margin: 4px 0 0;
+  color: var(--ez-muted);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.route-state small {
+  display: block;
+  margin-top: 8px;
+  color: var(--ez-muted);
+  line-height: 1.45;
+}
+
+.route-state--loading > .codicon {
+  color: var(--ez-link);
+}
+
+.route-state--error > .codicon {
+  color: var(--ez-error);
 }
 
 .taskflow-view__header {
