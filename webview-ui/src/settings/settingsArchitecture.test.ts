@@ -7,6 +7,37 @@ const controllerPath = join(process.cwd(), "webview-ui", "src", "settings", "use
 const operationsPath = join(process.cwd(), "webview-ui", "src", "settings", "settingsOperations.ts")
 
 describe("settings architecture", () => {
+  it("initializes operation accessors before eager settings memos use them", () => {
+    const source = readFileSync(controllerPath, "utf8")
+    const operationStateIndex = source.indexOf("const operationState = (key: SettingsOperationKey)")
+    const operationBusyIndex = source.indexOf("const operationBusy = (key: SettingsOperationKey): boolean =>")
+    const backgroundRefreshBusyIndex = source.indexOf("const backgroundRefreshBusy = (key: SettingsOperationKey): boolean =>")
+    const providerListEmptyMessageIndex = source.indexOf("const providerListEmptyMessage = createMemo")
+    const settingsTabDefsIndex = source.indexOf("const settingsTabDefsVisible", providerListEmptyMessageIndex)
+    const providerListEmptyMessageBlock = source.slice(providerListEmptyMessageIndex, settingsTabDefsIndex)
+
+    expect(operationStateIndex).toBeGreaterThanOrEqual(0)
+    expect(operationBusyIndex).toBeGreaterThanOrEqual(0)
+    expect(backgroundRefreshBusyIndex).toBeGreaterThanOrEqual(0)
+    expect(providerListEmptyMessageIndex).toBeGreaterThanOrEqual(0)
+    expect(operationStateIndex).toBeLessThan(providerListEmptyMessageIndex)
+    expect(operationBusyIndex).toBeLessThan(providerListEmptyMessageIndex)
+    expect(backgroundRefreshBusyIndex).toBeLessThan(providerListEmptyMessageIndex)
+    expect(providerListEmptyMessageBlock).toContain('operationBusy("providers")')
+    expect(providerListEmptyMessageBlock).toContain('backgroundRefreshBusy("providers")')
+  })
+
+  it("keeps refreshOperation hoisted for effects that call it during setup", () => {
+    const source = readFileSync(controllerPath, "utf8")
+    const agentConfigEffectIndex = source.indexOf('refreshOperation("serverSettings", { mode: "background" })')
+
+    expect(agentConfigEffectIndex).toBeGreaterThanOrEqual(0)
+    expect(source).toContain("function refreshOperation(key: SettingsOperationKey")
+    expect(source).toContain("function refreshPage(tab: SettingsTab")
+    expect(source).not.toContain("const refreshOperation =")
+    expect(source).not.toContain("const refreshPage =")
+  })
+
   it("keeps tabs behind the settings controller instead of importing settingsMessages", () => {
     const offenders = readdirSync(tabsDir)
       .filter((file) => file.endsWith(".tsx"))

@@ -1729,6 +1729,14 @@ export function createSettingsController(props: SettingsViewProps) {
   const [pendingProviderModelRequests, setPendingProviderModelRequests] = createSignal<Record<string, { providerId: string; requestId: string }>>({})
   let providerModelRequestSeq = 0
 
+  const operationState = (key: SettingsOperationKey): SettingsOperationState =>
+    getSettingsOperationState(operationStates(), key)
+  const operationError = (key: SettingsOperationKey): string | undefined => operationState(key).error
+  const operationBusy = (key: SettingsOperationKey): boolean =>
+    settingsOperationIsBusy(operationStates(), key)
+  const backgroundRefreshBusy = (key: SettingsOperationKey): boolean =>
+    settingsBackgroundRefreshIsBusy(backgroundRefreshes(), key)
+
   const [hostUrl, setHostUrl] = createSignal("")
   const [loginUsername, setLoginUsername] = createSignal("")
   const [loginPassword, setLoginPassword] = createSignal("")
@@ -1908,13 +1916,6 @@ export function createSettingsController(props: SettingsViewProps) {
   const canManageUsers = createMemo(() => connectionScopes().includes("users:manage"))
   const canReadAudit = createMemo(() => connectionScopes().includes("audit:read"))
   const canManageDevices = createMemo(() => connectionScopes().includes("devices:read") || connectionScopes().includes("devices:revoke"))
-  const operationState = (key: SettingsOperationKey): SettingsOperationState =>
-    getSettingsOperationState(operationStates(), key)
-  const operationError = (key: SettingsOperationKey): string | undefined => operationState(key).error
-  const operationBusy = (key: SettingsOperationKey): boolean =>
-    settingsOperationIsBusy(operationStates(), key)
-  const backgroundRefreshBusy = (key: SettingsOperationKey): boolean =>
-    settingsBackgroundRefreshIsBusy(backgroundRefreshes(), key)
   const serverSettingsSaveBusy = (): boolean =>
     settingsServerSettingsSaveIsBusy(operationStates())
     || settingsServerSettingsReadIsBusy(operationStates())
@@ -2984,7 +2985,7 @@ export function createSettingsController(props: SettingsViewProps) {
     })
   }
 
-  const refreshOperation = (key: SettingsOperationKey, options: RefreshOperationOptions = {}) => {
+  function refreshOperation(key: SettingsOperationKey, options: RefreshOperationOptions = {}) {
     if (options.skip?.includes(key)) return
     const mode = options.mode || "foreground"
     const completeWithoutRequest = () => {
@@ -3110,7 +3111,7 @@ export function createSettingsController(props: SettingsViewProps) {
     }
   }
 
-  const refreshPage = (tab: SettingsTab, options: RefreshOperationOptions = {}) => {
+  function refreshPage(tab: SettingsTab, options: RefreshOperationOptions = {}) {
     for (const key of settingsPageOperationKeys(tab)) refreshOperation(key, options)
   }
 
