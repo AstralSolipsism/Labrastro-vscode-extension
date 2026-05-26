@@ -36,8 +36,23 @@ describe("toolchains settings label", () => {
     const labels = TOOLCHAIN_SECTIONS.map((section) => section.label)
     expect(labels).toContain("用户指令")
     expect(labels).toContain("Agent Tools")
+    expect(labels).toContain("能力包")
+    expect(labels).not.toContain("导入")
     expect(labels).not.toContain("Chat 指令")
     expect(labels).not.toContain("Mention 引用")
+  })
+
+  it("shows capability package environment requirement resources explicitly", () => {
+    expect(toolchainsTabSource).toContain("componentRecordSummary")
+    expect(toolchainsTabSource).toContain("resourceKindLabel(resourceKind)")
+    expect(toolchainsTabSource).toContain("command=${command}")
+    expect(toolchainsTabSource).toContain("environment_requirement_refs")
+  })
+
+  it("does not expose environment run actions for MCP servers", () => {
+    expect(toolchainsTabSource).toContain("canRunEnvironmentItem")
+    expect(toolchainsTabSource).toContain('item.kind === "environment_requirement"')
+    expect(toolchainsTabSource).toContain("MCP Server 通过环境要求引用间接检查")
   })
 
   it("projects chat command execution semantics from the behavior catalog", () => {

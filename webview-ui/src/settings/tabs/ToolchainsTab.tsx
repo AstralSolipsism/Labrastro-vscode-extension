@@ -9,12 +9,27 @@ import { agentToolPermissionLabel, agentToolPermissionTitle } from "../toolchain
 import { TOOLCHAIN_SECTIONS, type ToolchainSection } from "../toolchainSections"
 import type { SettingsController } from "../useSettingsController"
 
-type EnvironmentEntryKind = "cli" | "mcp" | "skill"
+type EnvironmentEntryKind = "environment_requirement" | "mcp"
 type ToolchainKind = EnvironmentEntryKind
 type ToolchainKindFilter = "all" | ToolchainKind
+type ToolchainResourceKind =
+  | "executable"
+  | "runtime"
+  | "sdk"
+  | "service"
+  | "env_var"
+  | "credential"
+  | "path"
+  | "project_file"
+  | "container"
+  | "mcp_server"
+  | "unsupported"
 
 interface ToolchainRecord {
+  id?: string
   kind: ToolchainKind
+  entryType: ToolchainKind
+  resourceKind: ToolchainResourceKind
   name: string
   enabled?: boolean
   [key: string]: any
@@ -38,6 +53,8 @@ interface CapabilityPackageView {
 }
 
 interface TabProps { controller: SettingsController & Record<string, any> }
+
+const MCP_ENVIRONMENT_ACTION_TITLE = "MCP Server 通过环境要求引用间接检查"
 
 function stringArrayValue(value: unknown): string[] {
   return Array.isArray(value)
@@ -91,24 +108,6 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
     agentToolCatalogItems,
     toolchainStatusFilter,
     setToolchainStatusFilter,
-    toolchainIngestState,
-    ingestRepoUrl,
-    setIngestRepoUrl,
-    ingestDocsUrl,
-    setIngestDocsUrl,
-    ingestKindHint,
-    setIngestKindHint,
-    ingestNameHint,
-    setIngestNameHint,
-    ingestPlacementHint,
-    setIngestPlacementHint,
-    runToolchainIngest,
-    hasToolchainIngestDuplicates,
-    cancelToolchainIngest,
-    ingestDocsText,
-    setIngestDocsText,
-    toolchainIngestDuplicates,
-    duplicateMatchLabel,
     toolchainKindFilter,
     setToolchainKindFilter,
     toolchainSearch,
@@ -117,13 +116,11 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
     selectedToolchainId,
     setSelectedToolchainId,
     dashboardItemToRecord,
-    environmentKindLabel,
     toolchainSourceLabel,
     selectedToolchain,
     placementLabel,
     objectValue,
     numberValue,
-    toolchainIngestLogs,
     capabilitySourceType,
     setCapabilitySourceType,
     capabilitySourceUrl,
@@ -192,9 +189,16 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
     const draft = currentCapabilityDraft()
     return Boolean(stringValue(draft.id) && currentDraftComponents().length > 0)
   })
-  const registeredSkillNames = createMemo(() => (environmentEntriesByKind().skill || []).map((item: any) => stringValue(item.name)).filter(Boolean))
+  const registeredSkillNames = createMemo(() => Object.values(capabilityComponents())
+    .map(objectValue)
+    .filter((item) => stringValue(item.kind) === "skill")
+    .map((item) => stringValue(item.name || item.id))
+    .filter(Boolean))
   const skillChoiceOptions = () => registeredSkillNames().map((id: string) => ({ id, label: id, kind: "Skill" }))
   const environmentAgentAvailable = () => environmentAgentCandidates().length > 0
+  const canRunEnvironmentItem = (item: { kind: string }) => item.kind === "environment_requirement"
+  const environmentActionTitle = (item: { kind: string }, title: string) =>
+    canRunEnvironmentItem(item) ? title : MCP_ENVIRONMENT_ACTION_TITLE
   const environmentAgentLabel = () => {
     const agent = environmentAgentCandidates()[0]
     return agent ? stringValue(agent.name) || agent.id : "environment_configurator"
@@ -207,6 +211,21 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
     if (source === "config") return "配置"
     if (source === "behavior_catalog") return "行为目录"
     return source || "未知"
+  }
+  const resourceKindLabel = (kind: string) => {
+    switch (kind) {
+      case "executable": return "Executable"
+      case "runtime": return "Runtime"
+      case "sdk": return "SDK"
+      case "service": return "Service"
+      case "env_var": return "Environment Variable"
+      case "credential": return "Credential"
+      case "path": return "Path"
+      case "project_file": return "Project File"
+      case "container": return "Container"
+      case "mcp_server": return "MCP Server"
+      default: return "Unsupported"
+    }
   }
   const commandSemanticsLabel = (command: {
     supportsArgs: boolean
@@ -287,54 +306,71 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
     return url || type
   }
 
-  const componentSummary = (componentId: string) => {
-    const component = objectValue(capabilityComponents()[componentId])
-    const name = stringValue(component.name, componentId)
+  const componentRecordSummary = (component: Record<string, unknown>, fallbackName: string) => {
+    const name = stringValue(component.name, fallbackName)
     const kind = stringValue(component.kind)
+    if (kind === "environment_requirement") {
+      const config = objectValue(component.config)
+      const resourceKind = stringValue(config.kind || config.resource_kind || component.resource_kind, "runtime")
+      const requirements = objectValue(config.requirements || component.requirements)
+      const requirementText = Object.entries(requirements)
+        .map(([key, value]) => `${key} ${String(value)}`.trim())
+        .join(", ")
+      const command = stringValue(config.command || component.command)
+      return [
+        resourceKindLabel(resourceKind),
+        name,
+        requirementText,
+        command ? `command=${command}` : "",
+      ].filter(Boolean).join(" · ")
+    }
     return kind ? `${kind.toUpperCase()} · ${name}` : name
   }
+  const componentSummary = (componentId: string) => componentRecordSummary(objectValue(capabilityComponents()[componentId]), componentId)
 
-  const refreshToolchains = () => {
+  const refreshToolchains = () => {
     refreshToolchainsRequest()
-  }
-
-  const openCreateToolchain = (kind: ToolchainKind) => {
-    setToolchainEditor(emptyToolchainEditor(kind))
-  }
-
-  const openEditToolchain = (record: ToolchainRecord) => {
-    setToolchainEditor(toolchainEditorFromRecord(record))
-  }
-
-  const patchToolchainEditor = (patch: Partial<ToolchainEditorState>) => {
-    setToolchainEditor((current) => current ? { ...current, ...patch } : current)
-  }
-
-  const saveToolchain = () => {
-    const editor = toolchainEditor()
-    if (!editor) return
-    const payload = toolchainPayloadFromEditor(editor)
-    if (!stringValue(payload.name).trim()) return
+  }
+
+  const openCreateToolchain = (kind: ToolchainKind) => {
+    setToolchainEditor(emptyToolchainEditor(kind))
+  }
+
+  const openEditToolchain = (record: ToolchainRecord) => {
+    setToolchainEditor(toolchainEditorFromRecord(record))
+  }
+
+  const patchToolchainEditor = (patch: Partial<ToolchainEditorState>) => {
+    setToolchainEditor((current) => current ? { ...current, ...patch } : current)
+  }
+
+  const saveToolchain = () => {
+    const editor = toolchainEditor()
+    if (!editor) return
+    const payload = toolchainPayloadFromEditor(editor)
+    if (!stringValue(payload.name).trim()) return
     recordToolchainRequest(editor.kind, payload)
-    setToolchainEditor(undefined)
-  }
-
-  const enableToolchain = (record: ToolchainRecord, enabled: boolean) => {
-    enableToolchainRequest(record.kind, record.name, enabled)
-  }
-
-  const deleteToolchain = (record: ToolchainRecord) => {
+    setToolchainEditor(undefined)
+  }
+
+  const enableToolchain = (record: ToolchainRecord, enabled: boolean) => {
+    const target = record.kind === "environment_requirement" ? stringValue(record.id, record.name) : record.name
+    enableToolchainRequest(record.kind, target, enabled)
+  }
+
+  const deleteToolchain = (record: ToolchainRecord) => {
     if (!globalThis.confirm(`删除 ${record.name}？此操作会从服务器能力组件清单移除该条目。`)) return
-    deleteToolchainRecord(record.kind, record.name)
-  }
-
-  const renderToolchainEditor = () => {
-    const editor = toolchainEditor()
-    if (!editor) return null
-    const title = `${editor.mode === "create" ? "新增" : "编辑"} ${
-      editor.kind === "cli" ? "CLI" : editor.kind === "mcp" ? "MCP" : "Skill"
-    }`
-    return (
+    const target = record.kind === "environment_requirement" ? stringValue(record.id, record.name) : record.name
+    deleteToolchainRecord(record.kind, target)
+  }
+
+  const renderToolchainEditor = () => {
+    const editor = toolchainEditor()
+    if (!editor) return null
+    const title = `${editor.mode === "create" ? "新增" : "编辑"} ${
+      editor.kind === "mcp" ? "MCP Server" : resourceKindLabel(editor.resourceKind)
+    }`
+    return (
       <DialogSurface
         ariaLabel={title}
         backdropClass="settings-overlay settings-overlay--center"
@@ -342,30 +378,47 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
         onClose={() => setToolchainEditor(undefined)}
         initialFocusSelector=".toolchain-editor input"
       >
-          <div class="settings-modal__header">
-            <div>
-              <h3>{title}</h3>
-            </div>
-            <button class="ez-icon-button" onClick={() => setToolchainEditor(undefined)} aria-label="关闭">
-              <span class="codicon codicon-close" aria-hidden="true" />
-            </button>
-          </div>
-          <div class="toolchain-editor__grid">
-            <label class="field-label">
-              <span>{t("toolchain.editor.name")}</span>
-              <input value={editor.name} disabled={editor.mode === "edit"} onInput={(event) => patchToolchainEditor({ name: event.currentTarget.value })} />
-            </label>
-            <label class="field-label">
-              <span>{t("toolchain.filterStatus")}</span>
-              <select value={editor.enabled ? "true" : "false"} onChange={(event) => patchToolchainEditor({ enabled: event.currentTarget.value === "true" })}>
-                <option value="true">{t("provider.enable")}</option>
-                <option value="false">{t("provider.disable")}</option>
-              </select>
-            </label>
-            <label class="field-label">
-              <span>来源</span>
-              <input value={editor.source} onInput={(event) => patchToolchainEditor({ source: event.currentTarget.value })} />
-            </label>
+          <div class="settings-modal__header">
+            <div>
+              <h3>{title}</h3>
+            </div>
+            <button class="ez-icon-button" onClick={() => setToolchainEditor(undefined)} aria-label="关闭">
+              <span class="codicon codicon-close" aria-hidden="true" />
+            </button>
+          </div>
+          <div class="toolchain-editor__grid">
+            <label class="field-label">
+              <span>{t("toolchain.editor.name")}</span>
+              <input value={editor.name} disabled={editor.mode === "edit"} onInput={(event) => patchToolchainEditor({ name: event.currentTarget.value })} />
+            </label>
+            <label class="field-label">
+              <span>{t("toolchain.filterStatus")}</span>
+              <select value={editor.enabled ? "true" : "false"} onChange={(event) => patchToolchainEditor({ enabled: event.currentTarget.value === "true" })}>
+                <option value="true">{t("provider.enable")}</option>
+                <option value="false">{t("provider.disable")}</option>
+              </select>
+            </label>
+            <Show when={editor.kind === "environment_requirement"}>
+              <label class="field-label">
+                <span>资源类型</span>
+                <select value={editor.resourceKind} onChange={(event) => patchToolchainEditor({ resourceKind: event.currentTarget.value })}>
+                  <option value="executable">executable</option>
+                  <option value="runtime">runtime</option>
+                  <option value="sdk">sdk</option>
+                  <option value="service">service</option>
+                  <option value="env_var">env_var</option>
+                  <option value="credential">credential</option>
+                  <option value="path">path</option>
+                  <option value="project_file">project_file</option>
+                  <option value="container">container</option>
+                </select>
+              </label>
+            </Show>
+
+            <label class="field-label">
+              <span>来源</span>
+              <input value={editor.source} onInput={(event) => patchToolchainEditor({ source: event.currentTarget.value })} />
+            </label>
             <label class="field-label">
               <span>版本</span>
               <input value={editor.version} onInput={(event) => patchToolchainEditor({ version: event.currentTarget.value })} />
@@ -379,91 +432,97 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
               <input value={editor.riskLevel} placeholder="low / medium / high" onInput={(event) => patchToolchainEditor({ riskLevel: event.currentTarget.value })} />
             </label>
           </div>
-          <label class="field-label">
-            <span>说明</span>
-            <input value={editor.description} onInput={(event) => patchToolchainEditor({ description: event.currentTarget.value })} />
-          </label>
-
-          <Show when={editor.kind !== "skill"}>
-            <label class="field-label">
-              <span>{editor.kind === "mcp" ? "启动命令" : "命令"}</span>
-              <input value={editor.command} onInput={(event) => patchToolchainEditor({ command: event.currentTarget.value })} />
-            </label>
-          </Show>
-
-          <Show when={editor.kind === "cli"}>
-            <label class="field-label">
-              <span>部署属性</span>
-              <select value={editor.placement} onChange={(event) => patchToolchainEditor({ placement: event.currentTarget.value })}>
-                <option value="local">local</option>
-                <option value="server">server</option>
-                <option value="both">both</option>
-              </select>
-            </label>
+          <label class="field-label">
+            <span>说明</span>
+            <input value={editor.description} onInput={(event) => patchToolchainEditor({ description: event.currentTarget.value })} />
+          </label>
+
+          <label class="field-label">
+            <span>{editor.kind === "mcp" ? "启动命令" : "命令"}</span>
+            <input value={editor.command} onInput={(event) => patchToolchainEditor({ command: event.currentTarget.value })} />
+          </label>
+
+          <Show when={editor.kind === "environment_requirement"}>
+            <div class="toolchain-editor__grid">
+              <label class="field-label">
+                <span>部署属性</span>
+                <select value={editor.placement} onChange={(event) => patchToolchainEditor({ placement: event.currentTarget.value })}>
+                  <option value="peer">peer</option>
+                  <option value="server">server</option>
+                  <option value="both">both</option>
+                </select>
+              </label>
+              <label class="field-label">
+                <span>运行时</span>
+                <input value={editor.runtime} onInput={(event) => patchToolchainEditor({ runtime: event.currentTarget.value })} />
+              </label>
+              <label class="field-label">
+                <span>语言</span>
+                <input value={editor.language} onInput={(event) => patchToolchainEditor({ language: event.currentTarget.value })} />
+              </label>
+              <label class="field-label">
+                <span>路径</span>
+                <input value={editor.path} onInput={(event) => patchToolchainEditor({ path: event.currentTarget.value })} />
+              </label>
+            </div>
             <label class="field-label">
               <span>组件标签</span>
               <textarea rows={3} value={editor.tagsText} placeholder="每行一个组件标签，例如 code-search" onInput={(event) => patchToolchainEditor({ tagsText: event.currentTarget.value })} />
             </label>
           </Show>
-
-          <Show when={editor.kind === "mcp"}>
-            <div class="toolchain-editor__grid">
-              <label class="field-label">
-                <span>安装位置</span>
-                <select value={editor.placement} onChange={(event) => patchToolchainEditor({ placement: event.currentTarget.value })}>
-                  <option value="peer">peer</option>
-                  <option value="both">both</option>
-                  <option value="server">server</option>
-                </select>
-              </label>
-              <label class="field-label">
-                <span>分发方式</span>
-                <select value={editor.distribution} onChange={(event) => patchToolchainEditor({ distribution: event.currentTarget.value })}>
-                  <option value="command">command</option>
-                  <option value="artifact">artifact</option>
-                </select>
-              </label>
-              <label class="field-label">
-                <span>工作目录</span>
-                <input value={editor.cwd} onInput={(event) => patchToolchainEditor({ cwd: event.currentTarget.value })} />
-              </label>
-            </div>
-            <label class="field-label">
-              <span>参数</span>
-              <textarea rows={3} value={editor.argsText} placeholder="每行一个参数" onInput={(event) => patchToolchainEditor({ argsText: event.currentTarget.value })} />
-            </label>
-            <label class="field-label">
-              <span>环境变量</span>
-              <textarea rows={3} value={editor.envText} placeholder="KEY=value，每行一个" onInput={(event) => patchToolchainEditor({ envText: event.currentTarget.value })} />
-            </label>
+
+          <Show when={editor.kind === "mcp"}>
+            <div class="toolchain-editor__grid">
+              <label class="field-label">
+                <span>安装位置</span>
+                <select value={editor.placement} onChange={(event) => patchToolchainEditor({ placement: event.currentTarget.value })}>
+                  <option value="peer">peer</option>
+                  <option value="both">both</option>
+                  <option value="server">server</option>
+                </select>
+              </label>
+              <label class="field-label">
+                <span>分发方式</span>
+                <select value={editor.distribution} onChange={(event) => patchToolchainEditor({ distribution: event.currentTarget.value })}>
+                  <option value="command">command</option>
+                  <option value="artifact">artifact</option>
+                </select>
+              </label>
+              <label class="field-label">
+                <span>工作目录</span>
+                <input value={editor.cwd} onInput={(event) => patchToolchainEditor({ cwd: event.currentTarget.value })} />
+              </label>
+            </div>
+            <label class="field-label">
+              <span>参数</span>
+              <textarea rows={3} value={editor.argsText} placeholder="每行一个参数" onInput={(event) => patchToolchainEditor({ argsText: event.currentTarget.value })} />
+            </label>
+            <label class="field-label">
+              <span>环境变量</span>
+              <textarea rows={3} value={editor.envText} placeholder="KEY=value，每行一个" onInput={(event) => patchToolchainEditor({ envText: event.currentTarget.value })} />
+            </label>
+            <label class="field-label">
+              <span>环境要求引用</span>
+              <textarea rows={3} value={editor.requirementRefsText} placeholder="envreq:runtime:node，每行一个" onInput={(event) => patchToolchainEditor({ requirementRefsText: event.currentTarget.value })} />
+            </label>
           </Show>
-
-          <Show when={editor.kind === "skill"}>
-            <div class="toolchain-editor__grid">
-              <label class="field-label">
-                <span>作用域</span>
-                <select value={editor.scope} onChange={(event) => patchToolchainEditor({ scope: event.currentTarget.value })}>
-                  <option value="project">project</option>
-                  <option value="user">user</option>
-                </select>
-              </label>
-              <label class="field-label">
-                <span>路径提示</span>
-                <input value={editor.pathHint} onInput={(event) => patchToolchainEditor({ pathHint: event.currentTarget.value })} />
-              </label>
-            </div>
-          </Show>
-
-          <div class="toolchain-editor__grid">
-            <label class="field-label">
-              <span>检查命令</span>
-              <textarea rows={3} value={editor.check} onInput={(event) => patchToolchainEditor({ check: event.currentTarget.value })} />
-            </label>
-            <label class="field-label">
-              <span>安装命令</span>
-              <textarea rows={3} value={editor.install} onInput={(event) => patchToolchainEditor({ install: event.currentTarget.value })} />
-            </label>
-          </div>
+
+          <div class="toolchain-editor__grid">
+            <label class="field-label">
+              <span>检查命令</span>
+              <textarea rows={3} value={editor.check} onInput={(event) => patchToolchainEditor({ check: event.currentTarget.value })} />
+            </label>
+            <label class="field-label">
+              <span>安装命令</span>
+              <textarea rows={3} value={editor.install} onInput={(event) => patchToolchainEditor({ install: event.currentTarget.value })} />
+            </label>
+            <Show when={editor.kind === "environment_requirement"}>
+              <label class="field-label">
+                <span>配置命令</span>
+                <textarea rows={3} value={editor.configure} onInput={(event) => patchToolchainEditor({ configure: event.currentTarget.value })} />
+              </label>
+            </Show>
+          </div>
           <label class="field-label">
             <span>文档链接</span>
             <textarea rows={3} value={editor.docsText} placeholder="标题 | URL，每行一个" onInput={(event) => patchToolchainEditor({ docsText: event.currentTarget.value })} />
@@ -473,37 +532,39 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
             <textarea rows={3} value={editor.evidenceText} placeholder="field | title | url | excerpt，每行一条" onInput={(event) => patchToolchainEditor({ evidenceText: event.currentTarget.value })} />
           </label>
           <div class="toolchain-editor__grid">
-            <label class="field-label">
-              <span>运行要求</span>
-              <textarea rows={3} value={editor.requirementsText} placeholder="KEY=value，每行一个" onInput={(event) => patchToolchainEditor({ requirementsText: event.currentTarget.value })} />
-            </label>
+            <Show when={editor.kind === "environment_requirement"}>
+              <label class="field-label">
+                <span>运行要求</span>
+                <textarea rows={3} value={editor.requirementsText} placeholder="KEY=value，每行一个" onInput={(event) => patchToolchainEditor({ requirementsText: event.currentTarget.value })} />
+              </label>
+            </Show>
             <label class="field-label">
               <span>凭据需求</span>
               <textarea rows={3} value={editor.credentialsText} placeholder="每行一个凭据名，例如 GITHUB_TOKEN" onInput={(event) => patchToolchainEditor({ credentialsText: event.currentTarget.value })} />
             </label>
           </div>
-          <label class="field-label">
-            <span>安装指导 prompt</span>
-            <textarea rows={4} value={editor.installPrompt} onInput={(event) => patchToolchainEditor({ installPrompt: event.currentTarget.value })} />
-          </label>
-          <label class="field-label">
-            <span>验证指导 prompt</span>
-            <textarea rows={4} value={editor.verifyPrompt} onInput={(event) => patchToolchainEditor({ verifyPrompt: event.currentTarget.value })} />
-          </label>
-          <label class="field-label">
-            <span>注意事项</span>
-            <textarea rows={3} value={editor.notesText} placeholder="每行一条，例如不要自动安装 Node" onInput={(event) => patchToolchainEditor({ notesText: event.currentTarget.value })} />
-          </label>
-          <div class="toolchain-editor__footer">
-            <button class="btn btn-secondary" onClick={() => setToolchainEditor(undefined)}>{t("executor.picker.cancel")}</button>
-            <button class="btn btn-primary" onClick={saveToolchain} disabled={!editor.name.trim()}>
-              保存
-            </button>
-          </div>
+          <label class="field-label">
+            <span>安装指导 prompt</span>
+            <textarea rows={4} value={editor.installPrompt} onInput={(event) => patchToolchainEditor({ installPrompt: event.currentTarget.value })} />
+          </label>
+          <label class="field-label">
+            <span>验证指导 prompt</span>
+            <textarea rows={4} value={editor.verifyPrompt} onInput={(event) => patchToolchainEditor({ verifyPrompt: event.currentTarget.value })} />
+          </label>
+          <label class="field-label">
+            <span>注意事项</span>
+            <textarea rows={3} value={editor.notesText} placeholder="每行一条，例如不要自动安装 Node" onInput={(event) => patchToolchainEditor({ notesText: event.currentTarget.value })} />
+          </label>
+          <div class="toolchain-editor__footer">
+            <button class="btn btn-secondary" onClick={() => setToolchainEditor(undefined)}>{t("executor.picker.cancel")}</button>
+            <button class="btn btn-primary" onClick={saveToolchain} disabled={!editor.name.trim()}>
+              保存
+            </button>
+          </div>
       </DialogSurface>
-    )
-  }
-
+    )
+  }
+
   return (
       <div class="settings-page settings-page--wide toolchain-dashboard-page">
         <div class="settings-page-header">
@@ -675,83 +736,14 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
           </button>
         </div>
 
-        <section class="settings-section settings-section--flat toolchain-ingest-panel" classList={{ "settings-section--hidden": section() !== "ingest" }}>
-          <div class="settings-section-heading">
-            <div>
-              <span>新增能力组件</span>
-            </div>
-            <StatusBadge tone={toolchainIngestState().running === true ? "warning" : toolchainIngestState().persisted === true ? "success" : "muted"}>
-              {toolchainIngestState().running === true ? "运行中" : toolchainIngestState().persisted === true ? "已写入" : "待命"}
-            </StatusBadge>
-          </div>
-          <div class="toolchain-ingest-grid">
-            <label class="field-label">
-              <span>仓库地址（可选）</span>
-              <input value={ingestRepoUrl()} placeholder="可留空，Agent 可从文档发现" onInput={(event) => setIngestRepoUrl(event.currentTarget.value)} />
-            </label>
-            <label class="field-label">
-              <span>文档地址 / 资料链接</span>
-              <input value={ingestDocsUrl()} placeholder="官方文档、README、安装指南 URL" onInput={(event) => setIngestDocsUrl(event.currentTarget.value)} />
-            </label>
-            <label class="field-label">
-              <span>类型提示</span>
-              <select value={ingestKindHint()} onChange={(event) => setIngestKindHint(event.currentTarget.value as ToolchainKindFilter)}>
-                <option value="all">自动判断</option>
-                <option value="cli">CLI</option>
-                <option value="mcp">MCP</option>
-                <option value="skill">Skill</option>
-              </select>
-            </label>
-            <label class="field-label">
-              <span>名称提示</span>
-              <input value={ingestNameHint()} onInput={(event) => setIngestNameHint(event.currentTarget.value)} />
-            </label>
-            <label class="field-label">
-              <span>可选部署提示</span>
-              <input value={ingestPlacementHint()} placeholder="留空由 Agent 根据 fetch_Capabilities 证据判断" onInput={(event) => setIngestPlacementHint(event.currentTarget.value)} />
-            </label>
-            <div class="toolchain-ingest-actions">
-              <button class="btn btn-primary" onClick={runToolchainIngest} disabled={toolchainIngestState().running === true || (!ingestRepoUrl().trim() && !ingestDocsUrl().trim() && !ingestDocsText().trim())}>
-                <span class="codicon codicon-sparkle" aria-hidden="true" />
-                {hasToolchainIngestDuplicates() ? "仍然新增组件" : "新增组件"}
-              </button>
-              <Show when={toolchainIngestState().running === true}>
-                <button class="btn btn-danger" onClick={cancelToolchainIngest}>
-                  <span class="codicon codicon-debug-stop" aria-hidden="true" />
-                  停止
-                </button>
-              </Show>
-            </div>
-          </div>
-          <label class="field-label">
-            <span>补充文档片段</span>
-            <textarea rows={3} value={ingestDocsText()} placeholder="可粘贴 README 安装段落、凭据说明或风险提示" onInput={(event) => setIngestDocsText(event.currentTarget.value)} />
-          </label>
-          <Show when={hasToolchainIngestDuplicates()}>
-            <div class="settings-warning toolchain-duplicate-warning">
-              <span class="codicon codicon-warning" aria-hidden="true" />
-              <div>
-                <strong>可能已存在相关组件</strong>
-                <Show when={toolchainIngestDuplicates().repo.length}>
-                  <p>相同仓库：{toolchainIngestDuplicates().repo.map(duplicateMatchLabel).join("、")}</p>
-                </Show>
-                <Show when={toolchainIngestDuplicates().docs.length}>
-                  <p>相同文档：{toolchainIngestDuplicates().docs.map(duplicateMatchLabel).join("、")}</p>
-                </Show>
-              </div>
-            </div>
-          </Show>
-        </section>
-
         <section class="toolchain-workbench" classList={{ "settings-section--hidden": section() !== "components" }}>
           <div class="toolchain-list-pane">
             <div class="toolchain-toolbar">
               <div class="toolchain-kind-tabs" role="tablist" aria-label="工具类型筛选">
                 <For each={[
                   ["all", "全部"],
-                  ["cli", "CLI"],
+                  ["environment_requirement", "环境要求"],
                   ["mcp", "MCP"],
-                  ["skill", "Skill"],
                 ] as Array<[ToolchainKindFilter, string]>}>
                   {([id, label]) => (
                     <button classList={{ "is-active": toolchainKindFilter() === id }} onClick={() => setToolchainKindFilter(id)}>
@@ -765,17 +757,13 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
                 <input value={toolchainSearch()} placeholder="搜索工具、文档、命令" onInput={(event) => setToolchainSearch(event.currentTarget.value)} />
               </div>
               <div class="toolchain-toolbar__actions" aria-label="新增能力组件">
-                <button class="btn btn-secondary btn--compact" type="button" onClick={() => openCreateToolchain("cli")}>
+                <button class="btn btn-secondary btn--compact" type="button" onClick={() => openCreateToolchain("environment_requirement")}>
                   <span class="codicon codicon-add" aria-hidden="true" />
-                  新增 CLI
+                  新增环境要求
                 </button>
                 <button class="btn btn-secondary btn--compact" type="button" onClick={() => openCreateToolchain("mcp")}>
                   <span class="codicon codicon-add" aria-hidden="true" />
                   新增 MCP
-                </button>
-                <button class="btn btn-secondary btn--compact" type="button" onClick={() => openCreateToolchain("skill")}>
-                  <span class="codicon codicon-add" aria-hidden="true" />
-                  新增 Skill
                 </button>
               </div>
             </div>
@@ -811,7 +799,7 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
                           <strong>{item.name}</strong>
                           <small>{item.alias || item.command || "未记录别名"}</small>
                         </span>
-                        <span><StatusBadge>{environmentKindLabel(item.kind)}</StatusBadge></span>
+                        <span><StatusBadge>{resourceKindLabel(item.resourceKind || item.rawKind || item.kind)}</StatusBadge></span>
                         <span class="toolchain-source-cell">{toolchainSourceLabel(item)}</span>
                         <span>{placementLabel(item)}</span>
                         <span>
@@ -820,10 +808,10 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
                           </StatusBadge>
                         </span>
                         <span class="toolchain-row-actions">
-                          <button class="ez-icon-button" title="检查" disabled={environmentSnapshot().running || !environmentAgentAvailable()} onClick={(event) => { event.stopPropagation(); runEnvironment("check", [item.id]) }}>
+                          <button class="ez-icon-button" title={environmentActionTitle(item, "检查")} disabled={!canRunEnvironmentItem(item) || environmentSnapshot().running || !environmentAgentAvailable()} onClick={(event) => { event.stopPropagation(); if (canRunEnvironmentItem(item)) runEnvironment("check", [item.id]) }}>
                             <span class="codicon codicon-search" aria-hidden="true" />
                           </button>
-                          <button class="ez-icon-button" title="配置" disabled={environmentSnapshot().running || !environmentAgentAvailable()} onClick={(event) => { event.stopPropagation(); runEnvironment("configure", [item.id]) }}>
+                          <button class="ez-icon-button" title={environmentActionTitle(item, "配置")} disabled={!canRunEnvironmentItem(item) || environmentSnapshot().running || !environmentAgentAvailable()} onClick={(event) => { event.stopPropagation(); if (canRunEnvironmentItem(item)) runEnvironment("configure", [item.id]) }}>
                             <span class="codicon codicon-tools" aria-hidden="true" />
                           </button>
                           <button class="ez-icon-button" title="编辑" onClick={(event) => { event.stopPropagation(); openEditToolchain(record()) }}>
@@ -850,7 +838,7 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
                 <>
                   <div class="toolchain-detail-header">
                     <div>
-                      <span class="settings-badge">{environmentKindLabel(item().kind)}</span>
+                      <span class="settings-badge">{resourceKindLabel(item().resourceKind || item().rawKind || item().kind)}</span>
                       <h3>{item().name}</h3>
                       <p>{item().alias || item().source || "未记录说明"}</p>
                     </div>
@@ -859,11 +847,11 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
                     </StatusBadge>
                   </div>
                   <div class="toolchain-detail-actions">
-                    <button class="btn btn-secondary" disabled={environmentSnapshot().running || !environmentAgentAvailable()} onClick={() => runEnvironment("check", [item().id])}>
+                    <button class="btn btn-secondary" title={environmentActionTitle(item(), "检查")} disabled={!canRunEnvironmentItem(item()) || environmentSnapshot().running || !environmentAgentAvailable()} onClick={() => { if (canRunEnvironmentItem(item())) runEnvironment("check", [item().id]) }}>
                       <span class="codicon codicon-search" aria-hidden="true" />
                       检查
                     </button>
-                    <button class="btn btn-primary" disabled={environmentSnapshot().running || !environmentAgentAvailable()} onClick={() => runEnvironment("configure", [item().id])}>
+                    <button class="btn btn-primary" title={environmentActionTitle(item(), "配置")} disabled={!canRunEnvironmentItem(item()) || environmentSnapshot().running || !environmentAgentAvailable()} onClick={() => { if (canRunEnvironmentItem(item())) runEnvironment("configure", [item().id]) }}>
                       <span class="codicon codicon-tools" aria-hidden="true" />
                       配置
                     </button>
@@ -925,27 +913,28 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
                     <span>安装命令</span>
                     <code class="environment-command">{item().install || "未记录"}</code>
                   </div>
+                  <Show when={item().kind === "environment_requirement"}>
+                    <div class="toolchain-detail-section">
+                      <span>配置命令</span>
+                      <code class="environment-command">{item().configure || "未记录"}</code>
+                    </div>
+                    <div class="toolchain-detail-section">
+                      <span>运行要求</span>
+                      <small>{Object.entries(item().requirements || {}).map(([key, value]) => `${key} ${String(value)}`.trim()).join("、") || "未记录"}</small>
+                    </div>
+                  </Show>
+                  <Show when={item().kind === "mcp"}>
+                    <div class="toolchain-detail-section">
+                      <span>环境要求引用</span>
+                      <small>{item().environment_requirement_refs?.length ? item().environment_requirement_refs.join("、") : "未记录"}</small>
+                    </div>
+                  </Show>
                   <div class="toolchain-detail-section">
                     <span>风险说明</span>
                     <small>
                       {item().risk_level || "未标注"}
                       {item().credentials.length ? ` · 需要凭据：${item().credentials.join(", ")}` : ""}
                     </small>
-                  </div>
-                  <div class="toolchain-detail-section">
-                    <span>解析 Agent 日志</span>
-                    <Show when={toolchainIngestLogs().length} fallback={<small>尚未运行新增能力组件 Agent。</small>}>
-                      <div class="toolchain-ingest-log-list">
-                        <For each={toolchainIngestLogs().slice(-6)}>
-                          {(log) => (
-                            <div class={`toolchain-ingest-log toolchain-ingest-log--${stringValue(log.level, "info")}`}>
-                              <small>{formatTimestamp(log.createdAt)}</small>
-                              <span>{stringValue(log.message)}</span>
-                            </div>
-                          )}
-                        </For>
-                      </div>
-                    </Show>
                   </div>
                 </>
               )}
@@ -1035,7 +1024,7 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
                         <div class="capability-component-card">
                           <div>
                             <strong>{stringValue(component.id, stringValue(component.name, "component"))}</strong>
-                            <small>{stringValue(component.description) || stringValue(component.name)}</small>
+                            <small>{componentRecordSummary(component, stringValue(component.id, "component"))}</small>
                           </div>
                           <StatusBadge>{stringValue(component.kind, "component")}</StatusBadge>
                         </div>
@@ -1196,10 +1185,10 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
         <section class="settings-section settings-section--flat" classList={{ "settings-section--hidden": section() !== "logs" }}>
           <div class="settings-section-heading">
             <span>运行日志</span>
-            <StatusBadge>{String(environmentSnapshot().logs.length + toolchainIngestLogs().length)}</StatusBadge>
+            <StatusBadge>{String(environmentSnapshot().logs.length)}</StatusBadge>
           </div>
           <div class="environment-log-list">
-            <Show when={environmentSnapshot().logs.length || toolchainIngestLogs().length} fallback={<p class="settings-empty-note">环境检查、配置或导入任务运行后会显示最近输出。</p>}>
+            <Show when={environmentSnapshot().logs.length} fallback={<p class="settings-empty-note">环境检查或配置任务运行后会显示最近输出。</p>}>
               <For each={environmentSnapshot().logs}>
                 {(log) => (
                   <div class={`environment-log environment-log--${log.level}`}>
@@ -1210,14 +1199,6 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
                       <small>{formatTimestamp(log.createdAt)}</small>
                     </div>
                     <pre class="environment-log__message">{log.message}</pre>
-                  </div>
-                )}
-              </For>
-              <For each={toolchainIngestLogs()}>
-                {(log) => (
-                  <div class={`toolchain-ingest-log toolchain-ingest-log--${stringValue(log.level, "info")}`}>
-                    <small>{formatTimestamp(log.createdAt)}</small>
-                    <span>{stringValue(log.message)}</span>
                   </div>
                 )}
               </For>

@@ -1,4 +1,4 @@
-﻿import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from "solid-js"
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from "solid-js"
 import { useVSCode } from "../context/vscode"
 import { useServer } from "../context/server"
 import {
@@ -111,8 +111,19 @@ function executorEngineLabel(engine: ExecutorEngine): string {
 }
 type ModelDetailMode = "fetched" | "custom"
 type ModelActionIntent = "" | "savePreset" | "deletePreset"
-type EnvironmentEntryKind = "cli" | "mcp" | "skill"
-type ToolchainKind = EnvironmentEntryKind
+type EnvironmentRequirementKind =
+  | "executable"
+  | "runtime"
+  | "sdk"
+  | "service"
+  | "env_var"
+  | "credential"
+  | "path"
+  | "project_file"
+  | "container"
+type EnvironmentEntryKind = "environment_requirement" | "mcp" | "unsupported"
+type ToolchainKind = "environment_requirement" | "mcp"
+type ToolchainResourceKind = EnvironmentRequirementKind | "mcp_server" | "unsupported"
 type ToolchainKindFilter = "all" | ToolchainKind
 type ToolchainStatusFilter = "all" | "ready" | "missing" | "stopped" | "awaiting"
 const BUILT_IN_ENVIRONMENT_AGENT_ID = "environment_configurator"
@@ -241,6 +252,7 @@ function knownModelCapabilityDefaults(
 interface EnvironmentEntryState {
   id: string
   kind: EnvironmentEntryKind
+  requirementKind: EnvironmentRequirementKind | "unsupported"
   name: string
   description: string
   source: string
@@ -293,7 +305,10 @@ interface EnvironmentSnapshotState {
 }
 
 interface ToolchainRecord {
+  id?: string
   kind: ToolchainKind
+  entryType: ToolchainKind
+  resourceKind: ToolchainResourceKind
   name: string
   enabled?: boolean
   command?: string
@@ -307,7 +322,11 @@ interface ToolchainRecord {
   scope?: string
   check?: string
   install?: string
+  configure?: string
   version?: string
+  runtime?: string
+  language?: string
+  path?: string
   source?: string
   description?: string
   path_hint?: string
@@ -324,11 +343,15 @@ interface ToolchainRecord {
   install_prompt?: string
   verify_prompt?: string
   notes?: string[]
+  environment_requirement_refs?: string[]
 }
 
 interface ToolchainDashboardItem {
   id: string
   kind: ToolchainKind
+  entryType: ToolchainKind
+  resourceKind: ToolchainResourceKind
+  rawKind: string
   name: string
   alias: string
   source: string
@@ -341,7 +364,12 @@ interface ToolchainDashboardItem {
   status_detail: string
   check: string
   install: string
+  configure: string
   command: string
+  runtime: string
+  language: string
+  path: string
+  environment_requirement_refs: string[]
   requirements: Record<string, string>
   credentials: string[]
   risk_level: string
@@ -395,6 +423,9 @@ interface CapabilityPackageIngestState {
 interface ToolchainEditorState {
   mode: "create" | "edit"
   kind: ToolchainKind
+  id: string
+  entryType: ToolchainKind
+  resourceKind: ToolchainResourceKind
   name: string
   enabled: boolean
   command: string
@@ -408,7 +439,11 @@ interface ToolchainEditorState {
   scope: string
   check: string
   install: string
+  configure: string
   version: string
+  runtime: string
+  language: string
+  path: string
   source: string
   description: string
   pathHint: string
@@ -420,6 +455,7 @@ interface ToolchainEditorState {
   installPrompt: string
   verifyPrompt: string
   notesText: string
+  requirementRefsText: string
 }
 
 /* ── Agent 配置类型 ── */
@@ -742,37 +778,37 @@ export function normalizeSettingsTab(value: unknown): SettingsTab | undefined {
     case "other":
       return "conversation"
 
-    default:
-      return undefined
-  }
-}
-
-function asProviderType(value: unknown): ProviderType {
-  return providerTypes.includes(value as ProviderType) ? value as ProviderType : "openai_chat"
-}
-
-function asProviderCompat(value: unknown): ProviderCompat {
-  return compats.includes(value as ProviderCompat) ? value as ProviderCompat : "generic"
-}
-
-function stringValue(value: unknown, fallback = ""): string {
-  if (value === undefined || value === null) return fallback
-  return String(value)
-}
-
+    default:
+      return undefined
+  }
+}
+
+function asProviderType(value: unknown): ProviderType {
+  return providerTypes.includes(value as ProviderType) ? value as ProviderType : "openai_chat"
+}
+
+function asProviderCompat(value: unknown): ProviderCompat {
+  return compats.includes(value as ProviderCompat) ? value as ProviderCompat : "generic"
+}
+
+function stringValue(value: unknown, fallback = ""): string {
+  if (value === undefined || value === null) return fallback
+  return String(value)
+}
+
 function numberValue(value: unknown, fallback: number): number {
-  const parsed = typeof value === "number" ? value : Number(value)
-  return Number.isFinite(parsed) ? parsed : fallback
-}
-
-function boolValue(value: unknown, fallback = true): boolean {
-  if (value === undefined || value === null) return fallback
-  if (typeof value === "string") {
-    return !["0", "false", "no", "off"].includes(value.trim().toLowerCase())
-  }
-  return Boolean(value)
-}
-
+  const parsed = typeof value === "number" ? value : Number(value)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
+function boolValue(value: unknown, fallback = true): boolean {
+  if (value === undefined || value === null) return fallback
+  if (typeof value === "string") {
+    return !["0", "false", "no", "off"].includes(value.trim().toLowerCase())
+  }
+  return Boolean(value)
+}
+
 function agentVisibilityValue(value: unknown): AgentVisibility {
   const visibility = stringValue(value, "user")
   return visibility === "system" || visibility === "internal" ? visibility : "user"
@@ -781,57 +817,57 @@ function agentVisibilityValue(value: unknown): AgentVisibility {
 
 
 function stringListText(value: unknown): string {
-  return Array.isArray(value) ? value.map((item) => String(item)).join("\n") : ""
-}
-
-function parseStringList(value: string): string[] {
-  return value
-    .split(/\r?\n|,/)
-    .map((item) => item.trim())
-    .filter(Boolean)
-}
-
-function mapText(value: unknown): string {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return ""
-  return Object.entries(value as Record<string, unknown>)
-    .map(([key, item]) => `${key}=${String(item)}`)
-    .join("\n")
-}
-
-function parseMapText(value: string): Record<string, string> {
-  const result: Record<string, string> = {}
-  for (const line of value.split(/\r?\n/)) {
-    const trimmed = line.trim()
-    if (!trimmed) continue
-    const index = trimmed.indexOf("=")
-    if (index < 0) {
-      result[trimmed] = ""
-      continue
-    }
-    result[trimmed.slice(0, index).trim()] = trimmed.slice(index + 1).trim()
-  }
-  return result
-}
-
-function docsText(value: unknown): string {
-  if (!Array.isArray(value)) return ""
-  return value
-    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
-    .map((item) => `${stringValue(item.title)} | ${stringValue(item.url)}`.trim())
-    .join("\n")
-}
-
+  return Array.isArray(value) ? value.map((item) => String(item)).join("\n") : ""
+}
+
+function parseStringList(value: string): string[] {
+  return value
+    .split(/\r?\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function mapText(value: unknown): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return ""
+  return Object.entries(value as Record<string, unknown>)
+    .map(([key, item]) => `${key}=${String(item)}`)
+    .join("\n")
+}
+
+function parseMapText(value: string): Record<string, string> {
+  const result: Record<string, string> = {}
+  for (const line of value.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    const index = trimmed.indexOf("=")
+    if (index < 0) {
+      result[trimmed] = ""
+      continue
+    }
+    result[trimmed.slice(0, index).trim()] = trimmed.slice(index + 1).trim()
+  }
+  return result
+}
+
+function docsText(value: unknown): string {
+  if (!Array.isArray(value)) return ""
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+    .map((item) => `${stringValue(item.title)} | ${stringValue(item.url)}`.trim())
+    .join("\n")
+}
+
 function parseDocsText(value: string): Array<{ title: string; url: string }> {
-  const docs: Array<{ title: string; url: string }> = []
-  for (const line of value.split(/\r?\n/)) {
-    const trimmed = line.trim()
-    if (!trimmed) continue
-    const [titlePart, ...urlParts] = trimmed.split("|")
-    const title = titlePart.trim()
-    const url = urlParts.join("|").trim()
-    if (!title && !url) continue
-    docs.push({ title, url })
-  }
+  const docs: Array<{ title: string; url: string }> = []
+  for (const line of value.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    const [titlePart, ...urlParts] = trimmed.split("|")
+    const title = titlePart.trim()
+    const url = urlParts.join("|").trim()
+    if (!title && !url) continue
+    docs.push({ title, url })
+  }
   return docs
 }
 
@@ -866,34 +902,53 @@ function parseEvidenceText(value: string): Array<Record<string, string>> {
   }
   return evidence
 }
-
-function normalizeToolchainList(value: unknown, kind: ToolchainKind): ToolchainRecord[] {
-  if (!Array.isArray(value)) return []
-  return value
-    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
-    .map((item) => ({ ...item, kind, name: stringValue(item.name || item.id) } as ToolchainRecord))
-    .filter((item) => item.name)
-}
-
+
+function normalizeToolchainList(value: unknown, kind: ToolchainKind): ToolchainRecord[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+    .map((item) => {
+      const resourceKind: ToolchainResourceKind = kind === "environment_requirement"
+        ? normalizeRequirementKind(item.kind || item.resource_kind)
+        : "mcp_server"
+      return {
+        ...item,
+        id: stringValue(item.id),
+        kind,
+        entryType: kind,
+        resourceKind,
+        name: stringValue(item.name || item.id),
+      } as ToolchainRecord
+    })
+    .filter((item) => item.name)
+}
+
 function emptyToolchainEditor(kind: ToolchainKind): ToolchainEditorState {
   return {
-    mode: "create",
-    kind,
-    name: "",
-    enabled: true,
-    command: "",
+    mode: "create",
+    kind,
+    id: "",
+    entryType: kind,
+    resourceKind: kind === "environment_requirement" ? "executable" : "mcp_server",
+    name: "",
+    enabled: true,
+    command: "",
 
     tagsText: "",
     argsText: "",
     envText: "",
     cwd: "",
-    placement: kind === "cli" ? "local" : "peer",
+    placement: "peer",
     distribution: "command",
     requirementsText: "",
     scope: "project",
     check: "",
     install: "",
+    configure: "",
     version: "",
+    runtime: "",
+    language: "",
+    path: "",
     source: "",
     description: "",
     pathHint: "",
@@ -905,6 +960,7 @@ function emptyToolchainEditor(kind: ToolchainKind): ToolchainEditorState {
     installPrompt: "",
     verifyPrompt: "",
     notesText: "",
+    requirementRefsText: "",
   }
 }
 
@@ -912,6 +968,9 @@ function toolchainEditorFromRecord(record: ToolchainRecord): ToolchainEditorStat
   return {
     ...emptyToolchainEditor(record.kind),
     mode: "edit",
+    id: stringValue(record.id),
+    entryType: record.entryType || record.kind,
+    resourceKind: record.resourceKind || (record.kind === "mcp" ? "mcp_server" : normalizeRequirementKind(record.kind)),
     name: record.name,
     enabled: boolValue(record.enabled, true),
     command: stringValue(record.command),
@@ -925,7 +984,11 @@ function toolchainEditorFromRecord(record: ToolchainRecord): ToolchainEditorStat
     scope: stringValue(record.scope, "project"),
     check: stringValue(record.check),
     install: stringValue(record.install),
+    configure: stringValue(record.configure),
     version: stringValue(record.version),
+    runtime: stringValue(record.runtime),
+    language: stringValue(record.language),
+    path: stringValue(record.path),
     source: stringValue(record.source),
     description: stringValue(record.description),
     pathHint: stringValue(record.path_hint),
@@ -937,11 +1000,13 @@ function toolchainEditorFromRecord(record: ToolchainRecord): ToolchainEditorStat
     installPrompt: stringValue(record.install_prompt),
     verifyPrompt: stringValue(record.verify_prompt),
     notesText: stringListText(record.notes),
+    requirementRefsText: stringListText(record.environment_requirement_refs),
   }
 }
 
 function toolchainPayloadFromEditor(editor: ToolchainEditorState): Record<string, unknown> {
   const payload: Record<string, unknown> = {
+    id: editor.id.trim() || undefined,
     name: editor.name.trim(),
     enabled: editor.enabled,
     check: editor.check.trim(),
@@ -952,16 +1017,21 @@ function toolchainPayloadFromEditor(editor: ToolchainEditorState): Record<string
     repo_url: editor.repoUrl.trim(),
     docs: parseDocsText(editor.docsText),
     evidence: parseEvidenceText(editor.evidenceText),
-    requirements: parseMapText(editor.requirementsText),
     credentials: parseStringList(editor.credentialsText),
     risk_level: editor.riskLevel.trim(),
     install_prompt: editor.installPrompt.trim(),
     verify_prompt: editor.verifyPrompt.trim(),
     notes: parseStringList(editor.notesText),
   }
-  if (editor.kind === "cli") {
+  if (editor.kind === "environment_requirement") {
+    payload.kind = editor.resourceKind === "unsupported" ? undefined : editor.resourceKind
     payload.command = editor.command.trim()
-    payload.placement = editor.placement || "local"
+    payload.placement = editor.placement || "peer"
+    payload.configure = editor.configure.trim()
+    payload.runtime = editor.runtime.trim()
+    payload.language = editor.language.trim()
+    payload.path = editor.path.trim()
+    payload.requirements = parseMapText(editor.requirementsText)
     payload.tags = parseStringList(editor.tagsText)
   } else if (editor.kind === "mcp") {
     payload.command = editor.command.trim()
@@ -970,9 +1040,7 @@ function toolchainPayloadFromEditor(editor: ToolchainEditorState): Record<string
     payload.cwd = editor.cwd.trim() || undefined
     payload.placement = editor.placement || "peer"
     payload.distribution = editor.distribution || "command"
-  } else {
-    payload.scope = editor.scope || "project"
-    payload.path_hint = editor.pathHint.trim() || undefined
+    payload.environment_requirement_refs = parseStringList(editor.requirementRefsText)
   }
   return payload
 }
@@ -1146,6 +1214,66 @@ function stringMapValue(value: unknown): Record<string, string> {
   }, {})
 }
 
+const ENVIRONMENT_REQUIREMENT_KIND_VALUES: EnvironmentRequirementKind[] = [
+  "executable",
+  "runtime",
+  "sdk",
+  "service",
+  "env_var",
+  "credential",
+  "path",
+  "project_file",
+  "container",
+]
+
+function normalizeRequirementKind(value: unknown): EnvironmentRequirementKind | "unsupported" {
+  const text = stringValue(value).trim().toLowerCase()
+  return (ENVIRONMENT_REQUIREMENT_KIND_VALUES as string[]).includes(text)
+    ? text as EnvironmentRequirementKind
+    : "unsupported"
+}
+
+function normalizeEntryType(value: unknown): ToolchainKind | "" {
+  const text = stringValue(value).trim().toLowerCase()
+  if (text === "environment_requirement") return "environment_requirement"
+  if (text === "mcp" || text === "mcp_server") return "mcp"
+  return ""
+}
+
+function entryTypeFromResourceKind(value: unknown): ToolchainKind | "" {
+  const text = stringValue(value).trim().toLowerCase()
+  if (text === "mcp" || text === "mcp_server") return "mcp"
+  if ((ENVIRONMENT_REQUIREMENT_KIND_VALUES as string[]).includes(text)) return "environment_requirement"
+  return ""
+}
+
+function resourceKindLabel(kind: ToolchainResourceKind): string {
+  switch (kind) {
+    case "executable":
+      return "Executable"
+    case "runtime":
+      return "Runtime"
+    case "sdk":
+      return "SDK"
+    case "service":
+      return "Service"
+    case "env_var":
+      return "Environment Variable"
+    case "credential":
+      return "Credential"
+    case "path":
+      return "Path"
+    case "project_file":
+      return "Project File"
+    case "container":
+      return "Container"
+    case "mcp_server":
+      return "MCP Server"
+    default:
+      return "Unsupported"
+  }
+}
+
 function normalizeEvidence(value: unknown): Array<Record<string, string>> {
   if (!Array.isArray(value)) return []
   return value
@@ -1177,13 +1305,19 @@ function normalizeToolchainStatus(value: unknown): EnvironmentEntryStatus {
 }
 
 function toolchainRecordToDashboardItem(record: ToolchainRecord): ToolchainDashboardItem {
-  const placement =
-    record.kind === "skill"
-      ? stringValue(record.scope, "project")
-      : stringValue(record.placement, record.kind === "cli" ? "local" : "server")
+  const placement = stringValue(record.placement, record.kind === "mcp" ? "server" : "peer")
+  const resourceKind = record.resourceKind || (record.kind === "mcp" ? "mcp_server" : normalizeRequirementKind(record.kind))
+  const id = stringValue(record.id) || (
+    record.kind === "environment_requirement"
+      ? `envreq:${resourceKind}:${record.name}`
+      : `mcp:${record.name}`
+  )
   return {
-    id: `${record.kind}:${record.name}`,
+    id,
     kind: record.kind,
+    entryType: record.entryType || record.kind,
+    resourceKind,
+    rawKind: resourceKind,
     name: record.name,
     alias: stringValue(record.command || record.path_hint || record.name),
     source: stringValue(record.source),
@@ -1191,12 +1325,17 @@ function toolchainRecordToDashboardItem(record: ToolchainRecord): ToolchainDashb
     docs: Array.isArray(record.docs) ? record.docs : [],
     evidence: normalizeEvidence(record.evidence),
     placement,
-    scope: record.kind === "skill" ? placement : stringValue(record.placement, placement),
+    scope: stringValue(record.scope || record.placement, placement),
     status: boolValue(record.enabled, true) ? "unchecked" : "stopped",
     status_detail: boolValue(record.enabled, true) ? "等待环境检查" : "清单已停用",
     check: stringValue(record.check),
     install: stringValue(record.install),
+    configure: stringValue(record.configure),
     command: stringValue(record.command || record.path_hint),
+    runtime: stringValue(record.runtime),
+    language: stringValue(record.language),
+    path: stringValue(record.path),
+    environment_requirement_refs: stringArray(record.environment_requirement_refs),
     requirements: stringMapValue(record.requirements),
     credentials: stringArray(record.credentials),
     risk_level: stringValue(record.risk_level),
@@ -1217,38 +1356,29 @@ function normalizeToolchainDashboardItems(
   const rawItems = Array.isArray(value)
     ? value.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
     : []
-  const baseItems = rawItems.length
-    ? rawItems.map((item) => ({
-        id: stringValue(item.id) || `${stringValue(item.kind)}:${stringValue(item.name)}`,
-        kind: (["cli", "mcp", "skill"].includes(stringValue(item.kind)) ? stringValue(item.kind) : "cli") as ToolchainKind,
-        name: stringValue(item.name),
-        alias: stringValue(item.alias || item.command || item.name),
-        source: stringValue(item.source),
-        repo_url: stringValue(item.repo_url),
-        docs: Array.isArray(item.docs) ? item.docs as Array<{ title?: string; url?: string }> : [],
-        evidence: normalizeEvidence(item.evidence),
-        placement: stringValue(item.placement || item.scope),
-        scope: stringValue(item.scope || item.placement),
-        status: normalizeToolchainStatus(item.status),
-        status_detail: stringValue(item.status_detail),
-        check: stringValue(item.check),
-        install: stringValue(item.install),
-        command: stringValue(item.command),
-        requirements: stringMapValue(item.requirements),
-        credentials: stringArray(item.credentials),
-        risk_level: stringValue(item.risk_level),
-        enabled: boolValue(item.enabled, true),
-        last_action: stringValue(item.last_action),
-        last_updated: stringValue(item.last_updated),
-        component_id: stringValue(item.component_id),
-        package_ids: stringArray(item.package_ids),
-        managed_by: stringValue(item.managed_by),
-      }))
-    : (["cli", "mcp", "skill"] as ToolchainKind[]).flatMap((kind) =>
-        fallbackGroups[kind].map(toolchainRecordToDashboardItem)
-      )
+  const baseItems = (["environment_requirement", "mcp"] as ToolchainKind[]).flatMap((kind) =>
+    fallbackGroups[kind].map(toolchainRecordToDashboardItem)
+  )
+  const byId = new Map(baseItems.map((item) => [item.id, item]))
+  for (const rawItem of rawItems) {
+    const summary = dashboardSummaryItem(rawItem)
+    const existing = byId.get(summary.id)
+    if (!existing) {
+      byId.set(summary.id, summary)
+      continue
+    }
+    byId.set(summary.id, {
+      ...existing,
+      status: summary.status,
+      status_detail: summary.status_detail,
+      enabled: summary.enabled,
+      last_action: summary.last_action,
+      last_updated: summary.last_updated,
+    })
+  }
+  const mergedItems = [...byId.values()]
   const statusById = new Map(snapshot.entries.map((entry) => [entry.id, entry]))
-  return baseItems
+  return mergedItems
     .filter((item) => item.name)
     .map((item) => {
       const entry = statusById.get(item.id)
@@ -1261,6 +1391,55 @@ function normalizeToolchainDashboardItems(
         last_updated: entry.lastUpdated || item.last_updated,
       }
     })
+}
+
+function dashboardSummaryItem(item: Record<string, unknown>): ToolchainDashboardItem {
+  const name = stringValue(item.name)
+  const entryType = (normalizeEntryType(item.entry_type) || entryTypeFromResourceKind(item.kind) || "environment_requirement") as ToolchainKind
+  const resourceKind = (
+    entryType === "mcp"
+      ? "mcp_server"
+      : normalizeRequirementKind(item.kind || item.resource_kind)
+  ) as ToolchainResourceKind
+  const id = stringValue(item.id) || (
+    entryType === "mcp"
+      ? `mcp:${name}`
+      : `envreq:${resourceKind}:${name}`
+  )
+  return {
+    id,
+    kind: entryType,
+    entryType,
+    resourceKind,
+    rawKind: stringValue(item.kind),
+    name,
+    alias: stringValue(item.alias || item.command || item.name),
+    source: stringValue(item.source),
+    repo_url: stringValue(item.repo_url),
+    docs: Array.isArray(item.docs) ? item.docs as Array<{ title?: string; url?: string }> : [],
+    evidence: normalizeEvidence(item.evidence),
+    placement: stringValue(item.placement || item.scope),
+    scope: stringValue(item.scope || item.placement),
+    status: normalizeToolchainStatus(item.status),
+    status_detail: stringValue(item.status_detail),
+    check: stringValue(item.check),
+    install: stringValue(item.install),
+    configure: stringValue(item.configure),
+    command: stringValue(item.command),
+    runtime: stringValue(item.runtime),
+    language: stringValue(item.language),
+    path: stringValue(item.path),
+    environment_requirement_refs: stringArray(item.environment_requirement_refs),
+    requirements: stringMapValue(item.requirements),
+    credentials: stringArray(item.credentials),
+    risk_level: stringValue(item.risk_level),
+    enabled: boolValue(item.enabled, true),
+    last_action: stringValue(item.last_action),
+    last_updated: stringValue(item.last_updated),
+    component_id: stringValue(item.component_id),
+    package_ids: stringArray(item.package_ids),
+    managed_by: stringValue(item.managed_by),
+  }
 }
 
 function toolchainStatusBucket(status: EnvironmentEntryStatus): ToolchainStatusFilter {
@@ -1286,7 +1465,7 @@ function summarizeToolchainDashboard(items: ToolchainDashboardItem[]) {
 }
 
 function placementLabel(item: ToolchainDashboardItem): string {
-  if (item.kind === "cli") {
+  if (item.kind === "environment_requirement") {
     if (item.placement === "server") return "服务端"
     if (item.placement === "both") return "服务端+本地端"
     return "本地端"
@@ -1304,64 +1483,25 @@ function toolchainSourceLabel(item: ToolchainDashboardItem): string {
   return item.repo_url || stringValue(firstDoc?.url) || item.source || "未记录"
 }
 
-function normalizeToolchainUrl(value: string): string {
-  const trimmed = value.trim().toLowerCase()
-  if (!trimmed) return ""
-  try {
-    const url = new URL(trimmed)
-    url.hash = ""
-    if (url.pathname !== "/") {
-      url.pathname = url.pathname.replace(/\/+$/, "")
-    }
-    return url.toString().replace(/\/+$/, "")
-  } catch {
-    return trimmed.replace(/\/+$/, "")
-  }
-}
-
-function toolchainDuplicateInputMatches(
-  items: ToolchainDashboardItem[],
-  repoUrl: string,
-  docsUrl: string,
-): { repo: ToolchainDashboardItem[]; docs: ToolchainDashboardItem[] } {
-  const repo = normalizeToolchainUrl(repoUrl)
-  const docs = normalizeToolchainUrl(docsUrl)
-  const repoMatches = new Map<string, ToolchainDashboardItem>()
-  const docsMatches = new Map<string, ToolchainDashboardItem>()
-  for (const item of items) {
-    const itemRepo = normalizeToolchainUrl(item.repo_url || (item.source.startsWith("http") ? item.source : ""))
-    if (repo && itemRepo && repo === itemRepo) {
-      repoMatches.set(item.id, item)
-    }
-    if (docs) {
-      for (const doc of item.docs) {
-        if (docs === normalizeToolchainUrl(stringValue(doc.url))) {
-          docsMatches.set(item.id, item)
-        }
-      }
-    }
-  }
-  return {
-    repo: [...repoMatches.values()],
-    docs: [...docsMatches.values()],
-  }
-}
-
-function duplicateMatchLabel(item: ToolchainDashboardItem): string {
-  return `${environmentKindLabel(item.kind)} ${item.name}`
-}
-
 function dashboardItemToRecord(item: ToolchainDashboardItem): ToolchainRecord {
   return {
+    id: item.id,
     kind: item.kind,
+    entryType: item.entryType,
+    resourceKind: item.resourceKind,
     name: item.name,
     enabled: item.enabled,
     command: item.command,
-    placement: item.kind === "skill" ? undefined : item.placement,
-    scope: item.kind === "skill" ? item.scope || item.placement : undefined,
+    placement: item.placement,
+    scope: item.scope || item.placement,
     requirements: item.requirements,
     check: item.check,
     install: item.install,
+    configure: item.configure,
+    runtime: item.runtime,
+    language: item.language,
+    path: item.path,
+    environment_requirement_refs: item.environment_requirement_refs,
     source: item.source,
     description: item.alias,
     docs: item.docs,
@@ -1474,16 +1614,16 @@ function environmentRunTone(status: EnvironmentSnapshotStatus): "success" | "war
   }
 }
 
-function environmentKindLabel(kind: EnvironmentEntryKind): string {
-  if (kind === "cli") return "CLI"
+function environmentKindLabel(kind: EnvironmentEntryKind | ToolchainKind): string {
+  if (kind === "environment_requirement") return "环境要求"
   if (kind === "mcp") return "MCP"
-  return "Skills"
+  return "不支持"
 }
 
-function environmentKindIcon(kind: EnvironmentEntryKind): string {
-  if (kind === "cli") return "terminal"
+function environmentKindIcon(kind: EnvironmentEntryKind | ToolchainKind): string {
+  if (kind === "environment_requirement") return "terminal"
   if (kind === "mcp") return "plug"
-  return "hubot"
+  return "warning"
 }
 
 function formatTimestamp(value: unknown): string {
@@ -1499,7 +1639,8 @@ function normalizeEnvironmentEntries(value: unknown): EnvironmentEntryState[] {
     .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
     .map((item) => ({
       id: stringValue(item.id),
-      kind: (["cli", "mcp", "skill"].includes(stringValue(item.kind)) ? stringValue(item.kind) : "cli") as EnvironmentEntryKind,
+      kind: (normalizeEntryType(item.kind) || entryTypeFromResourceKind(item.requirement_kind || item.resource_kind || item.kind) || "unsupported") as EnvironmentEntryKind,
+      requirementKind: normalizeRequirementKind(item.requirement_kind || item.resource_kind || item.kind),
       name: stringValue(item.name),
       description: stringValue(item.description),
       source: stringValue(item.source),
@@ -1782,12 +1923,6 @@ export function createSettingsController(props: SettingsViewProps) {
   const [toolchainStatusFilter, setToolchainStatusFilter] = createSignal<ToolchainStatusFilter>("all")
   const [toolchainSearch, setToolchainSearch] = createSignal("")
   const [selectedToolchainId, setSelectedToolchainId] = createSignal("")
-  const [ingestRepoUrl, setIngestRepoUrl] = createSignal("")
-  const [ingestDocsUrl, setIngestDocsUrl] = createSignal("")
-  const [ingestDocsText, setIngestDocsText] = createSignal("")
-  const [ingestKindHint, setIngestKindHint] = createSignal<ToolchainKindFilter>("all")
-  const [ingestNameHint, setIngestNameHint] = createSignal("")
-  const [ingestPlacementHint, setIngestPlacementHint] = createSignal("")
   const [capabilitySourceType, setCapabilitySourceType] = createSignal<"github_repo" | "docs_url" | "project_notes">("github_repo")
   const [capabilitySourceUrl, setCapabilitySourceUrl] = createSignal("")
   const [capabilitySourceNotes, setCapabilitySourceNotes] = createSignal("")
@@ -2090,7 +2225,7 @@ export function createSettingsController(props: SettingsViewProps) {
     if (!result?.ok) return undefined
     const kind = stringValue(result.kind)
     const name = stringValue(result.name)
-    const label = kind === "cli" ? "CLI" : kind === "mcp" ? "MCP" : kind === "skill" ? "Skill" : "能力"
+    const label = kind === "environment_requirement" ? "环境要求" : kind === "mcp_server" || kind === "mcp" ? "MCP" : "能力"
     if (result.created === true) return `${label} ${name} 已新增。`
     if (result.toolchain) return `${label} ${name} 已保存。`
     return `${label} ${name} 操作已完成。`
@@ -2098,16 +2233,15 @@ export function createSettingsController(props: SettingsViewProps) {
   const toolchainGroups = createMemo(() => {
     const state = server.toolchainState() || {}
     return {
-      cli: normalizeToolchainList(state.cli_tools, "cli"),
+      environment_requirement: normalizeToolchainList(state.environment_requirements, "environment_requirement"),
       mcp: normalizeToolchainList(state.mcp_servers, "mcp"),
-      skill: normalizeToolchainList(state.skills, "skill"),
     }
   })
   const environmentCounts = createMemo(() => summarizeEnvironmentEntries(environmentSnapshot().entries))
   const environmentEntriesByKind = createMemo(() => ({
-    cli: environmentSnapshot().entries.filter((entry) => entry.kind === "cli"),
+    environment_requirement: environmentSnapshot().entries.filter((entry) => entry.kind === "environment_requirement"),
     mcp: environmentSnapshot().entries.filter((entry) => entry.kind === "mcp"),
-    skill: environmentSnapshot().entries.filter((entry) => entry.kind === "skill"),
+    unsupported: environmentSnapshot().entries.filter((entry) => entry.kind === "unsupported"),
   }))
   const toolchainDashboardItems = createMemo(() => {
     const state = server.toolchainState() || {}
@@ -2254,9 +2388,8 @@ export function createSettingsController(props: SettingsViewProps) {
         description: stringValue(description),
       })
     }
-    for (const item of groups.cli) add(item.name, "CLI", item.command || stringValue((item as unknown as Record<string, unknown>).alias))
+    for (const item of groups.environment_requirement) add(item.id || item.name, resourceKindLabel(item.resourceKind), item.command || stringValue((item as unknown as Record<string, unknown>).alias))
     for (const item of groups.mcp) add(item.name, "MCP", item.command || stringValue((item as unknown as Record<string, unknown>).alias))
-    for (const item of groups.skill) add(item.name, "Skill", item.source || stringValue((item as unknown as Record<string, unknown>).alias))
     for (const item of capabilityPackageViews()) add(item.id, "能力包", item.description || item.name)
     return options.sort((a, b) => `${a.kind}:${a.id}`.localeCompare(`${b.kind}:${b.id}`))
   })
@@ -2325,24 +2458,6 @@ export function createSettingsController(props: SettingsViewProps) {
     const sessionId = stringValue(task?.executor_session_id)
     return Boolean(executor && sessionId && executorFeatures()[executor]?.resumeById)
   })
-  const toolchainIngestState = createMemo(() => server.toolchainIngestState())
-  const toolchainIngestLogs = createMemo(() => {
-    const logs = toolchainIngestState().logs
-    return Array.isArray(logs)
-      ? logs.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
-      : []
-  })
-  const toolchainIngestDuplicates = createMemo(() =>
-    toolchainDuplicateInputMatches(
-      toolchainDashboardItems(),
-      ingestRepoUrl(),
-      ingestDocsUrl(),
-    )
-  )
-  const hasToolchainIngestDuplicates = createMemo(() =>
-    toolchainIngestDuplicates().repo.length > 0 || toolchainIngestDuplicates().docs.length > 0
-  )
-
   createEffect(() => {
     const selected = selectedToolchainId()
     const items = toolchainDashboardItems()
@@ -2640,6 +2755,12 @@ export function createSettingsController(props: SettingsViewProps) {
         if (["completed", "failed", "cancelled", "blocked"].includes(status)) {
           stopCapabilityIngestPolling()
         }
+      }
+      if (msg.type === "capabilityPackage.actionResult") {
+        setCapabilityPackageIngestState((current) => ({
+          ...current,
+          error: "",
+        }))
       }
       if (msg.type === "capabilityPackage.error") {
         if (operationBusy("capabilityIngestStart")) markOperationError("capabilityIngestStart", message)
@@ -3181,11 +3302,13 @@ export function createSettingsController(props: SettingsViewProps) {
     const selected = entryIds?.length
       ? toolchainDashboardItems().filter((item) => entryIds.includes(item.id))
       : toolchainDashboardItems()
-    return selected.map((item) => ({
-      id: item.id,
-      name: item.name,
-      kind: item.kind,
-    }))
+    return selected
+      .filter((item) => item.kind === "environment_requirement")
+      .map((item) => ({
+        id: item.id,
+        name: item.name,
+        kind: item.kind,
+      }))
   }
   const runEnvironment = (mode: "check" | "configure", entryIds?: string[]) => {
     const items = environmentRunItems(entryIds)
@@ -3220,17 +3343,6 @@ export function createSettingsController(props: SettingsViewProps) {
       serverAgentRunSettingsPayload(maxAgents, maxShells)
     )
   }
-  const runToolchainIngest = () => {
-    settingsMessages.runToolchainIngest(vscode, {
-      repoUrl: ingestRepoUrl().trim(),
-      docsUrl: ingestDocsUrl().trim(),
-      docsText: ingestDocsText().trim(),
-      kindHint: ingestKindHint() === "all" ? "" : ingestKindHint(),
-      nameHint: ingestNameHint().trim(),
-      placementHint: ingestPlacementHint().trim(),
-    })
-  }
-  const cancelToolchainIngest = () => settingsMessages.cancelToolchainIngest(vscode)
   const startCapabilityPackageIngest = () => {
     if (capabilityIngestOperationBusy()) return
     const sourceType = capabilitySourceType()
@@ -3871,18 +3983,6 @@ export function createSettingsController(props: SettingsViewProps) {
     setToolchainSearch,
     selectedToolchainId,
     setSelectedToolchainId,
-    ingestRepoUrl,
-    setIngestRepoUrl,
-    ingestDocsUrl,
-    setIngestDocsUrl,
-    ingestDocsText,
-    setIngestDocsText,
-    ingestKindHint,
-    setIngestKindHint,
-    ingestNameHint,
-    setIngestNameHint,
-    ingestPlacementHint,
-    setIngestPlacementHint,
     capabilitySourceType,
     setCapabilitySourceType,
     capabilitySourceUrl,
@@ -4032,10 +4132,6 @@ export function createSettingsController(props: SettingsViewProps) {
     agentRunLastSeq,
     agentRunTerminal,
     agentRunCanResume,
-    toolchainIngestState,
-    toolchainIngestLogs,
-    toolchainIngestDuplicates,
-    hasToolchainIngestDuplicates,
     openModelDetail,
     openCustomModelDialog,
     closeCustomModelDialog,
@@ -4092,8 +4188,6 @@ export function createSettingsController(props: SettingsViewProps) {
     recordToolchain,
     enableToolchain,
     deleteToolchainRecord,
-    runToolchainIngest,
-    cancelToolchainIngest,
     startCapabilityPackageIngest,
     refreshCapabilityPackageIngestStatus,
     acceptCapabilityPackageDraft,
@@ -4151,7 +4245,6 @@ export function createSettingsController(props: SettingsViewProps) {
     dashboardItemToRecord,
     placementLabel,
     toolchainSourceLabel,
-    duplicateMatchLabel,
     toolchainStatusBucket,
     runtimeOptionDescription,
   }
