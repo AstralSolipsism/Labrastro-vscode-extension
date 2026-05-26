@@ -7,7 +7,7 @@ export interface EnvironmentCoordinatorOptions {
   client: LabrastroRemoteClient
   isEnvironmentRunActive: () => boolean
   agentRunSubmitPayload: (payload: Record<string, unknown>) => Record<string, unknown>
-  refreshToolchainState: (post: PostMessage) => Promise<void>
+  refreshCapabilityState: (post: PostMessage) => Promise<void>
   refreshEnvironmentManifest: (post: PostMessage) => Promise<void>
   startEnvironmentRun: (
     mode: "check" | "configure",
@@ -16,14 +16,14 @@ export interface EnvironmentCoordinatorOptions {
     agentId?: string
   ) => Promise<void>
   cancelEnvironmentRun: (post: PostMessage) => Promise<void>
-  runToolchainAction: (
+  runCapabilityAction: (
     post: PostMessage,
     action: () => Promise<Record<string, unknown>>
   ) => Promise<boolean>
 }
 
 export class EnvironmentCoordinator {
-  private cachedToolchainState: Record<string, unknown> | undefined
+  private cachedCapabilityState: Record<string, unknown> | undefined
   private cachedEnvironmentManifest: Record<string, unknown> | undefined
   private cachedEnvironmentSnapshot: Record<string, unknown> = {
     mode: null,
@@ -38,12 +38,12 @@ export class EnvironmentCoordinator {
 
   constructor(private readonly options: EnvironmentCoordinatorOptions) {}
 
-  get toolchainState(): Record<string, unknown> | undefined {
-    return this.cachedToolchainState
+  get capabilityState(): Record<string, unknown> | undefined {
+    return this.cachedCapabilityState
   }
 
-  set toolchainState(value: Record<string, unknown> | undefined) {
-    this.cachedToolchainState = value
+  set capabilityState(value: Record<string, unknown> | undefined) {
+    this.cachedCapabilityState = value
   }
 
   get environmentManifest(): Record<string, unknown> | undefined {
@@ -108,12 +108,12 @@ export class EnvironmentCoordinator {
       case "environment.refreshManifest":
         await this.options.refreshEnvironmentManifest(post)
         return true
-      case "toolchain.refresh":
-        await this.options.refreshToolchainState(post)
+      case "capability.refresh":
+        await this.options.refreshCapabilityState(post)
         return true
-      case "toolchain.record":
+      case "capability.record":
         if (
-          await this.options.runToolchainAction(post, () => {
+          await this.options.runCapabilityAction(post, () => {
             const payload = objectValue(message.payload)
             const entryType = capabilityEntryType(message.kind, payload)
             if (entryType === "environment_requirement") {
@@ -122,15 +122,18 @@ export class EnvironmentCoordinator {
             if (entryType === "mcp") {
               return this.options.client.mcpServerRecord(payload)
             }
+            if (entryType === "skill") {
+              return this.options.client.skillRecord(payload)
+            }
             throw new Error(`unsupported capability entry type: ${stringValue(message.kind) || ""}`)
           })
         ) {
-          await this.refreshToolchainAndManifest(post)
+          await this.refreshCapabilityAndManifest(post)
         }
         return true
-      case "toolchain.delete":
+      case "capability.delete":
         if (
-          await this.options.runToolchainAction(post, () => {
+          await this.options.runCapabilityAction(post, () => {
             const entryType = capabilityEntryType(message.kind)
             const name = stringValue(message.name) || ""
             if (entryType === "environment_requirement") {
@@ -139,15 +142,18 @@ export class EnvironmentCoordinator {
             if (entryType === "mcp") {
               return this.options.client.mcpServerDelete(name)
             }
+            if (entryType === "skill") {
+              return this.options.client.skillDelete(name)
+            }
             throw new Error(`unsupported capability entry type: ${stringValue(message.kind) || ""}`)
           })
         ) {
-          await this.refreshToolchainAndManifest(post)
+          await this.refreshCapabilityAndManifest(post)
         }
         return true
-      case "toolchain.enable":
+      case "capability.enable":
         if (
-          await this.options.runToolchainAction(post, () => {
+          await this.options.runCapabilityAction(post, () => {
             const entryType = capabilityEntryType(message.kind)
             const name = stringValue(message.name) || ""
             if (entryType === "environment_requirement") {
@@ -156,10 +162,13 @@ export class EnvironmentCoordinator {
             if (entryType === "mcp") {
               return this.options.client.mcpServerEnable(name, Boolean(message.enabled))
             }
+            if (entryType === "skill") {
+              return this.options.client.skillEnable(name, Boolean(message.enabled))
+            }
             throw new Error(`unsupported capability entry type: ${stringValue(message.kind) || ""}`)
           })
         ) {
-          await this.refreshToolchainAndManifest(post)
+          await this.refreshCapabilityAndManifest(post)
         }
         return true
       case "environment.run":
@@ -182,8 +191,8 @@ export class EnvironmentCoordinator {
     }
   }
 
-  private async refreshToolchainAndManifest(post: PostMessage): Promise<void> {
-    await this.options.refreshToolchainState(post)
+  private async refreshCapabilityAndManifest(post: PostMessage): Promise<void> {
+    await this.options.refreshCapabilityState(post)
     if (!this.options.isEnvironmentRunActive()) {
       await this.options.refreshEnvironmentManifest(post)
     }
@@ -193,10 +202,11 @@ export class EnvironmentCoordinator {
 function capabilityEntryType(
   value: unknown,
   payload: Record<string, unknown> = {},
-): "environment_requirement" | "mcp" | "" {
+): "environment_requirement" | "mcp" | "skill" | "" {
   const text = stringValue(value) || stringValue(payload.entry_type) || stringValue(payload.entryType) || stringValue(payload.kind) || ""
   if (text === "environment_requirement") return "environment_requirement"
   if (text === "mcp" || text === "mcp_server") return "mcp"
+  if (text === "skill") return "skill"
   if ([
     "executable",
     "runtime",

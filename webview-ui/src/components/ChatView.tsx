@@ -1,4 +1,4 @@
-﻿import { Component, For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js"
+import { Component, For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { TaskHeader } from "./chat/TaskHeader"
 import { on } from "solid-js"
 import { MessageList } from "./chat/MessageList"
@@ -262,9 +262,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
     return pending ? `当前回复结束后切换到 ${modelLabel(pending, modelOptions(), pending)}` : ""
   })
   const hostTarget = createMemo(() => resolveHostTargetSummary(server.connectionState(), server.executorType()))
-  const behaviorCatalog = createMemo(() => objectValue(server.toolchainState()?.behavior_catalog))
+  const behaviorCatalog = createMemo(() => objectValue(server.capabilityState()?.behavior_catalog))
   const behaviorCatalogArray = (key: string) => {
-    const state = server.toolchainState() || {}
+    const state = server.capabilityState() || {}
     const direct = state[key]
     if (Array.isArray(direct)) return direct
     const nested = behaviorCatalog()[key]

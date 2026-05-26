@@ -51,10 +51,10 @@ describe("settings operations", () => {
     ])
   })
 
-  it("maps toolchains refresh to server settings, toolchains, and environment manifest", () => {
-    expect(settingsPageOperationKeys("toolchains")).toEqual([
+  it("maps capabilities refresh to server settings, capabilities, and environment manifest", () => {
+    expect(settingsPageOperationKeys("capabilities")).toEqual([
       "serverSettings",
-      "toolchains",
+      "capabilities",
       "environmentManifest",
     ])
   })

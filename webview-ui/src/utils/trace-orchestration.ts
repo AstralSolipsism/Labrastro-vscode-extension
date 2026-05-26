@@ -1,4 +1,4 @@
-﻿import type { MockSession, MockSessionBundle } from "../components/chat/mock-data"
+import type { MockSession, MockSessionBundle } from "../components/chat/mock-data"
 import type { TraceEdge, TraceNode } from "../types/trace"
 
 export interface SessionTreeEntry {

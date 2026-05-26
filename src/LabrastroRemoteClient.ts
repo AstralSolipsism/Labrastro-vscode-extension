@@ -1,4 +1,4 @@
-﻿import * as vscode from "vscode"
+import * as vscode from "vscode"
 import * as fs from "fs/promises"
 import { constants as fsConstants } from "fs"
 import * as path from "path"
@@ -533,6 +533,26 @@ export class LabrastroRemoteClient {
 
   async mcpServerEnable(name: string, enabled: boolean): Promise<JsonObject> {
     return this.authenticatedPost("/remote/admin/mcp-servers/enable", { name, enabled })
+  }
+
+  async skillsList(): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/skills/list", {})
+  }
+
+  async skillsDashboard(): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/skills/dashboard", {})
+  }
+
+  async skillRecord(payload: JsonObject): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/skills/record", { skill: payload })
+  }
+
+  async skillDelete(name: string): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/skills/delete", { name })
+  }
+
+  async skillEnable(name: string, enabled: boolean): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/skills/enable", { name, enabled })
   }
 
   async environmentManifest(): Promise<JsonObject> {

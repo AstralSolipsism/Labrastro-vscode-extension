@@ -1,4 +1,4 @@
-﻿import * as vscode from "vscode"
+import * as vscode from "vscode"
 import { buildWebviewHtml } from "./webview-html"
 import { LabrastroController } from "./LabrastroController"
 import { isWebviewToHostMessage } from "./protocol/messages"

@@ -1,4 +1,4 @@
-﻿import { createContext, useContext, ParentComponent, createMemo, createSignal, onCleanup, onMount } from "solid-js"
+import { createContext, useContext, ParentComponent, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import type {
   TraceEdge,
   TraceNavigationIntent,

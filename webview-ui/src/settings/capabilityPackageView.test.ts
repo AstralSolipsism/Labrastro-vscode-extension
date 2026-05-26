@@ -79,6 +79,12 @@ describe("capability package component view", () => {
       components,
       { skillsEnabled: false, disabledSkills: [] },
     ).capabilities[0].skillStatus).toBe("global_disabled")
+
+    expect(groupCapabilityPackageComponents(
+      [{ id: "skill:stopped-review", kind: "skill", name: "stopped-review", enabled: false }],
+      {},
+      { skillsEnabled: true, disabledSkills: [] },
+    ).capabilities[0].skillStatus).toBe("disabled")
   })
 
   it("uses capability and dependency labels in summaries", () => {
@@ -120,6 +126,14 @@ describe("capability package component view", () => {
         environment_requirement_refs: ["envreq:executable:gh"],
         package_ids: ["github-tools"],
       }],
+      skillRecords: [{
+        id: "skill:code-review",
+        kind: "skill",
+        name: "code-review",
+        enabled: true,
+        path_hint: "/registered/code-review/SKILL.md",
+        package_ids: ["repo-review"],
+      }],
       componentIndex: {
         "skill:code-review": components["skill:code-review"],
       },
@@ -142,9 +156,11 @@ describe("capability package component view", () => {
       mcp: { command: "github-mcp" },
     })
     expect(capabilities[1]).toMatchObject({
+      enabled: false,
+      status: "disabled",
       sourcePackageIds: ["repo-review"],
       skill: {
-        pathHint: "/skills/code-review",
+        pathHint: "/registered/code-review/SKILL.md",
         disabled: true,
         globalEnabled: true,
       },

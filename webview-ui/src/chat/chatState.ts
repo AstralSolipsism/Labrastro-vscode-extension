@@ -1,4 +1,4 @@
-﻿export interface ChatModeOption {
+export interface ChatModeOption {
   id: string
   label: string
   description: string

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 服务器状态上下文。
  *
  * 复刻 Kilocode 的 ServerProvider 模式：
@@ -61,9 +61,9 @@ interface ServerContextValue {
   authAuditState: () => Record<string, unknown> | undefined
   authActionResult: () => Record<string, unknown> | undefined
   authError: () => string | undefined
-  toolchainState: () => Record<string, unknown> | undefined
-  toolchainActionResult: () => Record<string, unknown> | undefined
-  toolchainError: () => string | undefined
+  capabilityState: () => Record<string, unknown> | undefined
+  capabilityActionResult: () => Record<string, unknown> | undefined
+  capabilityError: () => string | undefined
   environmentManifest: () => Record<string, unknown> | undefined
   environmentSnapshot: () => Record<string, unknown>
   environmentError: () => string | undefined
@@ -147,9 +147,9 @@ export const ServerProvider: ParentComponent = (props) => {
   const [authAuditState, setAuthAuditState] = createSignal<Record<string, unknown> | undefined>()
   const [authActionResult, setAuthActionResult] = createSignal<Record<string, unknown> | undefined>()
   const [authErrorPayload, setAuthErrorPayload] = createSignal<Record<string, unknown> | undefined>()
-  const [toolchainState, setToolchainState] = createSignal<Record<string, unknown> | undefined>()
-  const [toolchainActionResult, setToolchainActionResult] = createSignal<Record<string, unknown> | undefined>()
-  const [toolchainError, setToolchainError] = createSignal<string | undefined>()
+  const [capabilityState, setCapabilityState] = createSignal<Record<string, unknown> | undefined>()
+  const [capabilityActionResult, setCapabilityActionResult] = createSignal<Record<string, unknown> | undefined>()
+  const [capabilityError, setCapabilityError] = createSignal<string | undefined>()
   const [environmentManifest, setEnvironmentManifest] = createSignal<Record<string, unknown> | undefined>()
   const [environmentSnapshot, setEnvironmentSnapshot] = createSignal<Record<string, unknown>>({})
   const [environmentError, setEnvironmentError] = createSignal<string | undefined>()
@@ -330,16 +330,16 @@ export const ServerProvider: ParentComponent = (props) => {
         const payload = objectValue(msg.payload)
         setAuthErrorPayload(Object.keys(payload).length > 0 ? payload : { message: stringValue(msg.message) })
       }
-      if (msg.type === "toolchain.state" && typeof msg.payload === "object" && msg.payload) {
-        setToolchainState(msg.payload as Record<string, unknown>)
-        setToolchainError(undefined)
+      if (msg.type === "capability.state" && typeof msg.payload === "object" && msg.payload) {
+        setCapabilityState(msg.payload as Record<string, unknown>)
+        setCapabilityError(undefined)
       }
-      if (msg.type === "toolchain.actionResult" && typeof msg.payload === "object" && msg.payload) {
-        setToolchainActionResult(msg.payload as Record<string, unknown>)
-        setToolchainError(undefined)
+      if (msg.type === "capability.actionResult" && typeof msg.payload === "object" && msg.payload) {
+        setCapabilityActionResult(msg.payload as Record<string, unknown>)
+        setCapabilityError(undefined)
       }
-      if (msg.type === "toolchain.error") {
-        setToolchainError(typeof msg.message === "string" ? msg.message : "Toolchain request failed")
+      if (msg.type === "capability.error") {
+        setCapabilityError(typeof msg.message === "string" ? msg.message : "Capability request failed")
       }
       if (msg.type === "environment.manifest" && typeof msg.payload === "object" && msg.payload) {
         setEnvironmentManifest(msg.payload as Record<string, unknown>)
@@ -417,9 +417,9 @@ export const ServerProvider: ParentComponent = (props) => {
       const payload = authErrorPayload()
       return payload ? authErrorMessage(payload) : undefined
     },
-    toolchainState,
-    toolchainActionResult,
-    toolchainError,
+    capabilityState,
+    capabilityActionResult,
+    capabilityError,
     environmentManifest,
     environmentSnapshot,
     environmentError,

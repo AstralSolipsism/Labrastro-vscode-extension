@@ -241,16 +241,16 @@ export const ServerSettingsTab: Component<TabProps> = (props) => {
             <span>持久化策略</span>
             <StatusBadge tone="muted">{stringValue(persistenceSettings().backend, "auto")}</StatusBadge>
           </div>
-          <div class="toolchain-detail-grid">
-            <div class="toolchain-detail-block">
+          <div class="capability-detail-grid">
+            <div class="capability-detail-block">
               <span>Backend</span>
               <strong>{stringValue(persistenceSettings().backend, "auto")}</strong>
             </div>
-            <div class="toolchain-detail-block">
+            <div class="capability-detail-block">
               <span>Database URL</span>
               <strong>{stringValue(persistenceSettings().database_url) ? "已配置" : "未配置"}</strong>
             </div>
-            <div class="toolchain-detail-block">
+            <div class="capability-detail-block">
               <span>Auto Migrate</span>
               <strong>{boolValue(persistenceSettings().auto_migrate, true) ? "true" : "false"}</strong>
             </div>

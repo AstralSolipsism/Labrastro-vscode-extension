@@ -14,14 +14,17 @@ function coordinator(active = false) {
       mcpServerRecord: vi.fn(async () => ({ ok: true })),
       mcpServerDelete: vi.fn(async () => ({ ok: true })),
       mcpServerEnable: vi.fn(async () => ({ ok: true })),
+      skillRecord: vi.fn(async () => ({ ok: true })),
+      skillDelete: vi.fn(async () => ({ ok: true })),
+      skillEnable: vi.fn(async () => ({ ok: true })),
     },
     isEnvironmentRunActive: vi.fn(() => active),
     agentRunSubmitPayload: vi.fn((payload) => ({ ...payload, normalized: true })),
-    refreshToolchainState: vi.fn(),
+    refreshCapabilityState: vi.fn(),
     refreshEnvironmentManifest: vi.fn(),
     startEnvironmentRun: vi.fn(),
     cancelEnvironmentRun: vi.fn(),
-    runToolchainAction: vi.fn(async (_post, action) => {
+    runCapabilityAction: vi.fn(async (_post, action) => {
       await action()
       return true
     }),
@@ -33,15 +36,15 @@ function coordinator(active = false) {
 }
 
 describe("EnvironmentCoordinator", () => {
-  it("owns cached environment and toolchain state for initial posts", () => {
+  it("owns cached environment and capability state for initial posts", () => {
     const { coordinator: subject } = coordinator()
 
-    subject.toolchainState = { items: ["node"] }
+    subject.capabilityState = { items: ["node"] }
     subject.environmentManifest = { environment_requirements: [] }
     subject.environmentSnapshot = { running: false, status: "idle" }
     subject.activeEnvironmentRun = { taskId: "task-1" }
 
-    expect(subject.toolchainState).toEqual({ items: ["node"] })
+    expect(subject.capabilityState).toEqual({ items: ["node"] })
     expect(subject.environmentManifest).toEqual({ environment_requirements: [] })
     expect(subject.environmentSnapshot).toEqual({ running: false, status: "idle" })
     expect(subject.isEnvironmentRunActive()).toBe(true)
@@ -62,13 +65,13 @@ describe("EnvironmentCoordinator", () => {
     const post = vi.fn()
 
     await subject.handleMessage({
-      type: "toolchain.record",
+      type: "capability.record",
       kind: "environment_requirement",
       payload: { kind: "executable", name: "gh", command: "gh" },
     }, post)
 
     expect(options.client.environmentRequirementRecord).toHaveBeenCalledWith({ kind: "executable", name: "gh", command: "gh" })
-    expect(options.refreshToolchainState).toHaveBeenCalledWith(post)
+    expect(options.refreshCapabilityState).toHaveBeenCalledWith(post)
     expect(options.refreshEnvironmentManifest).toHaveBeenCalledWith(post)
   })
 
@@ -77,13 +80,28 @@ describe("EnvironmentCoordinator", () => {
     const post = vi.fn()
 
     await subject.handleMessage({
-      type: "toolchain.record",
+      type: "capability.record",
       kind: "mcp",
       payload: { name: "github", command: "github-mcp" },
     }, post)
 
     expect(options.client.mcpServerRecord).toHaveBeenCalledWith({ name: "github", command: "github-mcp" })
-    expect(options.refreshToolchainState).toHaveBeenCalledWith(post)
+    expect(options.refreshCapabilityState).toHaveBeenCalledWith(post)
+    expect(options.refreshEnvironmentManifest).toHaveBeenCalledWith(post)
+  })
+
+  it("records Skills through the split admin endpoint", async () => {
+    const { options, coordinator: subject } = coordinator(false)
+    const post = vi.fn()
+
+    await subject.handleMessage({
+      type: "capability.record",
+      kind: "skill",
+      payload: { name: "code-review", path_hint: "/skills/code-review/SKILL.md" },
+    }, post)
+
+    expect(options.client.skillRecord).toHaveBeenCalledWith({ name: "code-review", path_hint: "/skills/code-review/SKILL.md" })
+    expect(options.refreshCapabilityState).toHaveBeenCalledWith(post)
     expect(options.refreshEnvironmentManifest).toHaveBeenCalledWith(post)
   })
 
@@ -91,12 +109,12 @@ describe("EnvironmentCoordinator", () => {
     const { options, coordinator: subject } = coordinator(true)
 
     await subject.handleMessage({
-      type: "toolchain.record",
+      type: "capability.record",
       kind: "environment_requirement",
       payload: { kind: "runtime", name: "node" },
     }, vi.fn())
 
-    expect(options.refreshToolchainState).toHaveBeenCalled()
+    expect(options.refreshCapabilityState).toHaveBeenCalled()
     expect(options.refreshEnvironmentManifest).not.toHaveBeenCalled()
   })
 
@@ -105,18 +123,31 @@ describe("EnvironmentCoordinator", () => {
     const post = vi.fn()
 
     await subject.handleMessage({
-      type: "toolchain.enable",
+      type: "capability.enable",
       kind: "environment_requirement",
       name: "envreq:executable:gh",
       enabled: false,
     }, post)
     await subject.handleMessage({
-      type: "toolchain.delete",
+      type: "capability.delete",
       kind: "mcp",
       name: "github",
+    }, post)
+    await subject.handleMessage({
+      type: "capability.enable",
+      kind: "skill",
+      name: "code-review",
+      enabled: true,
+    }, post)
+    await subject.handleMessage({
+      type: "capability.delete",
+      kind: "skill",
+      name: "code-review",
     }, post)
 
     expect(options.client.environmentRequirementEnable).toHaveBeenCalledWith("envreq:executable:gh", false)
     expect(options.client.mcpServerDelete).toHaveBeenCalledWith("github")
+    expect(options.client.skillEnable).toHaveBeenCalledWith("code-review", true)
+    expect(options.client.skillDelete).toHaveBeenCalledWith("code-review")
   })
 })

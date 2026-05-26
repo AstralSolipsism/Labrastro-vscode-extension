@@ -1,4 +1,4 @@
-﻿import * as vscode from "vscode"
+import * as vscode from "vscode"
 import * as fs from "fs"
 import * as path from "path"
 import { ApprovalDocumentProvider } from "./ApprovalDocumentProvider"
@@ -138,7 +138,7 @@ export class LabrastroController implements vscode.Disposable {
       postChatConfigState: this.postChatConfigState.bind(this),
       postGithubState: this.postGithubState.bind(this),
       refreshBackendFeatures: this.refreshBackendFeatures.bind(this),
-      refreshToolchainState: this.refreshToolchainState.bind(this),
+      refreshCapabilityState: this.refreshCapabilityState.bind(this),
       refreshEnvironmentManifest: this.refreshEnvironmentManifest.bind(this),
       broadcastState: this.broadcastWebviewMessage.bind(this),
       runAdminAction: this.runAdminAction.bind(this),
@@ -150,11 +150,11 @@ export class LabrastroController implements vscode.Disposable {
       client: this.client,
       isEnvironmentRunActive: () => this.environmentCoordinator.isEnvironmentRunActive(),
       agentRunSubmitPayload: this.agentRunSubmitPayload.bind(this),
-      refreshToolchainState: this.refreshToolchainState.bind(this),
+      refreshCapabilityState: this.refreshCapabilityState.bind(this),
       refreshEnvironmentManifest: this.refreshEnvironmentManifest.bind(this),
       startEnvironmentRun: this.startEnvironmentRun.bind(this),
       cancelEnvironmentRun: this.cancelEnvironmentRun.bind(this),
-      runToolchainAction: this.runToolchainAction.bind(this),
+      runCapabilityAction: this.runCapabilityAction.bind(this),
     })
     this.sessionCoordinator = new SessionCoordinator({
       client: this.client,
@@ -188,12 +188,12 @@ export class LabrastroController implements vscode.Disposable {
     this.context.subscriptions.push(workspaceFileWatcher)
   }
 
-  private get toolchainState(): Record<string, unknown> | undefined {
-    return this.environmentCoordinator.toolchainState
+  private get capabilityState(): Record<string, unknown> | undefined {
+    return this.environmentCoordinator.capabilityState
   }
 
-  private set toolchainState(value: Record<string, unknown> | undefined) {
-    this.environmentCoordinator.toolchainState = value
+  private set capabilityState(value: Record<string, unknown> | undefined) {
+    this.environmentCoordinator.capabilityState = value
   }
 
   private get environmentManifest(): Record<string, unknown> | undefined {
@@ -348,8 +348,8 @@ export class LabrastroController implements vscode.Disposable {
 
     await Promise.allSettled(tasks)
 
-    if (options.includeAdminState && this.toolchainState) {
-      post({ type: "toolchain.state", payload: this.toolchainState })
+    if (options.includeAdminState && this.capabilityState) {
+      post({ type: "capability.state", payload: this.capabilityState })
     }
     if (options.includeAdminState && this.environmentManifest) {
       post({ type: "environment.manifest", payload: this.environmentManifest })
@@ -615,11 +615,12 @@ export class LabrastroController implements vscode.Disposable {
     return this.backendFeatures ?? null
   }
 
-  private async refreshToolchainState(post: PostMessage): Promise<void> {
+  private async refreshCapabilityState(post: PostMessage): Promise<void> {
     try {
-      const [environmentRequirements, mcpServers] = await Promise.all([
+      const [environmentRequirements, mcpServers, skills] = await Promise.all([
         this.client.environmentRequirementsList(),
         this.client.mcpServersList(),
+        this.client.skillsList(),
       ])
       let environmentDashboard: Record<string, unknown> | undefined
       try {
@@ -641,6 +642,16 @@ export class LabrastroController implements vscode.Disposable {
           summary: {},
         }
       }
+      let skillsDashboard: Record<string, unknown> | undefined
+      try {
+        skillsDashboard = await this.client.skillsDashboard()
+      } catch (error) {
+        skillsDashboard = {
+          error: errorMessage(error),
+          items: [],
+          summary: {},
+        }
+      }
       let behaviorCatalog: Record<string, unknown> | undefined
       try {
         behaviorCatalog = await this.client.environmentRequirementsBehaviorCatalog()
@@ -655,19 +666,23 @@ export class LabrastroController implements vscode.Disposable {
       }
       const environmentDashboardPayload = environmentDashboard || {}
       const mcpDashboardPayload = mcpDashboard || {}
+      const skillsDashboardPayload = skillsDashboard || {}
       const dashboardItems = [
         ...(Array.isArray(environmentDashboardPayload.items) ? environmentDashboardPayload.items : []),
         ...(Array.isArray(mcpDashboardPayload.items) ? mcpDashboardPayload.items : []),
+        ...(Array.isArray(skillsDashboardPayload.items) ? skillsDashboardPayload.items : []),
       ]
       const behaviorPayload = behaviorCatalog || {}
-      this.toolchainState = {
+      this.capabilityState = {
         environment_requirements: Array.isArray(environmentRequirements.environment_requirements)
           ? environmentRequirements.environment_requirements
           : [],
         mcp_servers: Array.isArray(mcpServers.mcp_servers) ? mcpServers.mcp_servers : [],
+        skills: Array.isArray(skills.skills) ? skills.skills : [],
         dashboard: {
           environment_requirements: environmentDashboardPayload,
           mcp_servers: mcpDashboardPayload,
+          skills: skillsDashboardPayload,
           items: dashboardItems,
         },
         dashboard_items: dashboardItems,
@@ -679,9 +694,9 @@ export class LabrastroController implements vscode.Disposable {
         agent_tools: Array.isArray(behaviorPayload.agent_tools) ? behaviorPayload.agent_tools : [],
         behavior_catalog_error: typeof behaviorPayload.error === "string" ? behaviorPayload.error : "",
       }
-      post({ type: "toolchain.state", payload: this.toolchainState })
+      post({ type: "capability.state", payload: this.capabilityState })
     } catch (error) {
-      post({ type: "toolchain.error", message: errorMessage(error) })
+      post({ type: "capability.error", message: errorMessage(error) })
     }
   }
 
@@ -1491,15 +1506,15 @@ export class LabrastroController implements vscode.Disposable {
     }
   }
 
-  private async runToolchainAction(
+  private async runCapabilityAction(
     post: PostMessage,
     action: () => Promise<Record<string, unknown>>
   ): Promise<boolean> {
     try {
-      post({ type: "toolchain.actionResult", payload: await action() })
+      post({ type: "capability.actionResult", payload: await action() })
       return true
     } catch (error) {
-      post({ type: "toolchain.error", message: adminErrorMessage(error) })
+      post({ type: "capability.error", message: adminErrorMessage(error) })
       return false
     }
   }

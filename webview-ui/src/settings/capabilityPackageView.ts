@@ -66,6 +66,7 @@ export interface CapabilityView {
 
 export interface CapabilityViewsFromSourcesOptions extends CapabilityComponentGroupOptions {
   mcpServers?: Record<string, unknown>[]
+  skillRecords?: Record<string, unknown>[]
   componentIndex?: Record<string, unknown>
   packages?: Record<string, unknown>
 }
@@ -267,10 +268,11 @@ export function capabilityComponentView(
   const pathHint = stringValue(config.path_hint || component.path_hint)
   const sourcePath = stringValue(component.source_path || config.source_path)
   const disabled = new Set((options.disabledSkills || []).map((item) => item.trim()).filter(Boolean))
+  const componentDisabled = component.enabled === false || config.enabled === false
   const skillStatus = kind === "skill"
     ? options.skillsEnabled === false
       ? "global_disabled"
-      : disabled.has(name) || disabled.has(id)
+      : componentDisabled || disabled.has(name) || disabled.has(id)
         ? "disabled"
         : "enabled"
     : undefined
@@ -304,6 +306,16 @@ function skillCapabilityView(
   const evidence = recordArrayValue(config.evidence || component.evidence)
   const installPrompt = stringValue(config.install_prompt || component.install_prompt)
   const verifyPrompt = stringValue(config.verify_prompt || component.verify_prompt)
+  const packageLookupId = stringValue(component.component_id || view.id)
+  const recordStatus = stringValue(component.status).toLowerCase()
+  const recordDisabled = component.enabled === false || recordStatus === "disabled" || recordStatus === "stopped"
+  const disabledBySettings = disabled.has(view.name) || disabled.has(view.id)
+  const skillDisabled = recordDisabled || disabledBySettings
+  const status = options.skillsEnabled === false
+    ? "global_disabled"
+    : skillDisabled
+      ? "disabled"
+      : "enabled"
   return {
     id: view.id,
     kind: "skill",
@@ -311,20 +323,16 @@ function skillCapabilityView(
     label: "Skill",
     summary: view.summary,
     description: stringValue(component.description || config.description),
-    enabled: options.skillsEnabled !== false && !disabled.has(view.name) && !disabled.has(view.id),
-    status: options.skillsEnabled === false
-      ? "global_disabled"
-      : disabled.has(view.name) || disabled.has(view.id)
-        ? "disabled"
-        : "enabled",
-    sourcePackageIds: packageIdsForComponent(view.id, component, packages),
+    enabled: status === "enabled",
+    status,
+    sourcePackageIds: packageIdsForComponent(packageLookupId, component, packages),
     dependencyIds: [],
     raw: component,
     skill: {
       pathHint: view.pathHint || stringValue(config.path_hint || component.path_hint || component.source_path),
       sourcePath: view.sourcePath,
       globalEnabled: options.skillsEnabled !== false,
-      disabled: disabled.has(view.name) || disabled.has(view.id),
+      disabled: skillDisabled,
       installPrompt,
       verifyPrompt,
       docs,
@@ -381,11 +389,25 @@ export function capabilityViewsFromSources(options: CapabilityViewsFromSourcesOp
   const mcpCapabilities = (options.mcpServers || []).map((record) =>
     mcpCapabilityView(record, componentIndex, packages)
   )
-  const skillCapabilities = Object.entries(componentIndex)
+  const registeredSkillKeys = new Set<string>()
+  const registeredSkillCapabilities = (options.skillRecords || []).map((record) => {
+    const fallbackId = stringValue(record.id || record.component_id) || `skill:${stringValue(record.name)}`
+    const capability = skillCapabilityView(record, fallbackId, packages, options)
+    const componentId = stringValue(record.component_id)
+    ;[capability.id, capability.name, `skill:${capability.name}`, componentId].filter(Boolean).forEach((key) => {
+      registeredSkillKeys.add(key)
+    })
+    return capability
+  })
+  const componentSkillCapabilities = Object.entries(componentIndex)
     .map(([id, raw]) => ({ id, component: objectValue(raw) }))
     .filter(({ id, component }) => normalizedKind(component, id) === "skill")
+    .filter(({ id, component }) => {
+      const name = stringValue(component.name || objectValue(component.config).name, nameFromId(id) || id)
+      return !registeredSkillKeys.has(id) && !registeredSkillKeys.has(name) && !registeredSkillKeys.has(`skill:${name}`)
+    })
     .map(({ id, component }) => skillCapabilityView(component, id, packages, options))
-  return [...mcpCapabilities, ...skillCapabilities]
+  return [...mcpCapabilities, ...registeredSkillCapabilities, ...componentSkillCapabilities]
 }
 
 export function groupCapabilityPackageComponents(

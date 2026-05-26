@@ -1,12 +1,40 @@
 import { describe, expect, it } from "vitest"
-import { readFileSync, readdirSync } from "node:fs"
-import { join } from "node:path"
+import { readFileSync, readdirSync, statSync } from "node:fs"
+import { extname, join, relative } from "node:path"
 
 const tabsDir = join(process.cwd(), "webview-ui", "src", "settings", "tabs")
 const controllerPath = join(process.cwd(), "webview-ui", "src", "settings", "useSettingsController.tsx")
 const operationsPath = join(process.cwd(), "webview-ui", "src", "settings", "settingsOperations.ts")
+const sourceExtensions = new Set([".css", ".json", ".ts", ".tsx"])
+
+function projectSourceFiles(path: string): string[] {
+  const stat = statSync(path)
+  if (stat.isFile()) {
+    return sourceExtensions.has(extname(path)) ? [path] : []
+  }
+  return readdirSync(path, { withFileTypes: true }).flatMap((entry) =>
+    projectSourceFiles(join(path, entry.name))
+  )
+}
 
 describe("settings architecture", () => {
+  it("keeps frontend source files free of UTF-8 BOM", () => {
+    const files = [
+      join(process.cwd(), "package.json"),
+      ...projectSourceFiles(join(process.cwd(), "src")),
+      ...projectSourceFiles(join(process.cwd(), "webview-ui", "src")),
+    ]
+    const offenders = files
+      .filter((file) => {
+        const bytes = readFileSync(file)
+        return bytes.length >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF
+      })
+      .map((file) => relative(process.cwd(), file).replace(/\\/g, "/"))
+
+    expect(offenders).toEqual([])
+    expect(() => JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8"))).not.toThrow()
+  })
+
   it("initializes operation accessors before eager settings memos use them", () => {
     const source = readFileSync(controllerPath, "utf8")
     const operationStateIndex = source.indexOf("const operationState = (key: SettingsOperationKey)")
@@ -56,7 +84,7 @@ describe("settings architecture", () => {
       "serverSettingsSave",
       "autoApprovalSave",
       "integrationsSave",
-      "toolchainsCapabilitySave",
+      "capabilitySettingsSave",
       "agentConfigSave",
       "diagnosticsSave",
       "capabilitySyncSave",
@@ -140,10 +168,10 @@ describe("settings architecture", () => {
 
     expect(bootstrapStart).toBeGreaterThanOrEqual(0)
     expect(bootstrapEnd).toBeGreaterThan(bootstrapStart)
-    expect(bootstrapBlock).toContain('refreshOperation("toolchains", { mode: "background" })')
+    expect(bootstrapBlock).toContain('refreshOperation("capabilities", { mode: "background" })')
     expect(bootstrapBlock).toContain('refreshOperation("environmentManifest", { mode: "background" })')
     expect(bootstrapBlock).toContain('refreshOperation("serverSettings", { mode: "background" })')
-    expect(bootstrapBlock).not.toContain('refreshOperation("toolchains")')
+    expect(bootstrapBlock).not.toContain('refreshOperation("capabilities")')
     expect(bootstrapBlock).not.toContain('refreshOperation("serverSettings")')
     expect(bootstrapBlock).not.toContain("refreshServerSettings()")
   })

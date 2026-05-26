@@ -1,4 +1,4 @@
-﻿import { Component, For, Show, createSignal } from "solid-js"
+import { Component, For, Show, createSignal } from "solid-js"
 import { t } from "../../i18n"
 import { RefreshButton } from "../../components/common/RefreshButton"
 import { SelectableList } from "../../components/common/interaction"
@@ -87,7 +87,7 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
   const mcpChoiceOptions = () => registeredMcpServers().map((id: string) => ({ id, label: id, kind: "MCP" }))
   const capabilityChoiceOptions = () => capabilityPackageOptions().map((id: string) => ({ id, label: id, kind: "能力包" }))
   const renderCapabilityGroup = (label: string, items: any[], empty: string) => (
-    <div class="toolchain-detail-section">
+    <div class="capability-detail-section">
       <span>{label}</span>
       <Show when={items.length} fallback={<small>{empty}</small>}>
         <div class="settings-badge-group">
@@ -452,10 +452,10 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
                   <small class="field-help">{t("agentConfig.agent.capabilityRefsDesc")}</small>
                 </label>
                 <Show when={selectedAgentCapabilityPackages().length > 0}>
-                  <div class="toolchain-detail-section field-label--full">
+                  <div class="capability-detail-section field-label--full">
                     <span>{t("agentConfig.agent.capabilityPackagesPreview")}</span>
                     <For each={selectedAgentCapabilityPackages()}>{(pkg) => (
-                      <div class="toolchain-detail-block">
+                      <div class="capability-detail-block">
                         <strong>{pkg.name || pkg.id}</strong>
                         <small>{pkg.description || pkg.id}</small>
                         {renderCapabilityGroup("提供的能力", capabilityPackageComponentGroups(pkg.components).capabilities, "未声明 MCP Server 或 Skill。")}

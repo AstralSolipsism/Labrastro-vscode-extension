@@ -1,4 +1,4 @@
-﻿import { describe, expect, it } from "vitest"
+import { describe, expect, it } from "vitest"
 import {
   PROVIDER_KIND_REGISTRY,
   approvalRuleDraftToPayload,
@@ -17,7 +17,7 @@ import {
   runtimeProfileDraftToPayload,
   settingsAdminRecordList,
   textToChoiceList,
-  toolchainEditorToPayload,
+  capabilityEditorToPayload,
   uniqueCommandRules,
 } from "./utils"
 import {
@@ -172,8 +172,8 @@ describe("settings utils", () => {
     })
   })
 
-  it("builds toolchain payloads", () => {
-    expect(toolchainEditorToPayload({
+  it("builds capability payloads", () => {
+    expect(capabilityEditorToPayload({
       kind: "mcp",
       name: "context7",
       enabled: true,

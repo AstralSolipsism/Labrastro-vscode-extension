@@ -1,4 +1,4 @@
-﻿import * as vscode from "vscode"
+import * as vscode from "vscode"
 import { AgentManagerPanelProvider } from "./AgentManagerPanelProvider"
 import { LabrastroController } from "./LabrastroController"
 import { SidebarProvider } from "./SidebarProvider"

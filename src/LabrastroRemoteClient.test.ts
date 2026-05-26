@@ -1,4 +1,4 @@
-﻿import { EventEmitter } from "events"
+import { EventEmitter } from "events"
 import * as fsSync from "fs"
 import * as fs from "fs/promises"
 import * as os from "os"
@@ -839,6 +839,31 @@ describe("LabrastroRemoteClient runtime admin API", () => {
     await expect(client.mcpServerEnable("github", true)).resolves.toMatchObject({
       path: "/remote/admin/mcp-servers/enable",
       body: { name: "github", enabled: true },
+      authorization: "Bearer access-token-1",
+    })
+    await expect(client.skillsList()).resolves.toMatchObject({
+      path: "/remote/admin/skills/list",
+      body: {},
+      authorization: "Bearer access-token-1",
+    })
+    await expect(client.skillsDashboard()).resolves.toMatchObject({
+      path: "/remote/admin/skills/dashboard",
+      body: {},
+      authorization: "Bearer access-token-1",
+    })
+    await expect(client.skillRecord({ name: "code-review", path_hint: "/skills/code-review/SKILL.md" })).resolves.toMatchObject({
+      path: "/remote/admin/skills/record",
+      body: { skill: { name: "code-review", path_hint: "/skills/code-review/SKILL.md" } },
+      authorization: "Bearer access-token-1",
+    })
+    await expect(client.skillDelete("code-review")).resolves.toMatchObject({
+      path: "/remote/admin/skills/delete",
+      body: { name: "code-review" },
+      authorization: "Bearer access-token-1",
+    })
+    await expect(client.skillEnable("code-review", false)).resolves.toMatchObject({
+      path: "/remote/admin/skills/enable",
+      body: { name: "code-review", enabled: false },
       authorization: "Bearer access-token-1",
     })
   })

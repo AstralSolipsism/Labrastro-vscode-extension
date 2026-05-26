@@ -23,7 +23,7 @@ export type SettingsOperationKey =
   | "providerEnable"
   | "modelProfileSave"
   | "modelProfileDelete"
-  | "toolchains"
+  | "capabilities"
   | "environmentManifest"
   | "authUsers"
   | "authDevices"
@@ -34,7 +34,7 @@ export type SettingsOperationKey =
   | "serverSettingsSave"
   | "autoApprovalSave"
   | "integrationsSave"
-  | "toolchainsCapabilitySave"
+  | "capabilitySettingsSave"
   | "agentConfigSave"
   | "diagnosticsSave"
   | "capabilitySyncSave"
@@ -63,7 +63,7 @@ export const SETTINGS_SERVER_SETTINGS_SAVE_KEYS: SettingsOperationKey[] = [
   "serverSettingsSave",
   "autoApprovalSave",
   "integrationsSave",
-  "toolchainsCapabilitySave",
+  "capabilitySettingsSave",
   "agentConfigSave",
   "diagnosticsSave",
   "capabilitySyncSave",
@@ -114,7 +114,7 @@ export const SETTINGS_OPERATION_KEYS: SettingsOperationKey[] = [
   "providerEnable",
   "modelProfileSave",
   "modelProfileDelete",
-  "toolchains",
+  "capabilities",
   "environmentManifest",
   "authUsers",
   "authDevices",
@@ -125,7 +125,7 @@ export const SETTINGS_OPERATION_KEYS: SettingsOperationKey[] = [
   "serverSettingsSave",
   "autoApprovalSave",
   "integrationsSave",
-  "toolchainsCapabilitySave",
+  "capabilitySettingsSave",
   "agentConfigSave",
   "diagnosticsSave",
   "capabilitySyncSave",
@@ -141,7 +141,7 @@ export const SETTINGS_PAGE_RESOURCES: Record<SettingsTab, SettingsOperationKey[]
   executors: [],
   accounts: ["accounts"],
   providers: ["providers", "modelProfiles", "modelCapabilities"],
-  toolchains: ["serverSettings", "toolchains", "environmentManifest"],
+  capabilities: ["serverSettings", "capabilities", "environmentManifest"],
   conversation: ["chatConfig", "serverSettings", "reasoningDisplay", "chatSendDuringRunMode"],
   sessionPolicy: ["serverSettings"],
   serverSettings: ["serverSettings"],

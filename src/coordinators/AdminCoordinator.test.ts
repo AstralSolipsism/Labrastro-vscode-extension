@@ -1,4 +1,4 @@
-﻿import { describe, expect, it, vi } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { AdminCoordinator } from "./AdminCoordinator"
 import { RemoteError } from "../remote-errors"
 
@@ -96,7 +96,7 @@ function coordinator() {
     postChatConfigState: vi.fn(),
     postGithubState: vi.fn(),
     refreshBackendFeatures: vi.fn(),
-    refreshToolchainState: vi.fn(),
+    refreshCapabilityState: vi.fn(),
     refreshEnvironmentManifest: vi.fn(),
     broadcastState: vi.fn(),
     runAdminAction: vi.fn(async (_post, action) => {
@@ -377,7 +377,7 @@ describe("AdminCoordinator", () => {
       type: "capabilityPackage.error",
       message: "HTTP 400 invalid_environment_requirement: invalid environment requirement kind: runttime",
     })
-    expect(options.refreshToolchainState).not.toHaveBeenCalled()
+    expect(options.refreshCapabilityState).not.toHaveBeenCalled()
   })
 
   it("refreshes connection state when admin-scoped capability calls lose auth", async () => {
@@ -417,7 +417,7 @@ describe("AdminCoordinator", () => {
     expect(options.postChatConfigState).toHaveBeenCalledWith(post)
     expect(options.postGithubState).toHaveBeenCalledWith(post)
     expect(options.refreshBackendFeatures).toHaveBeenCalledWith(post)
-    expect(options.refreshToolchainState).toHaveBeenCalledWith(post)
+    expect(options.refreshCapabilityState).toHaveBeenCalledWith(post)
     expect(options.refreshEnvironmentManifest).toHaveBeenCalledWith(post)
     expect(post).toHaveBeenCalledWith({
       type: "modelCapabilities.state",
@@ -428,7 +428,7 @@ describe("AdminCoordinator", () => {
     })
   })
 
-  it("keeps toolchain and environment state untouched after failed login", async () => {
+  it("keeps capability and environment state untouched after failed login", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
     options.client.login.mockRejectedValue(new Error("bad credentials"))
@@ -445,7 +445,7 @@ describe("AdminCoordinator", () => {
       password: "wrong",
     }, post)).resolves.toBe(true)
 
-    expect(options.refreshToolchainState).not.toHaveBeenCalled()
+    expect(options.refreshCapabilityState).not.toHaveBeenCalled()
     expect(options.refreshEnvironmentManifest).not.toHaveBeenCalled()
     expect(options.refreshBackendFeatures).not.toHaveBeenCalled()
     expect(options.client.modelCapabilitiesStatus).not.toHaveBeenCalled()

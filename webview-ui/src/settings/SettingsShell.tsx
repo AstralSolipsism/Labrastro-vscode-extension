@@ -4,7 +4,7 @@ import type { SettingsController } from "./useSettingsController"
 import { ExecutorsTab } from "./tabs/ExecutorsTab"
 import { AccountsTab } from "./tabs/AccountsTab"
 import { ProvidersTab } from "./tabs/ProvidersTab"
-import { ToolchainsTab } from "./tabs/ToolchainsTab"
+import { CapabilitiesTab } from "./tabs/CapabilitiesTab"
 import { SessionPolicyTab } from "./tabs/SessionPolicyTab"
 import { ServerSettingsTab } from "./tabs/ServerSettingsTab"
 import { AgentConfigTab } from "./tabs/AgentConfigTab"
@@ -53,7 +53,7 @@ export const SettingsShell: Component<SettingsShellProps> = (props) => {
             <Match when={controller.activeTab() === "executors"}><ExecutorsTab controller={controller} /></Match>
             <Match when={controller.activeTab() === "accounts"}><AccountsTab controller={controller} /></Match>
             <Match when={controller.activeTab() === "providers"}><ProvidersTab controller={controller} /></Match>
-            <Match when={controller.activeTab() === "toolchains"}><ToolchainsTab controller={controller} /></Match>
+            <Match when={controller.activeTab() === "capabilities"}><CapabilitiesTab controller={controller} /></Match>
             <Match when={controller.activeTab() === "conversation"}><ConversationTab controller={controller} /></Match>
             <Match when={controller.activeTab() === "sessionPolicy"}><SessionPolicyTab controller={controller} /></Match>
             <Match when={controller.activeTab() === "serverSettings"}><ServerSettingsTab controller={controller} /></Match>

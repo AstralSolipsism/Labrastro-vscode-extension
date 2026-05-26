@@ -1,4 +1,4 @@
-﻿import { Component, For, Match, Show, Switch, createEffect, createMemo, createSignal } from "solid-js"
+import { Component, For, Match, Show, Switch, createEffect, createMemo, createSignal } from "solid-js"
 import { t } from "../../i18n"
 import type { MockTurn, MockMessage } from "./mock-data"
 import type {

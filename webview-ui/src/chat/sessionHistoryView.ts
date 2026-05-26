@@ -1,4 +1,4 @@
-﻿import type { MockSession } from "../components/chat/mock-data"
+import type { MockSession } from "../components/chat/mock-data"
 
 export type SessionHistorySort = "newest" | "oldest"
 export type SessionHistoryListStatus = "idle" | "loading" | "unauthenticated" | "unavailable" | "empty" | "ready" | "error"

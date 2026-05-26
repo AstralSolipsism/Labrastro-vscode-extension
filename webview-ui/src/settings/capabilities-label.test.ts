@@ -2,25 +2,26 @@ import { describe, expect, it } from "vitest"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { setLocale, t } from "../i18n"
-import { TOOLCHAIN_SECTIONS } from "./toolchainSections"
-import { agentToolExecutionPolicyLabel, agentToolPermissionLabel } from "./toolchainCatalogLabels"
+import { CAPABILITY_SECTIONS } from "./capabilitySections"
+import { agentToolExecutionPolicyLabel, agentToolPermissionLabel } from "./capabilityCatalogLabels"
+import { isPackageManagedCapability, isPackageManagedResource } from "./tabs/CapabilitiesTab"
 
-const toolchainsTabSource = readFileSync(join(__dirname, "tabs", "ToolchainsTab.tsx"), "utf8")
+const capabilitiesTabSource = readFileSync(join(__dirname, "tabs", "CapabilitiesTab.tsx"), "utf8")
 const settingsControllerSource = readFileSync(join(__dirname, "useSettingsController.tsx"), "utf8")
 const capabilityPackageViewSource = readFileSync(join(__dirname, "capabilityPackageView.ts"), "utf8")
 
-describe("toolchains settings label", () => {
+describe("capabilities settings label", () => {
   it("uses capability and behavior management wording", () => {
     setLocale("zh-CN")
-    expect(t("settings.tab.toolchains")).toBe("能力/行为管理")
-    expect(t("toolchain.desc")).toContain("MCP Server 和 Skill")
-    expect(t("toolchain.desc")).toContain("能力依赖")
+    expect(t("settings.tab.capabilities")).toBe("能力/行为管理")
+    expect(t("capability.desc")).toContain("MCP Server 和 Skill")
+    expect(t("capability.desc")).toContain("能力依赖")
     expect(t("agentConfig.profile.mcpNotRegistered")).toBe("未在 MCP Server 配置中注册")
 
     setLocale("en")
-    expect(t("settings.tab.toolchains")).toBe("Capability / Behavior Management")
-    expect(t("toolchain.desc")).toContain("MCP Servers and Skills")
-    expect(t("toolchain.desc")).toContain("Capability Dependencies")
+    expect(t("settings.tab.capabilities")).toBe("Capability / Behavior Management")
+    expect(t("capability.desc")).toContain("MCP Servers and Skills")
+    expect(t("capability.desc")).toContain("Capability Dependencies")
     expect(t("agentConfig.profile.mcpNotRegistered")).toBe("Not registered in MCP Server configuration")
 
     setLocale("zh-CN")
@@ -40,7 +41,7 @@ describe("toolchains settings label", () => {
   })
 
   it("splits behavior management into clear catalog tabs", () => {
-    const labels = TOOLCHAIN_SECTIONS.map((section) => section.label)
+    const labels = CAPABILITY_SECTIONS.map((section) => section.label)
     expect(labels).toEqual(["能力", "能力包", "能力依赖", "行为管理", "运行日志"])
     expect(labels).not.toContain("环境看板")
     expect(labels).not.toContain("环境依赖")
@@ -54,29 +55,59 @@ describe("toolchains settings label", () => {
   })
 
   it("shows capability package capabilities and dependencies explicitly", () => {
-    expect(toolchainsTabSource).toContain("groupCapabilityPackageComponents")
-    expect(toolchainsTabSource).toContain("提供的能力")
-    expect(toolchainsTabSource).toContain("所需能力依赖")
+    expect(capabilitiesTabSource).toContain("groupCapabilityPackageComponents")
+    expect(capabilitiesTabSource).toContain("提供的能力")
+    expect(capabilitiesTabSource).toContain("所需能力依赖")
     expect(capabilityPackageViewSource).toContain("\"Skill\"")
     expect(capabilityPackageViewSource).toContain("resourceKindLabel(resourceKind)")
     expect(capabilityPackageViewSource).toContain("command=${command}")
     expect(capabilityPackageViewSource).toContain("CapabilityView")
     expect(capabilityPackageViewSource).toContain("CapabilityDependencyView")
-    expect(toolchainsTabSource).toContain("能力依赖")
-    expect(toolchainsTabSource).toContain("行为管理")
-    expect(toolchainsTabSource).toContain("install_prompt")
-    expect(toolchainsTabSource).toContain("verify_prompt")
-    expect(toolchainsTabSource).toContain("componentEvidenceItems")
-    expect(toolchainsTabSource).toContain("environment_requirement_refs")
+    expect(capabilitiesTabSource).toContain("能力依赖")
+    expect(capabilitiesTabSource).toContain("行为管理")
+    expect(capabilitiesTabSource).toContain("install_prompt")
+    expect(capabilitiesTabSource).toContain("verify_prompt")
+    expect(capabilitiesTabSource).toContain("componentEvidenceItems")
+    expect(capabilitiesTabSource).toContain("environment_requirement_refs")
   })
 
   it("keeps MCP and Skill on the capabilities page and out of capability dependencies", () => {
-    expect(toolchainsTabSource).toContain("capabilityViews")
-    expect(toolchainsTabSource).toContain("MCP Server")
-    expect(toolchainsTabSource).toContain("Skill")
-    expect(toolchainsTabSource).toContain("filteredCapabilityItems")
-    expect(toolchainsTabSource).toContain('item.kind === "environment_requirement"')
-    expect(toolchainsTabSource).not.toContain("环境依赖")
+    expect(capabilitiesTabSource).toContain("capabilityViews")
+    expect(capabilitiesTabSource).toContain("MCP Server")
+    expect(capabilitiesTabSource).toContain("Skill")
+    expect(capabilitiesTabSource).toContain("filteredCapabilityItems")
+    expect(capabilitiesTabSource).toContain('item.kind === "environment_requirement"')
+    expect(capabilitiesTabSource).not.toContain("环境依赖")
+  })
+
+  it("locks direct actions only for package-managed capabilities", () => {
+    expect(capabilitiesTabSource).toContain("isPackageManagedCapability(capability)")
+    expect(capabilitiesTabSource).toContain("isPackageManagedResource(item)")
+    expect(capabilitiesTabSource).toContain("该资源由能力包管理，请在能力包页启停或删除来源能力包。")
+    expect(isPackageManagedCapability({
+      raw: { managed_by: "capability_package", package_ids: ["review"] },
+      sourcePackageIds: ["review"],
+    } as any)).toBe(true)
+    expect(isPackageManagedResource({
+      managed_by: "capability_package",
+      package_ids: ["review"],
+      kind: "environment_requirement",
+      name: "gh",
+    })).toBe(true)
+    expect(isPackageManagedCapability({
+      raw: { managed_by: "capability_package" },
+      sourcePackageIds: [],
+    } as any)).toBe(false)
+    expect(isPackageManagedResource({
+      raw: { managed_by: "user", package_ids: ["review"] },
+      sourcePackageIds: ["review"],
+    })).toBe(false)
+    expect(isPackageManagedResource({
+      managed_by: "user",
+      package_ids: ["review"],
+      kind: "environment_requirement",
+      name: "gh",
+    })).toBe(false)
   })
 
   it("uses shared capability package grouping in Agent configuration preview", () => {
@@ -88,9 +119,9 @@ describe("toolchains settings label", () => {
   })
 
   it("does not expose environment run actions for MCP servers", () => {
-    expect(toolchainsTabSource).toContain("canRunEnvironmentItem")
-    expect(toolchainsTabSource).toContain('item.kind === "environment_requirement"')
-    expect(toolchainsTabSource).toContain("MCP Server 通过环境要求引用间接检查")
+    expect(capabilitiesTabSource).toContain("canRunEnvironmentItem")
+    expect(capabilitiesTabSource).toContain('item.kind === "environment_requirement"')
+    expect(capabilitiesTabSource).toContain("MCP Server 通过环境要求引用间接检查")
   })
 
   it("projects chat command execution semantics from the behavior catalog", () => {
@@ -99,9 +130,9 @@ describe("toolchains settings label", () => {
     expect(settingsControllerSource).toContain("visibility: stringValue(item.visibility, \"visible\")")
     expect(settingsControllerSource).toContain("executionPolicy: stringValue(item.execution_policy)")
     expect(settingsControllerSource).toContain("permission: normalizeAgentToolPermission(item.permission)")
-    expect(toolchainsTabSource).toContain("userInstructionItems")
-    expect(toolchainsTabSource).toContain("reference_only")
-    expect(toolchainsTabSource).toContain("effectiveCapabilities")
-    expect(toolchainsTabSource).toContain("权限")
+    expect(capabilitiesTabSource).toContain("userInstructionItems")
+    expect(capabilitiesTabSource).toContain("reference_only")
+    expect(capabilitiesTabSource).toContain("effectiveCapabilities")
+    expect(capabilitiesTabSource).toContain("权限")
   })
 })

@@ -123,10 +123,10 @@ type EnvironmentRequirementKind =
   | "project_file"
   | "container"
 type EnvironmentEntryKind = "environment_requirement" | "mcp" | "unsupported"
-type ToolchainKind = "environment_requirement" | "mcp"
-type ToolchainResourceKind = EnvironmentRequirementKind | "mcp_server" | "unsupported"
-type ToolchainKindFilter = "all" | ToolchainKind
-type ToolchainStatusFilter = "all" | "ready" | "missing" | "stopped" | "awaiting"
+type CapabilityKind = "environment_requirement" | "mcp" | "skill"
+type CapabilityResourceKind = EnvironmentRequirementKind | "mcp_server" | "skill" | "unsupported"
+type CapabilityKindFilter = "all" | CapabilityKind
+type CapabilityStatusFilter = "all" | "ready" | "missing" | "stopped" | "awaiting"
 const BUILT_IN_ENVIRONMENT_AGENT_ID = "environment_configurator"
 type AgentVisibility = "user" | "system" | "internal"
 type EnvironmentEntryStatus =
@@ -305,11 +305,11 @@ interface EnvironmentSnapshotState {
   lastRunStatus?: "completed" | "error" | "canceled"
 }
 
-interface ToolchainRecord {
+interface CapabilityRecord {
   id?: string
-  kind: ToolchainKind
-  entryType: ToolchainKind
-  resourceKind: ToolchainResourceKind
+  kind: CapabilityKind
+  entryType: CapabilityKind
+  resourceKind: CapabilityResourceKind
   name: string
   enabled?: boolean
   command?: string
@@ -333,6 +333,7 @@ interface ToolchainRecord {
   source?: string
   description?: string
   path_hint?: string
+  source_path?: string
   docs?: Array<{ title?: string; url?: string }>
   evidence?: Array<Record<string, string>>
   repo_url?: string
@@ -350,11 +351,11 @@ interface ToolchainRecord {
   environment_requirement_refs?: string[]
 }
 
-interface ToolchainDashboardItem {
+interface CapabilityDashboardItem {
   id: string
-  kind: ToolchainKind
-  entryType: ToolchainKind
-  resourceKind: ToolchainResourceKind
+  kind: CapabilityKind
+  entryType: CapabilityKind
+  resourceKind: CapabilityResourceKind
   rawKind: string
   name: string
   alias: string
@@ -379,6 +380,8 @@ interface ToolchainDashboardItem {
   runtime: string
   language: string
   path: string
+  path_hint: string
+  source_path: string
   environment_requirement_refs: string[]
   requirements: Record<string, string>
   credentials: string[]
@@ -430,12 +433,12 @@ interface CapabilityPackageIngestState {
   source?: Record<string, unknown>
 }
 
-interface ToolchainEditorState {
+interface CapabilityEditorState {
   mode: "create" | "edit"
-  kind: ToolchainKind
+  kind: CapabilityKind
   id: string
-  entryType: ToolchainKind
-  resourceKind: ToolchainResourceKind
+  entryType: CapabilityKind
+  resourceKind: CapabilityResourceKind
   name: string
   enabled: boolean
   command: string
@@ -454,6 +457,7 @@ interface ToolchainEditorState {
   runtime: string
   language: string
   path: string
+  sourcePath: string
   source: string
   description: string
   pathHint: string
@@ -751,7 +755,7 @@ const settingsTabDefs: Array<{ id: SettingsTab; labelKey: string; icon: string }
   { id: "executors", labelKey: "settings.tab.executors", icon: "radio-tower" },
   { id: "providers", labelKey: "settings.tab.providers", icon: "server-process" },
   { id: "agentConfig", labelKey: "settings.tab.agentConfig", icon: "hubot" },
-  { id: "toolchains", labelKey: "settings.tab.toolchains", icon: "tools" },
+  { id: "capabilities", labelKey: "settings.tab.capabilities", icon: "tools" },
   { id: "conversation", labelKey: "settings.tab.conversation", icon: "comment-discussion" },
   { id: "sessionPolicy", labelKey: "settings.tab.sessionPolicy", icon: "layers" },
   { id: "autoApproval", labelKey: "settings.tab.autoApproval", icon: "shield" },
@@ -769,8 +773,8 @@ export function normalizeSettingsTab(value: unknown): SettingsTab | undefined {
       return "executors"
     case "accounts":
       return "accounts"
-    case "toolchains":
-      return "toolchains"
+    case "capabilities":
+      return "capabilities"
     case "conversation":
       return "conversation"
     case "sessionPolicy":
@@ -913,35 +917,46 @@ function parseEvidenceText(value: string): Array<Record<string, string>> {
   return evidence
 }
 
-function normalizeToolchainList(value: unknown, kind: ToolchainKind): ToolchainRecord[] {
+function normalizeCapabilityList(value: unknown, kind: CapabilityKind): CapabilityRecord[] {
   if (!Array.isArray(value)) return []
   return value
     .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
     .map((item) => {
-      const rawKind = kind === "environment_requirement" ? requirementKindTextFromRecord(item) : "mcp_server"
-      const resourceKind: ToolchainResourceKind = kind === "environment_requirement"
+      const rawKind = kind === "environment_requirement"
+        ? requirementKindTextFromRecord(item)
+        : kind === "skill"
+          ? "skill"
+          : "mcp_server"
+      const resourceKind: CapabilityResourceKind = kind === "environment_requirement"
         ? normalizeRequirementKind(rawKind)
-        : "mcp_server"
+        : kind === "skill"
+          ? "skill"
+          : "mcp_server"
+      const name = stringValue(item.name || item.id)
       return {
         ...item,
-        id: stringValue(item.id),
+        id: stringValue(item.id) || (kind === "skill" ? `skill:${name}` : ""),
         kind,
         entryType: kind,
         resourceKind,
         raw_kind: rawKind,
-        name: stringValue(item.name || item.id),
-      } as ToolchainRecord
+        name,
+      } as CapabilityRecord
     })
     .filter((item) => item.name)
 }
 
-function emptyToolchainEditor(kind: ToolchainKind): ToolchainEditorState {
+function emptyCapabilityEditor(kind: CapabilityKind): CapabilityEditorState {
   return {
     mode: "create",
     kind,
     id: "",
     entryType: kind,
-    resourceKind: kind === "environment_requirement" ? "executable" : "mcp_server",
+    resourceKind: kind === "environment_requirement"
+      ? "executable"
+      : kind === "skill"
+        ? "skill"
+        : "mcp_server",
     name: "",
     enabled: true,
     command: "",
@@ -961,6 +976,7 @@ function emptyToolchainEditor(kind: ToolchainKind): ToolchainEditorState {
     runtime: "",
     language: "",
     path: "",
+    sourcePath: "",
     source: "",
     description: "",
     pathHint: "",
@@ -976,13 +992,19 @@ function emptyToolchainEditor(kind: ToolchainKind): ToolchainEditorState {
   }
 }
 
-function toolchainEditorFromRecord(record: ToolchainRecord): ToolchainEditorState {
+function capabilityEditorFromRecord(record: CapabilityRecord): CapabilityEditorState {
   return {
-    ...emptyToolchainEditor(record.kind),
+    ...emptyCapabilityEditor(record.kind),
     mode: "edit",
     id: stringValue(record.id),
     entryType: record.entryType || record.kind,
-    resourceKind: record.resourceKind || (record.kind === "mcp" ? "mcp_server" : normalizeRequirementKind(record.kind)),
+    resourceKind: record.resourceKind || (
+      record.kind === "mcp"
+        ? "mcp_server"
+        : record.kind === "skill"
+          ? "skill"
+          : normalizeRequirementKind(record.kind)
+    ),
     name: record.name,
     enabled: boolValue(record.enabled, true),
     command: stringValue(record.command),
@@ -1001,6 +1023,7 @@ function toolchainEditorFromRecord(record: ToolchainRecord): ToolchainEditorStat
     runtime: stringValue(record.runtime),
     language: stringValue(record.language),
     path: stringValue(record.path),
+    sourcePath: stringValue(record.source_path),
     source: stringValue(record.source),
     description: stringValue(record.description),
     pathHint: stringValue(record.path_hint),
@@ -1016,7 +1039,7 @@ function toolchainEditorFromRecord(record: ToolchainRecord): ToolchainEditorStat
   }
 }
 
-function toolchainPayloadFromEditor(editor: ToolchainEditorState): Record<string, unknown> {
+function capabilityPayloadFromEditor(editor: CapabilityEditorState): Record<string, unknown> {
   const payload: Record<string, unknown> = {
     id: editor.id.trim() || undefined,
     name: editor.name.trim(),
@@ -1053,6 +1076,9 @@ function toolchainPayloadFromEditor(editor: ToolchainEditorState): Record<string
     payload.placement = editor.placement || "peer"
     payload.distribution = editor.distribution || "command"
     payload.environment_requirement_refs = parseStringList(editor.requirementRefsText)
+  } else if (editor.kind === "skill") {
+    payload.path_hint = editor.pathHint.trim()
+    payload.source_path = editor.sourcePath.trim()
   }
   return payload
 }
@@ -1273,21 +1299,23 @@ function requirementKindTextFromRecord(item: Record<string, unknown>): string {
   return item.command ? "executable" : ""
 }
 
-function normalizeEntryType(value: unknown): ToolchainKind | "" {
+function normalizeEntryType(value: unknown): CapabilityKind | "" {
   const text = stringValue(value).trim().toLowerCase()
   if (text === "environment_requirement") return "environment_requirement"
   if (text === "mcp" || text === "mcp_server") return "mcp"
+  if (text === "skill") return "skill"
   return ""
 }
 
-function entryTypeFromResourceKind(value: unknown): ToolchainKind | "" {
+function entryTypeFromResourceKind(value: unknown): CapabilityKind | "" {
   const text = stringValue(value).trim().toLowerCase()
   if (text === "mcp" || text === "mcp_server") return "mcp"
+  if (text === "skill") return "skill"
   if ((ENVIRONMENT_REQUIREMENT_KIND_VALUES as string[]).includes(text)) return "environment_requirement"
   return ""
 }
 
-function resourceKindLabel(kind: ToolchainResourceKind): string {
+function resourceKindLabel(kind: CapabilityResourceKind): string {
   switch (kind) {
     case "executable":
       return "Executable"
@@ -1309,6 +1337,8 @@ function resourceKindLabel(kind: ToolchainResourceKind): string {
       return "Container"
     case "mcp_server":
       return "MCP Server"
+    case "skill":
+      return "Skill"
     default:
       return "Unsupported"
   }
@@ -1328,7 +1358,7 @@ function normalizeEvidence(value: unknown): Array<Record<string, string>> {
     .filter((item) => Object.keys(item).length > 0)
 }
 
-function normalizeToolchainStatus(value: unknown): EnvironmentEntryStatus {
+function normalizeCapabilityStatus(value: unknown): EnvironmentEntryStatus {
   const text = stringValue(value)
   if (text === "ready") return "available"
   if ([
@@ -1350,13 +1380,21 @@ function normalizeToolchainStatus(value: unknown): EnvironmentEntryStatus {
   return "unchecked"
 }
 
-function toolchainRecordToDashboardItem(record: ToolchainRecord): ToolchainDashboardItem {
-  const placement = stringValue(record.placement, record.kind === "mcp" ? "server" : "peer")
-  const resourceKind = record.resourceKind || (record.kind === "mcp" ? "mcp_server" : normalizeRequirementKind(record.kind))
+function capabilityRecordToDashboardItem(record: CapabilityRecord): CapabilityDashboardItem {
+  const placement = stringValue(record.placement, record.kind === "mcp" ? "server" : record.kind === "skill" ? "agent" : "peer")
+  const resourceKind = record.resourceKind || (
+    record.kind === "mcp"
+      ? "mcp_server"
+      : record.kind === "skill"
+        ? "skill"
+        : normalizeRequirementKind(record.kind)
+  )
   const id = stringValue(record.id) || (
     record.kind === "environment_requirement"
       ? `envreq:${resourceKind}:${record.name}`
-      : `mcp:${record.name}`
+      : record.kind === "skill"
+        ? `skill:${record.name}`
+        : `mcp:${record.name}`
   )
   return {
     id,
@@ -1365,7 +1403,7 @@ function toolchainRecordToDashboardItem(record: ToolchainRecord): ToolchainDashb
     resourceKind,
     rawKind: stringValue(record.raw_kind || resourceKind),
     name: record.name,
-    alias: stringValue(record.command || record.path_hint || record.name),
+    alias: stringValue(record.command || record.path_hint || record.source_path || record.name),
     source: stringValue(record.source),
     repo_url: stringValue(record.repo_url),
     docs: Array.isArray(record.docs) ? record.docs : [],
@@ -1387,6 +1425,8 @@ function toolchainRecordToDashboardItem(record: ToolchainRecord): ToolchainDashb
     runtime: stringValue(record.runtime),
     language: stringValue(record.language),
     path: stringValue(record.path),
+    path_hint: stringValue(record.path_hint),
+    source_path: stringValue(record.source_path),
     environment_requirement_refs: stringArray(record.environment_requirement_refs),
     requirements: stringMapValue(record.requirements),
     credentials: stringArray(record.credentials),
@@ -1400,16 +1440,16 @@ function toolchainRecordToDashboardItem(record: ToolchainRecord): ToolchainDashb
   }
 }
 
-function normalizeToolchainDashboardItems(
+function normalizeCapabilityDashboardItems(
   value: unknown,
-  fallbackGroups: Record<ToolchainKind, ToolchainRecord[]>,
+  fallbackGroups: Record<CapabilityKind, CapabilityRecord[]>,
   snapshot: EnvironmentSnapshotState,
-): ToolchainDashboardItem[] {
+): CapabilityDashboardItem[] {
   const rawItems = Array.isArray(value)
     ? value.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
     : []
-  const baseItems = (["environment_requirement", "mcp"] as ToolchainKind[]).flatMap((kind) =>
-    fallbackGroups[kind].map(toolchainRecordToDashboardItem)
+  const baseItems = (["environment_requirement", "mcp", "skill"] as CapabilityKind[]).flatMap((kind) =>
+    fallbackGroups[kind].map(capabilityRecordToDashboardItem)
   )
   const byId = new Map(baseItems.map((item) => [item.id, item]))
   for (const rawItem of rawItems) {
@@ -1437,7 +1477,7 @@ function normalizeToolchainDashboardItems(
       if (!entry) return item
       return {
         ...item,
-        status: normalizeToolchainStatus(entry.status),
+        status: normalizeCapabilityStatus(entry.status),
         status_detail: entry.detail || environmentStatusLabel(entry.status),
         last_action: entry.lastAction || item.last_action,
         last_updated: entry.lastUpdated || item.last_updated,
@@ -1445,35 +1485,39 @@ function normalizeToolchainDashboardItems(
     })
 }
 
-function dashboardSummaryItem(item: Record<string, unknown>): ToolchainDashboardItem {
+function dashboardSummaryItem(item: Record<string, unknown>): CapabilityDashboardItem {
   const name = stringValue(item.name)
-  const entryType = (normalizeEntryType(item.entry_type) || entryTypeFromResourceKind(item.kind) || "environment_requirement") as ToolchainKind
+  const entryType = (normalizeEntryType(item.entry_type) || entryTypeFromResourceKind(item.kind) || "environment_requirement") as CapabilityKind
   const rawRequirementKind = requirementKindTextFromRecord(item) || stringValue(item.kind)
   const resourceKind = (
     entryType === "mcp"
       ? "mcp_server"
-      : normalizeRequirementKind(rawRequirementKind)
-  ) as ToolchainResourceKind
+      : entryType === "skill"
+        ? "skill"
+        : normalizeRequirementKind(rawRequirementKind)
+  ) as CapabilityResourceKind
   const id = stringValue(item.id) || (
     entryType === "mcp"
       ? `mcp:${name}`
-      : `envreq:${resourceKind}:${name}`
+      : entryType === "skill"
+        ? `skill:${name}`
+        : `envreq:${resourceKind}:${name}`
   )
   return {
     id,
     kind: entryType,
     entryType,
     resourceKind,
-    rawKind: entryType === "mcp" ? "mcp_server" : rawRequirementKind,
+    rawKind: entryType === "mcp" ? "mcp_server" : entryType === "skill" ? "skill" : rawRequirementKind,
     name,
-    alias: stringValue(item.alias || item.command || item.name),
+    alias: stringValue(item.alias || item.command || item.path_hint || item.source_path || item.name),
     source: stringValue(item.source),
     repo_url: stringValue(item.repo_url),
     docs: Array.isArray(item.docs) ? item.docs as Array<{ title?: string; url?: string }> : [],
     evidence: normalizeEvidence(item.evidence),
     placement: stringValue(item.placement || item.scope),
     scope: stringValue(item.scope || item.placement),
-    status: normalizeToolchainStatus(item.status),
+    status: normalizeCapabilityStatus(item.status),
     status_detail: stringValue(item.status_detail),
     check: stringValue(item.check),
     install: stringValue(item.install),
@@ -1488,6 +1532,8 @@ function dashboardSummaryItem(item: Record<string, unknown>): ToolchainDashboard
     runtime: stringValue(item.runtime),
     language: stringValue(item.language),
     path: stringValue(item.path),
+    path_hint: stringValue(item.path_hint),
+    source_path: stringValue(item.source_path),
     environment_requirement_refs: stringArray(item.environment_requirement_refs),
     requirements: stringMapValue(item.requirements),
     credentials: stringArray(item.credentials),
@@ -1501,7 +1547,7 @@ function dashboardSummaryItem(item: Record<string, unknown>): ToolchainDashboard
   }
 }
 
-function toolchainStatusBucket(status: EnvironmentEntryStatus): ToolchainStatusFilter {
+function capabilityStatusBucket(status: EnvironmentEntryStatus): CapabilityStatusFilter {
   if (status === "available" || status === "configured") return "ready"
   if (status === "missing") return "missing"
   if (status === "stopped") return "stopped"
@@ -1509,10 +1555,10 @@ function toolchainStatusBucket(status: EnvironmentEntryStatus): ToolchainStatusF
   return "all"
 }
 
-function summarizeToolchainDashboard(items: ToolchainDashboardItem[]) {
+function summarizeCapabilityDashboard(items: CapabilityDashboardItem[]) {
   return items.reduce(
     (summary, item) => {
-      const bucket = toolchainStatusBucket(item.status)
+      const bucket = capabilityStatusBucket(item.status)
       if (bucket === "ready") summary.ready += 1
       if (bucket === "missing") summary.missing += 1
       if (bucket === "stopped") summary.stopped += 1
@@ -1523,7 +1569,7 @@ function summarizeToolchainDashboard(items: ToolchainDashboardItem[]) {
   )
 }
 
-function placementLabel(item: ToolchainDashboardItem): string {
+function placementLabel(item: CapabilityDashboardItem): string {
   if (item.kind === "environment_requirement") {
     if (item.placement === "server") return "服务端"
     if (item.placement === "both") return "服务端+本地端"
@@ -1534,15 +1580,16 @@ function placementLabel(item: ToolchainDashboardItem): string {
     if (item.placement === "both") return "服务端+本地端"
     return "本地端"
   }
+  if (item.kind === "skill") return "Skill"
   return item.scope === "user" || item.placement === "user" ? "用户级" : "项目级"
 }
 
-function toolchainSourceLabel(item: ToolchainDashboardItem): string {
+function capabilitySourceLabel(item: CapabilityDashboardItem): string {
   const firstDoc = item.docs[0]
   return item.repo_url || stringValue(firstDoc?.url) || item.source || "未记录"
 }
 
-function dashboardItemToRecord(item: ToolchainDashboardItem): ToolchainRecord {
+function dashboardItemToRecord(item: CapabilityDashboardItem): CapabilityRecord {
   return {
     id: item.id,
     kind: item.kind,
@@ -1566,6 +1613,8 @@ function dashboardItemToRecord(item: ToolchainDashboardItem): ToolchainRecord {
     url: item.url,
     language: item.language,
     path: item.path,
+    path_hint: item.path_hint,
+    source_path: item.source_path,
     environment_requirement_refs: item.environment_requirement_refs,
     source: item.source,
     description: item.alias,
@@ -1679,13 +1728,13 @@ function environmentRunTone(status: EnvironmentSnapshotStatus): "success" | "war
   }
 }
 
-function environmentKindLabel(kind: EnvironmentEntryKind | ToolchainKind): string {
+function environmentKindLabel(kind: EnvironmentEntryKind | CapabilityKind): string {
   if (kind === "environment_requirement") return "环境要求"
   if (kind === "mcp") return "MCP"
   return "不支持"
 }
 
-function environmentKindIcon(kind: EnvironmentEntryKind | ToolchainKind): string {
+function environmentKindIcon(kind: EnvironmentEntryKind | CapabilityKind): string {
   if (kind === "environment_requirement") return "terminal"
   if (kind === "mcp") return "plug"
   return "warning"
@@ -1982,12 +2031,12 @@ export function createSettingsController(props: SettingsViewProps) {
   const [selectedEnvironmentAgentId, setSelectedEnvironmentAgentId] = createSignal("")
   const [serverSettingsBootstrapped, setServerSettingsBootstrapped] = createSignal(false)
   const [selectedEnvironmentApproval, setSelectedEnvironmentApproval] = createSignal<EnvironmentApprovalState | undefined>()
-  const [toolchainBootstrapped, setToolchainBootstrapped] = createSignal(false)
-  const [toolchainEditor, setToolchainEditor] = createSignal<ToolchainEditorState | undefined>()
-  const [toolchainKindFilter, setToolchainKindFilter] = createSignal<ToolchainKindFilter>("all")
-  const [toolchainStatusFilter, setToolchainStatusFilter] = createSignal<ToolchainStatusFilter>("all")
-  const [toolchainSearch, setToolchainSearch] = createSignal("")
-  const [selectedToolchainId, setSelectedToolchainId] = createSignal("")
+  const [capabilityBootstrapped, setCapabilityBootstrapped] = createSignal(false)
+  const [capabilityEditor, setCapabilityEditor] = createSignal<CapabilityEditorState | undefined>()
+  const [capabilityKindFilter, setCapabilityKindFilter] = createSignal<CapabilityKindFilter>("all")
+  const [capabilityStatusFilter, setCapabilityStatusFilter] = createSignal<CapabilityStatusFilter>("all")
+  const [capabilitySearch, setCapabilitySearch] = createSignal("")
+  const [selectedCapabilityId, setSelectedCapabilityId] = createSignal("")
   const [capabilitySourceType, setCapabilitySourceType] = createSignal<"github_repo" | "docs_url" | "project_notes">("github_repo")
   const [capabilitySourceUrl, setCapabilitySourceUrl] = createSignal("")
   const [capabilitySourceNotes, setCapabilitySourceNotes] = createSignal("")
@@ -1998,7 +2047,7 @@ export function createSettingsController(props: SettingsViewProps) {
     status: "idle",
     error: "",
   })
-  const [toolchainRunSerial, setToolchainRunSerial] = createSignal(true)
+  const [capabilityRunSerial, setCapabilityRunSerial] = createSignal(true)
   const [serverMaxRunningAgents, setServerMaxRunningAgents] = createSignal(4)
   const [serverMaxShellsPerAgent, setServerMaxShellsPerAgent] = createSignal(1)
   const [serverSettingsDirty, setServerSettingsDirty] = createSignal(false)
@@ -2284,22 +2333,29 @@ export function createSettingsController(props: SettingsViewProps) {
   const environmentError = createMemo(() =>
     stringValue(server.environmentError()) || environmentSnapshot().error
   )
-  const toolchainError = createMemo(() => stringValue(server.toolchainError()))
-  const toolchainActionFeedback = createMemo(() => {
-    const result = server.toolchainActionResult()
+  const capabilityError = createMemo(() => stringValue(server.capabilityError()))
+  const capabilityActionFeedback = createMemo(() => {
+    const result = server.capabilityActionResult()
     if (!result?.ok) return undefined
     const kind = stringValue(result.kind)
     const name = stringValue(result.name)
-    const label = kind === "environment_requirement" ? "环境要求" : kind === "mcp_server" || kind === "mcp" ? "MCP" : "能力"
+    const label = kind === "environment_requirement"
+      ? "环境要求"
+      : kind === "mcp_server" || kind === "mcp"
+        ? "MCP"
+        : kind === "skill"
+          ? "Skill"
+          : "能力"
     if (result.created === true) return `${label} ${name} 已新增。`
-    if (result.toolchain) return `${label} ${name} 已保存。`
+    if (result.capability || result.skill || result.mcp_server || result.environment_requirement) return `${label} ${name} 已保存。`
     return `${label} ${name} 操作已完成。`
   })
-  const toolchainGroups = createMemo(() => {
-    const state = server.toolchainState() || {}
+  const capabilityGroups = createMemo(() => {
+    const state = server.capabilityState() || {}
     return {
-      environment_requirement: normalizeToolchainList(state.environment_requirements, "environment_requirement"),
-      mcp: normalizeToolchainList(state.mcp_servers, "mcp"),
+      environment_requirement: normalizeCapabilityList(state.environment_requirements, "environment_requirement"),
+      mcp: normalizeCapabilityList(state.mcp_servers, "mcp"),
+      skill: normalizeCapabilityList(state.skills, "skill"),
     }
   })
   const environmentCounts = createMemo(() => summarizeEnvironmentEntries(environmentSnapshot().entries))
@@ -2308,19 +2364,19 @@ export function createSettingsController(props: SettingsViewProps) {
     mcp: environmentSnapshot().entries.filter((entry) => entry.kind === "mcp"),
     unsupported: environmentSnapshot().entries.filter((entry) => entry.kind === "unsupported"),
   }))
-  const toolchainDashboardItems = createMemo(() => {
-    const state = server.toolchainState() || {}
-    return normalizeToolchainDashboardItems(
+  const capabilityDashboardItems = createMemo(() => {
+    const state = server.capabilityState() || {}
+    return normalizeCapabilityDashboardItems(
       state.dashboard_items,
-      toolchainGroups(),
+      capabilityGroups(),
       environmentSnapshot(),
     )
   })
-  const filteredToolchainItems = createMemo(() => {
-    const query = toolchainSearch().trim().toLowerCase()
-    return toolchainDashboardItems().filter((item) => {
-      if (toolchainKindFilter() !== "all" && item.kind !== toolchainKindFilter()) return false
-      if (toolchainStatusFilter() !== "all" && toolchainStatusBucket(item.status) !== toolchainStatusFilter()) {
+  const filteredCapabilityItems = createMemo(() => {
+    const query = capabilitySearch().trim().toLowerCase()
+    return capabilityDashboardItems().filter((item) => {
+      if (capabilityKindFilter() !== "all" && item.kind !== capabilityKindFilter()) return false
+      if (capabilityStatusFilter() !== "all" && capabilityStatusBucket(item.status) !== capabilityStatusFilter()) {
         return false
       }
       if (!query) return true
@@ -2334,37 +2390,37 @@ export function createSettingsController(props: SettingsViewProps) {
       ].join(" ").toLowerCase().includes(query)
     })
   })
-  const selectedToolchain = createMemo(() =>
-    toolchainDashboardItems().find((item) => item.id === selectedToolchainId()) ||
-    filteredToolchainItems()[0] ||
-    toolchainDashboardItems()[0]
+  const selectedCapability = createMemo(() =>
+    capabilityDashboardItems().find((item) => item.id === selectedCapabilityId()) ||
+    filteredCapabilityItems()[0] ||
+    capabilityDashboardItems()[0]
   )
-  const toolchainSummary = createMemo(() => summarizeToolchainDashboard(toolchainDashboardItems()))
+  const capabilitySummary = createMemo(() => summarizeCapabilityDashboard(capabilityDashboardItems()))
   const behaviorCatalog = createMemo(() =>
-    objectValue(server.toolchainState()?.behavior_catalog)
+    objectValue(server.capabilityState()?.behavior_catalog)
   )
-  const toolchainBehaviorError = createMemo(() =>
-    stringValue(server.toolchainState()?.behavior_catalog_error) ||
+  const capabilityBehaviorError = createMemo(() =>
+    stringValue(server.capabilityState()?.behavior_catalog_error) ||
     stringValue(behaviorCatalog().error)
   )
   const chatCommandCatalogItems = createMemo(() =>
     normalizeChatCommandCatalog(
-      server.toolchainState()?.chat_commands || behaviorCatalog().chat_commands
+      server.capabilityState()?.chat_commands || behaviorCatalog().chat_commands
     )
   )
   const mentionProviderCatalogItems = createMemo(() =>
     normalizeMentionProviderCatalog(
-      server.toolchainState()?.mention_providers || behaviorCatalog().mention_providers
+      server.capabilityState()?.mention_providers || behaviorCatalog().mention_providers
     )
   )
   const uiActionCatalogItems = createMemo(() =>
     normalizeUiActionCatalog(
-      server.toolchainState()?.ui_actions || behaviorCatalog().ui_actions
+      server.capabilityState()?.ui_actions || behaviorCatalog().ui_actions
     )
   )
   const agentToolCatalogItems = createMemo(() =>
     normalizeAgentToolCatalog(
-      server.toolchainState()?.agent_tools || behaviorCatalog().agent_tools
+      server.capabilityState()?.agent_tools || behaviorCatalog().agent_tools
     )
   )
   const serverSettingsPayload = createMemo(() => {
@@ -2409,14 +2465,15 @@ export function createSettingsController(props: SettingsViewProps) {
   )
   const capabilityViews = createMemo(() =>
     capabilityViewsFromSources({
-      mcpServers: toolchainDashboardItems().filter((item) => item.kind === "mcp") as unknown as Record<string, unknown>[],
+      mcpServers: capabilityDashboardItems().filter((item) => item.kind === "mcp") as unknown as Record<string, unknown>[],
+      skillRecords: capabilityDashboardItems().filter((item) => item.kind === "skill") as unknown as Record<string, unknown>[],
       componentIndex: capabilityComponents(),
       packages: capabilityPackagesById(),
       ...capabilitySkillsSettings(),
     })
   )
   const capabilityDependencyViews = createMemo(() =>
-    toolchainDashboardItems()
+    capabilityDashboardItems()
       .filter((item) => item.kind === "environment_requirement")
       .map((item) => {
         const dependencyKind = item.resourceKind !== "unsupported" ? item.resourceKind : item.rawKind
@@ -2478,11 +2535,11 @@ export function createSettingsController(props: SettingsViewProps) {
     return agentRunsAgents().filter((agent) => agent.id === BUILT_IN_ENVIRONMENT_AGENT_ID)
   })
   const registeredMcpServers = createMemo(() => {
-    const groups = toolchainGroups()
+    const groups = capabilityGroups()
     return groups.mcp.map((item) => item.name)
   })
   const registeredToolOptions = createMemo<ChoiceOption[]>(() => {
-    const groups = toolchainGroups()
+    const groups = capabilityGroups()
     const seen = new Set<string>()
     const options: ChoiceOption[] = []
     const add = (id: unknown, kind: string, description?: unknown) => {
@@ -2498,6 +2555,7 @@ export function createSettingsController(props: SettingsViewProps) {
     }
     for (const item of groups.environment_requirement) add(item.id || item.name, resourceKindLabel(item.resourceKind), item.command || stringValue((item as unknown as Record<string, unknown>).alias))
     for (const item of groups.mcp) add(item.name, "MCP", item.command || stringValue((item as unknown as Record<string, unknown>).alias))
+    for (const item of groups.skill) add(item.name, "Skill", item.path_hint || item.source_path || stringValue((item as unknown as Record<string, unknown>).alias))
     for (const item of capabilityPackageViews()) add(item.id, "能力包", item.description || item.name)
     return options.sort((a, b) => `${a.kind}:${a.id}`.localeCompare(`${b.kind}:${b.id}`))
   })
@@ -2567,14 +2625,14 @@ export function createSettingsController(props: SettingsViewProps) {
     return Boolean(executor && sessionId && executorFeatures()[executor]?.resumeById)
   })
   createEffect(() => {
-    const selected = selectedToolchainId()
-    const items = toolchainDashboardItems()
+    const selected = selectedCapabilityId()
+    const items = capabilityDashboardItems()
     if (!items.length) {
-      if (selected) setSelectedToolchainId("")
+      if (selected) setSelectedCapabilityId("")
       return
     }
     if (!items.some((item) => item.id === selected)) {
-      setSelectedToolchainId(items[0].id)
+      setSelectedCapabilityId(items[0].id)
     }
   })
 
@@ -2768,8 +2826,8 @@ export function createSettingsController(props: SettingsViewProps) {
       if (msg.type === "diagnostics.toolDiagnostics.error") settleRefreshError("toolDiagnostics", message)
       if (msg.type === "modelCapabilities.state") settleRefreshSuccess("modelCapabilities")
       if (msg.type === "modelCapabilities.error") settleRefreshError("modelCapabilities", message)
-      if (msg.type === "toolchain.state" || msg.type === "toolchain.actionResult") settleRefreshSuccess("toolchains")
-      if (msg.type === "toolchain.error") settleRefreshError("toolchains", message)
+      if (msg.type === "capability.state" || msg.type === "capability.actionResult") settleRefreshSuccess("capabilities")
+      if (msg.type === "capability.error") settleRefreshError("capabilities", message)
       if (msg.type === "environment.manifest" || msg.type === "environment.snapshot") settleRefreshSuccess("environmentManifest")
       if (msg.type === "environment.run.error") settleRefreshError("environmentManifest", message)
       if (msg.type === "auth.devices") markAuthOperationSuccess("authDevices")
@@ -3295,9 +3353,9 @@ export function createSettingsController(props: SettingsViewProps) {
           markOperationSuccess(key)
         }
         return
-      case "toolchains":
-        setToolchainBootstrapped(true)
-        settingsMessages.refreshToolchains(vscode)
+      case "capabilities":
+        setCapabilityBootstrapped(true)
+        settingsMessages.refreshCapabilities(vscode)
         return
       case "environmentManifest":
         setEnvironmentBootstrapped(true)
@@ -3408,8 +3466,8 @@ export function createSettingsController(props: SettingsViewProps) {
   const refreshEnvironmentManifest = () => refreshOperation("environmentManifest")
   const environmentRunItems = (entryIds?: string[]) => {
     const selected = entryIds?.length
-      ? toolchainDashboardItems().filter((item) => entryIds.includes(item.id))
-      : toolchainDashboardItems()
+      ? capabilityDashboardItems().filter((item) => entryIds.includes(item.id))
+      : capabilityDashboardItems()
     return selected
       .filter((item) => item.kind === "environment_requirement")
       .map((item) => ({
@@ -3796,10 +3854,10 @@ export function createSettingsController(props: SettingsViewProps) {
   })
 
   createEffect(() => {
-    if (activeTab() !== "toolchains") return
-    if (!toolchainBootstrapped()) {
-      setToolchainBootstrapped(true)
-      refreshOperation("toolchains", { mode: "background" })
+    if (activeTab() !== "capabilities") return
+    if (!capabilityBootstrapped()) {
+      setCapabilityBootstrapped(true)
+      refreshOperation("capabilities", { mode: "background" })
     }
     if (!environmentBootstrapped()) {
       setEnvironmentBootstrapped(true)
@@ -3936,8 +3994,8 @@ export function createSettingsController(props: SettingsViewProps) {
     updateServerSettingsForOperation("integrationsSave", payload)
   const saveInfrastructureSettings = (payload: Record<string, unknown>) =>
     updateServerSettingsForOperation("serverSettingsSave", payload)
-  const saveToolchainsCapabilitySettings = (payload: Record<string, unknown>) =>
-    updateServerSettingsForOperation("toolchainsCapabilitySave", payload)
+  const saveCapabilitySettings = (payload: Record<string, unknown>) =>
+    updateServerSettingsForOperation("capabilitySettingsSave", payload)
   const saveDiagnosticsSettings = (payload: Record<string, unknown>) =>
     updateServerSettingsForOperation("diagnosticsSave", payload)
   const saveCapabilitySyncSettings = (payload: Record<string, unknown>) =>
@@ -3957,21 +4015,21 @@ export function createSettingsController(props: SettingsViewProps) {
   const openPeerDiagnosticsLog = () => settingsMessages.openPeerDiagnosticsLog(vscode)
   const clearPeerDiagnosticsLog = () => settingsMessages.clearPeerDiagnosticsLog(vscode)
   const readToolDiagnosticsStats = () => refreshOperation("toolDiagnostics")
-  const refreshToolchains = () => {
-    refreshOperation("toolchains")
+  const refreshCapabilities = () => {
+    refreshOperation("capabilities")
     refreshOperation("environmentManifest")
   }
-  const recordToolchain = (kind: string, payload: Record<string, unknown>) => {
-    markOperationStarted("toolchains", "saving")
-    settingsMessages.recordToolchain(vscode, kind, payload)
+  const recordCapability = (kind: string, payload: Record<string, unknown>) => {
+    markOperationStarted("capabilities", "saving")
+    settingsMessages.recordCapability(vscode, kind, payload)
   }
-  const enableToolchain = (kind: string, name: string, enabled: boolean) => {
-    markOperationStarted("toolchains", "saving")
-    settingsMessages.enableToolchain(vscode, kind, name, enabled)
+  const enableCapability = (kind: string, name: string, enabled: boolean) => {
+    markOperationStarted("capabilities", "saving")
+    settingsMessages.enableCapability(vscode, kind, name, enabled)
   }
-  const deleteToolchainRecord = (kind: string, name: string) => {
-    markOperationStarted("toolchains", "saving")
-    settingsMessages.deleteToolchain(vscode, kind, name)
+  const deleteCapabilityRecord = (kind: string, name: string) => {
+    markOperationStarted("capabilities", "saving")
+    settingsMessages.deleteCapability(vscode, kind, name)
   }
 
   return {
@@ -4079,18 +4137,18 @@ export function createSettingsController(props: SettingsViewProps) {
     setServerSettingsBootstrapped,
     selectedEnvironmentApproval,
     setSelectedEnvironmentApproval,
-    toolchainBootstrapped,
-    setToolchainBootstrapped,
-    toolchainEditor,
-    setToolchainEditor,
-    toolchainKindFilter,
-    setToolchainKindFilter,
-    toolchainStatusFilter,
-    setToolchainStatusFilter,
-    toolchainSearch,
-    setToolchainSearch,
-    selectedToolchainId,
-    setSelectedToolchainId,
+    capabilityBootstrapped,
+    setCapabilityBootstrapped,
+    capabilityEditor,
+    setCapabilityEditor,
+    capabilityKindFilter,
+    setCapabilityKindFilter,
+    capabilityStatusFilter,
+    setCapabilityStatusFilter,
+    capabilitySearch,
+    setCapabilitySearch,
+    selectedCapabilityId,
+    setSelectedCapabilityId,
     capabilitySourceType,
     setCapabilitySourceType,
     capabilitySourceUrl,
@@ -4101,8 +4159,8 @@ export function createSettingsController(props: SettingsViewProps) {
     setCapabilityPackageIdHint,
     capabilityPackageIngestState,
     setCapabilityPackageIngestState,
-    toolchainRunSerial,
-    setToolchainRunSerial,
+    capabilityRunSerial,
+    setCapabilityRunSerial,
     serverMaxRunningAgents,
     setServerMaxRunningAgents,
     serverMaxShellsPerAgent,
@@ -4199,19 +4257,19 @@ export function createSettingsController(props: SettingsViewProps) {
     environmentManifest,
     environmentSnapshot,
     environmentError,
-    toolchainError,
-    toolchainActionFeedback,
-    toolchainGroups,
+    capabilityError,
+    capabilityActionFeedback,
+    capabilityGroups,
     environmentCounts,
     environmentEntriesByKind,
-    toolchainDashboardItems,
+    capabilityDashboardItems,
     capabilityViews,
     capabilityDependencyViews,
-    filteredToolchainItems,
-    selectedToolchain,
-    toolchainSummary,
+    filteredCapabilityItems,
+    selectedCapability,
+    capabilitySummary,
     behaviorCatalog,
-    toolchainBehaviorError,
+    capabilityBehaviorError,
     chatCommandCatalogItems,
     mentionProviderCatalogItems,
     uiActionCatalogItems,
@@ -4288,7 +4346,7 @@ export function createSettingsController(props: SettingsViewProps) {
     saveAutoApprovalServerSettings,
     saveIntegrationsSettings,
     saveInfrastructureSettings,
-    saveToolchainsCapabilitySettings,
+    saveCapabilitySettings,
     saveDiagnosticsSettings,
     saveCapabilitySyncSettings,
     saveReasoningDisplay,
@@ -4297,10 +4355,10 @@ export function createSettingsController(props: SettingsViewProps) {
     openPeerDiagnosticsLog,
     clearPeerDiagnosticsLog,
     readToolDiagnosticsStats,
-    refreshToolchains,
-    recordToolchain,
-    enableToolchain,
-    deleteToolchainRecord,
+    refreshCapabilities,
+    recordCapability,
+    enableCapability,
+    deleteCapabilityRecord,
     startCapabilityPackageIngest,
     refreshCapabilityPackageIngestStatus,
     acceptCapabilityPackageDraft,
@@ -4352,13 +4410,13 @@ export function createSettingsController(props: SettingsViewProps) {
     stringArray,
     parseAgentConfigListText,
     formatAgentConfigList,
-    toolchainPayloadFromEditor,
-    emptyToolchainEditor,
-    toolchainEditorFromRecord,
+    capabilityPayloadFromEditor,
+    emptyCapabilityEditor,
+    capabilityEditorFromRecord,
     dashboardItemToRecord,
     placementLabel,
-    toolchainSourceLabel,
-    toolchainStatusBucket,
+    capabilitySourceLabel,
+    capabilityStatusBucket,
     runtimeOptionDescription,
   }
 }

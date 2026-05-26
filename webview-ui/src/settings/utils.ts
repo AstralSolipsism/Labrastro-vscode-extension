@@ -81,7 +81,7 @@ export interface AgentDefinitionDraft {
   credentialRefsText: string
 }
 
-export interface ToolchainEditorState {
+export interface CapabilityEditorState {
   kind: EnvironmentEntryKind
   name: string
   enabled: boolean
@@ -389,7 +389,7 @@ export function agentDefinitionDraftToPayload(draft: AgentDefinitionDraft): Reco
   }
 }
 
-export function toolchainEditorToPayload(editor: ToolchainEditorState): Record<string, unknown> {
+export function capabilityEditorToPayload(editor: CapabilityEditorState): Record<string, unknown> {
   return {
     kind: editor.kind,
     name: editor.name.trim(),

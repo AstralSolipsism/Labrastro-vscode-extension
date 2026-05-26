@@ -136,20 +136,20 @@ export const settingsMessages = {
     port.postMessage({ type: "capabilityPackage.enable", payload: { package_id: packageId, enabled } })
   },
 
-  refreshToolchains(port: SettingsMessagePort): void {
-    port.postMessage({ type: "toolchain.refresh" })
+  refreshCapabilities(port: SettingsMessagePort): void {
+    port.postMessage({ type: "capability.refresh" })
   },
 
-  recordToolchain(port: SettingsMessagePort, kind: string, payload: Record<string, unknown>): void {
-    port.postMessage({ type: "toolchain.record", kind, payload })
+  recordCapability(port: SettingsMessagePort, kind: string, payload: Record<string, unknown>): void {
+    port.postMessage({ type: "capability.record", kind, payload })
   },
 
-  enableToolchain(port: SettingsMessagePort, kind: string, name: string, enabled: boolean): void {
-    port.postMessage({ type: "toolchain.enable", kind, name, enabled })
+  enableCapability(port: SettingsMessagePort, kind: string, name: string, enabled: boolean): void {
+    port.postMessage({ type: "capability.enable", kind, name, enabled })
   },
 
-  deleteToolchain(port: SettingsMessagePort, kind: string, name: string): void {
-    port.postMessage({ type: "toolchain.delete", kind, name })
+  deleteCapability(port: SettingsMessagePort, kind: string, name: string): void {
+    port.postMessage({ type: "capability.delete", kind, name })
   },
 
   providerModels(port: SettingsMessagePort, providerId: string): void {

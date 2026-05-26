@@ -95,9 +95,9 @@ export type HostToWebviewMessageType =
   | "session.state"
   | "session.syncStatus"
   | "startup.metric"
-  | "toolchain.actionResult"
-  | "toolchain.error"
-  | "toolchain.state"
+  | "capability.actionResult"
+  | "capability.error"
+  | "capability.state"
   | "workspace.files"
   | "taskflow.complexity"
   | "taskflow.complexity.error"
@@ -223,10 +223,10 @@ export type WebviewToHostMessageType =
   | "taskflow.complexity.get"
   | "taskflow.complexity.scan"
   | "taskflow.focusChatInteraction"
-  | "toolchain.delete"
-  | "toolchain.enable"
-  | "toolchain.record"
-  | "toolchain.refresh"
+  | "capability.delete"
+  | "capability.enable"
+  | "capability.record"
+  | "capability.refresh"
   | "workspace.files.search"
   | "webviewReady"
 
@@ -303,9 +303,9 @@ const HOST_TO_WEBVIEW_TYPES = new Set<HostToWebviewMessageType>([
   "session.state",
   "session.syncStatus",
   "startup.metric",
-  "toolchain.actionResult",
-  "toolchain.error",
-  "toolchain.state",
+  "capability.actionResult",
+  "capability.error",
+  "capability.state",
   "workspace.files",
   "taskflow.complexity",
   "taskflow.complexity.error",
@@ -426,10 +426,10 @@ const WEBVIEW_TO_HOST_TYPES = new Set<WebviewToHostMessageType>([
   "taskflow.complexity.get",
   "taskflow.complexity.scan",
   "taskflow.focusChatInteraction",
-  "toolchain.delete",
-  "toolchain.enable",
-  "toolchain.record",
-  "toolchain.refresh",
+  "capability.delete",
+  "capability.enable",
+  "capability.record",
+  "capability.refresh",
   "workspace.files.search",
   "webviewReady",
 ])

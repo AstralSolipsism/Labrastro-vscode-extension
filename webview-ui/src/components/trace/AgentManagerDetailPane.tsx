@@ -1,4 +1,4 @@
-﻿import { Component, For, Show, createMemo } from "solid-js"
+import { Component, For, Show, createMemo } from "solid-js"
 import {
   getTraceNavigationIntentLabel,
   getTraceNodeKindLabel,

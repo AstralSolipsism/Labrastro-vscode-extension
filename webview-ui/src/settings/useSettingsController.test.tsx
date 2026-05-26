@@ -56,9 +56,9 @@ function makeServer(overrides: Record<string, unknown> = {}) {
     authAuditState: () => undefined,
     authActionResult: () => undefined,
     authError: () => undefined,
-    toolchainState: () => undefined,
-    toolchainActionResult: () => undefined,
-    toolchainError: () => undefined,
+    capabilityState: () => undefined,
+    capabilityActionResult: () => undefined,
+    capabilityError: () => undefined,
     environmentManifest: () => undefined,
     environmentSnapshot: () => ({}),
     environmentError: () => undefined,
@@ -95,7 +95,7 @@ describe("settings controller capability model", () => {
 
   it("keeps list configuration when dashboard only carries status summary", () => {
     const controller = withController(makeServer({
-      toolchainState: () => ({
+      capabilityState: () => ({
         environment_requirements: [
           {
             id: "envreq:sdk:dotnet",
@@ -125,7 +125,7 @@ describe("settings controller capability model", () => {
       }),
     }), (controller) => controller)
 
-    const dotnet = controller.toolchainDashboardItems().find((item) => item.id === "envreq:sdk:dotnet")
+    const dotnet = controller.capabilityDashboardItems().find((item) => item.id === "envreq:sdk:dotnet")
 
     expect(dotnet).toMatchObject({
       status: "missing",
@@ -142,7 +142,7 @@ describe("settings controller capability model", () => {
 
   it("runs environment checks only for environment requirements", () => {
     const controller = withController(makeServer({
-      toolchainState: () => ({
+      capabilityState: () => ({
         environment_requirements: [
           {
             id: "envreq:executable:gh",
@@ -191,7 +191,7 @@ describe("settings controller capability model", () => {
 
   it("keeps dependency resource kind from envreq id when the list omits kind", () => {
     const controller = withController(makeServer({
-      toolchainState: () => ({
+      capabilityState: () => ({
         environment_requirements: [
           { id: "envreq:sdk:dotnet", name: "dotnet" },
           { id: "envreq:gpu:cuda", name: "cuda" },
@@ -269,7 +269,7 @@ describe("settings controller capability model", () => {
 
   it("exposes MCP servers and Skills as capabilities while dependencies stay separate", () => {
     const controller = withController(makeServer({
-      toolchainState: () => ({
+      capabilityState: () => ({
         environment_requirements: [
           { id: "envreq:executable:gh", kind: "executable", name: "gh", command: "gh" },
         ],

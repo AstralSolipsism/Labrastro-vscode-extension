@@ -1,4 +1,4 @@
-﻿import type * as vscode from "vscode"
+import type * as vscode from "vscode"
 import type { ConnectionState, LabrastroRemoteClient } from "../LabrastroRemoteClient"
 import type { PostMessage } from "../WebviewBus"
 import type { WebviewToHostMessage } from "../protocol/messages"
@@ -46,7 +46,7 @@ export interface AdminCoordinatorOptions {
   postChatConfigState: (post: PostMessage) => Promise<void>
   postGithubState: (post: PostMessage) => Promise<void>
   refreshBackendFeatures: (post?: PostMessage) => Promise<void>
-  refreshToolchainState: (post: PostMessage) => Promise<void>
+  refreshCapabilityState: (post: PostMessage) => Promise<void>
   refreshEnvironmentManifest: (post: PostMessage) => Promise<void>
   broadcastState: (payload: Record<string, unknown>) => void
   runAdminAction: (
@@ -99,7 +99,7 @@ export class AdminCoordinator {
           await this.refreshModularAdminState(post)
           await this.postModelCapabilitiesStatus(post)
           await this.options.refreshBackendFeatures(post)
-          await this.options.refreshToolchainState(post)
+          await this.options.refreshCapabilityState(post)
           await this.options.refreshEnvironmentManifest(post)
         } catch (error) {
           const failureMessage = isRemoteError(error)
@@ -352,7 +352,7 @@ export class AdminCoordinator {
             payload: await this.options.client.capabilityPackageDraftAccept(objectValue(message.payload)),
           })
           await this.postServerSettingsState(post)
-          await this.options.refreshToolchainState(post)
+          await this.options.refreshCapabilityState(post)
           await this.options.refreshEnvironmentManifest(post)
         } catch (error) {
           post({ type: "capabilityPackage.error", message: adminErrorMessage(error) })
@@ -366,7 +366,7 @@ export class AdminCoordinator {
             payload: await this.options.client.capabilityPackageDelete(objectValue(message.payload)),
           })
           await this.postServerSettingsState(post)
-          await this.options.refreshToolchainState(post)
+          await this.options.refreshCapabilityState(post)
           await this.options.refreshEnvironmentManifest(post)
         } catch (error) {
           post({ type: "capabilityPackage.error", message: adminErrorMessage(error) })
@@ -380,7 +380,7 @@ export class AdminCoordinator {
             payload: await this.options.client.capabilityPackageEnable(objectValue(message.payload)),
           })
           await this.postServerSettingsState(post)
-          await this.options.refreshToolchainState(post)
+          await this.options.refreshCapabilityState(post)
           await this.options.refreshEnvironmentManifest(post)
         } catch (error) {
           post({ type: "capabilityPackage.error", message: adminErrorMessage(error) })
