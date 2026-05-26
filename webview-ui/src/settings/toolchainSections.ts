@@ -4,7 +4,6 @@ export type ToolchainSection =
   | "packages"
   | "userActions"
   | "agentTools"
-  | "ingest"
   | "logs"
 
 export const TOOLCHAIN_SECTIONS: Array<{ id: ToolchainSection; label: string; icon: string }> = [
@@ -13,6 +12,5 @@ export const TOOLCHAIN_SECTIONS: Array<{ id: ToolchainSection; label: string; ic
   { id: "packages", label: "能力包", icon: "package" },
   { id: "userActions", label: "用户指令", icon: "terminal" },
   { id: "agentTools", label: "Agent Tools", icon: "tools" },
-  { id: "ingest", label: "导入", icon: "cloud-download" },
   { id: "logs", label: "运行日志", icon: "output" },
 ]

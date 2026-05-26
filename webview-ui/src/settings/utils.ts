@@ -10,7 +10,17 @@ export type ProviderKind =
   | "glm"
   | "zenmux"
   | "custom"
-export type EnvironmentEntryKind = "cli" | "mcp" | "skill"
+export type EnvironmentRequirementKind =
+  | "executable"
+  | "runtime"
+  | "sdk"
+  | "service"
+  | "env_var"
+  | "credential"
+  | "path"
+  | "project_file"
+  | "container"
+export type EnvironmentEntryKind = "environment_requirement" | "mcp" | "unsupported"
 export type EnvironmentSnapshotStatus = "idle" | "running" | "completed" | "error" | "canceled"
 export type ConnectionNoticeTone = "success" | "warning" | "error" | "info"
 
@@ -399,7 +409,7 @@ export function normalizeEnvironmentSnapshot(value: unknown): {
   running: boolean
   status: EnvironmentSnapshotStatus
   summary: string
-  entries: Array<{ id: string; kind: EnvironmentEntryKind; name: string }>
+  entries: Array<{ id: string; kind: EnvironmentEntryKind; requirementKind: EnvironmentRequirementKind | "unsupported"; name: string }>
 } {
   const item = objectValue(value)
   return {
@@ -407,11 +417,12 @@ export function normalizeEnvironmentSnapshot(value: unknown): {
     status: normalizeSnapshotStatus(item.status),
     summary: stringValue(item.summary, "尚未运行。"),
     entries: Array.isArray(item.entries)
-      ? item.entries.map(objectValue).map((entry) => ({
-          id: stringValue(entry.id),
-          kind: normalizeEntryKind(entry.kind),
-          name: stringValue(entry.name),
-        }))
+        ? item.entries.map(objectValue).map((entry) => ({
+            id: stringValue(entry.id),
+            kind: normalizeEntryKind(entry.kind),
+            requirementKind: normalizeRequirementKind(entry.requirement_kind || entry.resource_kind || entry.kind),
+            name: stringValue(entry.name),
+          }))
       : [],
   }
 }
@@ -450,7 +461,23 @@ function normalizeSnapshotStatus(value: unknown): EnvironmentSnapshotStatus {
 
 function normalizeEntryKind(value: unknown): EnvironmentEntryKind {
   const kind = stringValue(value)
-  return kind === "mcp" || kind === "skill" ? kind : "cli"
+  if (kind === "environment_requirement" || kind === "mcp") return kind
+  return "unsupported"
+}
+
+function normalizeRequirementKind(value: unknown): EnvironmentRequirementKind | "unsupported" {
+  const kind = stringValue(value)
+  return [
+    "executable",
+    "runtime",
+    "sdk",
+    "service",
+    "env_var",
+    "credential",
+    "path",
+    "project_file",
+    "container",
+  ].includes(kind) ? kind as EnvironmentRequirementKind : "unsupported"
 }
 
 function objectValue(value: unknown): Record<string, unknown> {

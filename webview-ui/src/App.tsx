@@ -44,7 +44,7 @@ interface EnvironmentRunRequest {
   id: string
   mode: "check" | "configure"
   executionMode: "serial" | "combined"
-  items: Array<{ id: string; name: string; kind: "cli" | "mcp" | "skill" }>
+  items: Array<{ id: string; name: string; kind: "environment_requirement" | "mcp" | "unsupported" }>
 }
 
 const RouteLoading: Component<{ title: string }> = (props) => (

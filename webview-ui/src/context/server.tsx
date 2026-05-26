@@ -64,7 +64,6 @@ interface ServerContextValue {
   toolchainState: () => Record<string, unknown> | undefined
   toolchainActionResult: () => Record<string, unknown> | undefined
   toolchainError: () => string | undefined
-  toolchainIngestState: () => Record<string, unknown>
   environmentManifest: () => Record<string, unknown> | undefined
   environmentSnapshot: () => Record<string, unknown>
   environmentError: () => string | undefined
@@ -76,12 +75,6 @@ interface ServerContextValue {
 }
 
 const ServerContext = createContext<ServerContextValue>()
-
-function ingestLogs(value: unknown): Record<string, unknown>[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
-    : []
-}
 
 function objectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {}
@@ -157,11 +150,6 @@ export const ServerProvider: ParentComponent = (props) => {
   const [toolchainState, setToolchainState] = createSignal<Record<string, unknown> | undefined>()
   const [toolchainActionResult, setToolchainActionResult] = createSignal<Record<string, unknown> | undefined>()
   const [toolchainError, setToolchainError] = createSignal<string | undefined>()
-  const [toolchainIngestState, setToolchainIngestState] = createSignal<Record<string, unknown>>({
-    running: false,
-    status: "idle",
-    logs: [],
-  })
   const [environmentManifest, setEnvironmentManifest] = createSignal<Record<string, unknown> | undefined>()
   const [environmentSnapshot, setEnvironmentSnapshot] = createSignal<Record<string, unknown>>({})
   const [environmentError, setEnvironmentError] = createSignal<string | undefined>()
@@ -353,53 +341,6 @@ export const ServerProvider: ParentComponent = (props) => {
       if (msg.type === "toolchain.error") {
         setToolchainError(typeof msg.message === "string" ? msg.message : "Toolchain request failed")
       }
-      if (msg.type === "toolchain.ingest.started" && typeof msg.payload === "object" && msg.payload) {
-        setToolchainIngestState({
-          ...(msg.payload as Record<string, unknown>),
-          running: true,
-          logs: [],
-        })
-        setToolchainError(undefined)
-      }
-      if (msg.type === "toolchain.ingest.event" && typeof msg.payload === "object" && msg.payload) {
-        setToolchainIngestState((current) => ({
-          ...current,
-          running: true,
-          logs: [
-            ...ingestLogs(current.logs),
-            msg.payload as Record<string, unknown>,
-          ].slice(-80),
-        }))
-      }
-      if (msg.type === "toolchain.ingest.result" && typeof msg.payload === "object" && msg.payload) {
-        setToolchainIngestState((current) => ({
-          ...current,
-          ...(msg.payload as Record<string, unknown>),
-          running: false,
-          logs: ingestLogs(current.logs),
-        }))
-        setToolchainError(undefined)
-      }
-      if (msg.type === "toolchain.ingest.error") {
-        const payload = typeof msg.payload === "object" && msg.payload
-          ? msg.payload as Record<string, unknown>
-          : { message: typeof msg.message === "string" ? msg.message : "Toolchain ingest failed" }
-        setToolchainIngestState((current) => ({
-          ...current,
-          ...payload,
-          running: false,
-          error: typeof payload.message === "string" ? payload.message : "Toolchain ingest failed",
-          logs: [
-            ...ingestLogs(current.logs),
-            {
-              level: "error",
-              message: typeof payload.message === "string" ? payload.message : "Toolchain ingest failed",
-              createdAt: new Date().toISOString(),
-            },
-          ].slice(-80),
-        }))
-        setToolchainError(typeof payload.message === "string" ? payload.message : "Toolchain ingest failed")
-      }
       if (msg.type === "environment.manifest" && typeof msg.payload === "object" && msg.payload) {
         setEnvironmentManifest(msg.payload as Record<string, unknown>)
         setEnvironmentError(undefined)
@@ -479,7 +420,6 @@ export const ServerProvider: ParentComponent = (props) => {
     toolchainState,
     toolchainActionResult,
     toolchainError,
-    toolchainIngestState,
     environmentManifest,
     environmentSnapshot,
     environmentError,

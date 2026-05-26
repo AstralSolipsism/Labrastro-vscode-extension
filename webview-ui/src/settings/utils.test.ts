@@ -195,12 +195,12 @@ describe("settings utils", () => {
     })
   })
 
-  it("normalizes environment snapshots defensively", () => {
+  it("normalizes environment snapshots without downgrading requirement kinds to cli", () => {
     expect(normalizeEnvironmentSnapshot({
       running: true,
       status: "completed",
       entries: [
-        { id: "node", kind: "cli", name: "Node.js" },
+        { id: "envreq:executable:gh", kind: "environment_requirement", requirement_kind: "executable", name: "gh" },
         { id: "docs", kind: "unexpected", name: "Docs" },
       ],
     })).toEqual({
@@ -208,8 +208,8 @@ describe("settings utils", () => {
       status: "completed",
       summary: "尚未运行。",
       entries: [
-        { id: "node", kind: "cli", name: "Node.js" },
-        { id: "docs", kind: "cli", name: "Docs" },
+        { id: "envreq:executable:gh", kind: "environment_requirement", requirementKind: "executable", name: "gh" },
+        { id: "docs", kind: "unsupported", requirementKind: "unsupported", name: "Docs" },
       ],
     })
   })

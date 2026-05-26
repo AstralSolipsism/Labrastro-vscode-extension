@@ -136,14 +136,6 @@ export const settingsMessages = {
     port.postMessage({ type: "capabilityPackage.enable", payload: { package_id: packageId, enabled } })
   },
 
-  runToolchainIngest(port: SettingsMessagePort, payload: Record<string, unknown>): void {
-    port.postMessage({ type: "toolchain.ingest.run", payload })
-  },
-
-  cancelToolchainIngest(port: SettingsMessagePort): void {
-    port.postMessage({ type: "toolchain.ingest.cancel" })
-  },
-
   refreshToolchains(port: SettingsMessagePort): void {
     port.postMessage({ type: "toolchain.refresh" })
   },
