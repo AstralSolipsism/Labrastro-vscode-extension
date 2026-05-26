@@ -346,24 +346,45 @@ export class AdminCoordinator {
         }
         return true
       case "capabilityPackage.draft.accept":
-        if (await this.options.runAdminAction(post, () => this.options.client.capabilityPackageDraftAccept(objectValue(message.payload)))) {
+        try {
+          post({
+            type: "capabilityPackage.actionResult",
+            payload: await this.options.client.capabilityPackageDraftAccept(objectValue(message.payload)),
+          })
           await this.postServerSettingsState(post)
           await this.options.refreshToolchainState(post)
           await this.options.refreshEnvironmentManifest(post)
+        } catch (error) {
+          post({ type: "capabilityPackage.error", message: adminErrorMessage(error) })
+          await this.refreshConnectionOnAuthBoundary(error, post)
         }
         return true
       case "capabilityPackage.delete":
-        if (await this.options.runAdminAction(post, () => this.options.client.capabilityPackageDelete(objectValue(message.payload)))) {
+        try {
+          post({
+            type: "capabilityPackage.actionResult",
+            payload: await this.options.client.capabilityPackageDelete(objectValue(message.payload)),
+          })
           await this.postServerSettingsState(post)
           await this.options.refreshToolchainState(post)
           await this.options.refreshEnvironmentManifest(post)
+        } catch (error) {
+          post({ type: "capabilityPackage.error", message: adminErrorMessage(error) })
+          await this.refreshConnectionOnAuthBoundary(error, post)
         }
         return true
       case "capabilityPackage.enable":
-        if (await this.options.runAdminAction(post, () => this.options.client.capabilityPackageEnable(objectValue(message.payload)))) {
+        try {
+          post({
+            type: "capabilityPackage.actionResult",
+            payload: await this.options.client.capabilityPackageEnable(objectValue(message.payload)),
+          })
           await this.postServerSettingsState(post)
           await this.options.refreshToolchainState(post)
           await this.options.refreshEnvironmentManifest(post)
+        } catch (error) {
+          post({ type: "capabilityPackage.error", message: adminErrorMessage(error) })
+          await this.refreshConnectionOnAuthBoundary(error, post)
         }
         return true
       case "openFile":

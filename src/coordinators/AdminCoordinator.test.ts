@@ -78,6 +78,9 @@ function coordinator() {
         ok: true,
         model_profiles: [],
       })),
+      capabilityPackageDraftAccept: vi.fn(async () => ({ ok: true })),
+      capabilityPackageDelete: vi.fn(async () => ({ ok: true })),
+      capabilityPackageEnable: vi.fn(async () => ({ ok: true })),
     },
     context: {
       workspaceState: {
@@ -355,6 +358,26 @@ describe("AdminCoordinator", () => {
     })
     expect(options.postModelProfilesState).toHaveBeenCalledWith(post)
     expect(options.postChatConfigState).toHaveBeenCalledWith(post)
+  })
+
+  it("surfaces capability package environment requirement validation messages", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    options.client.capabilityPackageDraftAccept.mockRejectedValue(new RemoteError(
+      400,
+      "invalid_environment_requirement",
+      "HTTP 400 invalid_environment_requirement",
+      { error: "invalid_environment_requirement", message: "invalid environment requirement kind: runttime" },
+    ))
+
+    await expect(subject.handleMessage({ type: "capabilityPackage.draft.accept", payload: { draft: { id: "bad" } } }, post)).resolves.toBe(true)
+
+    expect(options.client.capabilityPackageDraftAccept).toHaveBeenCalledWith({ draft: { id: "bad" } })
+    expect(post).toHaveBeenCalledWith({
+      type: "capabilityPackage.error",
+      message: "HTTP 400 invalid_environment_requirement: invalid environment requirement kind: runttime",
+    })
+    expect(options.refreshToolchainState).not.toHaveBeenCalled()
   })
 
   it("refreshes connection state when admin-scoped capability calls lose auth", async () => {

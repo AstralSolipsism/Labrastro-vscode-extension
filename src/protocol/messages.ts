@@ -97,10 +97,6 @@ export type HostToWebviewMessageType =
   | "startup.metric"
   | "toolchain.actionResult"
   | "toolchain.error"
-  | "toolchain.ingest.error"
-  | "toolchain.ingest.event"
-  | "toolchain.ingest.result"
-  | "toolchain.ingest.started"
   | "toolchain.state"
   | "workspace.files"
   | "taskflow.complexity"
@@ -229,8 +225,6 @@ export type WebviewToHostMessageType =
   | "taskflow.focusChatInteraction"
   | "toolchain.delete"
   | "toolchain.enable"
-  | "toolchain.ingest.cancel"
-  | "toolchain.ingest.run"
   | "toolchain.record"
   | "toolchain.refresh"
   | "workspace.files.search"
@@ -311,10 +305,6 @@ const HOST_TO_WEBVIEW_TYPES = new Set<HostToWebviewMessageType>([
   "startup.metric",
   "toolchain.actionResult",
   "toolchain.error",
-  "toolchain.ingest.error",
-  "toolchain.ingest.event",
-  "toolchain.ingest.result",
-  "toolchain.ingest.started",
   "toolchain.state",
   "workspace.files",
   "taskflow.complexity",
@@ -438,8 +428,6 @@ const WEBVIEW_TO_HOST_TYPES = new Set<WebviewToHostMessageType>([
   "taskflow.focusChatInteraction",
   "toolchain.delete",
   "toolchain.enable",
-  "toolchain.ingest.cancel",
-  "toolchain.ingest.run",
   "toolchain.record",
   "toolchain.refresh",
   "workspace.files.search",

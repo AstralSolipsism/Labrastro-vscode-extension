@@ -9,8 +9,6 @@ export interface EnvironmentCoordinatorOptions {
   agentRunSubmitPayload: (payload: Record<string, unknown>) => Record<string, unknown>
   refreshToolchainState: (post: PostMessage) => Promise<void>
   refreshEnvironmentManifest: (post: PostMessage) => Promise<void>
-  startToolchainIngest: (input: Record<string, unknown>, post: PostMessage) => Promise<void>
-  cancelToolchainIngest: (post: PostMessage) => Promise<void>
   startEnvironmentRun: (
     mode: "check" | "configure",
     post: PostMessage,
@@ -37,7 +35,6 @@ export class EnvironmentCoordinator {
     logs: [],
   }
   private activeRun: Record<string, unknown> | undefined
-  private activeIngestChatId: string | undefined
 
   constructor(private readonly options: EnvironmentCoordinatorOptions) {}
 
@@ -71,14 +68,6 @@ export class EnvironmentCoordinator {
 
   set activeEnvironmentRun(value: Record<string, unknown> | undefined) {
     this.activeRun = value
-  }
-
-  get activeToolchainIngestChatId(): string | undefined {
-    return this.activeIngestChatId
-  }
-
-  set activeToolchainIngestChatId(value: string | undefined) {
-    this.activeIngestChatId = value
   }
 
   isEnvironmentRunActive(): boolean {
@@ -124,46 +113,54 @@ export class EnvironmentCoordinator {
         return true
       case "toolchain.record":
         if (
-          await this.options.runToolchainAction(post, () =>
-            this.options.client.toolchainRecord(
-              stringValue(message.kind) || "",
-              objectValue(message.payload)
-            )
-          )
+          await this.options.runToolchainAction(post, () => {
+            const payload = objectValue(message.payload)
+            const entryType = capabilityEntryType(message.kind, payload)
+            if (entryType === "environment_requirement") {
+              return this.options.client.environmentRequirementRecord(payload)
+            }
+            if (entryType === "mcp") {
+              return this.options.client.mcpServerRecord(payload)
+            }
+            throw new Error(`unsupported capability entry type: ${stringValue(message.kind) || ""}`)
+          })
         ) {
           await this.refreshToolchainAndManifest(post)
         }
         return true
       case "toolchain.delete":
         if (
-          await this.options.runToolchainAction(post, () =>
-            this.options.client.toolchainDelete(
-              stringValue(message.kind) || "",
-              stringValue(message.name) || ""
-            )
-          )
+          await this.options.runToolchainAction(post, () => {
+            const entryType = capabilityEntryType(message.kind)
+            const name = stringValue(message.name) || ""
+            if (entryType === "environment_requirement") {
+              return this.options.client.environmentRequirementDelete(name)
+            }
+            if (entryType === "mcp") {
+              return this.options.client.mcpServerDelete(name)
+            }
+            throw new Error(`unsupported capability entry type: ${stringValue(message.kind) || ""}`)
+          })
         ) {
           await this.refreshToolchainAndManifest(post)
         }
         return true
       case "toolchain.enable":
         if (
-          await this.options.runToolchainAction(post, () =>
-            this.options.client.toolchainEnable(
-              stringValue(message.kind) || "",
-              stringValue(message.name) || "",
-              Boolean(message.enabled)
-            )
-          )
+          await this.options.runToolchainAction(post, () => {
+            const entryType = capabilityEntryType(message.kind)
+            const name = stringValue(message.name) || ""
+            if (entryType === "environment_requirement") {
+              return this.options.client.environmentRequirementEnable(name, Boolean(message.enabled))
+            }
+            if (entryType === "mcp") {
+              return this.options.client.mcpServerEnable(name, Boolean(message.enabled))
+            }
+            throw new Error(`unsupported capability entry type: ${stringValue(message.kind) || ""}`)
+          })
         ) {
           await this.refreshToolchainAndManifest(post)
         }
-        return true
-      case "toolchain.ingest.run":
-        void this.options.startToolchainIngest(objectValue(message.payload), post)
-        return true
-      case "toolchain.ingest.cancel":
-        await this.options.cancelToolchainIngest(post)
         return true
       case "environment.run":
         if (message.mode === "check" || message.mode === "configure") {
@@ -191,4 +188,27 @@ export class EnvironmentCoordinator {
       await this.options.refreshEnvironmentManifest(post)
     }
   }
+}
+
+function capabilityEntryType(
+  value: unknown,
+  payload: Record<string, unknown> = {},
+): "environment_requirement" | "mcp" | "" {
+  const text = stringValue(value) || stringValue(payload.entry_type) || stringValue(payload.entryType) || stringValue(payload.kind) || ""
+  if (text === "environment_requirement") return "environment_requirement"
+  if (text === "mcp" || text === "mcp_server") return "mcp"
+  if ([
+    "executable",
+    "runtime",
+    "sdk",
+    "service",
+    "env_var",
+    "credential",
+    "path",
+    "project_file",
+    "container",
+  ].includes(text)) {
+    return "environment_requirement"
+  }
+  return ""
 }
