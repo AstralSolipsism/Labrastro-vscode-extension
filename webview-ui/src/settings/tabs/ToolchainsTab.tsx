@@ -7,11 +7,17 @@ import { StatusBadge } from "../components/StatusBadge"
 import { ChoiceMultiSelect } from "../components/ChoiceMultiSelect"
 import { agentToolPermissionLabel, agentToolPermissionTitle } from "../toolchainCatalogLabels"
 import { TOOLCHAIN_SECTIONS, type ToolchainSection } from "../toolchainSections"
+import {
+  groupCapabilityPackageComponents,
+  type CapabilityComponentGroups,
+  type CapabilityComponentView,
+  type CapabilityView,
+} from "../capabilityPackageView"
 import type { SettingsController } from "../useSettingsController"
 
 type EnvironmentEntryKind = "environment_requirement" | "mcp"
 type ToolchainKind = EnvironmentEntryKind
-type ToolchainKindFilter = "all" | ToolchainKind
+type CapabilityKindFilter = "all" | "mcp_server" | "skill"
 type ToolchainResourceKind =
   | "executable"
   | "runtime"
@@ -41,7 +47,7 @@ interface CapabilityPackageView {
   name: string
   id: string
   description: string
-  components: string[]
+  components: Array<string | Record<string, unknown>>
   enabled: boolean
   status: string
   source: Record<string, unknown>
@@ -62,6 +68,13 @@ function stringArrayValue(value: unknown): string[] {
     : []
 }
 
+function componentListValue(value: unknown): Array<string | Record<string, unknown>> {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is string | Record<string, unknown> =>
+    typeof item === "string" || Boolean(item && typeof item === "object" && !Array.isArray(item))
+  )
+}
+
 function parseListText(value: string): string[] {
   return value
     .split(/[\n,]+/)
@@ -71,7 +84,6 @@ function parseListText(value: string): string[] {
 
 export const ToolchainsTab: Component<TabProps> = (props) => {
   const {
-    environmentEntriesByKind,
     environmentStatusTone,
     environmentStatusLabel,
     formatTimestamp,
@@ -101,23 +113,21 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
     setSelectedEnvironmentApproval,
     replyEnvironmentApproval,
     rememberEnvironmentApprovalDecision,
-    toolchainSummary,
     toolchainBehaviorError,
     chatCommandCatalogItems,
     mentionProviderCatalogItems,
     agentToolCatalogItems,
     toolchainStatusFilter,
     setToolchainStatusFilter,
-    toolchainKindFilter,
-    setToolchainKindFilter,
     toolchainSearch,
     setToolchainSearch,
-    filteredToolchainItems,
+    toolchainDashboardItems,
+    capabilityViews,
+    capabilityDependencyViews,
     selectedToolchainId,
     setSelectedToolchainId,
     dashboardItemToRecord,
     toolchainSourceLabel,
-    selectedToolchain,
     placementLabel,
     objectValue,
     numberValue,
@@ -137,7 +147,9 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
     enableCapabilityPackage,
   } = props.controller
 
-  const [section, setSection] = createSignal<ToolchainSection>("dashboard")
+  const [section, setSection] = createSignal<ToolchainSection>("capabilities")
+  const [capabilityKindFilter, setCapabilityKindFilter] = createSignal<CapabilityKindFilter>("all")
+  const [selectedCapabilityId, setSelectedCapabilityId] = createSignal("")
   const [capabilityDirty, setCapabilityDirty] = createSignal(false)
   const [capabilitySaved, setCapabilitySaved] = createSignal(false)
   const [skillsEnabled, setSkillsEnabled] = createSignal(true)
@@ -159,7 +171,7 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
           id,
           name: stringValue(item.name, id),
           description: stringValue(item.description),
-          components: stringArrayValue(item.components),
+          components: componentListValue(item.components),
           enabled: item.enabled !== false,
           status: stringValue(item.status, "installed"),
           source: objectValue(item.source),
@@ -189,6 +201,102 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
     const draft = currentCapabilityDraft()
     return Boolean(stringValue(draft.id) && currentDraftComponents().length > 0)
   })
+  const skillDisplayOptions = () => ({
+    skillsEnabled: skillsEnabled(),
+    disabledSkills: parseListText(skillsDisabledText()),
+  })
+  const currentDraftComponentGroups = createMemo(() =>
+    groupCapabilityPackageComponents(currentDraftComponents(), {}, skillDisplayOptions())
+  )
+  const packageComponentGroups = (pkg: CapabilityPackageView) =>
+    groupCapabilityPackageComponents(pkg.components, capabilityComponents(), skillDisplayOptions())
+  const dependencyItems = createMemo<any[]>(() => capabilityDependencyViews() as any[])
+  const dependencyById = createMemo(() => new Map(dependencyItems().map((item) => [item.id, item])))
+  const capabilityStatusLabel = (status: string) => {
+    if (status === "available") return "已就绪"
+    if (status === "missing") return "缺失"
+    if (status === "disabled") return "已禁用"
+    if (status === "global_disabled") return "全局关闭"
+    if (status === "stopped") return "已停用"
+    if (status === "enabled") return "启用"
+    return status || "未检查"
+  }
+  const capabilityStatusTone = (status: string) => {
+    if (status === "available" || status === "enabled") return "success"
+    if (status === "missing") return "error"
+    if (status === "disabled" || status === "global_disabled" || status === "stopped") return "muted"
+    return undefined
+  }
+  const dependencyStatusBucket = (status: string) => {
+    if (status === "available" || status === "configured") return "ready"
+    if (status === "missing") return "missing"
+    if (status === "stopped") return "stopped"
+    if (status === "awaiting_approval" || status === "needs_review" || status === "parse_failed") return "awaiting"
+    return "all"
+  }
+  const filteredCapabilityItems = createMemo(() => {
+    const query = toolchainSearch().trim().toLowerCase()
+    return (capabilityViews() as CapabilityView[])
+      .filter((item) => capabilityKindFilter() === "all" || item.kind === capabilityKindFilter())
+      .filter((item) => {
+        if (!query) return true
+        return [
+          item.name,
+          item.label,
+          item.description,
+          item.summary,
+          ...item.sourcePackageIds,
+          ...item.dependencyIds,
+          item.skill?.pathHint || "",
+          item.skill?.sourcePath || "",
+          item.mcp?.command || "",
+          item.mcp?.url || "",
+        ].join(" ").toLowerCase().includes(query)
+      })
+  })
+  const selectedCapability = createMemo(() =>
+    (capabilityViews() as CapabilityView[]).find((item) => item.id === selectedCapabilityId()) ||
+    filteredCapabilityItems()[0] ||
+    (capabilityViews() as CapabilityView[])[0]
+  )
+  const filteredDependencyItems = createMemo(() => {
+    const query = toolchainSearch().trim().toLowerCase()
+    return dependencyItems().filter((item) => {
+      if (toolchainStatusFilter() !== "all" && dependencyStatusBucket(String(item.status)) !== toolchainStatusFilter()) return false
+      if (!query) return true
+      return [
+        item.name,
+        item.alias,
+        item.source,
+        item.repo_url,
+        item.command,
+        ...((item.docs || []) as Array<{ title?: string; url?: string }>).map((doc) => `${stringValue(doc.title)} ${stringValue(doc.url)}`),
+      ].join(" ").toLowerCase().includes(query)
+    })
+  })
+  const selectedDependency = createMemo(() =>
+    dependencyItems().find((item) => item.id === selectedToolchainId()) ||
+    filteredDependencyItems()[0] ||
+    dependencyItems()[0]
+  )
+  const dependencySummary = createMemo(() => dependencyItems().reduce((summary, item) => {
+    const bucket = dependencyStatusBucket(String(item.status))
+    if (bucket === "ready") summary.ready += 1
+    if (bucket === "missing") summary.missing += 1
+    if (bucket === "stopped") summary.stopped += 1
+    if (bucket === "awaiting") summary.awaiting += 1
+    return summary
+  }, { ready: 0, missing: 0, stopped: 0, awaiting: 0 }))
+  const toggleSkillDisabled = (capability: CapabilityView) => {
+    if (capability.kind !== "skill") return
+    const disabled = new Set(parseListText(skillsDisabledText()))
+    const nextDisabled = capability.skill?.disabled !== true
+    disabled.delete(capability.id)
+    disabled.delete(capability.name)
+    if (nextDisabled) disabled.add(capability.name)
+    setSkillsDisabledText([...disabled].sort().join("\n"))
+    markCapabilityDirty()
+  }
   const registeredSkillNames = createMemo(() => Object.values(capabilityComponents())
     .map(objectValue)
     .filter((item) => stringValue(item.kind) === "skill")
@@ -209,7 +317,7 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
     if (source === "settings_ui") return "设置页"
     if (source === "workspace") return "工作区"
     if (source === "config") return "配置"
-    if (source === "behavior_catalog") return "行为目录"
+    if (source === "behavior_catalog") return "行为管理"
     return source || "未知"
   }
   const resourceKindLabel = (kind: string) => {
@@ -224,9 +332,11 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
       case "project_file": return "Project File"
       case "container": return "Container"
       case "mcp_server": return "MCP Server"
-      default: return "Unsupported"
+      default: return kind ? kind.replace(/_/g, " ").replace(/\b\w/g, (match) => match.toUpperCase()) : "Unsupported"
     }
   }
+  const displayResourceKind = (item: any) =>
+    item.resourceKind && item.resourceKind !== "unsupported" ? item.resourceKind : item.rawKind || item.kind
   const commandSemanticsLabel = (command: {
     supportsArgs: boolean
     argsHint: string
@@ -306,27 +416,236 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
     return url || type
   }
 
-  const componentRecordSummary = (component: Record<string, unknown>, fallbackName: string) => {
-    const name = stringValue(component.name, fallbackName)
-    const kind = stringValue(component.kind)
-    if (kind === "environment_requirement") {
-      const config = objectValue(component.config)
-      const resourceKind = stringValue(config.kind || config.resource_kind || component.resource_kind, "runtime")
-      const requirements = objectValue(config.requirements || component.requirements)
-      const requirementText = Object.entries(requirements)
-        .map(([key, value]) => `${key} ${String(value)}`.trim())
-        .join(", ")
-      const command = stringValue(config.command || component.command)
-      return [
-        resourceKindLabel(resourceKind),
-        name,
-        requirementText,
-        command ? `command=${command}` : "",
-      ].filter(Boolean).join(" · ")
-    }
-    return kind ? `${kind.toUpperCase()} · ${name}` : name
+  const skillStatusLabel = (status?: string) => {
+    if (status === "global_disabled") return "全局关闭"
+    if (status === "disabled") return "已禁用"
+    return "启用"
   }
-  const componentSummary = (componentId: string) => componentRecordSummary(objectValue(capabilityComponents()[componentId]), componentId)
+  const skillComponentDetail = (component: CapabilityComponentView) => [
+    component.packageIds.length ? `来源能力包：${component.packageIds.join("、")}` : "",
+    component.pathHint ? `path=${component.pathHint}` : "",
+    component.sourcePath ? `source=${component.sourcePath}` : "",
+    component.kind === "skill" ? `状态：${skillStatusLabel(component.skillStatus)}` : "",
+  ].filter(Boolean).join(" · ")
+  const componentConfig = (component: CapabilityComponentView) => objectValue(component.raw.config)
+  const componentTextField = (component: CapabilityComponentView, field: string) =>
+    stringValue(componentConfig(component)[field] || component.raw[field])
+  const componentDocs = (component: CapabilityComponentView) => {
+    const docs = componentConfig(component).docs || component.raw.docs
+    return Array.isArray(docs)
+      ? docs.map(objectValue).map((doc) => stringValue(doc.title || doc.url)).filter(Boolean)
+      : []
+  }
+  const componentEvidenceItems = (component: CapabilityComponentView) => {
+    const evidence = componentConfig(component).evidence || component.raw.evidence
+    return Array.isArray(evidence)
+      ? evidence.map(objectValue).map((item) => stringValue(item.title || item.field || item.url || item.excerpt)).filter(Boolean)
+      : []
+  }
+  const skillSupportDetails = (component: CapabilityComponentView) => {
+    if (component.kind !== "skill") return []
+    const installPrompt = componentTextField(component, "install_prompt")
+    const verifyPrompt = componentTextField(component, "verify_prompt")
+    return [
+      installPrompt ? `安装：${installPrompt}` : "",
+      verifyPrompt ? `验证：${verifyPrompt}` : "",
+      componentDocs(component).length ? `文档：${componentDocs(component).join("、")}` : "",
+      componentEvidenceItems(component).length ? `证据：${componentEvidenceItems(component).join("、")}` : "",
+    ].filter(Boolean)
+  }
+  const renderCapabilityComponentCards = (items: CapabilityComponentView[]) => (
+    <div class="capability-component-list">
+      <For each={items}>
+        {(component) => (
+          <div class="capability-component-card">
+            <div>
+              <strong>{component.summary}</strong>
+              <Show when={skillComponentDetail(component)}>
+                <small>{skillComponentDetail(component)}</small>
+              </Show>
+              <Show when={skillSupportDetails(component).length}>
+                <ul class="capability-text-list">
+                  <For each={skillSupportDetails(component)}>
+                    {(detail) => <li>{detail}</li>}
+                  </For>
+                </ul>
+              </Show>
+            </div>
+            <StatusBadge tone={component.skillStatus === "disabled" || component.skillStatus === "global_disabled" ? "muted" : undefined}>
+              {component.kind === "skill" ? skillStatusLabel(component.skillStatus) : component.label}
+            </StatusBadge>
+          </div>
+        )}
+      </For>
+    </div>
+  )
+  const renderComponentGroups = (groups: CapabilityComponentGroups) => (
+    <>
+      <div class="toolchain-detail-section">
+        <span>提供的能力</span>
+        <Show when={groups.capabilities.length} fallback={<small>未声明 Skill、MCP 或 Prompt 等能力。</small>}>
+          {renderCapabilityComponentCards(groups.capabilities)}
+        </Show>
+      </div>
+      <div class="toolchain-detail-section">
+        <span>所需能力依赖</span>
+        <Show when={groups.dependencies.length} fallback={<small>未声明 CLI、SDK、凭据或路径等依赖。</small>}>
+          {renderCapabilityComponentCards(groups.dependencies)}
+        </Show>
+      </div>
+      <Show when={groups.other.length}>
+        <div class="toolchain-detail-section">
+          <span>其他组件</span>
+          {renderCapabilityComponentCards(groups.other)}
+        </div>
+      </Show>
+    </>
+  )
+  const dependencySummaryText = (dependencyId: string) => {
+    const dependency = dependencyById().get(dependencyId)
+    if (!dependency) return dependencyId
+    return `${resourceKindLabel(displayResourceKind(dependency))} · ${dependency.name}`
+  }
+  const renderCapabilityCards = (items: CapabilityView[]) => (
+    <div class="capability-component-list">
+      <For each={items}>
+        {(capability) => (
+          <button
+            type="button"
+            class="capability-component-card capability-component-card--button"
+            classList={{ "is-selected": selectedCapability()?.id === capability.id }}
+            onClick={() => setSelectedCapabilityId(capability.id)}
+          >
+            <div>
+              <strong>{capability.summary}</strong>
+              <small>
+                {[
+                  capability.sourcePackageIds.length ? `来源能力包：${capability.sourcePackageIds.join("、")}` : "未关联能力包",
+                  capability.dependencyIds.length ? `能力依赖：${capability.dependencyIds.map(dependencySummaryText).join("、")}` : "",
+                ].filter(Boolean).join(" · ")}
+              </small>
+            </div>
+            <StatusBadge tone={capabilityStatusTone(capability.status)}>
+              {capabilityStatusLabel(capability.status)}
+            </StatusBadge>
+          </button>
+        )}
+      </For>
+    </div>
+  )
+  const renderCapabilityDetail = (capability: CapabilityView) => (
+    <>
+      <div class="toolchain-detail-header">
+        <div>
+          <span class="settings-badge">{capability.label}</span>
+          <h3>{capability.name}</h3>
+          <p>{capability.description || capability.summary}</p>
+        </div>
+        <StatusBadge tone={capabilityStatusTone(capability.status)}>
+          {capabilityStatusLabel(capability.status)}
+        </StatusBadge>
+      </div>
+      <div class="toolchain-detail-section">
+        <span>来源能力包</span>
+        <small>{capability.sourcePackageIds.length ? capability.sourcePackageIds.join("、") : "未关联能力包"}</small>
+      </div>
+      <div class="toolchain-detail-section">
+        <span>关联能力依赖</span>
+        <Show when={capability.dependencyIds.length} fallback={<small>未声明能力依赖。</small>}>
+          <ul class="capability-text-list">
+            <For each={capability.dependencyIds}>
+              {(dependencyId) => <li>{dependencySummaryText(dependencyId)}</li>}
+            </For>
+          </ul>
+        </Show>
+      </div>
+      <Show when={capability.kind === "mcp_server" && capability.mcp}>
+        <div class="toolchain-detail-section">
+          <span>MCP 连接</span>
+          <code class="environment-command">
+            {capability.mcp?.command || capability.mcp?.url || "未记录"}
+          </code>
+          <small>
+            {[
+              capability.mcp?.transport ? `transport=${capability.mcp.transport}` : "",
+              capability.mcp?.cwd ? `cwd=${capability.mcp.cwd}` : "",
+              capability.mcp?.args.length ? `args=${capability.mcp.args.join(" ")}` : "",
+              Object.keys(capability.mcp?.env || {}).length ? `env=${Object.keys(capability.mcp?.env || {}).join(",")}` : "",
+            ].filter(Boolean).join(" · ") || "未记录连接细节"}
+          </small>
+        </div>
+        <div class="toolchain-detail-section">
+          <span>能力依赖引用 environment_requirement_refs</span>
+          <small>{capability.mcp?.environmentRequirementRefs.length ? capability.mcp.environmentRequirementRefs.join("、") : "未记录"}</small>
+        </div>
+        <div class="toolchain-detail-actions">
+          <button class="btn btn-secondary" onClick={() => openEditToolchain(dashboardItemToRecord(capability.raw as any))}>编辑连接</button>
+          <button class="btn btn-secondary" onClick={() => enableToolchain(dashboardItemToRecord(capability.raw as any), !capability.enabled)}>
+            {capability.enabled ? "停用" : "启用"}
+          </button>
+          <button class="btn btn-danger" onClick={() => deleteToolchain(dashboardItemToRecord(capability.raw as any))}>删除</button>
+        </div>
+      </Show>
+      <Show when={capability.kind === "skill" && capability.skill}>
+        <div class="toolchain-detail-section">
+          <span>Skill 路径</span>
+          <small>{capability.skill?.pathHint || capability.skill?.sourcePath || "未记录"}</small>
+        </div>
+        <div class="toolchain-detail-section">
+          <span>Skill 状态</span>
+          <small>
+            {capability.skill?.globalEnabled ? "全局启用" : "全局关闭"}
+            {capability.skill?.disabled ? " · 当前 Skill 已禁用" : " · 当前 Skill 启用"}
+          </small>
+        </div>
+        <Show when={capability.skill?.installPrompt}>
+          <div class="toolchain-detail-section">
+            <span>安装指导 prompt</span>
+            <small>{capability.skill?.installPrompt}</small>
+          </div>
+        </Show>
+        <Show when={capability.skill?.verifyPrompt}>
+          <div class="toolchain-detail-section">
+            <span>验证指导 prompt</span>
+            <small>{capability.skill?.verifyPrompt}</small>
+          </div>
+        </Show>
+        <Show when={capability.skill?.docs.length}>
+          <div class="toolchain-detail-section">
+            <span>文档</span>
+            <div class="toolchain-link-list">
+              <For each={capability.skill?.docs || []}>
+                {(doc) => <small>{stringValue(doc.title || doc.url)}</small>}
+              </For>
+            </div>
+          </div>
+        </Show>
+        <Show when={capability.skill?.evidence.length}>
+          <div class="toolchain-detail-section">
+            <span>证据</span>
+            <div class="toolchain-evidence-list">
+              <For each={(capability.skill?.evidence || []).slice(0, 4)}>
+                {(evidence) => (
+                  <div>
+                    <strong>{stringValue(evidence.title || evidence.field || "evidence")}</strong>
+                    <small>{stringValue(evidence.excerpt || evidence.url || evidence.title)}</small>
+                  </div>
+                )}
+              </For>
+            </div>
+          </div>
+        </Show>
+        <div class="toolchain-detail-actions">
+          <button class="btn btn-secondary" type="button" onClick={() => toggleSkillDisabled(capability)}>
+            {capability.skill?.disabled ? "启用 Skill" : "禁用 Skill"}
+          </button>
+          <button class="btn btn-primary" type="button" disabled={!capabilityDirty() || serverSettingsSaveBusy()} onClick={saveSkillsSettings}>
+            保存 Skills
+          </button>
+        </div>
+      </Show>
+    </>
+  )
 
   const refreshToolchains = () => {
     refreshToolchainsRequest()
@@ -359,7 +678,8 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
   }
 
   const deleteToolchain = (record: ToolchainRecord) => {
-    if (!globalThis.confirm(`删除 ${record.name}？此操作会从服务器能力组件清单移除该条目。`)) return
+    const scope = record.kind === "mcp" ? "MCP Server 连接配置" : "能力依赖"
+    if (!globalThis.confirm(`删除 ${record.name}？此操作会从服务器${scope}移除该条目。`)) return
     const target = record.kind === "environment_requirement" ? stringValue(record.id, record.name) : record.name
     deleteToolchainRecord(record.kind, target)
   }
@@ -466,8 +786,8 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
               </label>
             </div>
             <label class="field-label">
-              <span>组件标签</span>
-              <textarea rows={3} value={editor.tagsText} placeholder="每行一个组件标签，例如 code-search" onInput={(event) => patchToolchainEditor({ tagsText: event.currentTarget.value })} />
+              <span>能力/依赖标签</span>
+              <textarea rows={3} value={editor.tagsText} placeholder="每行一个标签，例如 code-search" onInput={(event) => patchToolchainEditor({ tagsText: event.currentTarget.value })} />
             </label>
           </Show>
 
@@ -575,10 +895,6 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
             </p>
           </div>
           <div class="settings-actions settings-actions--right">
-            <label class="field-label field-label--compact">
-              <span>环境 Agent</span>
-              <input value={environmentAgentLabel()} disabled />
-            </label>
             <RefreshButton
               class="btn-secondary"
               loading={pageRefreshing("toolchains")}
@@ -587,14 +903,6 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
             >
               刷新
             </RefreshButton>
-            <button class="btn btn-secondary" onClick={() => runEnvironment("check")} disabled={!environmentSnapshot().entries.length || environmentSnapshot().running || !environmentAgentAvailable()}>
-              <span class="codicon codicon-search" aria-hidden="true" />
-              检查全部
-            </button>
-            <button class="btn btn-primary" onClick={() => runEnvironment("configure")} disabled={!environmentSnapshot().entries.length || environmentSnapshot().running || !environmentAgentAvailable()}>
-              <span class="codicon codicon-tools" aria-hidden="true" />
-              配置全部
-            </button>
           </div>
         </div>
 
@@ -627,11 +935,82 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
           </For>
         </nav>
 
-        <Show when={toolchainBehaviorError() && ["userActions", "agentTools"].includes(section())}>
-          <div class="settings-error">行为目录加载失败：{toolchainBehaviorError()}</div>
+        <Show when={toolchainBehaviorError() && section() === "behavior"}>
+          <div class="settings-error">行为管理加载失败：{toolchainBehaviorError()}</div>
         </Show>
 
-        <section class="settings-section settings-section--flat" classList={{ "settings-section--hidden": section() !== "userActions" }}>
+        <section class="toolchain-workbench" classList={{ "settings-section--hidden": section() !== "capabilities" }}>
+          <div class="toolchain-list-pane">
+            <div class="toolchain-toolbar">
+              <div class="toolchain-kind-tabs" role="tablist" aria-label="能力类型筛选">
+                <For each={[
+                  ["all", "全部"],
+                  ["mcp_server", "MCP Server"],
+                  ["skill", "Skill"],
+                ] as Array<[CapabilityKindFilter, string]>}>
+                  {([id, label]) => (
+                    <button classList={{ "is-active": capabilityKindFilter() === id }} onClick={() => setCapabilityKindFilter(id)}>
+                      {label}
+                    </button>
+                  )}
+                </For>
+              </div>
+              <div class="toolchain-toolbar__search">
+                <span class="codicon codicon-search" aria-hidden="true" />
+                <input value={toolchainSearch()} placeholder="搜索 MCP Server、Skill、能力包或依赖" onInput={(event) => setToolchainSearch(event.currentTarget.value)} />
+              </div>
+              <div class="toolchain-toolbar__actions" aria-label="能力设置">
+                <StatusBadge tone={skillsEnabled() ? "success" : "muted"}>{skillsEnabled() ? "Skills 启用" : "Skills 关闭"}</StatusBadge>
+                <button class="btn btn-primary btn--compact" type="button" disabled={!capabilityDirty() || serverSettingsSaveBusy()} onClick={saveSkillsSettings}>
+                  <span class="codicon codicon-save" aria-hidden="true" />
+                  保存 Skills
+                </button>
+              </div>
+            </div>
+            <Show when={operations.state("toolchainsCapabilitySave").status === "success" && !capabilityDirty()}>
+              <div class="settings-success">Skills 设置已保存并重载。</div>
+            </Show>
+            <Show when={filteredCapabilityItems().length} fallback={<div class="toolchain-empty">暂无 MCP Server 或 Skill。</div>}>
+              {renderCapabilityCards(filteredCapabilityItems())}
+            </Show>
+          </div>
+
+          <aside class="toolchain-detail-pane">
+            <Show when={selectedCapability()} fallback={<div class="toolchain-empty">选择一个能力查看详情。</div>}>
+              {(capability) => renderCapabilityDetail(capability())}
+            </Show>
+            <div class="toolchain-detail-section">
+              <span>Skills 设置</span>
+              <div class="settings-form-grid">
+                <label class="field-label field-label--checkbox">
+                  <input type="checkbox" checked={skillsEnabled()} onChange={(event) => { setSkillsEnabled(event.currentTarget.checked); markCapabilityDirty() }} />
+                  <span>启用 Skills</span>
+                </label>
+                <label class="field-label field-label--checkbox">
+                  <input type="checkbox" checked={skillsScanProject()} onChange={(event) => { setSkillsScanProject(event.currentTarget.checked); markCapabilityDirty() }} />
+                  <span>扫描项目 Skills</span>
+                </label>
+                <label class="field-label field-label--checkbox">
+                  <input type="checkbox" checked={skillsScanUser()} onChange={(event) => { setSkillsScanUser(event.currentTarget.checked); markCapabilityDirty() }} />
+                  <span>扫描用户 Skills</span>
+                </label>
+                <label class="field-label field-label--full"><span>禁用 Skills</span>
+                  <ChoiceMultiSelect
+                    ariaLabel="禁用 Skills"
+                    options={skillChoiceOptions()}
+                    valueText={skillsDisabledText()}
+                    onChangeText={(next) => { setSkillsDisabledText(next); markCapabilityDirty() }}
+                    emptyMessage="暂无可选 Skill；历史禁用项会以自定义项保留。"
+                    searchPlaceholder="搜索 Skill"
+                    unknownLabel="自定义 Skill"
+                  />
+                </label>
+              </div>
+            </div>
+          </aside>
+        </section>
+
+        <section class="settings-section settings-section--flat" classList={{ "settings-section--hidden": section() !== "behavior" }}>
           <div class="settings-section-heading">
             <span>用户指令</span>
             <StatusBadge>{String(userInstructionItems().length)}</StatusBadge>
@@ -672,7 +1051,7 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
           </Show>
         </section>
 
-        <section class="settings-section settings-section--flat" classList={{ "settings-section--hidden": section() !== "agentTools" }}>
+        <section class="settings-section settings-section--flat" classList={{ "settings-section--hidden": section() !== "behavior" }}>
           <div class="settings-section-heading">
             <span>Agent Tools</span>
             <StatusBadge>{String(agentToolCatalogItems().length)}</StatusBadge>
@@ -684,7 +1063,7 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
                 <strong>来源</strong>
                 <strong>启用</strong>
                 <strong>注册路径</strong>
-                <strong>能力包/组件</strong>
+                <strong>能力包/依赖</strong>
                 <strong>模式</strong>
                 <strong title="后端 PermissionGateway 返回的真实运行时权限裁决。">权限</strong>
               </div>
@@ -717,68 +1096,69 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
           </Show>
         </section>
 
-        <div class="toolchain-summary-grid" classList={{ "settings-section--hidden": section() !== "dashboard" }}>
+        <div class="toolchain-summary-grid" classList={{ "settings-section--hidden": section() !== "dependencies" }}>
           <button class="toolchain-summary-card" classList={{ "is-active": toolchainStatusFilter() === "ready" }} onClick={() => setToolchainStatusFilter(toolchainStatusFilter() === "ready" ? "all" : "ready")}>
             <span>已就绪</span>
-            <strong>{String(toolchainSummary().ready)}</strong>
+            <strong>{String(dependencySummary().ready)}</strong>
           </button>
           <button class="toolchain-summary-card" classList={{ "is-active": toolchainStatusFilter() === "missing" }} onClick={() => setToolchainStatusFilter(toolchainStatusFilter() === "missing" ? "all" : "missing")}>
             <span>未安装</span>
-            <strong>{String(toolchainSummary().missing)}</strong>
+            <strong>{String(dependencySummary().missing)}</strong>
           </button>
           <button class="toolchain-summary-card" classList={{ "is-active": toolchainStatusFilter() === "stopped" }} onClick={() => setToolchainStatusFilter(toolchainStatusFilter() === "stopped" ? "all" : "stopped")}>
             <span>未运行</span>
-            <strong>{String(toolchainSummary().stopped)}</strong>
+            <strong>{String(dependencySummary().stopped)}</strong>
           </button>
           <button class="toolchain-summary-card" classList={{ "is-active": toolchainStatusFilter() === "awaiting" }} onClick={() => setToolchainStatusFilter(toolchainStatusFilter() === "awaiting" ? "all" : "awaiting")}>
             <span>待授权/待确认</span>
-            <strong>{String(toolchainSummary().awaiting)}</strong>
+            <strong>{String(dependencySummary().awaiting)}</strong>
           </button>
         </div>
 
-        <section class="toolchain-workbench" classList={{ "settings-section--hidden": section() !== "components" }}>
+        <section class="toolchain-workbench" classList={{ "settings-section--hidden": section() !== "dependencies" }}>
           <div class="toolchain-list-pane">
+            <p class="settings-empty-note">
+              这里管理能力依赖：CLI、SDK、Runtime、凭据、路径等由能力引用的外部资源。MCP Server 和 Skill 在“能力”页管理。
+            </p>
             <div class="toolchain-toolbar">
               <div class="toolchain-kind-tabs" role="tablist" aria-label="工具类型筛选">
-                <For each={[
-                  ["all", "全部"],
-                  ["environment_requirement", "环境要求"],
-                  ["mcp", "MCP"],
-                ] as Array<[ToolchainKindFilter, string]>}>
-                  {([id, label]) => (
-                    <button classList={{ "is-active": toolchainKindFilter() === id }} onClick={() => setToolchainKindFilter(id)}>
-                      {label}
-                    </button>
-                  )}
-                </For>
+                <button classList={{ "is-active": true }}>能力依赖</button>
               </div>
               <div class="toolchain-toolbar__search">
                 <span class="codicon codicon-search" aria-hidden="true" />
                 <input value={toolchainSearch()} placeholder="搜索工具、文档、命令" onInput={(event) => setToolchainSearch(event.currentTarget.value)} />
               </div>
-              <div class="toolchain-toolbar__actions" aria-label="新增能力组件">
+              <label class="field-label field-label--compact">
+                <span>环境 Agent</span>
+                <input value={environmentAgentLabel()} disabled />
+              </label>
+              <div class="toolchain-toolbar__actions" aria-label="新增能力依赖">
+                <button class="btn btn-secondary btn--compact" onClick={() => runEnvironment("check")} disabled={!dependencyItems().length || environmentSnapshot().running || !environmentAgentAvailable()}>
+                  <span class="codicon codicon-search" aria-hidden="true" />
+                  检查全部
+                </button>
+                <button class="btn btn-primary btn--compact" onClick={() => runEnvironment("configure")} disabled={!dependencyItems().length || environmentSnapshot().running || !environmentAgentAvailable()}>
+                  <span class="codicon codicon-tools" aria-hidden="true" />
+                  配置全部
+                </button>
                 <button class="btn btn-secondary btn--compact" type="button" onClick={() => openCreateToolchain("environment_requirement")}>
                   <span class="codicon codicon-add" aria-hidden="true" />
-                  新增环境要求
-                </button>
-                <button class="btn btn-secondary btn--compact" type="button" onClick={() => openCreateToolchain("mcp")}>
-                  <span class="codicon codicon-add" aria-hidden="true" />
-                  新增 MCP
+                  新增能力依赖
                 </button>
               </div>
             </div>
 
-            <div class="toolchain-table" role="table" aria-label="能力组件清单">
+            <div class="toolchain-table" role="table" aria-label="能力依赖清单">
               <div class="toolchain-table__row toolchain-table__row--head" role="row">
-                <span>组件名称</span>
+                <span>资源名称</span>
                 <span>{t("toolchain.filterKind")}</span>
                 <span>来源/文档</span>
                 <span>部署属性</span>
                 <span>安装/运行状态</span>
                 <span>操作</span>
               </div>
-              <Show when={filteredToolchainItems().length} fallback={<div class="toolchain-empty">没有匹配的组件条目。</div>}>
-                <For each={filteredToolchainItems()}>
+              <Show when={filteredDependencyItems().length} fallback={<div class="toolchain-empty">没有匹配的能力依赖。</div>}>
+                <For each={filteredDependencyItems()}>
                   {(item) => {
                     const record = () => dashboardItemToRecord(item)
                     return (
@@ -799,7 +1179,7 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
                           <strong>{item.name}</strong>
                           <small>{item.alias || item.command || "未记录别名"}</small>
                         </span>
-                        <span><StatusBadge>{resourceKindLabel(item.resourceKind || item.rawKind || item.kind)}</StatusBadge></span>
+                        <span><StatusBadge>{resourceKindLabel(displayResourceKind(item))}</StatusBadge></span>
                         <span class="toolchain-source-cell">{toolchainSourceLabel(item)}</span>
                         <span>{placementLabel(item)}</span>
                         <span>
@@ -833,12 +1213,12 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
           </div>
 
           <aside class="toolchain-detail-pane">
-            <Show when={selectedToolchain()} fallback={<div class="toolchain-empty">选择一个工具查看详情。</div>}>
+            <Show when={selectedDependency()} fallback={<div class="toolchain-empty">选择一个能力依赖查看详情。</div>}>
               {(item) => (
                 <>
                   <div class="toolchain-detail-header">
                     <div>
-                      <span class="settings-badge">{resourceKindLabel(item().resourceKind || item().rawKind || item().kind)}</span>
+                      <span class="settings-badge">{resourceKindLabel(displayResourceKind(item()))}</span>
                       <h3>{item().name}</h3>
                       <p>{item().alias || item().source || "未记录说明"}</p>
                     </div>
@@ -906,6 +1286,10 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
                   </div>
 
                   <div class="toolchain-detail-section">
+                    <span>命令</span>
+                    <code class="environment-command">{item().command || "未记录"}</code>
+                  </div>
+                  <div class="toolchain-detail-section">
                     <span>检查命令</span>
                     <code class="environment-command">{item().check || "未记录"}</code>
                   </div>
@@ -913,22 +1297,14 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
                     <span>安装命令</span>
                     <code class="environment-command">{item().install || "未记录"}</code>
                   </div>
-                  <Show when={item().kind === "environment_requirement"}>
-                    <div class="toolchain-detail-section">
-                      <span>配置命令</span>
-                      <code class="environment-command">{item().configure || "未记录"}</code>
-                    </div>
-                    <div class="toolchain-detail-section">
-                      <span>运行要求</span>
-                      <small>{Object.entries(item().requirements || {}).map(([key, value]) => `${key} ${String(value)}`.trim()).join("、") || "未记录"}</small>
-                    </div>
-                  </Show>
-                  <Show when={item().kind === "mcp"}>
-                    <div class="toolchain-detail-section">
-                      <span>环境要求引用</span>
-                      <small>{item().environment_requirement_refs?.length ? item().environment_requirement_refs.join("、") : "未记录"}</small>
-                    </div>
-                  </Show>
+                  <div class="toolchain-detail-section">
+                    <span>配置命令</span>
+                    <code class="environment-command">{item().configure || "未记录"}</code>
+                  </div>
+                  <div class="toolchain-detail-section">
+                    <span>运行要求</span>
+                    <small>{Object.entries(item().requirements || {}).map(([key, value]) => `${key} ${String(value)}`.trim()).join("、") || "未记录"}</small>
+                  </div>
                   <div class="toolchain-detail-section">
                     <span>风险说明</span>
                     <small>
@@ -1018,19 +1394,7 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
                   <Show when={stringValue(currentCapabilityDraft().description)}>
                     <p>{stringValue(currentCapabilityDraft().description)}</p>
                   </Show>
-                  <div class="capability-component-list">
-                    <For each={currentDraftComponents()}>
-                      {(component) => (
-                        <div class="capability-component-card">
-                          <div>
-                            <strong>{stringValue(component.id, stringValue(component.name, "component"))}</strong>
-                            <small>{componentRecordSummary(component, stringValue(component.id, "component"))}</small>
-                          </div>
-                          <StatusBadge>{stringValue(component.kind, "component")}</StatusBadge>
-                        </div>
-                      )}
-                    </For>
-                  </div>
+                  {renderComponentGroups(currentDraftComponentGroups())}
                   <Show when={stringArrayValue(currentCapabilityDraft().install_plan).length}>
                     <div class="toolchain-detail-section">
                       <span>安装方式</span>
@@ -1116,11 +1480,7 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
                         </ul>
                       </div>
                     </Show>
-                    <div class="capability-component-chips">
-                      <For each={pkg.components}>
-                        {(componentId) => <span>{componentSummary(componentId)}</span>}
-                      </For>
-                    </div>
+                    {renderComponentGroups(packageComponentGroups(pkg))}
                     <div class="capability-package-card__meta">
                       <small>状态：{pkg.status || "installed"}</small>
                       <Show when={pkg.riskLevel}><small>风险：{pkg.riskLevel}</small></Show>
@@ -1139,47 +1499,6 @@ export const ToolchainsTab: Component<TabProps> = (props) => {
               </For>
             </div>
           </Show>
-        </section>
-
-        <section class="settings-section settings-section--flat" classList={{ "settings-section--hidden": section() !== "packages" }}>
-          <div class="settings-section-heading">
-            <span>Skills 发现</span>
-            <div class="settings-actions settings-actions--right">
-              <StatusBadge tone={skillsEnabled() ? "success" : "muted"}>{skillsEnabled() ? "启用" : "关闭"}</StatusBadge>
-              <button class="btn btn-primary" type="button" disabled={!capabilityDirty() || serverSettingsSaveBusy()} onClick={saveSkillsSettings}>
-                <span class="codicon codicon-save" aria-hidden="true" />
-                保存 Skills
-              </button>
-            </div>
-          </div>
-          <Show when={operations.state("toolchainsCapabilitySave").status === "success" && !capabilityDirty()}>
-            <div class="settings-success">Skills 设置已保存并重载。</div>
-          </Show>
-          <div class="settings-form-grid settings-form-grid--two">
-            <label class="field-label field-label--checkbox">
-              <input type="checkbox" checked={skillsEnabled()} onChange={(event) => { setSkillsEnabled(event.currentTarget.checked); markCapabilityDirty() }} />
-              <span>启用 Skills</span>
-            </label>
-            <label class="field-label field-label--checkbox">
-              <input type="checkbox" checked={skillsScanProject()} onChange={(event) => { setSkillsScanProject(event.currentTarget.checked); markCapabilityDirty() }} />
-              <span>扫描项目 Skills</span>
-            </label>
-            <label class="field-label field-label--checkbox">
-              <input type="checkbox" checked={skillsScanUser()} onChange={(event) => { setSkillsScanUser(event.currentTarget.checked); markCapabilityDirty() }} />
-              <span>扫描用户 Skills</span>
-            </label>
-            <label class="field-label field-label--full"><span>禁用 Skills</span>
-              <ChoiceMultiSelect
-                ariaLabel="禁用 Skills"
-                options={skillChoiceOptions()}
-                valueText={skillsDisabledText()}
-                onChangeText={(next) => { setSkillsDisabledText(next); markCapabilityDirty() }}
-                emptyMessage="暂无可选 Skill；历史禁用项会以自定义项保留。"
-                searchPlaceholder="搜索 Skill"
-                unknownLabel="自定义 Skill"
-              />
-            </label>
-          </div>
         </section>
 
         <section class="settings-section settings-section--flat" classList={{ "settings-section--hidden": section() !== "logs" }}>

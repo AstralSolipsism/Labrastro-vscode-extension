@@ -1,16 +1,14 @@
 export type ToolchainSection =
-  | "dashboard"
-  | "components"
+  | "capabilities"
   | "packages"
-  | "userActions"
-  | "agentTools"
+  | "dependencies"
+  | "behavior"
   | "logs"
 
 export const TOOLCHAIN_SECTIONS: Array<{ id: ToolchainSection; label: string; icon: string }> = [
-  { id: "dashboard", label: "环境看板", icon: "dashboard" },
-  { id: "components", label: "组件清单", icon: "symbol-method" },
+  { id: "capabilities", label: "能力", icon: "extensions" },
   { id: "packages", label: "能力包", icon: "package" },
-  { id: "userActions", label: "用户指令", icon: "terminal" },
-  { id: "agentTools", label: "Agent Tools", icon: "tools" },
+  { id: "dependencies", label: "能力依赖", icon: "symbol-method" },
+  { id: "behavior", label: "行为管理", icon: "terminal" },
   { id: "logs", label: "运行日志", icon: "output" },
 ]

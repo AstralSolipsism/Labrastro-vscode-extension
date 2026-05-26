@@ -58,6 +58,7 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
     updateAgentField,
     capabilityPackageOptions,
     selectedAgentCapabilityPackages,
+    capabilityPackageComponentGroups,
     formatAgentConfigList,
     parseAgentConfigListText,
     agentRunPolling,
@@ -85,6 +86,18 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
   const systemAgentIds = () => Object.keys(agentDrafts()).filter((id) => agentDrafts()[id]?.visibility !== "user")
   const mcpChoiceOptions = () => registeredMcpServers().map((id: string) => ({ id, label: id, kind: "MCP" }))
   const capabilityChoiceOptions = () => capabilityPackageOptions().map((id: string) => ({ id, label: id, kind: "能力包" }))
+  const renderCapabilityGroup = (label: string, items: any[], empty: string) => (
+    <div class="toolchain-detail-section">
+      <span>{label}</span>
+      <Show when={items.length} fallback={<small>{empty}</small>}>
+        <div class="settings-badge-group">
+          <For each={items}>
+            {(item) => <StatusBadge>{item.summary || item.name || item.id}</StatusBadge>}
+          </For>
+        </div>
+      </Show>
+    </div>
+  )
 
   return (
     <div class="settings-page">
@@ -445,9 +458,8 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
                       <div class="toolchain-detail-block">
                         <strong>{pkg.name || pkg.id}</strong>
                         <small>{pkg.description || pkg.id}</small>
-                        <div class="settings-badge-group">
-                          <For each={pkg.components}>{(item) => <StatusBadge>{item}</StatusBadge>}</For>
-                        </div>
+                        {renderCapabilityGroup("提供的能力", capabilityPackageComponentGroups(pkg.components).capabilities, "未声明 MCP Server 或 Skill。")}
+                        {renderCapabilityGroup("所需能力依赖", capabilityPackageComponentGroups(pkg.components).dependencies, "未声明能力依赖。")}
                       </div>
                     )}</For>
                   </div>
