@@ -76,6 +76,7 @@ import {
   type ApprovalDecision,
   type ApprovalDetails,
 } from "../components/chat/ApprovalDetailsDialog"
+import { capabilityViewsFromSources, groupCapabilityPackageComponents } from "./capabilityPackageView"
 
 type ProviderType = "openai_chat" | "anthropic_messages" | "openai_responses"
 type ProviderCompat = "generic" | "deepseek" | "kimi" | "glm" | "qwen" | "zenmux"
@@ -318,6 +319,8 @@ interface ToolchainRecord {
   cwd?: string
   placement?: string
   distribution?: string
+  transport?: string
+  url?: string
   requirements?: Record<string, string>
   scope?: string
   check?: string
@@ -340,6 +343,7 @@ interface ToolchainRecord {
   component_id?: string
   package_ids?: string[]
   managed_by?: string
+  raw_kind?: string
   install_prompt?: string
   verify_prompt?: string
   notes?: string[]
@@ -366,6 +370,12 @@ interface ToolchainDashboardItem {
   install: string
   configure: string
   command: string
+  args: string[]
+  env: Record<string, string>
+  cwd: string
+  distribution: string
+  transport: string
+  url: string
   runtime: string
   language: string
   path: string
@@ -399,7 +409,7 @@ interface CapabilityPackageView {
   id: string
   name: string
   description: string
-  components: string[]
+  components: Array<string | Record<string, unknown>>
   enabled: boolean
   status: string
   source: Record<string, unknown>
@@ -908,8 +918,9 @@ function normalizeToolchainList(value: unknown, kind: ToolchainKind): ToolchainR
   return value
     .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
     .map((item) => {
+      const rawKind = kind === "environment_requirement" ? requirementKindTextFromRecord(item) : "mcp_server"
       const resourceKind: ToolchainResourceKind = kind === "environment_requirement"
-        ? normalizeRequirementKind(item.kind || item.resource_kind)
+        ? normalizeRequirementKind(rawKind)
         : "mcp_server"
       return {
         ...item,
@@ -917,6 +928,7 @@ function normalizeToolchainList(value: unknown, kind: ToolchainKind): ToolchainR
         kind,
         entryType: kind,
         resourceKind,
+        raw_kind: rawKind,
         name: stringValue(item.name || item.id),
       } as ToolchainRecord
     })
@@ -1051,6 +1063,14 @@ function objectValue(value: unknown): Record<string, unknown> {
 
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : []
+}
+
+function componentListValue(value: unknown): Array<string | Record<string, unknown>> {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((item): item is string | Record<string, unknown> =>
+      typeof item === "string" || Boolean(item && typeof item === "object" && !Array.isArray(item))
+    )
 }
 
 function normalizeBehaviorTrigger(value: unknown): UiActionCatalogItem["triggers"][number] {
@@ -1193,7 +1213,7 @@ function capabilityPackageValue(id: string, value: unknown): CapabilityPackageVi
     id,
     name: stringValue(item.name, id),
     description: stringValue(item.description),
-    components: stringArray(item.components),
+    components: componentListValue(item.components),
     enabled: item.enabled !== false,
     status: stringValue(item.status),
     source,
@@ -1231,6 +1251,26 @@ function normalizeRequirementKind(value: unknown): EnvironmentRequirementKind | 
   return (ENVIRONMENT_REQUIREMENT_KIND_VALUES as string[]).includes(text)
     ? text as EnvironmentRequirementKind
     : "unsupported"
+}
+
+function requirementKindTextFromRecord(item: Record<string, unknown>): string {
+  const config = objectValue(item.config)
+  for (const candidate of [
+    item.kind,
+    item.resource_kind,
+    item.requirement_kind,
+    config.kind,
+    config.resource_kind,
+  ]) {
+    const text = stringValue(candidate).trim().toLowerCase()
+    if (text) return text
+  }
+  const id = stringValue(item.id).trim().toLowerCase()
+  if (id.startsWith("envreq:")) {
+    const [, kind] = id.split(":")
+    if (kind) return kind
+  }
+  return item.command ? "executable" : ""
 }
 
 function normalizeEntryType(value: unknown): ToolchainKind | "" {
@@ -1272,6 +1312,12 @@ function resourceKindLabel(kind: ToolchainResourceKind): string {
     default:
       return "Unsupported"
   }
+}
+
+function displayRequirementKindLabel(kind: string): string {
+  const normalized = normalizeRequirementKind(kind)
+  if (normalized !== "unsupported") return resourceKindLabel(normalized)
+  return kind ? kind.replace(/_/g, " ").replace(/\b\w/g, (match) => match.toUpperCase()) : "Unsupported"
 }
 
 function normalizeEvidence(value: unknown): Array<Record<string, string>> {
@@ -1317,7 +1363,7 @@ function toolchainRecordToDashboardItem(record: ToolchainRecord): ToolchainDashb
     kind: record.kind,
     entryType: record.entryType || record.kind,
     resourceKind,
-    rawKind: resourceKind,
+    rawKind: stringValue(record.raw_kind || resourceKind),
     name: record.name,
     alias: stringValue(record.command || record.path_hint || record.name),
     source: stringValue(record.source),
@@ -1332,6 +1378,12 @@ function toolchainRecordToDashboardItem(record: ToolchainRecord): ToolchainDashb
     install: stringValue(record.install),
     configure: stringValue(record.configure),
     command: stringValue(record.command || record.path_hint),
+    args: stringArray(record.args),
+    env: stringMapValue(record.env),
+    cwd: stringValue(record.cwd),
+    distribution: stringValue(record.distribution),
+    transport: stringValue(record.transport || record.distribution),
+    url: stringValue(record.url),
     runtime: stringValue(record.runtime),
     language: stringValue(record.language),
     path: stringValue(record.path),
@@ -1396,10 +1448,11 @@ function normalizeToolchainDashboardItems(
 function dashboardSummaryItem(item: Record<string, unknown>): ToolchainDashboardItem {
   const name = stringValue(item.name)
   const entryType = (normalizeEntryType(item.entry_type) || entryTypeFromResourceKind(item.kind) || "environment_requirement") as ToolchainKind
+  const rawRequirementKind = requirementKindTextFromRecord(item) || stringValue(item.kind)
   const resourceKind = (
     entryType === "mcp"
       ? "mcp_server"
-      : normalizeRequirementKind(item.kind || item.resource_kind)
+      : normalizeRequirementKind(rawRequirementKind)
   ) as ToolchainResourceKind
   const id = stringValue(item.id) || (
     entryType === "mcp"
@@ -1411,7 +1464,7 @@ function dashboardSummaryItem(item: Record<string, unknown>): ToolchainDashboard
     kind: entryType,
     entryType,
     resourceKind,
-    rawKind: stringValue(item.kind),
+    rawKind: entryType === "mcp" ? "mcp_server" : rawRequirementKind,
     name,
     alias: stringValue(item.alias || item.command || item.name),
     source: stringValue(item.source),
@@ -1426,6 +1479,12 @@ function dashboardSummaryItem(item: Record<string, unknown>): ToolchainDashboard
     install: stringValue(item.install),
     configure: stringValue(item.configure),
     command: stringValue(item.command),
+    args: stringArray(item.args),
+    env: stringMapValue(item.env),
+    cwd: stringValue(item.cwd),
+    distribution: stringValue(item.distribution),
+    transport: stringValue(item.transport || item.distribution),
+    url: stringValue(item.url),
     runtime: stringValue(item.runtime),
     language: stringValue(item.language),
     path: stringValue(item.path),
@@ -1499,6 +1558,12 @@ function dashboardItemToRecord(item: ToolchainDashboardItem): ToolchainRecord {
     install: item.install,
     configure: item.configure,
     runtime: item.runtime,
+    args: item.args,
+    env: item.env,
+    cwd: item.cwd,
+    distribution: item.distribution,
+    transport: item.transport,
+    url: item.url,
     language: item.language,
     path: item.path,
     environment_requirement_refs: item.environment_requirement_refs,
@@ -2327,6 +2392,49 @@ export function createSettingsController(props: SettingsViewProps) {
       .map(([id, value]) => capabilityPackageValue(id, value))
       .sort((a, b) => a.id.localeCompare(b.id))
   })
+  const capabilityComponents = createMemo(() => {
+    const settings = objectValue(serverSettingsPayload().settings)
+    return objectValue(settings.capability_components)
+  })
+  const capabilitySkillsSettings = createMemo(() => {
+    const settings = objectValue(serverSettingsPayload().settings)
+    const skills = objectValue(settings.skills)
+    return {
+      skillsEnabled: skills.enabled !== false,
+      disabledSkills: stringArray(skills.disabled),
+    }
+  })
+  const capabilityPackagesById = createMemo<Record<string, unknown>>(() =>
+    Object.fromEntries(capabilityPackageViews().map((item) => [item.id, item]))
+  )
+  const capabilityViews = createMemo(() =>
+    capabilityViewsFromSources({
+      mcpServers: toolchainDashboardItems().filter((item) => item.kind === "mcp") as unknown as Record<string, unknown>[],
+      componentIndex: capabilityComponents(),
+      packages: capabilityPackagesById(),
+      ...capabilitySkillsSettings(),
+    })
+  )
+  const capabilityDependencyViews = createMemo(() =>
+    toolchainDashboardItems()
+      .filter((item) => item.kind === "environment_requirement")
+      .map((item) => {
+        const dependencyKind = item.resourceKind !== "unsupported" ? item.resourceKind : item.rawKind
+        return {
+          ...item,
+          dependencyKind,
+          label: displayRequirementKindLabel(dependencyKind),
+          summary: `${displayRequirementKindLabel(dependencyKind)} · ${item.name}`,
+          raw: item,
+        }
+      })
+  )
+  const capabilityPackageComponentGroups = (components: Array<string | Record<string, unknown>>) =>
+    groupCapabilityPackageComponents(
+      components,
+      capabilityComponents(),
+      capabilitySkillsSettings(),
+    )
   const capabilityPackageOptions = createMemo(() =>
     capabilityPackageViews().map((item) => item.id)
   )
@@ -4097,6 +4205,8 @@ export function createSettingsController(props: SettingsViewProps) {
     environmentCounts,
     environmentEntriesByKind,
     toolchainDashboardItems,
+    capabilityViews,
+    capabilityDependencyViews,
     filteredToolchainItems,
     selectedToolchain,
     toolchainSummary,
@@ -4127,6 +4237,9 @@ export function createSettingsController(props: SettingsViewProps) {
     runtimeModelOptions,
     profileMcpValidationWarnings,
     capabilityPackageOptions,
+    capabilityComponents,
+    capabilityPackageViews,
+    capabilityPackageComponentGroups,
     selectedAgentCapabilityPackages,
     selectedAgentRunId,
     agentRunLastSeq,

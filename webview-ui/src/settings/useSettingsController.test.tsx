@@ -188,4 +188,126 @@ describe("settings controller capability model", () => {
     controller.runEnvironment("check", ["mcp:github"])
     expect(mocks.vscode.postMessage).not.toHaveBeenCalled()
   })
+
+  it("keeps dependency resource kind from envreq id when the list omits kind", () => {
+    const controller = withController(makeServer({
+      toolchainState: () => ({
+        environment_requirements: [
+          { id: "envreq:sdk:dotnet", name: "dotnet" },
+          { id: "envreq:gpu:cuda", name: "cuda" },
+        ],
+        mcp_servers: [],
+      }),
+    }), (controller) => controller)
+
+    expect(controller.capabilityDependencyViews()[0]).toMatchObject({
+      id: "envreq:sdk:dotnet",
+      resourceKind: "sdk",
+      rawKind: "sdk",
+      dependencyKind: "sdk",
+      summary: "SDK · dotnet",
+    })
+    expect(controller.capabilityDependencyViews()[1]).toMatchObject({
+      id: "envreq:gpu:cuda",
+      resourceKind: "unsupported",
+      rawKind: "gpu",
+      dependencyKind: "gpu",
+      summary: "Gpu · cuda",
+    })
+  })
+
+  it("groups capability package components as user-facing capabilities and dependencies", () => {
+    const controller = withController(makeServer({
+      serverSettingsState: () => ({
+        settings: {
+          skills: {
+            enabled: true,
+            disabled: ["code-review"],
+          },
+          capability_packages: {
+            "repo-review": {
+              components: ["skill:code-review", "mcp:github", "envreq:sdk:dotnet"],
+            },
+          },
+          capability_components: {
+            "skill:code-review": {
+              kind: "skill",
+              name: "code-review",
+              package_ids: ["repo-review"],
+              config: { path_hint: "/skills/code-review" },
+            },
+            "mcp:github": {
+              kind: "mcp",
+              name: "github",
+            },
+            "envreq:sdk:dotnet": {
+              kind: "environment_requirement",
+              name: "dotnet",
+              config: {
+                kind: "sdk",
+                requirements: { version: ">=8" },
+              },
+            },
+          },
+        },
+      }),
+    }), (controller) => controller)
+
+    const groups = controller.capabilityPackageComponentGroups([
+      "skill:code-review",
+      "mcp:github",
+      "envreq:sdk:dotnet",
+    ])
+
+    expect(groups.capabilities.map((item) => item.id)).toEqual(["skill:code-review", "mcp:github"])
+    expect(groups.dependencies.map((item) => item.id)).toEqual(["envreq:sdk:dotnet"])
+    expect(groups.capabilities[0]).toMatchObject({
+      summary: "Skill · code-review · path=/skills/code-review",
+      skillStatus: "disabled",
+    })
+  })
+
+  it("exposes MCP servers and Skills as capabilities while dependencies stay separate", () => {
+    const controller = withController(makeServer({
+      toolchainState: () => ({
+        environment_requirements: [
+          { id: "envreq:executable:gh", kind: "executable", name: "gh", command: "gh" },
+        ],
+        mcp_servers: [
+          {
+            id: "mcp:github",
+            name: "github",
+            command: "github-mcp",
+            environment_requirement_refs: ["envreq:executable:gh"],
+            package_ids: ["github-tools"],
+          },
+        ],
+      }),
+      serverSettingsState: () => ({
+        settings: {
+          skills: { enabled: true, disabled: ["code-review"] },
+          capability_packages: {
+            "repo-review": { components: ["skill:code-review"] },
+          },
+          capability_components: {
+            "skill:code-review": {
+              kind: "skill",
+              name: "code-review",
+              config: { path_hint: "/skills/code-review" },
+            },
+          },
+        },
+      }),
+    }), (controller) => controller as any)
+
+    expect(controller.capabilityViews().map((item: any) => `${item.kind}:${item.name}`)).toEqual([
+      "mcp_server:github",
+      "skill:code-review",
+    ])
+    expect(controller.capabilityDependencyViews().map((item: any) => item.id)).toEqual(["envreq:executable:gh"])
+    expect(controller.capabilityViews()[1].skill).toMatchObject({
+      disabled: true,
+      pathHint: "/skills/code-review",
+    })
+  })
 })
