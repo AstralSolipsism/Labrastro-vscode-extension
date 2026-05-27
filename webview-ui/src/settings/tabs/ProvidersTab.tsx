@@ -3,6 +3,7 @@ import { t } from "../../i18n"
 import { DialogSurface } from "../../components/common/interaction"
 import { RefreshButton } from "../../components/common/RefreshButton"
 import { StatusBadge } from "../components/StatusBadge"
+import { SettingsActionRail, SettingsPage, SettingsPageHeader } from "../components/SettingsLayout"
 import { prioritizeProviderModelEntries } from "../providerModels"
 import type { SettingsController } from "../useSettingsController"
 import {
@@ -429,8 +430,8 @@ export const ProvidersTab: Component<TabProps> = (props) => {
   })
 
   return (
-    <div class="settings-page settings-page--wide">
-      <div class="settings-page-header">
+    <SettingsPage wide>
+      <SettingsPageHeader>
         <div>
           <h2>{t("provider.title")}</h2>
           <p class="setting-description">
@@ -438,7 +439,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
             {adminUsable() ? "可用" : t("executor.status.unavailable")} · 最近刷新：{server.providersUpdatedAt() || "尚未刷新"}
           </p>
         </div>
-        <div class="settings-actions settings-actions--right">
+        <SettingsActionRail align="right">
           <button class="btn btn-secondary" type="button" onClick={startNewProvider}>
             <span class="codicon codicon-add" aria-hidden="true" />
             新增服务商
@@ -446,8 +447,8 @@ export const ProvidersTab: Component<TabProps> = (props) => {
           <RefreshButton class="btn-secondary" loading={pageRefreshing("providers")} onClick={() => refreshPage("providers")}>
             刷新
           </RefreshButton>
-        </div>
-      </div>
+        </SettingsActionRail>
+      </SettingsPageHeader>
 
       <Show when={providerErrorMessage()}>
         <div class="settings-error">{providerErrorMessage()}</div>
@@ -533,7 +534,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
             <div>
               <h3>{providerId() || "新服务商"}</h3>
             </div>
-            <div class="settings-actions settings-actions--right">
+            <SettingsActionRail align="right">
               <Show when={selectedProvider()} fallback={<StatusBadge tone="success">保存后默认启用</StatusBadge>}>
                 <button class="btn btn-secondary" type="button" onClick={() => toggleProviderEnabled(!providerEnabled())} disabled={!adminUsable() || providerActionBusy()}>
                   <span class={`codicon codicon-${providerEnabled() ? "circle-slash" : "pass"}`} aria-hidden="true" />
@@ -544,7 +545,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
                 <span class="codicon codicon-save" aria-hidden="true" />
                 保存服务商
               </button>
-            </div>
+            </SettingsActionRail>
           </div>
 
           <div class="settings-section settings-section--flat">
@@ -705,7 +706,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
           <div class="settings-section settings-section--flat">
             <div class="settings-section-heading">
               <span>模型目录</span>
-              <div class="settings-actions settings-actions--right">
+              <SettingsActionRail align="right">
                 <button
                   class="btn btn-secondary"
                   type="button"
@@ -728,7 +729,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
                 >
                   刷新模型列表
                 </RefreshButton>
-              </div>
+              </SettingsActionRail>
             </div>
             <div class="model-capability-sync">
               <div class="model-capability-sync__meta">
@@ -1038,7 +1039,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
               </button>
             </div>
           </Show>
-          <div class="settings-actions settings-actions--right">
+          <SettingsActionRail align="right">
             <Show when={modelHasSavedProfile(profileModel())}>
               <button class="btn btn-danger" type="button" onClick={() => deleteModelPreset(profileId())} disabled={!profileId() || !adminUsable() || providerActionBusy()}>
                 <span class="codicon codicon-trash" aria-hidden="true" />
@@ -1052,9 +1053,9 @@ export const ProvidersTab: Component<TabProps> = (props) => {
               <span class="codicon codicon-save" aria-hidden="true" />
               保存参数
             </button>
-          </div>
+          </SettingsActionRail>
         </DialogSurface>
       </Show>
-    </div>
+    </SettingsPage>
   )
 }

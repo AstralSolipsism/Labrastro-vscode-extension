@@ -4,6 +4,13 @@ import { RefreshButton } from "../../components/common/RefreshButton"
 import { SelectableList } from "../../components/common/interaction"
 import { StatusBadge } from "../components/StatusBadge"
 import { ChoiceMultiSelect } from "../components/ChoiceMultiSelect"
+import {
+  SettingsActionRail,
+  SettingsPage,
+  SettingsPageHeader,
+  SettingsSubTabButton,
+  SettingsSubTabs,
+} from "../components/SettingsLayout"
 import type { SettingsController } from "../useSettingsController"
 
 interface TabProps { controller: SettingsController & Record<string, any> }
@@ -87,7 +94,7 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
   const mcpChoiceOptions = () => registeredMcpServers().map((id: string) => ({ id, label: id, kind: "MCP" }))
   const capabilityChoiceOptions = () => capabilityPackageOptions().map((id: string) => ({ id, label: id, kind: "能力包" }))
   const renderCapabilityGroup = (label: string, items: any[], empty: string) => (
-    <div class="capability-detail-section">
+    <div class="settings-detail-section">
       <span>{label}</span>
       <Show when={items.length} fallback={<small>{empty}</small>}>
         <div class="settings-badge-group">
@@ -100,12 +107,12 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
   )
 
   return (
-    <div class="settings-page">
-      <div class="settings-page-header">
+    <SettingsPage>
+      <SettingsPageHeader>
         <div>
           <h2>{t("agentConfig.title")}</h2>
         </div>
-        <div class="settings-actions settings-actions--right">
+        <SettingsActionRail align="right">
           <RefreshButton class="btn-secondary" loading={props.controller.pageRefreshing("agentConfig")} onClick={refreshServerSettings}>
             刷新
           </RefreshButton>
@@ -113,8 +120,8 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
             <span class="codicon codicon-save" aria-hidden="true" />
             {agentConfigSavePending() ? t("agentConfig.saving") : t("agentConfig.save")}
           </button>
-        </div>
-      </div>
+        </SettingsActionRail>
+      </SettingsPageHeader>
 
       <Show when={props.controller.operations.error("agentConfigSave") || props.controller.operations.error("serverSettings")}>
         <div class="settings-error">{props.controller.operations.error("agentConfigSave") || props.controller.operations.error("serverSettings")}</div>
@@ -127,21 +134,19 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
       </Show>
 
       {/* ── Runtime Profiles Section ── */}
-      <nav class="settings-subtabs" aria-label={t("agentConfig.title")}>
+      <SettingsSubTabs ariaLabel={t("agentConfig.title")}>
         <For each={AGENT_CONFIG_SECTIONS}>
           {(item) => (
-            <button
-              type="button"
-              class={`settings-subtab-button ${section() === item.id ? "settings-subtab-button--active" : ""}`}
-              aria-pressed={section() === item.id}
+            <SettingsSubTabButton
+              active={section() === item.id}
+              icon={item.icon}
               onClick={() => setSection(item.id)}
             >
-              <span class={`codicon codicon-${item.icon}`} aria-hidden="true" />
               {t(item.labelKey)}
-            </button>
+            </SettingsSubTabButton>
           )}
         </For>
-      </nav>
+      </SettingsSubTabs>
 
       <Show when={section() === "profiles"}>
       <section class="settings-section settings-section--flat" classList={{ "settings-section--hidden": section() !== "profiles" }}>
@@ -452,10 +457,10 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
                   <small class="field-help">{t("agentConfig.agent.capabilityRefsDesc")}</small>
                 </label>
                 <Show when={selectedAgentCapabilityPackages().length > 0}>
-                  <div class="capability-detail-section field-label--full">
+                  <div class="settings-detail-section field-label--full">
                     <span>{t("agentConfig.agent.capabilityPackagesPreview")}</span>
                     <For each={selectedAgentCapabilityPackages()}>{(pkg) => (
-                      <div class="capability-detail-block">
+                      <div class="settings-detail-block">
                         <strong>{pkg.name || pkg.id}</strong>
                         <small>{pkg.description || pkg.id}</small>
                         {renderCapabilityGroup("提供的能力", capabilityPackageComponentGroups(pkg.components).capabilities, "未声明 MCP Server 或 Skill。")}
@@ -547,7 +552,7 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
           </Show>
         </div>
       </section>
-    </div>
+    </SettingsPage>
   )
 
 

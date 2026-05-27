@@ -2,6 +2,7 @@ import { Component, Show, createEffect, createMemo, createSignal } from "solid-j
 import { t } from "../../i18n"
 import { RefreshButton } from "../../components/common/RefreshButton"
 import { StatusBadge } from "../components/StatusBadge"
+import { SettingsActionRail, SettingsPage, SettingsPageHeader } from "../components/SettingsLayout"
 import type { SettingsController } from "../useSettingsController"
 
 interface TabProps { controller: SettingsController & Record<string, any> }
@@ -111,13 +112,13 @@ export const ServerSettingsTab: Component<TabProps> = (props) => {
   const runtime = agentRunsState()
   return (
 
-      <div class="settings-page">
-        <div class="settings-page-header">
+      <SettingsPage>
+        <SettingsPageHeader>
           <div>
             <h2>{t("serverSettings.title")}</h2>
             <p class="setting-description">{t("serverSettings.desc")}</p>
           </div>
-          <div class="settings-actions settings-actions--right">
+          <SettingsActionRail align="right">
             <RefreshButton class="btn-secondary" loading={pageRefreshing("serverSettings")} onClick={refreshServerSettings}>
               {t("common.refresh")}
             </RefreshButton>
@@ -125,8 +126,8 @@ export const ServerSettingsTab: Component<TabProps> = (props) => {
               <span class="codicon codicon-save" aria-hidden="true" />
               {t("common.save")}
             </button>
-          </div>
-        </div>
+          </SettingsActionRail>
+        </SettingsPageHeader>
 
         <Show when={operations.error("serverSettingsSave") || operations.error("serverSettings")}>
           <div class="settings-error">{operations.error("serverSettingsSave") || operations.error("serverSettings")}</div>
@@ -241,16 +242,16 @@ export const ServerSettingsTab: Component<TabProps> = (props) => {
             <span>持久化策略</span>
             <StatusBadge tone="muted">{stringValue(persistenceSettings().backend, "auto")}</StatusBadge>
           </div>
-          <div class="capability-detail-grid">
-            <div class="capability-detail-block">
+          <div class="settings-detail-grid">
+            <div class="settings-detail-block">
               <span>Backend</span>
               <strong>{stringValue(persistenceSettings().backend, "auto")}</strong>
             </div>
-            <div class="capability-detail-block">
+            <div class="settings-detail-block">
               <span>Database URL</span>
               <strong>{stringValue(persistenceSettings().database_url) ? "已配置" : "未配置"}</strong>
             </div>
-            <div class="capability-detail-block">
+            <div class="settings-detail-block">
               <span>Auto Migrate</span>
               <strong>{boolValue(persistenceSettings().auto_migrate, true) ? "true" : "false"}</strong>
             </div>
@@ -274,13 +275,13 @@ export const ServerSettingsTab: Component<TabProps> = (props) => {
               <input type="number" min="1" value={persistenceMaintenanceInterval()} onInput={(event) => { setPersistenceMaintenanceInterval(Number(event.currentTarget.value) || 1); markInfraDirty() }} />
             </label>
           </div>
-          <div class="settings-actions settings-actions--right">
+          <SettingsActionRail align="right">
             <button class="btn btn-primary" type="button" disabled={!infraDirty() || serverSettingsSaveBusy()} onClick={saveInfrastructureSettings}>
               <span class="codicon codicon-save" aria-hidden="true" />
               保存运行环境
             </button>
-          </div>
+          </SettingsActionRail>
         </section>
-      </div>
+      </SettingsPage>
     )
 }

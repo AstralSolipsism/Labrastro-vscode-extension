@@ -2,6 +2,7 @@ import { Component, For, Show, createMemo, createSignal } from "solid-js"
 import { RefreshButton } from "../../components/common/RefreshButton"
 import { DialogSurface } from "../../components/common/interaction"
 import { StatusBadge } from "../components/StatusBadge"
+import { SettingsPage } from "../components/SettingsLayout"
 import type { SettingsController } from "../useSettingsController"
 
 interface TabProps { controller: SettingsController & Record<string, any> }
@@ -94,7 +95,7 @@ export const AccountsTab: Component<TabProps> = (props) => {
   }
 
   return (
-    <div class="settings-page settings-page--wide account-admin-page">
+    <SettingsPage wide extraClass="account-admin-page">
       <Show when={c.adminUsable()} fallback={
         <section class="account-access-denied" aria-live="polite">
           <span class="codicon codicon-lock" aria-hidden="true" />
@@ -474,7 +475,7 @@ export const AccountsTab: Component<TabProps> = (props) => {
           </div>
         </DialogSurface>
       </Show>
-    </div>
+    </SettingsPage>
   )
 }
 
