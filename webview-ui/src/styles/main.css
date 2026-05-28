@@ -1145,6 +1145,10 @@ button {
   font-size: 11px;
 }
 
+.settings-form-grid .field-label--full {
+  grid-column: 1 / -1;
+}
+
 .setting-select,
 .setting-input,
 .field-label input:not([type="checkbox"]),

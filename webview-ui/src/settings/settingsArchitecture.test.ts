@@ -198,6 +198,26 @@ describe("settings architecture", () => {
     expect(source).not.toContain("settingsMessages.refreshAdmin(vscode)")
   })
 
+  it("keeps memory settings on provider adapters instead of storage backends", () => {
+    const sessionPolicySource = readFileSync(join(tabsDir, "SessionPolicyTab.tsx"), "utf8")
+
+    expect(sessionPolicySource).toContain("memoryDefaultProvider")
+    expect(sessionPolicySource).toContain("memoryProvidersJson")
+    expect(sessionPolicySource).toContain("memorySourcesJson")
+    expect(sessionPolicySource).toContain("memoryToolsEnabled")
+    expect(sessionPolicySource).toContain("default_provider")
+    expect(sessionPolicySource).toContain("providers")
+    expect(sessionPolicySource).toContain("sources")
+    expect(sessionPolicySource).toContain("tools")
+    expect(sessionPolicySource).not.toContain("memory" + "Backend")
+    expect(sessionPolicySource).not.toContain("memory" + "StorePath")
+    expect(sessionPolicySource).not.toContain("memory" + ".backend")
+    expect(sessionPolicySource).not.toContain("store" + "_path")
+    expect(sessionPolicySource).not.toContain('<option value="' + 'sqlite">')
+    expect(sessionPolicySource).not.toContain('<option value="' + 'postgres">')
+    expect(sessionPolicySource).not.toContain('<option value="' + 'memory">')
+  })
+
   it("keeps provider catalog models behind an explicit add or configure action", () => {
     const providersSource = readFileSync(join(tabsDir, "ProvidersTab.tsx"), "utf8")
 
