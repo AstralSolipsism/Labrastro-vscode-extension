@@ -182,6 +182,70 @@ describe("ChatRunCoordinator", () => {
     })
   })
 
+  it("reports approval reply success with the backend resolution state", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    options.client.approvalReply.mockResolvedValueOnce({
+      ok: true,
+      state: "already_resolved",
+    })
+    subject.setActiveRun({
+      chatId: "active-chat",
+      cursor: 0,
+      status: "running",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reconnectAttempts: 0,
+    })
+
+    await subject.handleMessage({
+      type: "approval.reply",
+      approvalId: "approval-1",
+      decision: "allow_once",
+      reason: "ok",
+    }, post)
+
+    expect(post).toHaveBeenCalledWith({
+      type: "approval.reply.ok",
+      chatId: "active-chat",
+      approvalId: "approval-1",
+      decision: "allow_once",
+      payload: {
+        ok: true,
+        state: "already_resolved",
+      },
+    })
+  })
+
+  it("reports approval reply failures without converting the chat run to a fatal chat error", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    options.client.approvalReply.mockRejectedValueOnce(new Error("fetch failed"))
+    subject.setActiveRun({
+      chatId: "active-chat",
+      cursor: 0,
+      status: "running",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reconnectAttempts: 0,
+    })
+
+    await subject.handleMessage({
+      type: "approval.reply",
+      approvalId: "approval-1",
+      decision: "allow_once",
+      reason: "ok",
+    }, post)
+
+    expect(post).toHaveBeenCalledWith({
+      type: "approval.reply.error",
+      chatId: "active-chat",
+      approvalId: "approval-1",
+      decision: "allow_once",
+      message: "fetch failed",
+    })
+    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "chat.error" }))
+    expect(subject.activeRun?.chatId).toBe("active-chat")
+  })
+
   it("routes chat follow-ups to the active run and supports cancellation", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()

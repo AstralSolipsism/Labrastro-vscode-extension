@@ -81,6 +81,8 @@ export type HostToWebviewMessageType =
   | "agentRun.error"
   | "agentRun.events"
   | "agentRun.submitted"
+  | "approval.reply.error"
+  | "approval.reply.ok"
   | "serverSettings.error"
   | "serverSettings.state"
   | "session.adopted"
@@ -289,6 +291,8 @@ const HOST_TO_WEBVIEW_TYPES = new Set<HostToWebviewMessageType>([
   "agentRun.error",
   "agentRun.events",
   "agentRun.submitted",
+  "approval.reply.error",
+  "approval.reply.ok",
   "serverSettings.error",
   "serverSettings.state",
   "session.adopted",

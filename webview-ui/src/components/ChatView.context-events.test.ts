@@ -126,6 +126,24 @@ describe("ChatView context events", () => {
     expect(source).toContain('locale: locale()')
   })
 
+  it("keeps approval reply failures recoverable in the approval UI", () => {
+    expect(source).toContain('msg.type === "approval.reply.error"')
+    expect(source).toContain("markApprovalSubmitFailed(items, approvalId, message)")
+    expect(source).toContain("mergeStatusApprovals(items, statusApprovals, chatId)")
+  })
+
+  it("clears pending approvals when approval reply succeeds", () => {
+    expect(source).toContain('msg.type === "approval.reply.ok"')
+    expect(source).toContain("markApprovalSubmitSucceeded(items, approvalId)")
+    expect(source).toContain("setSelectedApproval(undefined)")
+  })
+
+  it("routes auto approval through the same recoverable pending approval path", () => {
+    expect(source).toContain("setPendingApprovals((items) => upsertPendingApproval(items, pendingApproval))")
+    expect(source).toContain('replyApproval(pendingApproval, "allow_once", autoDecision.replyReason)')
+    expect(source).toContain('replyApproval(pendingApproval, "deny_once", autoDecision.replyReason)')
+  })
+
   it("guards slash command dispatch during active runs with command metadata", () => {
     expect(source).toContain("findChatCommandByText(chatCommandCatalog(), text)")
     expect(source).toContain("isWorking() && !command?.availableDuringRun")

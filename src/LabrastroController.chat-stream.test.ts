@@ -4,6 +4,14 @@ import { describe, expect, it } from "vitest"
 
 const source = readFileSync(join(__dirname, "LabrastroController.ts"), "utf8")
 
+function sourceSection(start: string, end: string): string {
+  const startIndex = source.indexOf(start)
+  const endIndex = source.indexOf(end, startIndex)
+  expect(startIndex).toBeGreaterThanOrEqual(0)
+  expect(endIndex).toBeGreaterThan(startIndex)
+  return source.slice(startIndex, endIndex)
+}
+
 describe("LabrastroController chat stream batching", () => {
   it("splits live stream deltas from replayable chat events", () => {
     expect(source).toContain("LIVE_CHAT_EVENT_TYPES")
@@ -23,6 +31,24 @@ describe("LabrastroController chat stream batching", () => {
     expect(source).not.toContain("canFallbackToLongPoll")
     expect(source).not.toContain("streamChat(")
     expect(source).not.toContain("LIVE_CHAT_STREAM_EVENT_TYPES")
+  })
+
+  it("refreshes active run status before chat.resume and forwards pending approvals", () => {
+    expect(source).toContain("activeRunPayloadWithServerStatus")
+    expect(source).toContain("const status = await this.client.chatStatus(chatId")
+    expect(source).toContain("approvals: Array.isArray(status.approvals) ? status.approvals : []")
+  })
+
+  it("does not advance the active run cursor from chat status", () => {
+    const resumeStatusFunction = sourceSection(
+      "private async activeRunPayloadWithServerStatus",
+      "private async refreshInitialStateInBackground",
+    )
+
+    expect(resumeStatusFunction).not.toContain("status.next_cursor")
+    expect(resumeStatusFunction).not.toContain("patchActiveRun({\n          cursor")
+    expect(resumeStatusFunction).toContain("const payloadCursor = Number(payload.cursor")
+    expect(resumeStatusFunction).toContain("const cursor = Number.isFinite(payloadCursor) ? payloadCursor : 0")
   })
 
   it("prefers the live chat.send locale over saved workspace locale", () => {

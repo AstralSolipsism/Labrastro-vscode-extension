@@ -236,16 +236,31 @@ export class ChatRunCoordinator {
           stringValue(message.chatId) ||
           this.activeChatId ||
           ""
+        const approvalId = stringValue(message.approvalId) || ""
+        const decision = stringValue(message.decision) || "deny_once"
         try {
-          await this.options.client.approvalReply({
+          const payload = await this.options.client.approvalReply({
             chat_id: chatId,
-            approval_id: stringValue(message.approvalId) || "",
-            decision: stringValue(message.decision) || "deny_once",
+            approval_id: approvalId,
+            decision,
             reason: stringValue(message.reason),
+          })
+          post({
+            type: "approval.reply.ok",
+            chatId,
+            approvalId,
+            decision,
+            payload,
           })
         } catch (error) {
           const resolvedError = chatErrorMessage(error)
-          post({ type: "chat.error", message: resolvedError })
+          post({
+            type: "approval.reply.error",
+            chatId,
+            approvalId,
+            decision,
+            message: resolvedError,
+          })
           await this.options.postConnectionStateIfAuthRequired(error, post)
         }
         return true

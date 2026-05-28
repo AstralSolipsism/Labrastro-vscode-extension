@@ -72,6 +72,14 @@ import {
   type SessionHistorySort,
 } from "../chat/sessionHistoryView"
 import {
+  markApprovalSubmitFailed,
+  markApprovalSubmitting,
+  markApprovalSubmitSucceeded,
+  mergeStatusApprovals,
+  type ApprovalSubmissionFields,
+  type ApprovalSubmissionState,
+} from "../chat/approval-state"
+import {
   approvalDecisionAfterResolution,
   approvalStatusAfterResolution,
   requiredToolCallId,
@@ -120,8 +128,9 @@ import type {
   TranscriptItem,
 } from "./chat/transcript-model"
 
-interface PendingApproval extends ApprovalDetails {
+interface PendingApproval extends ApprovalDetails, ApprovalSubmissionFields {
   chatId: string
+  submissionState?: ApprovalSubmissionState
 }
 
 interface ChatWebviewState {
@@ -1501,20 +1510,21 @@ const ChatView: Component<ChatViewProps> = (props) => {
         approvalSections: next.sections as Record<string, unknown>[],
         approvalDecision: autoDecision.decision === "allow" ? "auto_approved" : autoDecision.decision === "deny" ? "auto_denied" : undefined,
       }, next.toolCallId, { meta: eventMeta })
+      const pendingApproval = {
+        ...next,
+        autoApprovalReason: autoDecision.reason,
+      }
+      setPendingApprovals((items) => upsertPendingApproval(items, pendingApproval))
       if (autoDecision.decision === "allow") {
-        sendApprovalDecision(next, "allow_once", autoDecision.replyReason)
+        replyApproval(pendingApproval, "allow_once", autoDecision.replyReason)
         markRenderedEvent(eventMeta)
         return
       }
       if (autoDecision.decision === "deny") {
-        sendApprovalDecision(next, "deny_once", autoDecision.replyReason)
+        replyApproval(pendingApproval, "deny_once", autoDecision.replyReason)
         markRenderedEvent(eventMeta)
         return
       }
-      setPendingApprovals((items) => upsertPendingApproval(items, {
-        ...next,
-        autoApprovalReason: autoDecision.reason,
-      }))
     } else if (type === "approval_resolved") {
       const approvalId = String(payload.approval_id || "")
       const toolCallId = stringValue(payload.tool_call_id)
@@ -2120,10 +2130,24 @@ const ChatView: Component<ChatViewProps> = (props) => {
     })
   }
 
-  const replyApproval = (approval: PendingApproval, decision: ApprovalDecision) => {
-    setPendingApprovals((items) => items.filter((item) => item.approvalId !== approval.approvalId))
-    if (selectedApproval()?.approvalId === approval.approvalId) setSelectedApproval(undefined)
-    sendApprovalDecision(approval, decision)
+  const replyApproval = (approval: PendingApproval, decision: ApprovalDecision, reason?: string) => {
+    const nextApproval = {
+      ...approval,
+      submissionState: "submitting" as const,
+      submittedDecision: decision,
+      submissionError: undefined,
+    }
+    setPendingApprovals((items) =>
+      markApprovalSubmitting(
+        upsertPendingApproval(items, nextApproval),
+        approval.approvalId,
+        decision,
+      )
+    )
+    if (selectedApproval()?.approvalId === approval.approvalId) {
+      setSelectedApproval(nextApproval)
+    }
+    sendApprovalDecision(approval, decision, reason)
   }
 
   const rememberApprovalDecision = (
@@ -2344,6 +2368,12 @@ const ChatView: Component<ChatViewProps> = (props) => {
             trace.loadSession(sessionId)
           }
         }
+        const statusApprovals = Array.isArray(payload.approvals) ? payload.approvals : []
+        if (chatId && statusApprovals.length) {
+          setPendingApprovals((items) =>
+            mergeStatusApprovals(items, statusApprovals, chatId)
+          )
+        }
         setIsWorking(true)
         setChatStatus("running")
         setWorkingText(String(payload.status || "") === "reconnecting" ? "正在重连" : "正在继续处理")
@@ -2408,6 +2438,31 @@ const ChatView: Component<ChatViewProps> = (props) => {
       if (msg.type === "chat.cancelled") {
         markActiveToolsCancelled()
         finishChatRun("cancelled")
+      }
+      if (msg.type === "approval.reply.ok") {
+        const approvalId = stringValue(msg.approvalId) || stringValue(msg.approval_id)
+        if (approvalId) {
+          setPendingApprovals((items) => markApprovalSubmitSucceeded(items, approvalId))
+          if (selectedApproval()?.approvalId === approvalId) {
+            setSelectedApproval(undefined)
+          }
+        }
+      }
+      if (msg.type === "approval.reply.error") {
+        const approvalId = stringValue(msg.approvalId) || stringValue(msg.approval_id)
+        const message = typeof msg.message === "string" ? msg.message : "approval reply failed"
+        if (approvalId) {
+          setPendingApprovals((items) => markApprovalSubmitFailed(items, approvalId, message))
+          const selected = selectedApproval()
+          if (selected?.approvalId === approvalId) {
+            setSelectedApproval({
+              ...selected,
+              submissionState: "submit_failed",
+              submissionError: message,
+            })
+          }
+        }
+        appendNotice("error", `审批提交失败：${message}`, "error")
       }
       if (msg.type === "environment.run.error" && isWorking()) {
         appendNotice("error", `环境任务失败：${typeof msg.message === "string" ? msg.message : "unknown error"}`, "error")
@@ -2570,6 +2625,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
                 const canQuickRemember = () => summary().category === "execute" && quickRememberRules().length > 0
                 const canAlwaysAllowCategory = () => isCategoryAlwaysAllowAction(summary().category)
                 const remembering = () => rememberingApprovalId() === approval.approvalId
+                const submitting = () => approval.submissionState === "submitting"
+                const failed = () => approval.submissionState === "submit_failed"
+                const actionsDisabled = () => remembering() || submitting()
                 return (
                   <div class="approval-strip__item">
                     <span class={`codicon codicon-${summary().icon}`} aria-hidden="true" />
@@ -2577,38 +2635,45 @@ const ChatView: Component<ChatViewProps> = (props) => {
                       <strong>{summary().title}</strong>
                       <span>{summary().primary}</span>
                       <small>{summary().secondary}</small>
+                      <Show when={failed()}>
+                        <small class="approval-strip__error">提交失败：{approval.submissionError || "请重试"}</small>
+                      </Show>
                     </span>
                     <div class="approval-strip__actions">
-                      <button type="button" onClick={() => openApprovalDetails(approval)}>查看详情</button>
+                      <button type="button" disabled={submitting()} onClick={() => openApprovalDetails(approval)}>查看详情</button>
                       <Show when={canQuickRemember()}>
                         <button
                           type="button"
-                          disabled={remembering()}
+                          disabled={actionsDisabled()}
                           onClick={() => quickRememberApprovalDecision(approval, "allow_once")}
                         >
-                          {remembering() ? "写入中..." : "批准并始终运行"}
+                          {remembering() ? "写入中..." : submitting() ? "提交中..." : "批准并始终运行"}
                         </button>
                       </Show>
                       <Show when={canAlwaysAllowCategory()}>
                         <button
                           type="button"
-                          disabled={remembering()}
+                          disabled={actionsDisabled()}
                           onClick={() => alwaysAllowApprovalCategory(approval)}
                         >
-                          {remembering() ? "写入中..." : "批准并始终允许 MCP"}
+                          {remembering() ? "写入中..." : submitting() ? "提交中..." : "批准并始终允许 MCP"}
                         </button>
                       </Show>
-                      <button type="button" onClick={() => replyApproval(approval, "allow_once")}>批准一次</button>
+                      <button type="button" disabled={actionsDisabled()} onClick={() => replyApproval(approval, "allow_once")}>
+                        {submitting() && approval.submittedDecision === "allow_once" ? "提交中..." : failed() ? "重试批准" : "批准一次"}
+                      </button>
                       <Show when={canQuickRemember()}>
                         <button
                           type="button"
-                          disabled={remembering()}
+                          disabled={actionsDisabled()}
                           onClick={() => quickRememberApprovalDecision(approval, "deny_once")}
                         >
-                          {remembering() ? "写入中..." : "拒绝并记住"}
+                          {remembering() ? "写入中..." : submitting() ? "提交中..." : "拒绝并记住"}
                         </button>
                       </Show>
-                      <button type="button" onClick={() => replyApproval(approval, "deny_once")}>拒绝</button>
+                      <button type="button" disabled={actionsDisabled()} onClick={() => replyApproval(approval, "deny_once")}>
+                        {submitting() && approval.submittedDecision === "deny_once" ? "提交中..." : failed() ? "重试拒绝" : "拒绝"}
+                      </button>
                     </div>
                   </div>
                 )
@@ -2900,7 +2965,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         {(approval) => (
           <ApprovalDetailsDialog
             approval={approval()}
-            autoApprovalPending={rememberingApprovalId() === approval().approvalId}
+            autoApprovalPending={rememberingApprovalId() === approval().approvalId || approval().submissionState === "submitting"}
             onClose={() => setSelectedApproval(undefined)}
             onDecision={(decision) => replyApproval(approval(), decision)}
             onAlwaysAllow={() => alwaysAllowApprovalCategory(approval())}

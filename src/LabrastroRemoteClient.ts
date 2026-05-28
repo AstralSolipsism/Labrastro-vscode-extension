@@ -499,8 +499,8 @@ export class LabrastroRemoteClient {
     return this.authenticatedPost("/remote/admin/environment-requirements/dashboard", {})
   }
 
-  async environmentRequirementsBehaviorCatalog(): Promise<JsonObject> {
-    return this.authenticatedPost("/remote/admin/environment-requirements/behavior-catalog", {})
+  async behaviorCatalog(): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/behavior/catalog", {})
   }
 
   async environmentRequirementRecord(payload: JsonObject): Promise<JsonObject> {

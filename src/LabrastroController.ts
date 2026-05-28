@@ -285,8 +285,9 @@ export class LabrastroController implements vscode.Disposable {
     if (includeSession) {
       await this.sessionCoordinator.postSessionSyncStatus(post)
     }
-    const activeRunPayload = this.chatRunCoordinator.activeRunPayload()
+    let activeRunPayload = this.chatRunCoordinator.activeRunPayload()
     if (activeRunPayload && includeChatResume) {
+      activeRunPayload = await this.activeRunPayloadWithServerStatus(activeRunPayload)
       post({ type: "chat.resume", payload: activeRunPayload })
     }
     post({
@@ -297,6 +298,40 @@ export class LabrastroController implements vscode.Disposable {
       includeAdminState,
       includeSession,
     })
+  }
+
+  private async activeRunPayloadWithServerStatus(
+    payload: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const chatId = stringValue(payload.chatId) || stringValue(payload.chat_id)
+    if (!chatId) return payload
+    try {
+      const payloadCursor = Number(payload.cursor ?? 0)
+      const cursor = Number.isFinite(payloadCursor) ? payloadCursor : 0
+      const status = await this.client.chatStatus(chatId, cursor)
+      const sessionId =
+        stringValue(status.session_id) ||
+        stringValue(status.sessionId) ||
+        stringValue(payload.sessionId) ||
+        stringValue(payload.session_id)
+      this.chatRunCoordinator.patchActiveRun({
+        sessionId,
+        lastStreamAt: new Date().toISOString(),
+      })
+      const latestRun = this.chatRunCoordinator.activeRunPayload() || payload
+      return {
+        ...payload,
+        ...latestRun,
+        chatId,
+        cursor: Number.isFinite(cursor) ? cursor : 0,
+        sessionId,
+        session_id: sessionId,
+        status: stringValue(status.status) || stringValue(payload.status) || "running",
+        approvals: Array.isArray(status.approvals) ? status.approvals : [],
+      }
+    } catch {
+      return payload
+    }
   }
 
   private async refreshInitialStateInBackground(
@@ -654,7 +689,7 @@ export class LabrastroController implements vscode.Disposable {
       }
       let behaviorCatalog: Record<string, unknown> | undefined
       try {
-        behaviorCatalog = await this.client.environmentRequirementsBehaviorCatalog()
+        behaviorCatalog = await this.client.behaviorCatalog()
       } catch (error) {
         behaviorCatalog = {
           error: errorMessage(error),
@@ -1456,7 +1491,12 @@ export class LabrastroController implements vscode.Disposable {
       })
       this.emitChatMessage({
         type: "chat.resume",
-        payload: { chatId, sessionId, status: "running" },
+        payload: {
+          chatId,
+          sessionId,
+          status: "running",
+          approvals: Array.isArray(status.approvals) ? status.approvals : [],
+        },
       }, post)
       await this.consumeChatEventStream(chatId, sessionId, post)
     } catch (error) {

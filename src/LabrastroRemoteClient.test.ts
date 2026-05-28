@@ -796,8 +796,8 @@ describe("LabrastroRemoteClient runtime admin API", () => {
       body: {},
       authorization: "Bearer access-token-1",
     })
-    await expect(client.environmentRequirementsBehaviorCatalog()).resolves.toMatchObject({
-      path: "/remote/admin/environment-requirements/behavior-catalog",
+    await expect(client.behaviorCatalog()).resolves.toMatchObject({
+      path: "/remote/admin/behavior/catalog",
       body: {},
       authorization: "Bearer access-token-1",
     })
