@@ -9,6 +9,7 @@ import {
 } from "../utils/host-url"
 import {
   formatAgentConfigList,
+  isServerCapableRuntimeProfile,
   makeUniqueAgentConfigId,
   parseAgentConfigListText,
   renameRecordKey,
@@ -429,8 +430,10 @@ interface CapabilityPackageIngestState {
   agentRunId: string
   status: string
   error: string
+  validationMessages?: string[]
   draft?: Record<string, unknown>
   source?: Record<string, unknown>
+  sourceBundle?: Record<string, unknown>
 }
 
 interface CapabilityEditorState {
@@ -479,6 +482,8 @@ interface RuntimeProfileDraft {
   id: string
   executor: string
   execution_location: string
+  worker_kind: string
+  model_request_origin: string
   runtime_home_policy: string
   approval_mode: string
   config_isolation: string
@@ -532,6 +537,16 @@ const PROFILE_EXECUTION_LOCATION_OPTIONS: RuntimeOption[] = [
   { value: "local_workspace", labelKey: "agentConfig.profile.executionLocation.localWorkspace", descKey: "agentConfig.profile.executionLocation.localWorkspace.desc" },
   { value: "remote_server", labelKey: "agentConfig.profile.executionLocation.remoteServer", descKey: "agentConfig.profile.executionLocation.remoteServer.desc" },
 ]
+const PROFILE_WORKER_KIND_OPTIONS: RuntimeOption[] = [
+  { value: "server_worker", labelKey: "agentConfig.profile.workerKind.serverWorker", descKey: "agentConfig.profile.workerKind.serverWorker.desc" },
+  { value: "sandbox_worker", labelKey: "agentConfig.profile.workerKind.sandboxWorker", descKey: "agentConfig.profile.workerKind.sandboxWorker.desc" },
+  { value: "local_peer", labelKey: "agentConfig.profile.workerKind.localPeer", descKey: "agentConfig.profile.workerKind.localPeer.desc" },
+]
+const PROFILE_MODEL_REQUEST_ORIGIN_OPTIONS: RuntimeOption[] = [
+  { value: "server", labelKey: "agentConfig.profile.modelRequestOrigin.server", descKey: "agentConfig.profile.modelRequestOrigin.server.desc" },
+  { value: "server_worker_cli", labelKey: "agentConfig.profile.modelRequestOrigin.serverWorkerCli", descKey: "agentConfig.profile.modelRequestOrigin.serverWorkerCli.desc" },
+  { value: "local_cli", labelKey: "agentConfig.profile.modelRequestOrigin.localCli", descKey: "agentConfig.profile.modelRequestOrigin.localCli.desc" },
+]
 const PROFILE_HOME_POLICY_OPTIONS: RuntimeOption[] = [
   { value: "per_task", labelKey: "agentConfig.profile.runtimeHomePolicy.perTask", descKey: "agentConfig.profile.runtimeHomePolicy.perTask.desc" },
   { value: "shared", labelKey: "agentConfig.profile.runtimeHomePolicy.shared", descKey: "agentConfig.profile.runtimeHomePolicy.shared.desc" },
@@ -555,7 +570,9 @@ function emptyProfileDraft(id = ""): RuntimeProfileDraft {
   return {
     id,
     executor: "reuleauxcoder",
-    execution_location: "local_workspace",
+    execution_location: "remote_server",
+    worker_kind: "server_worker",
+    model_request_origin: "server",
     runtime_home_policy: "per_task",
     approval_mode: "full",
     config_isolation: "",
@@ -593,12 +610,60 @@ function emptyAgentDraft(id = ""): AgentDefinitionDraft {
   }
 }
 
+function inferredProfileModelRequestOrigin(profile: Record<string, unknown>): string {
+  const explicit = stringValue(profile.model_request_origin)
+  if (explicit) return explicit
+  const executor = stringValue(profile.executor, "reuleauxcoder")
+  const executionLocation = stringValue(profile.execution_location, "remote_server")
+  const workerKind = stringValue(
+    profile.worker_kind,
+    executionLocation === "local_workspace" ? "local_peer" : "server_worker",
+  )
+  if (executor === "codex" || executor === "claude" || executor === "gemini") {
+    return workerKind === "local_peer" ? "local_cli" : "server_worker_cli"
+  }
+  return "server"
+}
+
+function expectedProfileModelRequestOrigin(profile: Record<string, unknown>): string {
+  const executor = stringValue(profile.executor, "reuleauxcoder")
+  const executionLocation = stringValue(profile.execution_location, "remote_server")
+  const workerKind = stringValue(
+    profile.worker_kind,
+    executionLocation === "local_workspace" ? "local_peer" : "server_worker",
+  )
+  if (executor === "codex" || executor === "claude" || executor === "gemini") {
+    return workerKind === "local_peer" ? "local_cli" : "server_worker_cli"
+  }
+  return "server"
+}
+
+function validateProfileModelRequestOrigin(id: string, profile: Record<string, unknown>): void {
+  const expected = expectedProfileModelRequestOrigin(profile)
+  const actual = stringValue(profile.model_request_origin, expected)
+  if (actual !== expected) {
+    throw new Error(
+      `Runtime Profile ${id} 的模型请求来源不一致：${stringValue(profile.executor, "reuleauxcoder")} ` +
+      `/${stringValue(profile.worker_kind, "server_worker")} 必须使用 model_request_origin=${expected}。`,
+    )
+  }
+}
+
+function defaultProfileModelRequestOrigin(profile: Record<string, unknown>): string {
+  return inferredProfileModelRequestOrigin({ ...profile, model_request_origin: "" })
+}
+
 /** 将后端 profile 对象转为编辑器 draft */
-function profileToDraft(id: string, profile: Record<string, unknown>): RuntimeProfileDraft {
+export function profileToDraft(id: string, profile: Record<string, unknown>): RuntimeProfileDraft {
   return {
     id,
     executor: stringValue(profile.executor, "reuleauxcoder"),
-    execution_location: stringValue(profile.execution_location, "local_workspace"),
+    execution_location: stringValue(profile.execution_location, "remote_server"),
+    worker_kind: stringValue(
+      profile.worker_kind,
+      stringValue(profile.execution_location) === "local_workspace" ? "local_peer" : "server_worker",
+    ),
+    model_request_origin: inferredProfileModelRequestOrigin(profile),
     runtime_home_policy: stringValue(profile.runtime_home_policy, "per_task"),
     approval_mode: stringValue(profile.approval_mode, "full"),
     config_isolation: stringValue(profile.config_isolation),
@@ -661,6 +726,8 @@ function profileDraftToPayload(draft: RuntimeProfileDraft): Record<string, unkno
   const payload: Record<string, unknown> = {
     executor: draft.executor,
     execution_location: draft.execution_location,
+    worker_kind: draft.worker_kind,
+    model_request_origin: draft.model_request_origin,
     runtime_home_policy: draft.runtime_home_policy,
     approval_mode: draft.approval_mode,
   }
@@ -2900,6 +2967,9 @@ export function createSettingsController(props: SettingsViewProps) {
           agentRunId,
           status: stringValue(task.status, "queued"),
           source: objectValue(payload.source),
+          sourceBundle: objectValue(payload.source_bundle),
+          draft: undefined,
+          validationMessages: [],
           error: "",
         }))
         if (agentRunId) startCapabilityIngestPolling(agentRunId)
@@ -2909,6 +2979,7 @@ export function createSettingsController(props: SettingsViewProps) {
         const task = objectValue(payload.agent_run)
         const status = stringValue(task.status, "queued")
         const draft = objectValue(payload.draft)
+        const sourceBundle = objectValue(payload.source_bundle)
         markOperationSuccess("capabilityIngestStatus")
         setCapabilityPackageIngestState((current) => ({
           ...current,
@@ -2916,6 +2987,8 @@ export function createSettingsController(props: SettingsViewProps) {
           agentRunId: stringValue(task.id || task.agent_run_id, current.agentRunId),
           status,
           draft: Object.keys(draft).length ? draft : current.draft,
+          sourceBundle: Object.keys(sourceBundle).length ? sourceBundle : current.sourceBundle,
+          validationMessages: stringArray(objectValue(payload.validation).messages),
           error: "",
         }))
         if (["completed", "failed", "cancelled", "blocked"].includes(status)) {
@@ -2926,15 +2999,22 @@ export function createSettingsController(props: SettingsViewProps) {
         setCapabilityPackageIngestState((current) => ({
           ...current,
           error: "",
+          validationMessages: [],
         }))
       }
       if (msg.type === "capabilityPackage.error") {
         if (operationBusy("capabilityIngestStart")) markOperationError("capabilityIngestStart", message)
         if (operationBusy("capabilityIngestStatus")) markOperationError("capabilityIngestStatus", message)
         stopCapabilityIngestPolling()
+        const payload = objectValue(msg.payload)
+        const validationMessages = [
+          ...stringArray(msg.messages),
+          ...stringArray(payload.messages),
+        ].filter((item, index, items) => items.indexOf(item) === index)
         setCapabilityPackageIngestState((current) => ({
           ...current,
           running: false,
+          validationMessages,
           error: message || "Capability package request failed",
         }))
       }
@@ -2977,14 +3057,26 @@ export function createSettingsController(props: SettingsViewProps) {
     for (const [id, profile] of Object.entries(profiles)) {
       const validation = validateAgentConfigId(profile.id || id, Object.keys(profiles), id)
       if (!validation.ok) throw new Error(agentConfigIdErrorMessage(validation.code, validation.id || id))
+      validateProfileModelRequestOrigin(profile.id || id, profile as unknown as Record<string, unknown>)
     }
     for (const [id, agent] of Object.entries(agents)) {
       const validation = validateAgentConfigId(agent.id || id, Object.keys(agents), id)
       if (!validation.ok) throw new Error(agentConfigIdErrorMessage(validation.code, validation.id || id))
     }
     for (const [id, agent] of Object.entries(agents)) {
+      if (agent.visibility === "user" && !agent.runtime_profile) {
+        throw new Error(`Agent ${id} 必须选择 Runtime Profile。`)
+      }
       if (agent.runtime_profile && !profiles[agent.runtime_profile]) {
         throw new Error(`Agent ${id} 引用的 Runtime Profile 不存在：${agent.runtime_profile}`)
+      }
+      if (
+        agent.visibility === "user"
+        && agent.taskflow_eligible
+        && agent.runtime_profile
+        && !isServerCapableRuntimeProfile(profiles[agent.runtime_profile] as unknown as Record<string, unknown>)
+      ) {
+        throw new Error(`Agent ${id} 允许 Taskflow 调度，Runtime Profile 必须使用服务端 worker 或 sandbox worker。`)
       }
     }
   }
@@ -3079,7 +3171,17 @@ export function createSettingsController(props: SettingsViewProps) {
     if (!id) return
     setProfileDrafts((prev) => ({
       ...prev,
-      [id]: { ...prev[id], [field]: value },
+      [id]: (() => {
+        const draft = { ...prev[id], [field]: value }
+        if (
+          field === "executor" ||
+          field === "execution_location" ||
+          field === "worker_kind"
+        ) {
+          draft.model_request_origin = defaultProfileModelRequestOrigin(draft)
+        }
+        return draft
+      })(),
     }))
     markAgentConfigDirty()
   }
@@ -3089,7 +3191,7 @@ export function createSettingsController(props: SettingsViewProps) {
       ...savedAgentIdSet(),
     ])
     const draft = emptyAgentDraft(id)
-    draft.runtime_profile = resolveNewAgentRunProfile(selectedProfileId(), profileIdList())
+    draft.runtime_profile = resolveNewAgentRunProfile(selectedProfileId(), profileIdList(), profileDrafts() as unknown as Record<string, Record<string, unknown>>)
     setAgentDrafts((prev) => ({ ...prev, [id]: draft }))
     setSelectedAgentId(id)
     markAgentConfigDirty()
@@ -3521,6 +3623,9 @@ export function createSettingsController(props: SettingsViewProps) {
       agentRunId: "",
       status: "starting",
       error: "",
+      validationMessages: [],
+      draft: undefined,
+      sourceBundle: undefined,
     })
     markOperationStarted("capabilityIngestStart", "saving")
     settingsMessages.startCapabilityPackageIngest(vscode, {
@@ -3542,7 +3647,7 @@ export function createSettingsController(props: SettingsViewProps) {
   const acceptCapabilityPackageDraft = () => {
     const draft = capabilityPackageIngestState().draft
     if (!draft) return
-    settingsMessages.acceptCapabilityPackageDraft(vscode, draft)
+    settingsMessages.acceptCapabilityPackageDraft(vscode, draft, capabilityPackageIngestState().sourceBundle)
   }
   const deleteCapabilityPackage = (packageId: string) => {
     if (!packageId || packageId === "environment") return
@@ -4050,6 +4155,8 @@ export function createSettingsController(props: SettingsViewProps) {
     EXECUTOR_ENGINES,
     PROFILE_EXECUTOR_OPTIONS,
     PROFILE_EXECUTION_LOCATION_OPTIONS,
+    PROFILE_WORKER_KIND_OPTIONS,
+    PROFILE_MODEL_REQUEST_ORIGIN_OPTIONS,
     PROFILE_HOME_POLICY_OPTIONS,
     PROFILE_APPROVAL_MODE_OPTIONS,
     PROFILE_CONFIG_ISOLATION_OPTIONS,

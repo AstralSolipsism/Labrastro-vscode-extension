@@ -124,8 +124,16 @@ export const settingsMessages = {
     port.postMessage({ type: "capabilityPackage.ingest.status", payload: { agent_run_id: agentRunId } })
   },
 
-  acceptCapabilityPackageDraft(port: SettingsMessagePort, draft: Record<string, unknown>): void {
-    port.postMessage({ type: "capabilityPackage.draft.accept", payload: { draft } })
+  acceptCapabilityPackageDraft(
+    port: SettingsMessagePort,
+    draft: Record<string, unknown>,
+    sourceBundle?: Record<string, unknown>,
+  ): void {
+    const payload: Record<string, unknown> = { draft }
+    if (sourceBundle && Object.keys(sourceBundle).length) {
+      payload.source_bundle = sourceBundle
+    }
+    port.postMessage({ type: "capabilityPackage.draft.accept", payload })
   },
 
   deleteCapabilityPackage(port: SettingsMessagePort, packageId: string): void {

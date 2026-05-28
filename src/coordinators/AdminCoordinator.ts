@@ -355,7 +355,11 @@ export class AdminCoordinator {
           await this.options.refreshCapabilityState(post)
           await this.options.refreshEnvironmentManifest(post)
         } catch (error) {
-          post({ type: "capabilityPackage.error", message: adminErrorMessage(error) })
+          post({
+            type: "capabilityPackage.error",
+            message: adminErrorMessage(error),
+            ...capabilityPackageErrorDetails(error),
+          })
           await this.refreshConnectionOnAuthBoundary(error, post)
         }
         return true
@@ -588,6 +592,17 @@ function adminErrorMessage(error: unknown): string {
   const detail = stringValue(objectValue(error.body).message)
   if (!detail || error.message.includes(detail)) return error.message
   return `${error.message}: ${detail}`
+}
+
+function capabilityPackageErrorDetails(error: unknown): Record<string, unknown> {
+  if (!isRemoteError(error)) return {}
+  const body = objectValue(error.body)
+  const rawMessages = body.messages
+  const messages = Array.isArray(rawMessages)
+    ? rawMessages.map((item) => stringValue(item)).filter(Boolean)
+    : []
+  if (!messages.length) return {}
+  return { payload: body, messages }
 }
 
 function adminErrorCategory(error: unknown): "unauthenticated" | "forbidden" | "unavailable" | "network" | "unknown" {

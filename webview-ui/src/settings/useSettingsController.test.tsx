@@ -1,15 +1,27 @@
 import { createRoot } from "solid-js"
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-const mocks = vi.hoisted(() => ({
-  server: undefined as any,
-  vscode: {
-    postMessage: vi.fn(),
-    onMessage: vi.fn(() => () => {}),
-    getState: vi.fn(() => undefined),
-    setState: vi.fn(),
-  },
-}))
+const mocks = vi.hoisted(() => {
+  const messageHandlers: Array<(message: Record<string, unknown>) => void> = []
+  return {
+    messageHandlers,
+    server: undefined as any,
+    vscode: {
+      postMessage: vi.fn(),
+      onMessage: vi.fn((handler: (message: Record<string, unknown>) => void) => {
+        messageHandlers.push(handler)
+        return () => {
+          const index = messageHandlers.indexOf(handler)
+          if (index >= 0) messageHandlers.splice(index, 1)
+        }
+      }),
+      getState: vi.fn(() => undefined),
+      setState: vi.fn(),
+    },
+  }
+})
 
 vi.mock("../context/server", () => ({
   useServer: () => mocks.server,
@@ -19,7 +31,9 @@ vi.mock("../context/vscode", () => ({
   useVSCode: () => mocks.vscode,
 }))
 
-import { createSettingsController } from "./useSettingsController"
+import { createSettingsController, profileToDraft } from "./useSettingsController"
+
+const settingsControllerSource = readFileSync(join(__dirname, "useSettingsController.tsx"), "utf8")
 
 function makeServer(overrides: Record<string, unknown> = {}) {
   const defaults: Record<string, unknown> = {
@@ -87,8 +101,29 @@ function withController<T>(
   }
 }
 
+function runtimeProfileDraft(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "profile",
+    executor: "reuleauxcoder",
+    execution_location: "remote_server",
+    worker_kind: "server_worker",
+    model_request_origin: "server",
+    runtime_home_policy: "per_task",
+    approval_mode: "full",
+    config_isolation: "",
+    model: "",
+    command: "",
+    argsText: "",
+    envText: "",
+    credentialRefsText: "",
+    mcpServersText: "",
+    ...overrides,
+  }
+}
+
 describe("settings controller capability model", () => {
   beforeEach(() => {
+    mocks.messageHandlers.splice(0)
     mocks.vscode.postMessage.mockClear()
     mocks.vscode.onMessage.mockClear()
   })
@@ -262,7 +297,7 @@ describe("settings controller capability model", () => {
     expect(groups.capabilities.map((item) => item.id)).toEqual(["skill:code-review", "mcp:github"])
     expect(groups.dependencies.map((item) => item.id)).toEqual(["envreq:sdk:dotnet"])
     expect(groups.capabilities[0]).toMatchObject({
-      summary: "Skill · code-review · path=/skills/code-review",
+      summary: "Skill · code-review · installed path=/skills/code-review",
       skillStatus: "disabled",
     })
   })
@@ -309,5 +344,344 @@ describe("settings controller capability model", () => {
       disabled: true,
       pathHint: "/skills/code-review",
     })
+  })
+
+  it("stores capability package validation messages from status and accept errors", () => {
+    expect(settingsControllerSource).toContain("validationMessages?: string[]")
+    expect(settingsControllerSource).toContain("validationMessages: stringArray(objectValue(payload.validation).messages)")
+    expect(settingsControllerSource).toContain("...stringArray(msg.messages)")
+    expect(settingsControllerSource).toContain("...stringArray(payload.messages)")
+  })
+
+  it("stores capability package source bundle from started and status messages", () => {
+    expect(settingsControllerSource).toContain("sourceBundle?: Record<string, unknown>")
+    expect(settingsControllerSource).toContain("sourceBundle: objectValue(payload.source_bundle)")
+    expect(settingsControllerSource).toContain("sourceBundle: Object.keys(sourceBundle).length ? sourceBundle : current.sourceBundle")
+  })
+
+  it("sends stored source bundle when accepting a capability package draft", () => {
+    withController(makeServer(), (controller) => {
+      const sourceBundle = {
+        source: { type: "project_notes" },
+        evidence: [{ title: "Project notes", excerpt: "Install gh." }],
+      }
+      const draft = { id: "github-cli", name: "GitHub CLI" }
+
+      controller.setCapabilityPackageIngestState({
+        running: false,
+        agentRunId: "run-1",
+        status: "completed",
+        error: "",
+        draft,
+        sourceBundle,
+      } as any)
+
+      mocks.vscode.postMessage.mockClear()
+      controller.acceptCapabilityPackageDraft()
+
+      expect(mocks.vscode.postMessage).toHaveBeenCalledWith({
+        type: "capabilityPackage.draft.accept",
+        payload: {
+          draft,
+          source_bundle: sourceBundle,
+        },
+      })
+    })
+  })
+
+  it("omits empty source bundle when accepting a manually supplied capability package draft", () => {
+    withController(makeServer(), (controller) => {
+      const draft = { id: "dotnet-sdk", name: "Dotnet SDK" }
+
+      controller.setCapabilityPackageIngestState({
+        running: false,
+        agentRunId: "run-2",
+        status: "completed",
+        error: "",
+        draft,
+      } as any)
+
+      mocks.vscode.postMessage.mockClear()
+      controller.acceptCapabilityPackageDraft()
+
+      expect(mocks.vscode.postMessage).toHaveBeenCalledWith({
+        type: "capabilityPackage.draft.accept",
+        payload: {
+          draft,
+        },
+      })
+    })
+  })
+
+  it("persists runtime profile worker identity and model request origin", () => {
+    const controller = withController(makeServer(), (controller) => controller)
+
+    controller.setProfileDrafts({
+      agent_remote: {
+        id: "agent_remote",
+        executor: "reuleauxcoder",
+        execution_location: "remote_server",
+        worker_kind: "server_worker",
+        model_request_origin: "server",
+        runtime_home_policy: "per_task",
+        approval_mode: "full",
+        config_isolation: "",
+        model: "",
+        command: "",
+        argsText: "",
+        envText: "",
+        credentialRefsText: "",
+        mcpServersText: "",
+      },
+    })
+    controller.setAgentDrafts({
+      reviewer: {
+        id: "reviewer",
+        name: "",
+        description: "",
+        role: "worker",
+        chat_entrypoint: false,
+        visibility: "user",
+        delegable: true,
+        taskflow_eligible: true,
+        systemFlowOnlyText: "",
+        runtime_profile: "agent_remote",
+        modelKey: "",
+        dispatchProfileText: "",
+        dispatchExamplesText: "",
+        dispatchAvoidText: "",
+        systemAppend: "",
+        agentMd: "",
+        capabilityRefsText: "",
+        max_concurrent_tasks: 1,
+        credentialRefsText: "",
+      },
+    })
+
+    controller.saveAgentConfig()
+
+    expect(mocks.vscode.postMessage).toHaveBeenCalledWith({
+      type: "serverSettings.update",
+      payload: expect.objectContaining({
+        runtime_profiles: {
+          agent_remote: expect.objectContaining({
+            executor: "reuleauxcoder",
+            execution_location: "remote_server",
+            worker_kind: "server_worker",
+            model_request_origin: "server",
+          }),
+        },
+      }),
+    })
+  })
+
+  it("infers missing model request origin from executor and worker identity", () => {
+    expect(profileToDraft("local_codex", {
+      executor: "codex",
+      execution_location: "local_workspace",
+      worker_kind: "local_peer",
+    }).model_request_origin).toBe("local_cli")
+    expect(profileToDraft("remote_claude", {
+      executor: "claude",
+      execution_location: "remote_server",
+      worker_kind: "server_worker",
+    }).model_request_origin).toBe("server_worker_cli")
+    expect(profileToDraft("agent_remote", {
+      executor: "reuleauxcoder",
+      execution_location: "remote_server",
+      worker_kind: "server_worker",
+    }).model_request_origin).toBe("server")
+  })
+
+  it("keeps edited runtime profile model request origin aligned with executor and worker identity", () => {
+    const controller = withController(makeServer(), (controller) => controller)
+
+    controller.setProfileDrafts({
+      local_cli: {
+        id: "local_cli",
+        executor: "reuleauxcoder",
+        execution_location: "remote_server",
+        worker_kind: "server_worker",
+        model_request_origin: "server",
+        runtime_home_policy: "per_task",
+        approval_mode: "full",
+        config_isolation: "",
+        model: "",
+        command: "",
+        argsText: "",
+        envText: "",
+        credentialRefsText: "",
+        mcpServersText: "",
+      },
+    })
+    controller.setSelectedProfileId("local_cli")
+
+    controller.updateProfileField("executor", "codex")
+    expect(controller.profileDrafts().local_cli.model_request_origin).toBe("server_worker_cli")
+    controller.updateProfileField("execution_location", "local_workspace")
+    controller.updateProfileField("worker_kind", "local_peer")
+    expect(controller.profileDrafts().local_cli.model_request_origin).toBe("local_cli")
+  })
+
+  it.each([
+    [
+      {
+        id: "bad_server_cli",
+        executor: "codex",
+        worker_kind: "server_worker",
+        model_request_origin: "local_cli",
+      },
+      /model_request_origin=server_worker_cli/,
+    ],
+    [
+      {
+        id: "bad_local_cli",
+        executor: "codex",
+        execution_location: "local_workspace",
+        worker_kind: "local_peer",
+        model_request_origin: "server_worker_cli",
+      },
+      /model_request_origin=local_cli/,
+    ],
+    [
+      {
+        id: "bad_reuleauxcoder",
+        executor: "reuleauxcoder",
+        worker_kind: "server_worker",
+        model_request_origin: "server_worker_cli",
+      },
+      /model_request_origin=server/,
+    ],
+  ])("rejects inconsistent runtime profile model request origin", (profile, message) => {
+    const controller = withController(makeServer(), (controller) => controller)
+    controller.setProfileDrafts({
+      [String(profile.id)]: runtimeProfileDraft(profile),
+    })
+
+    expect(() => controller.validateAgentConfigDrafts()).toThrow(message)
+  })
+
+  it("accepts valid server and local cli runtime profile model request origins", () => {
+    const controller = withController(makeServer(), (controller) => controller)
+    controller.setProfileDrafts({
+      agent_remote: runtimeProfileDraft({
+        id: "agent_remote",
+        executor: "reuleauxcoder",
+        worker_kind: "server_worker",
+        model_request_origin: "server",
+      }),
+      codex_local: runtimeProfileDraft({
+        id: "codex_local",
+        executor: "codex",
+        execution_location: "local_workspace",
+        worker_kind: "local_peer",
+        model_request_origin: "local_cli",
+      }),
+      codex_remote: runtimeProfileDraft({
+        id: "codex_remote",
+        executor: "codex",
+        execution_location: "remote_server",
+        worker_kind: "server_worker",
+        model_request_origin: "server_worker_cli",
+      }),
+    })
+
+    expect(() => controller.validateAgentConfigDrafts()).not.toThrow()
+  })
+
+  it("rejects user agents without a runtime profile", () => {
+    const controller = withController(makeServer(), (controller) => controller)
+
+    controller.setProfileDrafts({
+      agent_remote: {
+        id: "agent_remote",
+        executor: "reuleauxcoder",
+        execution_location: "remote_server",
+        worker_kind: "server_worker",
+        model_request_origin: "server",
+        runtime_home_policy: "per_task",
+        approval_mode: "full",
+        config_isolation: "",
+        model: "",
+        command: "",
+        argsText: "",
+        envText: "",
+        credentialRefsText: "",
+        mcpServersText: "",
+      },
+    })
+    controller.setAgentDrafts({
+      reviewer: {
+        id: "reviewer",
+        name: "",
+        description: "",
+        role: "worker",
+        chat_entrypoint: false,
+        visibility: "user",
+        delegable: true,
+        taskflow_eligible: true,
+        systemFlowOnlyText: "",
+        runtime_profile: "",
+        modelKey: "",
+        dispatchProfileText: "",
+        dispatchExamplesText: "",
+        dispatchAvoidText: "",
+        systemAppend: "",
+        agentMd: "",
+        capabilityRefsText: "",
+        max_concurrent_tasks: 1,
+        credentialRefsText: "",
+      },
+    })
+
+    expect(() => controller.validateAgentConfigDrafts()).toThrow(/必须选择 Runtime Profile/)
+  })
+
+  it("rejects taskflow user agents bound to local-only profiles", () => {
+    const controller = withController(makeServer(), (controller) => controller)
+
+    controller.setProfileDrafts({
+      local_cli: {
+        id: "local_cli",
+        executor: "codex",
+        execution_location: "local_workspace",
+        worker_kind: "local_peer",
+        model_request_origin: "local_cli",
+        runtime_home_policy: "per_task",
+        approval_mode: "full",
+        config_isolation: "",
+        model: "",
+        command: "",
+        argsText: "",
+        envText: "",
+        credentialRefsText: "",
+        mcpServersText: "",
+      },
+    })
+    controller.setAgentDrafts({
+      local_worker: {
+        id: "local_worker",
+        name: "",
+        description: "",
+        role: "worker",
+        chat_entrypoint: false,
+        visibility: "user",
+        delegable: true,
+        taskflow_eligible: true,
+        systemFlowOnlyText: "",
+        runtime_profile: "local_cli",
+        modelKey: "",
+        dispatchProfileText: "",
+        dispatchExamplesText: "",
+        dispatchAvoidText: "",
+        systemAppend: "",
+        agentMd: "",
+        capabilityRefsText: "",
+        max_concurrent_tasks: 1,
+        credentialRefsText: "",
+      },
+    })
+
+    expect(() => controller.validateAgentConfigDrafts()).toThrow(/Taskflow.*服务端/)
   })
 })

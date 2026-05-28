@@ -120,6 +120,8 @@ describe("settings utils", () => {
       id: "codex",
       executor: "codex",
       execution_location: "local",
+      worker_kind: "local_peer",
+      model_request_origin: "local_cli",
       model: "gpt-5.2",
       command: "codex",
       argsText: "--approval-mode full-auto\n--model gpt-5.2",
@@ -136,6 +138,8 @@ describe("settings utils", () => {
     expect(payload).toMatchObject({
       executor: "codex",
       execution_location: "local",
+      worker_kind: "local_peer",
+      model_request_origin: "local_cli",
       args: ["--approval-mode full-auto", "--model gpt-5.2"],
       env: { OPENAI_BASE_URL: "https://example.test" },
       mcp: { servers: ["github", "context7"] },

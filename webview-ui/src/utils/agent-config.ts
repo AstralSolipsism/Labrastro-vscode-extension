@@ -70,11 +70,31 @@ export function toggleAgentConfigListValue(
   return formatAgentConfigList(next, delimiter)
 }
 
+export const DEFAULT_AGENT_RUNTIME_PROFILE_ID = "agent_remote"
+
+export function isServerCapableRuntimeProfile(profile: Record<string, unknown> | undefined): boolean {
+  const executionLocation = String(profile?.execution_location || "remote_server")
+  const workerKind = String(profile?.worker_kind || (executionLocation === "local_workspace" ? "local_peer" : "server_worker"))
+  if (executionLocation === "local_workspace") return false
+  return workerKind === "server_worker" || workerKind === "sandbox_worker"
+}
+
 export function resolveNewAgentRunProfile(
   selectedProfileId: string,
   profileIds: readonly string[],
+  profiles: Record<string, Record<string, unknown>> = {},
 ): string {
-  return selectedProfileId || profileIds[0] || ""
+  if (selectedProfileId && isServerCapableRuntimeProfile(profiles[selectedProfileId])) {
+    return selectedProfileId
+  }
+  if (
+    profileIds.includes(DEFAULT_AGENT_RUNTIME_PROFILE_ID)
+    && isServerCapableRuntimeProfile(profiles[DEFAULT_AGENT_RUNTIME_PROFILE_ID])
+  ) {
+    return DEFAULT_AGENT_RUNTIME_PROFILE_ID
+  }
+  const serverProfile = profileIds.find((id) => isServerCapableRuntimeProfile(profiles[id]))
+  return serverProfile || selectedProfileId || profileIds[0] || ""
 }
 
 export function renameRecordKey<T extends { id: string }>(

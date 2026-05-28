@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
+  isServerCapableRuntimeProfile,
   makeUniqueAgentConfigId,
   parseAgentConfigListText,
   renameRecordKey,
@@ -62,11 +63,45 @@ describe("agent config id helpers", () => {
     expect(agents.builder.runtime_profile).toBe("other_profile")
   })
 
-  it("defaults a new agent to the selected profile or first profile", () => {
-    expect(resolveNewAgentRunProfile("selected_profile", ["first_profile"]))
-      .toBe("selected_profile")
-    expect(resolveNewAgentRunProfile("", ["first_profile"]))
-      .toBe("first_profile")
+  it("detects profiles that are claimable by server-side workers", () => {
+    expect(isServerCapableRuntimeProfile({
+      execution_location: "remote_server",
+      worker_kind: "server_worker",
+    })).toBe(true)
+    expect(isServerCapableRuntimeProfile({
+      execution_location: "daemon_worktree",
+      worker_kind: "server_worker",
+    })).toBe(true)
+    expect(isServerCapableRuntimeProfile({
+      execution_location: "remote_server",
+      worker_kind: "sandbox_worker",
+    })).toBe(true)
+    expect(isServerCapableRuntimeProfile({
+      execution_location: "local_workspace",
+      worker_kind: "local_peer",
+    })).toBe(false)
+  })
+
+  it("defaults a new agent to a server-capable profile", () => {
+    const profiles = {
+      local_cli: {
+        execution_location: "local_workspace",
+        worker_kind: "local_peer",
+      },
+      agent_remote: {
+        execution_location: "remote_server",
+        worker_kind: "server_worker",
+      },
+      server_codex: {
+        execution_location: "daemon_worktree",
+        worker_kind: "server_worker",
+      },
+    }
+
+    expect(resolveNewAgentRunProfile("local_cli", ["local_cli", "agent_remote"], profiles))
+      .toBe("agent_remote")
+    expect(resolveNewAgentRunProfile("server_codex", ["local_cli", "server_codex"], profiles))
+      .toBe("server_codex")
     expect(resolveNewAgentRunProfile("", []))
       .toBe("")
   })

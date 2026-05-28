@@ -46,6 +46,8 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
     setProfileExecutorSelect,
     PROFILE_EXECUTOR_OPTIONS,
     PROFILE_EXECUTION_LOCATION_OPTIONS,
+    PROFILE_WORKER_KIND_OPTIONS,
+    PROFILE_MODEL_REQUEST_ORIGIN_OPTIONS,
     PROFILE_HOME_POLICY_OPTIONS,
     PROFILE_APPROVAL_MODE_OPTIONS,
     PROFILE_CONFIG_ISOLATION_OPTIONS,
@@ -270,6 +272,18 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
                     {t("agentConfig.advanced")}
                   </summary>
                   <div class="settings-form-grid">
+                    <label class="field-label"><span>{t("agentConfig.profile.workerKind")}</span>
+                      <select value={currentProfileDraft()!.worker_kind} onChange={(e) => updateProfileField("worker_kind", e.currentTarget.value)}>
+                        <For each={PROFILE_WORKER_KIND_OPTIONS}>{(option) => <option value={option.value}>{t(option.labelKey)}</option>}</For>
+                      </select>
+                      <small class="field-help">{runtimeOptionDescription(PROFILE_WORKER_KIND_OPTIONS, currentProfileDraft()!.worker_kind)}</small>
+                    </label>
+                    <label class="field-label"><span>{t("agentConfig.profile.modelRequestOrigin")}</span>
+                      <select value={currentProfileDraft()!.model_request_origin} onChange={(e) => updateProfileField("model_request_origin", e.currentTarget.value)}>
+                        <For each={PROFILE_MODEL_REQUEST_ORIGIN_OPTIONS}>{(option) => <option value={option.value}>{t(option.labelKey)}</option>}</For>
+                      </select>
+                      <small class="field-help">{runtimeOptionDescription(PROFILE_MODEL_REQUEST_ORIGIN_OPTIONS, currentProfileDraft()!.model_request_origin)}</small>
+                    </label>
                     <label class="field-label"><span>{t("agentConfig.profile.command")}</span>
                       <input value={currentProfileDraft()!.command} onInput={(e) => updateProfileField("command", e.currentTarget.value)} placeholder={currentProfileDraft()!.executor} />
                       <small class="field-help">{t("agentConfig.profile.commandDesc")}</small>
@@ -407,7 +421,9 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
 
                 <label class="field-label"><span>{t("agentConfig.agent.runtimeProfile")}</span>
                   <select value={currentAgentDraft()!.runtime_profile} onChange={(e) => updateAgentField("runtime_profile", e.currentTarget.value)}>
-                    <option value="">{t("agentConfig.agent.runtimeProfile.none")}</option>
+                    <Show when={profileIdList().length === 0 || !currentAgentDraft()!.runtime_profile}>
+                      <option value="" disabled>{t("agentConfig.agent.runtimeProfile.required")}</option>
+                    </Show>
                     <For each={profileIdList()}>{(pid) => <option value={pid}>{pid}</option>}</For>
                   </select>
                   <small class="field-help">{t("agentConfig.agent.runtimeProfileDesc")}</small>

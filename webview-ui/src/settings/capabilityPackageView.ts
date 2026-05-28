@@ -250,7 +250,7 @@ export function capabilityComponentSummary(
     return [
       "Skill",
       name,
-      pathHint ? `path=${pathHint}` : "",
+      pathHint ? `installed path=${pathHint}` : "",
     ].filter(Boolean).join(" · ")
   }
   return [capabilityComponentKindLabel(kind), name].filter(Boolean).join(" · ")

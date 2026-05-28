@@ -380,6 +380,49 @@ describe("AdminCoordinator", () => {
     expect(options.refreshCapabilityState).not.toHaveBeenCalled()
   })
 
+  it("passes capability package source bundle through when accepting a draft", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    const payload = {
+      draft: { id: "github-cli" },
+      source_bundle: {
+        source: { type: "project_notes" },
+        evidence: [{ title: "Project notes", excerpt: "Install gh." }],
+      },
+    }
+
+    await expect(subject.handleMessage({ type: "capabilityPackage.draft.accept", payload }, post)).resolves.toBe(true)
+
+    expect(options.client.capabilityPackageDraftAccept).toHaveBeenCalledWith(payload)
+  })
+
+  it("passes capability package draft validation messages to the webview", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    options.client.capabilityPackageDraftAccept.mockRejectedValue(new RemoteError(
+      400,
+      "invalid_capability_package_draft",
+      "HTTP 400 invalid_capability_package_draft",
+      {
+        error: "invalid_capability_package_draft",
+        messages: ["draft.evidence is required", "risk_level is required"],
+      },
+    ))
+
+    await expect(subject.handleMessage({ type: "capabilityPackage.draft.accept", payload: { draft: { id: "bad" } } }, post)).resolves.toBe(true)
+
+    expect(post).toHaveBeenCalledWith({
+      type: "capabilityPackage.error",
+      message: "HTTP 400 invalid_capability_package_draft",
+      payload: {
+        error: "invalid_capability_package_draft",
+        messages: ["draft.evidence is required", "risk_level is required"],
+      },
+      messages: ["draft.evidence is required", "risk_level is required"],
+    })
+    expect(options.refreshCapabilityState).not.toHaveBeenCalled()
+  })
+
   it("refreshes connection state when admin-scoped capability calls lose auth", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()

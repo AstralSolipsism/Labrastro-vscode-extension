@@ -54,6 +54,8 @@ export interface RuntimeProfileDraft {
   id: string
   executor: string
   execution_location: string
+  worker_kind: string
+  model_request_origin: string
   model: string
   command: string
   argsText: string
@@ -356,6 +358,8 @@ export function runtimeProfileDraftToPayload(draft: RuntimeProfileDraft): Record
   return {
     executor: draft.executor,
     execution_location: draft.execution_location,
+    worker_kind: draft.worker_kind,
+    model_request_origin: draft.model_request_origin,
     model: draft.model || undefined,
     command: draft.command || undefined,
     args: parseStringList(draft.argsText),

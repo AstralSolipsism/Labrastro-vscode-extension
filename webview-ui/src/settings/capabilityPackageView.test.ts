@@ -62,7 +62,7 @@ describe("capability package component view", () => {
       packageIds: ["repo-review"],
       pathHint: "/skills/code-review",
       skillStatus: "enabled",
-      summary: "Skill · code-review · path=/skills/code-review",
+      summary: "Skill · code-review · installed path=/skills/code-review",
     })
     expect(groups.dependencies[0].summary).toBe("SDK · dotnet · version >=8")
   })
@@ -131,7 +131,8 @@ describe("capability package component view", () => {
         kind: "skill",
         name: "code-review",
         enabled: true,
-        path_hint: "/registered/code-review/SKILL.md",
+        path_hint: "/srv/skills/packages/repo-review/code-review/SKILL.md",
+        source_path: "skills/code-review/SKILL.md",
         package_ids: ["repo-review"],
       }],
       componentIndex: {
@@ -160,7 +161,8 @@ describe("capability package component view", () => {
       status: "disabled",
       sourcePackageIds: ["repo-review"],
       skill: {
-        pathHint: "/registered/code-review/SKILL.md",
+        pathHint: "/srv/skills/packages/repo-review/code-review/SKILL.md",
+        sourcePath: "skills/code-review/SKILL.md",
         disabled: true,
         globalEnabled: true,
       },

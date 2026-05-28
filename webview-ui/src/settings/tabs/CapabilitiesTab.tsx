@@ -270,9 +270,12 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
     if (!Array.isArray(evidence)) return []
     return evidence.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
   })
+  const currentDraftValidationMessages = createMemo(() =>
+    stringArrayValue(capabilityPackageIngestState().validationMessages)
+  )
   const currentDraftReady = createMemo(() => {
     const draft = currentCapabilityDraft()
-    return Boolean(stringValue(draft.id) && currentDraftComponents().length > 0)
+    return Boolean(stringValue(draft.id) && currentDraftComponents().length > 0 && currentDraftValidationMessages().length === 0)
   })
   const skillDisplayOptions = () => ({
     skillsEnabled: skillsEnabled(),
@@ -801,9 +804,15 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
       </Show>
       <Show when={capability.kind === "skill" && capability.skill}>
         <SettingsDetailSection>
-          <span>Skill 路径</span>
-          <small>{capability.skill?.pathHint || capability.skill?.sourcePath || "未记录"}</small>
+          <span>安装路径</span>
+          <small>{capability.skill?.pathHint || "未记录"}</small>
         </SettingsDetailSection>
+        <Show when={capability.skill?.sourcePath}>
+          <SettingsDetailSection>
+            <span>来源路径</span>
+            <small>{capability.skill?.sourcePath}</small>
+          </SettingsDetailSection>
+        </Show>
         <SettingsDetailSection>
           <span>Skill 状态</span>
           <small>
@@ -997,7 +1006,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
           <Show when={editor.kind === "skill"}>
             <div class="capability-editor__grid">
               <label class="field-label">
-                <span>Skill 路径</span>
+                <span>安装路径</span>
                 <input value={editor.pathHint} onInput={(event) => patchCapabilityEditor({ pathHint: event.currentTarget.value })} />
               </label>
               <label class="field-label">
@@ -1271,7 +1280,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
         <SettingsWorkbench catalog hidden={section() !== "behavior"}>
           <SettingsPane>
             <SettingsToolbar>
-              <SettingsSegmentedControl ariaLabel="行为目录类型">
+              <SettingsSegmentedControl ariaLabel="行为管理类型">
                 <For each={behaviorSectionTabs()}>
                   {(item) => (
                     <button
@@ -1285,7 +1294,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
                 </For>
               </SettingsSegmentedControl>
               <SettingsSearchField
-                ariaLabel="搜索行为目录"
+                ariaLabel="搜索行为管理"
                 value={behaviorSearch()}
                 placeholder="搜索指令、注册路径、权限或来源"
                 onInput={setBehaviorSearch}
@@ -1294,7 +1303,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
             </SettingsToolbar>
             <SettingsPaneBody>
               <p class="settings-empty-note">这里展示用户可唤起行为、设置页 UI Actions 与 Agent Tools；@ 引用保持 reference_only，不授予 tool 权限。</p>
-              <Show when={filteredBehaviorEntries().length} fallback={<p class="settings-empty-note">暂无匹配的行为目录。</p>}>
+              <Show when={filteredBehaviorEntries().length} fallback={<p class="settings-empty-note">暂无匹配的行为管理项。</p>}>
                 <SettingsCatalogTable>
                   <For each={filteredBehaviorEntries()}>
                     {(entry) => (
@@ -1595,6 +1604,16 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
           <Show when={capabilityPackageIngestState().error}>
             <div class="settings-error">{capabilityPackageIngestState().error}</div>
           </Show>
+          <Show when={currentDraftValidationMessages().length}>
+            <div class="settings-error">
+              <strong>草案校验未通过</strong>
+              <ul class="capability-text-list">
+                <For each={currentDraftValidationMessages()}>
+                  {(item) => <li>{item}</li>}
+                </For>
+              </ul>
+            </div>
+          </Show>
 
           <div class="capability-package-workbench">
             <div class="capability-source-panel">
@@ -1740,6 +1759,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
                                 <span>{counts.capabilities} 能力</span>
                                 <span>{counts.dependencies} 依赖</span>
                                 <Show when={counts.other}><span>{counts.other} 其他</span></Show>
+                                <Show when={!pkg.enabled}><span>Agent 不可用</span></Show>
                               </SettingsListCardMeta>
                             </SettingsListCardMain>
                             <StatusBadge tone={pkg.enabled ? "success" : "muted"}>{pkg.enabled ? "enabled" : "disabled"}</StatusBadge>
@@ -1782,7 +1802,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
                             <SettingsDetailBlock>
                               <span>状态</span>
                               <strong>{pkg().status || "installed"}</strong>
-                              <small>{pkg().riskLevel ? `风险：${pkg().riskLevel}` : "未标注风险"}</small>
+                              <small>{pkg().enabled ? (pkg().riskLevel ? `风险：${pkg().riskLevel}` : "未标注风险") : "已停用，Agent 不可用"}</small>
                             </SettingsDetailBlock>
                           </SettingsDetailGrid>
                           <Show when={pkg().effectiveCapabilities.length}>
