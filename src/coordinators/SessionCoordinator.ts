@@ -670,7 +670,7 @@ export class SessionCoordinator {
     return this.currentSessionId
   }
 
-  async reloadCurrentAfterSessionRunDone(post: PostMessage): Promise<void> {
+  async refreshSessionListAfterSessionRunDone(post: PostMessage): Promise<void> {
     const result = await this.refreshSessions()
     if (result.status === "unauthenticated") {
       await this.options.postConnectionStateIfAuthRequired(result.error, post)

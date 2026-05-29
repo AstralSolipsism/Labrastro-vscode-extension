@@ -141,7 +141,7 @@ describe("SessionCoordinator", () => {
     })
   })
 
-  it("settles loaded pending approval when the backing chat no longer exists", async () => {
+  it("settles loaded pending approval when the backing session run no longer exists", async () => {
     const document = documentFor("remote-1", "Remote") as any
     document.stats = { ...document.stats, runStatus: "running" }
     ;(document as Record<string, unknown>).run_state = {
@@ -165,7 +165,7 @@ describe("SessionCoordinator", () => {
         record: { ...recordFor("remote-1"), transcript: document },
       })),
       sessionRunStatus: vi.fn(async () => {
-        throw new RemoteError(404, "session_run_not_found", "chat not found", {})
+        throw new RemoteError(404, "session_run_not_found", "session run not found", {})
       }),
     } as Partial<LabrastroRemoteClient>)
     const post = vi.fn()
@@ -186,7 +186,7 @@ describe("SessionCoordinator", () => {
     expect(String(tool.approvalResultReason)).toContain("审批已失效")
   })
 
-  it("creates a server session before chat when no session exists", async () => {
+  it("creates a server session before starting a session run when no session exists", async () => {
     const { client, context, emitSessionMessage, subject } = await coordinator()
 
     const result = await subject.prepareSessionRunSession(undefined, vi.fn(), {})
@@ -239,7 +239,7 @@ describe("SessionCoordinator", () => {
     expect(emitSessionMessage.mock.calls.map(([message]) => message.type)).toEqual(["session.adopted"])
   })
 
-  it("only refreshes the session list after chat completion", async () => {
+  it("only refreshes the session list after session run completion", async () => {
     const { client, emitSessionMessage, subject } = await coordinator({
       listSessions: vi.fn(async () => ({
         sessions: [{ id: "remote-1", saved_at: "2026-05-10T00:00:00.000Z", preview: "Remote" }],
@@ -248,7 +248,7 @@ describe("SessionCoordinator", () => {
     } as Partial<LabrastroRemoteClient>)
     const post = vi.fn()
 
-    await subject.reloadCurrentAfterSessionRunDone(post)
+    await subject.refreshSessionListAfterSessionRunDone(post)
 
     expect(client.loadSession).not.toHaveBeenCalled()
     expect(emitSessionMessage).toHaveBeenCalledWith(

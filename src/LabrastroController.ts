@@ -1301,7 +1301,10 @@ export class LabrastroController implements vscode.Disposable {
         locale: this.currentChatLocale(options.locale),
       })
       sessionId = stringValue(start.session_id) || sessionId
-      const sessionRunId = String(start.session_run_id || "")
+      const sessionRunId = stringValue(start.session_run_id)
+      if (!sessionRunId) {
+        throw new Error("session run start failed: empty session run id")
+      }
       this.sessionRunCoordinator.setActiveRun({
         sessionRunId,
         cursor: 0,
@@ -1506,7 +1509,7 @@ export class LabrastroController implements vscode.Disposable {
       lastStreamAt: new Date().toISOString(),
     })
     if (stream.done) {
-      await this.sessionCoordinator.reloadCurrentAfterSessionRunDone(post)
+      await this.sessionCoordinator.refreshSessionListAfterSessionRunDone(post)
       this.emitChatMessage({ type: "sessionRun.done", sessionRunId }, post)
       if (this.sessionRunCoordinator.activeRun?.sessionRunId === sessionRunId) {
         this.sessionRunCoordinator.setActiveRun(undefined)
@@ -2050,6 +2053,7 @@ function filterManifestItems(
 const LIVE_SESSION_RUN_EVENT_TYPES = new Set([
   "assistant_delta",
   "reasoning_delta",
+  "tool_call_delta",
   "tool_call_stream",
 ])
 

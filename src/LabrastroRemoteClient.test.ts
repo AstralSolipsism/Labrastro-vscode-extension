@@ -394,7 +394,7 @@ describe("LabrastroRemoteClient remote errors", () => {
     expect(isInvalidPeerTokenError(new RemoteError(404, "not_found", "404 not_found", {}))).toBe(false)
   })
 
-  it("classifies transient network, auth, and fatal chat errors", () => {
+  it("classifies transient network, auth, and fatal session run errors", () => {
     expect(classifyRemoteError(new TypeError("fetch failed"))).toBe("transient_network")
     expect(classifyRemoteError(new RemoteError(503, "service_unavailable", "503 service_unavailable", {}))).toBe("transient_network")
     expect(classifyRemoteError(new RemoteError(401, "unauthorized", "401 unauthorized", {}))).toBe("auth_required")
@@ -1129,8 +1129,8 @@ describe("LabrastroRemoteClient runtime admin API", () => {
   })
 })
 
-describe("LabrastroRemoteClient chat start", () => {
-  it("passes mode and workflow routing to the remote chat start endpoint", async () => {
+describe("LabrastroRemoteClient session run start", () => {
+  it("passes mode and workflow routing to the remote session run start endpoint", async () => {
     vscodeMock.labrastroValue = "http://127.0.0.1:8765"
     const context = {
       secrets: {
@@ -1287,7 +1287,7 @@ describe("LabrastroRemoteClient chat start", () => {
     })
   })
 
-  it("passes session list etag, fork anchor, and peer chat control requests to peer endpoints", async () => {
+  it("passes session list etag, fork anchor, and peer session run control requests to peer endpoints", async () => {
     vscodeMock.labrastroValue = "http://127.0.0.1:8765"
     const context = {
       secrets: {
@@ -1420,7 +1420,7 @@ describe("LabrastroRemoteClient chat start", () => {
     ])
   })
 
-  it("streams chat SSE frames across chunk boundaries", async () => {
+  it("streams session run SSE frames across chunk boundaries", async () => {
     vscodeMock.labrastroValue = "http://127.0.0.1:8765"
     const context = {
       secrets: {

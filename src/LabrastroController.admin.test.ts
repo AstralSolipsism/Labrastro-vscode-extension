@@ -192,3 +192,46 @@ describe("LabrastroController admin state errors", () => {
     }))
   })
 })
+
+describe("LabrastroController session run start", () => {
+  it("reports empty session run ids as start failures without persisting active run", async () => {
+    const controller = new LabrastroController(context())
+    const startSessionRun = vi.fn(async () => ({ session_run_id: "", session_id: "session-1" }))
+    const prepareSessionRunSession = vi.fn(async () => ({ ok: true, sessionId: "session-1" }))
+    ;(controller as unknown as {
+      client: { startSessionRun: typeof startSessionRun }
+    }).client = { startSessionRun }
+    ;(controller as unknown as {
+      sessionCoordinator: { prepareSessionRunSession: typeof prepareSessionRunSession }
+    }).sessionCoordinator = { prepareSessionRunSession }
+    const post = vi.fn()
+
+    await (controller as unknown as {
+      startSessionRun: (
+        text: string,
+        requestedSessionId: string | undefined,
+        post: (message: Record<string, unknown>) => void,
+        options?: Record<string, unknown>
+      ) => Promise<void>
+    }).startSessionRun("hello", "session-1", post, {
+      providerId: "deepseek",
+      modelId: "V4FLASH",
+      locale: "en",
+    })
+
+    expect(startSessionRun).toHaveBeenCalledWith("hello", "session-1", expect.objectContaining({
+      locale: "en",
+      providerId: "deepseek",
+      modelId: "V4FLASH",
+    }))
+    expect(post).toHaveBeenCalledWith({ type: "sessionRun.started", text: "hello" })
+    expect(post).toHaveBeenCalledWith({
+      type: "sessionRun.error",
+      message: "session run start failed: empty session run id",
+    })
+    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "sessionRun.session" }))
+    expect((controller as unknown as {
+      sessionRunCoordinator: { activeRun: unknown }
+    }).sessionRunCoordinator.activeRun).toBeUndefined()
+  })
+})
