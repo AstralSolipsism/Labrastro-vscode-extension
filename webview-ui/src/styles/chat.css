@@ -1455,6 +1455,51 @@
   color: var(--ez-muted);
 }
 
+.reasoning-card__header > .codicon:first-child,
+.process-group-card__header > .codicon:first-child {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 16px;
+  transform-origin: 50% 50%;
+  will-change: transform;
+}
+
+.rose-loader {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ez-muted);
+  line-height: 0;
+  background: transparent;
+  pointer-events: none;
+}
+
+.process-card__loader {
+  flex: 0 0 16px;
+}
+
+.rose-loader__svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+  overflow: visible;
+  background: transparent;
+}
+
+.rose-loader__motion {
+  display: inline;
+}
+
+.rose-loader__static {
+  display: none;
+}
+
 .terminal-card__header,
 .reasoning-card__header,
 .view-card__header,
@@ -1880,8 +1925,18 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .shell-terminal__cursor span {
+  .shell-terminal__cursor span,
+  .rose-loader__particle {
     animation: none;
+  }
+
+  .rose-loader__motion {
+    display: none;
+    animation: none;
+  }
+
+  .rose-loader__static {
+    display: inline;
   }
 }
 
@@ -2141,6 +2196,19 @@
   color: var(--ez-error);
 }
 
+.approval-quick {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.approval-quick__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .approval-strip__actions {
   grid-column: 1 / -1;
   display: flex;
@@ -2268,6 +2336,41 @@
 .approval-dialog__button--danger {
   border-color: color-mix(in srgb, var(--ez-danger, #f85149) 55%, var(--ez-border));
   background: color-mix(in srgb, var(--ez-danger, #f85149) 12%, transparent);
+}
+
+.approval-intent {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.approval-intent span {
+  color: var(--ez-muted);
+  font-size: 11px;
+}
+
+.approval-intent strong {
+  color: var(--ez-fg);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.45;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.approval-technical {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.approval-technical h3 {
+  margin: 0;
+  color: var(--ez-muted);
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .approval-remember {

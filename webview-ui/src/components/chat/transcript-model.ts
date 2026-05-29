@@ -61,6 +61,7 @@ export interface ToolActivityItem extends TranscriptMeta {
   endedAt?: number
   approvalId?: string
   approvalReason?: string
+  approvalIntent?: string
   approvalResultReason?: string
   approvalDecision?: string
   approvalSections?: Record<string, unknown>[]

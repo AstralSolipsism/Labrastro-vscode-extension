@@ -56,6 +56,27 @@ export interface TranscriptPresentationOptions {
   runningProcessLabel?: string
 }
 
+export function processTimelineItemKey(item: ProcessTimelineItem, index = 0): string {
+  if (item.type === "timeline_process_group") return item.group.id
+  if (item.type === "timeline_text") return `timeline_text:${item.part.id}`
+  if (item.type === "timeline_notice") return `timeline_notice:${item.part.id}`
+  return `timeline:${index}`
+}
+
+export function transcriptPresentationItemKey(item: TranscriptPresentationItem, index = 0): string {
+  if (
+    item.type === "timeline_process_group" ||
+    item.type === "timeline_text" ||
+    item.type === "timeline_notice"
+  ) {
+    return processTimelineItemKey(item, index)
+  }
+  if (item.type === "process_summary") return item.summary.id
+  if (item.type === "reasoning_panel") return item.panel.id
+  if (item.type === "final_answer") return `final_answer:${item.parts[0]?.id || index}`
+  return `presentation:${index}`
+}
+
 export const EXPLORE_TOOLS = new Set([
   "read_file",
   "read_files",
@@ -125,7 +146,6 @@ function buildReasoningPanel(
   const items = parts.filter((item) => item.type === "thinking" || item.type === "reasoning")
   if (!items.length) return undefined
   const first = items[0]
-  const last = items[items.length - 1]
   let raw = ""
   let summary = ""
   let state: ProcessState = "completed"
@@ -144,7 +164,7 @@ function buildReasoningPanel(
   }
 
   return {
-    id: `reasoning:${message?.id || "message"}:${first.id}:${last.id}`,
+    id: `reasoning:${message?.id || "message"}:${first.id}`,
     state,
     raw,
     summary: summary || undefined,
@@ -165,11 +185,10 @@ function buildTimelineItems(
       return
     }
     const first = current.items[0]
-    const last = current.items[current.items.length - 1]
     items.push({
       type: "timeline_process_group",
       group: {
-        id: `process-group:${message?.id || "message"}:${items.length}:${first.id}:${last.id}:${current.key}`,
+        id: `process-group:${message?.id || "message"}:${first.id}:${current.key}`,
         groupKey: current.key,
         kind: current.info.kind,
         label: current.info.label,

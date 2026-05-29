@@ -3,6 +3,8 @@ import type { MockMessage } from "./mock-data"
 import {
   buildTranscriptPresentation,
   getToolActionLabel,
+  processTimelineItemKey,
+  transcriptPresentationItemKey,
 } from "./transcript-presentation"
 import type { TranscriptItem } from "./transcript-model"
 
@@ -81,7 +83,7 @@ describe("transcript presentation", () => {
     const parts: TranscriptItem[] = [
       { id: "tool-1", type: "tool", tool: "list_file", status: "returned", input: { path: "src" } },
       { id: "text-1", type: "assistant_text", markdown: "最终结论", format: "markdown", streamKey: "assistant-message" },
-      { id: "notice-1", type: "notice", level: "error", text: "错误：chat_handler_failed" },
+      { id: "notice-1", type: "notice", level: "error", text: "错误：session_run_handler_failed" },
     ]
 
     const presentation = buildTranscriptPresentation(parts, assistant(parts, "error"))
@@ -94,7 +96,7 @@ describe("transcript presentation", () => {
     })
     expect(timelineGroups(presentation)).toHaveLength(0)
     const notice = presentation.find((item) => item.type === "timeline_notice")
-    expect(notice?.type === "timeline_notice" ? notice.part.text : "").toBe("错误：chat_handler_failed")
+    expect(notice?.type === "timeline_notice" ? notice.part.text : "").toBe("错误：session_run_handler_failed")
     const final = presentation.find((item) => item.type === "final_answer")
     expect(final?.type === "final_answer" ? final.parts.map((part) => part.markdown) : []).toEqual(["最终结论"])
   })
@@ -194,6 +196,115 @@ describe("transcript presentation", () => {
       count: 3,
     })
     expect(getToolActionLabel("list_file")).toBe("列出文件")
+  })
+
+  it("keeps a running process group identity stable while more items are folded into it", () => {
+    const firstParts: TranscriptItem[] = [
+      { id: "tool-1", type: "tool", tool: "apply_patch", status: "running", input: { path: "src/a.ts" } },
+    ]
+    const nextParts: TranscriptItem[] = [
+      { id: "tool-1", type: "tool", tool: "apply_patch", status: "returned", input: { path: "src/a.ts" } },
+      { id: "tool-2", type: "tool", tool: "edit_file", status: "running", input: { path: "src/b.ts" } },
+    ]
+
+    const firstGroup = timelineGroups(buildTranscriptPresentation(firstParts, assistant(firstParts, "active")))[0]
+    const nextGroup = timelineGroups(buildTranscriptPresentation(nextParts, assistant(nextParts, "active")))[0]
+
+    expect(firstGroup.id).toBe(nextGroup.id)
+    expect(nextGroup).toMatchObject({
+      kind: "modify",
+      label: "修改项目",
+      count: 2,
+      state: "running",
+    })
+  })
+
+  it("keeps a running process group identity stable when earlier timeline text streams in before it", () => {
+    const firstParts: TranscriptItem[] = [
+      { id: "tool-1", type: "tool", tool: "apply_patch", status: "running", input: { path: "src/a.ts" } },
+    ]
+    const nextParts: TranscriptItem[] = [
+      { id: "text-1", type: "assistant_text", markdown: "准备修改", format: "markdown", streamKey: "assistant-message" },
+      { id: "tool-1", type: "tool", tool: "apply_patch", status: "running", input: { path: "src/a.ts" } },
+    ]
+
+    const firstGroup = timelineGroups(buildTranscriptPresentation(firstParts, assistant(firstParts, "active")))[0]
+    const nextGroup = timelineGroups(buildTranscriptPresentation(nextParts, assistant(nextParts, "active")))[0]
+
+    expect(firstGroup.id).toBe(nextGroup.id)
+    expect(nextGroup).toMatchObject({
+      kind: "modify",
+      label: "修改项目",
+      state: "running",
+    })
+  })
+
+  it("uses the process group id as the render key even when earlier timeline text is inserted", () => {
+    const firstParts: TranscriptItem[] = [
+      { id: "tool-1", type: "tool", tool: "apply_patch", status: "running", input: { path: "src/a.ts" } },
+    ]
+    const nextParts: TranscriptItem[] = [
+      { id: "text-1", type: "assistant_text", markdown: "准备修改", format: "markdown", streamKey: "assistant-message" },
+      { id: "tool-1", type: "tool", tool: "apply_patch", status: "running", input: { path: "src/a.ts" } },
+    ]
+
+    const firstPresentation = buildTranscriptPresentation(firstParts, assistant(firstParts, "active"))
+    const nextPresentation = buildTranscriptPresentation(nextParts, assistant(nextParts, "active"))
+    const firstItem = firstPresentation.find((item) => item.type === "timeline_process_group")
+    const nextItem = nextPresentation.find((item) => item.type === "timeline_process_group")
+
+    if (!firstItem || firstItem.type !== "timeline_process_group") throw new Error("missing first process group")
+    if (!nextItem || nextItem.type !== "timeline_process_group") throw new Error("missing next process group")
+
+    expect(transcriptPresentationItemKey(firstItem, 0)).toBe(firstItem.group.id)
+    expect(transcriptPresentationItemKey(nextItem, 1)).toBe(nextItem.group.id)
+    expect(transcriptPresentationItemKey(firstItem, 0)).toBe(transcriptPresentationItemKey(nextItem, 1))
+  })
+
+  it("keeps a reasoning panel identity stable while more reasoning detail streams in", () => {
+    const firstParts: TranscriptItem[] = [
+      { id: "thinking-1", type: "thinking", title: "正在思考...", active: true, raw: "first" },
+    ]
+    const nextParts: TranscriptItem[] = [
+      { id: "thinking-1", type: "thinking", title: "正在思考...", active: true, raw: "first" },
+      { id: "reasoning-2", type: "reasoning", raw: "second", format: "markdown" },
+    ]
+
+    const firstPanel = reasoningPanel(buildTranscriptPresentation(firstParts, assistant(firstParts, "active")))
+    const nextPanel = reasoningPanel(buildTranscriptPresentation(nextParts, assistant(nextParts, "active")))
+
+    expect(firstPanel.id).toBe(nextPanel.id)
+    expect(nextPanel.raw).toContain("second")
+  })
+
+  it("returns stable render keys for presentation and timeline items", () => {
+    const parts: TranscriptItem[] = [
+      { id: "text-1", type: "assistant_text", markdown: "准备", format: "markdown", streamKey: "assistant-message" },
+      { id: "tool-1", type: "tool", tool: "read_file", status: "returned", input: { path: "src/index.ts" } },
+      { id: "notice-1", type: "notice", level: "warning", text: "提示" },
+      { id: "thinking-1", type: "thinking", title: "正在思考...", active: true, raw: "plan" },
+      { id: "text-final", type: "assistant_text", markdown: "完成", format: "markdown", streamKey: "assistant-message" },
+    ]
+
+    const presentation = buildTranscriptPresentation(parts, assistant(parts, "active"))
+    const summaryItem = presentation.find((item) => item.type === "process_summary")
+    const reasoningItem = presentation.find((item) => item.type === "reasoning_panel")
+    const finalItem = presentation.find((item) => item.type === "final_answer")
+
+    if (!summaryItem || summaryItem.type !== "process_summary") throw new Error("missing summary")
+    if (!reasoningItem || reasoningItem.type !== "reasoning_panel") throw new Error("missing reasoning")
+    if (!finalItem || finalItem.type !== "final_answer") throw new Error("missing final answer")
+
+    const [timelineText, timelineGroup, timelineNotice] = summaryItem.summary.items
+
+    expect(processTimelineItemKey(timelineText, 0)).toBe("timeline_text:text-1")
+    expect(processTimelineItemKey(timelineGroup, 1)).toBe(
+      timelineGroup.type === "timeline_process_group" ? timelineGroup.group.id : "",
+    )
+    expect(processTimelineItemKey(timelineNotice, 2)).toBe("timeline_notice:notice-1")
+    expect(transcriptPresentationItemKey(summaryItem, 0)).toBe(summaryItem.summary.id)
+    expect(transcriptPresentationItemKey(reasoningItem, 1)).toBe(reasoningItem.panel.id)
+    expect(transcriptPresentationItemKey(finalItem, 2)).toBe("final_answer:text-final")
   })
 
   it("treats streamed tool-call drafts as running process groups", () => {

@@ -1,4 +1,4 @@
-import { Component, For, Match, Show, Switch, createEffect, createMemo, createSignal } from "solid-js"
+import { Component, For, Index, Match, Show, Switch, createEffect, createMemo, createSignal, type Accessor, type JSX, type Setter } from "solid-js"
 import { t } from "../../i18n"
 import type { MockTurn, MockMessage } from "./mock-data"
 import type {
@@ -34,6 +34,8 @@ import {
 import {
   buildTranscriptPresentation,
   getToolActionLabel,
+  processTimelineItemKey,
+  transcriptPresentationItemKey,
   type ProcessGroup,
   type ProcessSummary,
   type ProcessTimelineItem,
@@ -41,6 +43,7 @@ import {
   type ProcessState,
   type TranscriptPresentationItem,
 } from "./transcript-presentation"
+import { RoseFourLoader } from "./RoseFourLoader"
 
 const TOOL_ICONS: Record<string, string> = {
   read_file: "file",
@@ -73,6 +76,60 @@ function initialCardOpenState(partId: string, fallback: boolean): boolean {
 function initialCardDetailsOpenState(partId: string, fallback: boolean): boolean {
   const saved = CARD_DETAILS_OPEN_STATE.get(partId)
   return saved ?? fallback
+}
+
+interface KeyedRecord<T> {
+  key: string
+  item: Accessor<T>
+  setItem: Setter<T>
+  index: Accessor<number>
+  setIndex: Setter<number>
+}
+
+const KeyedFor = <T,>(props: {
+  each: readonly T[]
+  key: (item: T, index: number) => string
+  children: (item: Accessor<T>, index: Accessor<number>) => JSX.Element
+}) => {
+  const records = new Map<string, KeyedRecord<T>>()
+  const [ordered, setOrdered] = createSignal<KeyedRecord<T>[]>([])
+
+  createEffect(() => {
+    const activeKeys = new Set<string>()
+    const next = props.each.map((item, index) => {
+      const baseKey = props.key(item, index) || String(index)
+      let key = baseKey
+      let duplicateIndex = 1
+      while (activeKeys.has(key)) {
+        duplicateIndex += 1
+        key = `${baseKey}:${duplicateIndex}`
+      }
+      activeKeys.add(key)
+
+      let record = records.get(key)
+      if (!record) {
+        const [itemSignal, setItem] = createSignal<T>(item, { equals: false })
+        const [indexSignal, setIndex] = createSignal(index)
+        record = { key, item: itemSignal, setItem, index: indexSignal, setIndex }
+        records.set(key, record)
+      } else {
+        record.setItem(() => item)
+        record.setIndex(index)
+      }
+      return record
+    })
+
+    for (const key of Array.from(records.keys())) {
+      if (!activeKeys.has(key)) records.delete(key)
+    }
+    setOrdered(() => next)
+  })
+
+  return (
+    <For each={ordered()}>
+      {(record) => props.children(record.item, record.index)}
+    </For>
+  )
 }
 
 function traceKindForPart(part: TranscriptItem): TraceNodeKind {
@@ -188,6 +245,7 @@ const ToolPart: Component<ItemProps<ToolActivityItem>> = (props) => {
     toolName: toolName(),
     toolSource: props.part.source,
     reason: props.part.approvalReason,
+    intent: props.part.approvalIntent,
     content: props.part.approvalContent,
     toolArgs: props.part.input || {},
     sections: props.part.approvalSections || [],
@@ -275,7 +333,7 @@ const ToolPart: Component<ItemProps<ToolActivityItem>> = (props) => {
               <ToolSection title={t("tool.section.approval")}>
                 <div class="tool-card__approval">
                   <div class="tool-card__approval-main">
-                    <span>{props.part.approvalReason || t("tool.approval.needsApproval")}</span>
+                    <span>{props.part.approvalIntent || props.part.approvalReason || t("tool.approval.needsApproval")}</span>
                     <Show when={props.part.approvalDecision}>
                       <strong>{approvalDecisionLabel(props.part.approvalDecision, props.part.status)}</strong>
                     </Show>
@@ -483,7 +541,7 @@ const ShellToolPart: Component<ItemProps<ToolActivityItem>> = (props) => {
           <Show when={props.part.approvalId}>
             <div class="shell-card__approval">
               <span class="codicon codicon-shield" aria-hidden="true" />
-              <span>{props.part.approvalReason || t("tool.shell.needsApproval")}</span>
+              <span>{props.part.approvalIntent || props.part.approvalReason || t("tool.shell.needsApproval")}</span>
               <strong>{approvalDecisionLabel(props.part.approvalDecision, props.part.status)}</strong>
             </div>
           </Show>
@@ -546,7 +604,7 @@ const ShellToolPart: Component<ItemProps<ToolActivityItem>> = (props) => {
               <ToolSection title={t("tool.section.approval")}>
                 <div class="shell-card__approval-detail">
                   <div class="shell-card__approval-detail-text">
-                    <span>{props.part.approvalReason || t("tool.shell.needsApproval")}</span>
+                    <span>{props.part.approvalIntent || props.part.approvalReason || t("tool.shell.needsApproval")}</span>
                     <Show when={approvalResultReasonForPart(props.part)}>
                       <span class="shell-card__approval-result">{approvalResultReasonForPart(props.part)}</span>
                     </Show>
@@ -1029,10 +1087,11 @@ const ReasoningPanelPart: Component<ReasoningPanelPartProps> = (props) => {
           })
         }}
       >
-        <span
-          class={props.panel.state === "running" ? "codicon codicon-loading codicon-modifier-spin" : "codicon codicon-comment-discussion"}
-          aria-hidden="true"
-        />
+        {props.panel.state === "running" ? (
+          <RoseFourLoader class="process-card__loader" />
+        ) : (
+          <span class="codicon codicon-comment-discussion" aria-hidden="true" />
+        )}
         <span class="reasoning-card__body">
           <span class="reasoning-card__title">{title()}</span>
           <Show when={props.panel.summary}>
@@ -1097,7 +1156,7 @@ const TimelineProcessGroupPart: Component<TimelineProcessGroupPartProps> = (prop
   createEffect(() => {
     CARD_OPEN_STATE.set(props.group.id, open())
   })
-  const icon = () => props.group.state === "running" ? "loading" : PROCESS_GROUP_ICONS[props.group.kind] || "list-tree"
+  const icon = () => PROCESS_GROUP_ICONS[props.group.kind] || "list-tree"
   const meta = () => {
     if (props.group.state === "running") {
       return [
@@ -1133,11 +1192,11 @@ const TimelineProcessGroupPart: Component<TimelineProcessGroupPartProps> = (prop
           })
         }}
       >
-        <span
-          class={`codicon codicon-${icon()}`}
-          classList={{ "codicon-modifier-spin": props.group.state === "running" }}
-          aria-hidden="true"
-        />
+        {props.group.state === "running" ? (
+          <RoseFourLoader class="process-card__loader" />
+        ) : (
+          <span class={`codicon codicon-${icon()}`} aria-hidden="true" />
+        )}
         <span class="process-card__body">
           <span class="process-card__title">{props.group.label}</span>
           <span class="process-card__meta">{meta()}</span>
@@ -1240,15 +1299,15 @@ interface ProcessTimelineProps extends Omit<PartProps, "part"> {
 }
 
 const ProcessTimeline: Component<ProcessTimelineProps> = (props) => (
-  <For each={props.items}>
+  <KeyedFor each={props.items} key={processTimelineItemKey}>
     {(item) => (
       <Switch>
-        <Match when={item.type === "timeline_text"}>
-          <TimelineTextPart part={(item as Extract<ProcessTimelineItem, { type: "timeline_text" }>).part} />
+        <Match when={item().type === "timeline_text"}>
+          <TimelineTextPart part={(item() as Extract<ProcessTimelineItem, { type: "timeline_text" }>).part} />
         </Match>
-        <Match when={item.type === "timeline_process_group"}>
+        <Match when={item().type === "timeline_process_group"}>
           <TimelineProcessGroupPart
-            group={(item as Extract<ProcessTimelineItem, { type: "timeline_process_group" }>).group}
+            group={(item() as Extract<ProcessTimelineItem, { type: "timeline_process_group" }>).group}
             selectedTraceNodeId={props.selectedTraceNodeId}
             onSelectSession={props.onSelectSession}
             onTraceNodeSelect={props.onTraceNodeSelect}
@@ -1258,12 +1317,12 @@ const ProcessTimeline: Component<ProcessTimelineProps> = (props) => (
             defaultReasoningOpen={props.defaultReasoningOpen}
           />
         </Match>
-        <Match when={item.type === "timeline_notice"}>
-          <NoticePart part={(item as Extract<ProcessTimelineItem, { type: "timeline_notice" }>).part} />
+        <Match when={item().type === "timeline_notice"}>
+          <NoticePart part={(item() as Extract<ProcessTimelineItem, { type: "timeline_notice" }>).part} />
         </Match>
       </Switch>
     )}
-  </For>
+  </KeyedFor>
 )
 
 const TranscriptItemView: Component<PartProps> = (props) => {
@@ -1376,10 +1435,10 @@ export const SessionTurn: Component<SessionTurnProps> = (props) => {
         </div>
       </div>
 
-      <For each={props.turn.assistantMessages}>
+      <Index each={props.turn.assistantMessages}>
         {(message) => {
-          const selected = () => Boolean(message.traceNodeId && message.traceNodeId === props.selectedTraceNodeId)
-          const presentation = createMemo(() => buildTranscriptPresentation(message.parts, message, {
+          const selected = () => Boolean(message().traceNodeId && message().traceNodeId === props.selectedTraceNodeId)
+          const presentation = createMemo(() => buildTranscriptPresentation(message().parts, message(), {
             runningProcessLabel: props.runningProcessLabel,
           }))
 
@@ -1387,22 +1446,25 @@ export const SessionTurn: Component<SessionTurnProps> = (props) => {
             <div
               class="assistant-message"
               classList={{ "message--selected": selected() }}
-              data-trace-node-id={message.traceNodeId}
-              onClick={() => message.traceNodeId && props.onTraceNodeSelect?.(message.traceNodeId)}
+              data-trace-node-id={message().traceNodeId}
+              onClick={() => {
+                const traceNodeId = message().traceNodeId
+                if (traceNodeId) props.onTraceNodeSelect?.(traceNodeId)
+              }}
             >
-              <MessageMarker message={message} selected={selected()} />
+              <MessageMarker message={message()} selected={selected()} />
               <div class="assistant-message__body">
-                <For each={presentation()}>
+                <KeyedFor each={presentation()} key={transcriptPresentationItemKey}>
                   {(item) => (
                     <Switch>
-                      <Match when={item.type === "timeline_text"}>
+                      <Match when={item().type === "timeline_text"}>
                         <TimelineTextPart
-                          part={(item as Extract<TranscriptPresentationItem, { type: "timeline_text" }>).part}
+                          part={(item() as Extract<TranscriptPresentationItem, { type: "timeline_text" }>).part}
                         />
                       </Match>
-                      <Match when={item.type === "timeline_process_group"}>
+                      <Match when={item().type === "timeline_process_group"}>
                         <TimelineProcessGroupPart
-                          group={(item as Extract<TranscriptPresentationItem, { type: "timeline_process_group" }>).group}
+                          group={(item() as Extract<TranscriptPresentationItem, { type: "timeline_process_group" }>).group}
                           selectedTraceNodeId={props.selectedTraceNodeId}
                           onSelectSession={props.onSelectSession}
                           onTraceNodeSelect={props.onTraceNodeSelect}
@@ -1412,14 +1474,14 @@ export const SessionTurn: Component<SessionTurnProps> = (props) => {
                           defaultReasoningOpen={props.defaultReasoningOpen}
                         />
                       </Match>
-                      <Match when={item.type === "timeline_notice"}>
+                      <Match when={item().type === "timeline_notice"}>
                         <NoticePart
-                          part={(item as Extract<TranscriptPresentationItem, { type: "timeline_notice" }>).part}
+                          part={(item() as Extract<TranscriptPresentationItem, { type: "timeline_notice" }>).part}
                         />
                       </Match>
-                      <Match when={item.type === "process_summary"}>
+                      <Match when={item().type === "process_summary"}>
                         <ProcessSummaryPart
-                          summary={(item as Extract<TranscriptPresentationItem, { type: "process_summary" }>).summary}
+                          summary={(item() as Extract<TranscriptPresentationItem, { type: "process_summary" }>).summary}
                           selectedTraceNodeId={props.selectedTraceNodeId}
                           onSelectSession={props.onSelectSession}
                           onTraceNodeSelect={props.onTraceNodeSelect}
@@ -1429,19 +1491,19 @@ export const SessionTurn: Component<SessionTurnProps> = (props) => {
                           defaultReasoningOpen={props.defaultReasoningOpen}
                         />
                       </Match>
-                      <Match when={item.type === "reasoning_panel"}>
+                      <Match when={item().type === "reasoning_panel"}>
                         <ReasoningPanelPart
-                          panel={(item as Extract<TranscriptPresentationItem, { type: "reasoning_panel" }>).panel}
+                          panel={(item() as Extract<TranscriptPresentationItem, { type: "reasoning_panel" }>).panel}
                         />
                       </Match>
-                      <Match when={item.type === "final_answer"}>
+                      <Match when={item().type === "final_answer"}>
                         <FinalAnswerPart
-                          parts={(item as Extract<TranscriptPresentationItem, { type: "final_answer" }>).parts}
+                          parts={(item() as Extract<TranscriptPresentationItem, { type: "final_answer" }>).parts}
                         />
                       </Match>
                     </Switch>
                   )}
-                </For>
+                </KeyedFor>
                 <div class="message-action-row">
                   <Show when={props.onCopyMessage}>
                     <IconButton
@@ -1449,29 +1511,29 @@ export const SessionTurn: Component<SessionTurnProps> = (props) => {
                       title={t("chat.copyMessage")}
                       onClick={(event) => {
                         event.stopPropagation()
-                        return props.onCopyMessage?.(message)
+                        return props.onCopyMessage?.(message())
                       }}
                     />
                   </Show>
-                  <Show when={canForkMessage(message)}>
+                  <Show when={canForkMessage(message())}>
                     <IconButton
                       icon="git-branch"
                       title={t("chat.forkFromHere")}
                       onClick={(event) => {
                         event.stopPropagation()
-                        props.onForkMessage?.(message)
+                        props.onForkMessage?.(message())
                       }}
                     />
                   </Show>
-                  <Show when={message.traceNodeId}>
-                    <IconButton icon="inspect" title={t("tool.locateTraceNode")} onClick={() => props.onTraceNodeSelect?.(message.traceNodeId as string)} />
+                  <Show when={message().traceNodeId}>
+                    <IconButton icon="inspect" title={t("tool.locateTraceNode")} onClick={() => props.onTraceNodeSelect?.(message().traceNodeId as string)} />
                   </Show>
                 </div>
               </div>
             </div>
           )
         }}
-      </For>
+      </Index>
     </article>
   )
 }
