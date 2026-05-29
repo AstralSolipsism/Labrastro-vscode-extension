@@ -290,7 +290,7 @@ interface EnvironmentSnapshotState {
   running: boolean
   status: EnvironmentSnapshotStatus
   summary: string
-  chatId?: string
+  sessionRunId?: string
   taskId?: string
   agentId?: string
   sessionId?: string
@@ -1898,7 +1898,7 @@ function normalizeEnvironmentSnapshot(value: unknown): EnvironmentSnapshotState 
     running: item.running === true,
     status: (["idle", "running", "completed", "error", "canceled"].includes(stringValue(item.status)) ? stringValue(item.status) : "idle") as EnvironmentSnapshotStatus,
     summary: stringValue(item.summary, "环境清单尚未加载。"),
-    chatId: stringValue(item.chatId) || undefined,
+    sessionRunId: stringValue(item.sessionRunId) || undefined,
     taskId: stringValue(item.taskId) || undefined,
     agentId: stringValue(item.agentId) || undefined,
     sessionId: stringValue(item.sessionId) || undefined,
@@ -3698,7 +3698,7 @@ export function createSettingsController(props: SettingsViewProps) {
       setSelectedEnvironmentApproval(undefined)
     }
     settingsMessages.replyApproval(vscode, {
-      chatId: environmentSnapshot().chatId,
+      sessionRunId: environmentSnapshot().sessionRunId,
       approvalId: approval.approvalId,
       decision,
     })

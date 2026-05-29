@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from "vitest"
-import { ChatRunCoordinator } from "./ChatRunCoordinator"
+import { SessionRunCoordinator } from "./SessionRunCoordinator"
 
 function coordinator() {
   const options = {
     client: {
       approvalReply: vi.fn(),
-      followUpChat: vi.fn(async () => ({ ok: true })),
-      cancelChatFollowUp: vi.fn(async () => ({ ok: true })),
-      recoverChat: vi.fn(async () => ({ ok: true })),
+      followUpSessionRun: vi.fn(async () => ({ ok: true })),
+      cancelSessionRunFollowUp: vi.fn(async () => ({ ok: true })),
+      recoverSessionRun: vi.fn(async () => ({ ok: true })),
       dispatchChatCommand: vi.fn(async () => ({
         ok: true,
         action: "continue",
@@ -36,25 +36,37 @@ function coordinator() {
     },
     context: {
       workspaceState: {
+        get: vi.fn(),
         update: vi.fn(),
       },
     },
     approvalDocuments: {
       open: vi.fn(),
     },
-    startChat: vi.fn(),
-    cancelChat: vi.fn(),
-    recoverChat: vi.fn(),
+    startSessionRun: vi.fn(),
+    cancelSessionRun: vi.fn(),
+    recoverSessionRun: vi.fn(),
     postConnectionStateIfAuthRequired: vi.fn(),
   }
   return {
     options,
-    coordinator: new ChatRunCoordinator(options as unknown as ConstructorParameters<typeof ChatRunCoordinator>[0]),
+    coordinator: new SessionRunCoordinator(options as unknown as ConstructorParameters<typeof SessionRunCoordinator>[0]),
   }
 }
 
-describe("ChatRunCoordinator", () => {
-  it("routes chat.send to startChat with unchanged payload fields", async () => {
+function coordinatorWithStoredActiveRun(stored: unknown) {
+  const created = coordinator()
+  created.options.context.workspaceState.get.mockImplementation((key: string) =>
+    key === "labrastro.activeSessionRun" ? stored : undefined
+  )
+  return {
+    ...created,
+    coordinator: new SessionRunCoordinator(created.options as unknown as ConstructorParameters<typeof SessionRunCoordinator>[0]),
+  }
+}
+
+describe("SessionRunCoordinator", () => {
+  it("routes chat.send to startSessionRun with unchanged payload fields", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
 
@@ -72,7 +84,7 @@ describe("ChatRunCoordinator", () => {
       mentions: [{ kind: "file", path: "README.md" }],
     }, post)).resolves.toBe(true)
 
-    expect(options.startChat).toHaveBeenCalledWith("hello", "s1", post, {
+    expect(options.startSessionRun).toHaveBeenCalledWith("hello", "s1", post, {
       mode: undefined,
       workflowMode: "chat",
       taskflowId: "taskflow-1",
@@ -95,9 +107,9 @@ describe("ChatRunCoordinator", () => {
       sessionId: "s1",
     }, post)).resolves.toBe(true)
 
-    expect(options.startChat).not.toHaveBeenCalled()
+    expect(options.startSessionRun).not.toHaveBeenCalled()
     expect(post).toHaveBeenCalledWith({
-      type: "chat.error",
+      type: "sessionRun.error",
       message: "请选择会话模型后再发送。",
     })
   })
@@ -116,7 +128,7 @@ describe("ChatRunCoordinator", () => {
       mentions: [{ kind: "file", path: "README.md" }],
     }, post)).resolves.toBe(true)
 
-    expect(options.startChat).not.toHaveBeenCalled()
+    expect(options.startSessionRun).not.toHaveBeenCalled()
     expect(options.client.dispatchChatCommand).toHaveBeenCalledWith({
       text: "/help",
       commandId: "system.help",
@@ -127,10 +139,10 @@ describe("ChatRunCoordinator", () => {
       mentions: [{ kind: "file", path: "README.md" }],
     })
     expect(post).toHaveBeenCalledWith({
-      type: "chat.events",
+      type: "sessionRun.events",
       events: [{ type: "output", payload: { content: "help" } }],
     })
-    expect(post).toHaveBeenCalledWith({ type: "chat.done" })
+    expect(post).toHaveBeenCalledWith({ type: "sessionRun.done" })
   })
 
   it("rejects non-slash chat command dispatch messages locally", async () => {
@@ -144,7 +156,7 @@ describe("ChatRunCoordinator", () => {
 
     expect(options.client.dispatchChatCommand).not.toHaveBeenCalled()
     expect(post).toHaveBeenCalledWith({
-      type: "chat.error",
+      type: "sessionRun.error",
       message: "无效指令：Chat 指令必须以 / 开头。",
     })
 
@@ -156,11 +168,11 @@ describe("ChatRunCoordinator", () => {
     expect(options.client.dispatchChatCommand).not.toHaveBeenCalled()
   })
 
-  it("uses the active chat id for approval replies when the message omits chatId", async () => {
+  it("uses the active chat id for approval replies when the message omits sessionRunId", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
     subject.setActiveRun({
-      chatId: "active-chat",
+      sessionRunId: "active-chat",
       cursor: 0,
       status: "running",
       startedAt: "2026-01-01T00:00:00.000Z",
@@ -175,7 +187,7 @@ describe("ChatRunCoordinator", () => {
     }, post)
 
     expect(options.client.approvalReply).toHaveBeenCalledWith({
-      chat_id: "active-chat",
+      session_run_id: "active-chat",
       approval_id: "approval-1",
       decision: "allow_once",
       reason: "ok",
@@ -190,7 +202,7 @@ describe("ChatRunCoordinator", () => {
       state: "already_resolved",
     })
     subject.setActiveRun({
-      chatId: "active-chat",
+      sessionRunId: "active-chat",
       cursor: 0,
       status: "running",
       startedAt: "2026-01-01T00:00:00.000Z",
@@ -206,7 +218,7 @@ describe("ChatRunCoordinator", () => {
 
     expect(post).toHaveBeenCalledWith({
       type: "approval.reply.ok",
-      chatId: "active-chat",
+      sessionRunId: "active-chat",
       approvalId: "approval-1",
       decision: "allow_once",
       payload: {
@@ -221,7 +233,7 @@ describe("ChatRunCoordinator", () => {
     const post = vi.fn()
     options.client.approvalReply.mockRejectedValueOnce(new Error("fetch failed"))
     subject.setActiveRun({
-      chatId: "active-chat",
+      sessionRunId: "active-chat",
       cursor: 0,
       status: "running",
       startedAt: "2026-01-01T00:00:00.000Z",
@@ -237,20 +249,20 @@ describe("ChatRunCoordinator", () => {
 
     expect(post).toHaveBeenCalledWith({
       type: "approval.reply.error",
-      chatId: "active-chat",
+      sessionRunId: "active-chat",
       approvalId: "approval-1",
       decision: "allow_once",
       message: "fetch failed",
     })
-    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "chat.error" }))
-    expect(subject.activeRun?.chatId).toBe("active-chat")
+    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "sessionRun.error" }))
+    expect(subject.activeRun?.sessionRunId).toBe("active-chat")
   })
 
   it("routes chat follow-ups to the active run and supports cancellation", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
     subject.setActiveRun({
-      chatId: "active-chat",
+      sessionRunId: "active-chat",
       cursor: 0,
       status: "running",
       startedAt: "2026-01-01T00:00:00.000Z",
@@ -258,35 +270,35 @@ describe("ChatRunCoordinator", () => {
     })
 
     await subject.handleMessage({
-      type: "chat.followup",
+      type: "sessionRun.followup",
       text: "use this extra constraint",
       followupId: "follow-1",
       requestId: "req-1",
     }, post)
     await subject.handleMessage({
-      type: "chat.followup.cancel",
+      type: "sessionRun.followup.cancel",
       followupId: "follow-1",
       reason: "user_changed_to_queue",
     }, post)
 
-    expect(options.client.followUpChat).toHaveBeenCalledWith({
-      chatId: "active-chat",
+    expect(options.client.followUpSessionRun).toHaveBeenCalledWith({
+      sessionRunId: "active-chat",
       text: "use this extra constraint",
       followupId: "follow-1",
       clientRequestId: "req-1",
     })
-    expect(options.client.cancelChatFollowUp).toHaveBeenCalledWith({
-      chatId: "active-chat",
+    expect(options.client.cancelSessionRunFollowUp).toHaveBeenCalledWith({
+      sessionRunId: "active-chat",
       followupId: "follow-1",
       reason: "user_changed_to_queue",
     })
   })
 
-  it("routes chat.recover to the active interrupted chat", async () => {
+  it("routes sessionRun.recover to the active interrupted chat", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
     subject.setActiveRun({
-      chatId: "active-chat",
+      sessionRunId: "active-chat",
       cursor: 7,
       status: "running",
       startedAt: "2026-01-01T00:00:00.000Z",
@@ -294,11 +306,11 @@ describe("ChatRunCoordinator", () => {
     })
 
     await subject.handleMessage({
-      type: "chat.recover",
+      type: "sessionRun.recover",
       action: "retry",
     }, post)
 
-    expect(options.recoverChat).toHaveBeenCalledWith("active-chat", "retry", post)
+    expect(options.recoverSessionRun).toHaveBeenCalledWith("active-chat", "retry", post)
   })
 
   it("routes taskflow complexity requests and posts results", async () => {
@@ -493,7 +505,7 @@ describe("ChatRunCoordinator", () => {
     const { options, coordinator: subject } = coordinator()
 
     subject.setActiveRun({
-      chatId: "chat-1",
+      sessionRunId: "chat-1",
       cursor: 4,
       sessionId: "session-1",
       draftSessionId: "session-local",
@@ -503,10 +515,10 @@ describe("ChatRunCoordinator", () => {
       nextRetryAt: 123,
     })
 
-    expect(subject.activeChatId).toBe("chat-1")
+    expect(subject.activeSessionRunId).toBe("chat-1")
     expect(subject.activeRunPayload()).toMatchObject({
-      chatId: "chat-1",
-      chat_id: "chat-1",
+      sessionRunId: "chat-1",
+      session_run_id: "chat-1",
       cursor: 4,
       sessionId: "session-1",
       session_id: "session-1",
@@ -519,8 +531,49 @@ describe("ChatRunCoordinator", () => {
       next_retry_at: 123,
     })
     expect(options.context.workspaceState.update).toHaveBeenCalledWith(
-      "labrastro.activeChatRun",
-      expect.objectContaining({ chatId: "chat-1", chat_id: "chat-1" })
+      "labrastro.activeSessionRun",
+      expect.objectContaining({ sessionRunId: "chat-1", session_run_id: "chat-1" })
     )
+  })
+
+  it("restores active run state from workspaceState on construction", () => {
+    const { coordinator: subject } = coordinatorWithStoredActiveRun({
+      sessionRunId: "chat-restored",
+      session_run_id: "ignored-snake-id",
+      cursor: "7",
+      session_id: "session-restored",
+      status: "reconnecting",
+      started_at: "2026-05-29T00:00:00.000Z",
+      reconnect_attempts: "3",
+      last_error: "network",
+      last_stream_at: "2026-05-29T00:00:01.000Z",
+      next_retry_at: "1234",
+    })
+
+    expect(subject.activeSessionRunId).toBe("chat-restored")
+    expect(subject.activeRunPayload()).toMatchObject({
+      sessionRunId: "chat-restored",
+      session_run_id: "chat-restored",
+      cursor: 7,
+      sessionId: "session-restored",
+      session_id: "session-restored",
+      status: "reconnecting",
+      startedAt: "2026-05-29T00:00:00.000Z",
+      reconnectAttempts: 3,
+      reconnect_attempts: 3,
+      lastError: "network",
+      nextRetryAt: 1234,
+    })
+  })
+
+  it("ignores invalid stored active run payloads", () => {
+    const { coordinator: missingChatId } = coordinatorWithStoredActiveRun({
+      cursor: 4,
+      status: "running",
+    })
+    const { coordinator: arrayPayload } = coordinatorWithStoredActiveRun([])
+
+    expect(missingChatId.activeRun).toBeUndefined()
+    expect(arrayPayload.activeRun).toBeUndefined()
   })
 })

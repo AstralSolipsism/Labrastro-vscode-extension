@@ -66,7 +66,7 @@ vi.mock("fs/promises", async () => {
 })
 
 import {
-  CHAT_EVENTS_TIMEOUT_SEC,
+  SESSION_RUN_EVENTS_TIMEOUT_SEC,
   LabrastroRemoteClient,
   RemoteError,
   classifyRemoteError,
@@ -210,7 +210,7 @@ function mockPeerFetch(artifactContent = Buffer.from("peer-binary"), serverVersi
           server_version: serverVersion,
           features: {
             sessions: true,
-            chat_events: true,
+            session_runs: true,
             fresh_session_without_session_hint: true,
             peer_token_heartbeat_refresh: true,
           },
@@ -331,6 +331,7 @@ function remoteContractFixtures(): Array<{
   )
   const candidates = [
     path.resolve(__dirname, "..", "..", relativeContractPath),
+    path.resolve(__dirname, "..", "..", "Labrastro", relativeContractPath),
     path.resolve(__dirname, "..", "..", "ReuleauxCoder", relativeContractPath),
     path.resolve(__dirname, "..", "..", "ezcode", relativeContractPath),
   ]
@@ -397,7 +398,7 @@ describe("LabrastroRemoteClient remote errors", () => {
     expect(classifyRemoteError(new TypeError("fetch failed"))).toBe("transient_network")
     expect(classifyRemoteError(new RemoteError(503, "service_unavailable", "503 service_unavailable", {}))).toBe("transient_network")
     expect(classifyRemoteError(new RemoteError(401, "unauthorized", "401 unauthorized", {}))).toBe("auth_required")
-    expect(classifyRemoteError(new RemoteError(404, "chat_not_found", "404 chat_not_found", {}))).toBe("fatal_chat")
+    expect(classifyRemoteError(new RemoteError(404, "session_run_not_found", "404 session_run_not_found", {}))).toBe("fatal_session_run")
   })
 })
 
@@ -418,7 +419,7 @@ describe("LabrastroRemoteClient features", () => {
         server_version: "0.3.0",
         features: {
           sessions: true,
-          chat_events: true,
+          session_runs: true,
           agent_runs: {
             executor_features: {
               claude: {
@@ -443,7 +444,7 @@ describe("LabrastroRemoteClient features", () => {
 
     const features = await new LabrastroRemoteClient(context as never).features()
 
-    expect(features.chatEvents).toBe(true)
+    expect(features.sessionRuns).toBe(true)
     expect(features.agentRuns.executorFeatures.claude).toMatchObject({
       installed: true,
       version: "2.0.1",
@@ -1139,7 +1140,7 @@ describe("LabrastroRemoteClient chat start", () => {
     let postedBody: Record<string, unknown> | undefined
     const fetchMock = vi.fn(async (_input: unknown, init?: RequestInit) => {
       postedBody = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>
-      return new Response(JSON.stringify({ chat_id: "chat-1" }), {
+      return new Response(JSON.stringify({ session_run_id: "run-1" }), {
         headers: { "Content-Type": "application/json" },
       })
     })
@@ -1161,7 +1162,7 @@ describe("LabrastroRemoteClient chat start", () => {
     peerProcess.kill = vi.fn()
     ;(client as unknown as { peerProcess: typeof peerProcess }).peerProcess = peerProcess
 
-    await expect(client.startChat("hello", "session-1", {
+    await expect(client.startSessionRun("hello", "session-1", {
       mode: "taskflow",
       workflowMode: "taskflow",
       taskflowId: "taskflow-1",
@@ -1170,7 +1171,7 @@ describe("LabrastroRemoteClient chat start", () => {
       parameters: { max_context_tokens: 1000000 },
       locale: "zh-CN",
       mentions: [{ kind: "file", name: "README.md", path: "README.md" }],
-    })).resolves.toMatchObject({ chat_id: "chat-1" })
+    })).resolves.toMatchObject({ session_run_id: "run-1" })
 
     expect(postedBody).toMatchObject({
       peer_token: "peer-token-1",
@@ -1324,25 +1325,25 @@ describe("LabrastroRemoteClient chat start", () => {
 
     await client.listSessions(5, "etag-1")
     await client.forkSession("session-1", 2)
-    await client.chatStatus("chat-1", 8)
-    await client.cancelChat("chat-1", "user_stop")
-    await client.followUpChat({
-      chatId: "chat-1",
+    await client.sessionRunStatus("run-1", 8)
+    await client.cancelSessionRun("run-1", "user_stop")
+    await client.followUpSessionRun({
+      sessionRunId: "run-1",
       text: "guide this turn",
       followupId: "follow-1",
       clientRequestId: "req-1",
     })
-    await client.cancelChatFollowUp({
-      chatId: "chat-1",
+    await client.cancelSessionRunFollowUp({
+      sessionRunId: "run-1",
       followupId: "follow-1",
       reason: "user_changed_to_queue",
     })
-    await client.recoverChat({
-      chatId: "chat-1",
+    await client.recoverSessionRun({
+      sessionRunId: "run-1",
       action: "continue",
     })
     await client.approvalReply({
-      chat_id: "chat-1",
+      session_run_id: "run-1",
       approval_id: "approval-1",
       decision: "allow_once",
     })
@@ -1365,45 +1366,45 @@ describe("LabrastroRemoteClient chat start", () => {
         },
       },
       {
-        pathname: "/remote/chat/status",
+        pathname: "/remote/session-runs/status",
         body: {
           peer_token: "peer-token-1",
-          chat_id: "chat-1",
+          session_run_id: "run-1",
           cursor: 8,
         },
       },
       {
-        pathname: "/remote/chat/cancel",
+        pathname: "/remote/session-runs/cancel",
         body: {
           peer_token: "peer-token-1",
-          chat_id: "chat-1",
+          session_run_id: "run-1",
           reason: "user_stop",
         },
       },
       {
-        pathname: "/remote/chat/follow-up",
+        pathname: "/remote/session-runs/follow-up",
         body: {
           peer_token: "peer-token-1",
-          chat_id: "chat-1",
+          session_run_id: "run-1",
           text: "guide this turn",
           followup_id: "follow-1",
           client_request_id: "req-1",
         },
       },
       {
-        pathname: "/remote/chat/follow-up/cancel",
+        pathname: "/remote/session-runs/follow-up/cancel",
         body: {
           peer_token: "peer-token-1",
-          chat_id: "chat-1",
+          session_run_id: "run-1",
           followup_id: "follow-1",
           reason: "user_changed_to_queue",
         },
       },
       {
-        pathname: "/remote/chat/recover",
+        pathname: "/remote/session-runs/recover",
         body: {
           peer_token: "peer-token-1",
-          chat_id: "chat-1",
+          session_run_id: "run-1",
           action: "continue",
         },
       },
@@ -1411,7 +1412,7 @@ describe("LabrastroRemoteClient chat start", () => {
         pathname: "/remote/approval/reply",
         body: {
           peer_token: "peer-token-1",
-          chat_id: "chat-1",
+          session_run_id: "run-1",
           approval_id: "approval-1",
           decision: "allow_once",
         },
@@ -1435,11 +1436,11 @@ describe("LabrastroRemoteClient chat start", () => {
         body: JSON.parse(String(init?.body || "{}")) as Record<string, unknown>,
       })
       return streamTextResponse([
-        "event: chat\n",
+        "event: session_run\n",
         'data: {"events":[{"type":"assistant_delta","payload":{"content":"he',
         'llo"}}],"done":false,"next_cursor":2}\n\n',
         ": ping\n\n",
-        'event: chat\ndata: {"events":[{"type":"chat_end","payload":{"response":"ok"}}],"done":true,"next_cursor":3}\n\n',
+        'event: session_run\ndata: {"events":[{"type":"session_run_end","payload":{"response":"ok"}}],"done":true,"next_cursor":3}\n\n',
       ])
     })
     vi.stubGlobal("fetch", fetchMock)
@@ -1447,17 +1448,17 @@ describe("LabrastroRemoteClient chat start", () => {
     attachPeer(client)
 
     const batches: JsonBody[] = []
-    await client.streamChatEvents("chat-1", 1, async (batch) => {
+    await client.streamSessionRunEvents("run-1", 1, async (batch) => {
       batches.push(batch)
     }, { timeoutSec: 2 })
 
     expect(posted).toEqual([
       {
-        pathname: "/remote/chat/events",
+        pathname: "/remote/session-runs/events",
         accept: "text/event-stream",
         body: {
           peer_token: "peer-token-1",
-          chat_id: "chat-1",
+          session_run_id: "run-1",
           cursor: 1,
           timeout_sec: 2,
         },
@@ -1470,7 +1471,7 @@ describe("LabrastroRemoteClient chat start", () => {
         next_cursor: 2,
       },
       {
-        events: [{ type: "chat_end", payload: { response: "ok" } }],
+        events: [{ type: "session_run_end", payload: { response: "ok" } }],
         done: true,
         next_cursor: 3,
       },
@@ -1485,15 +1486,15 @@ describe("LabrastroRemoteClient chat start", () => {
       },
     }
     vi.stubGlobal("fetch", vi.fn(async () => new Response(
-      JSON.stringify({ ok: false, error: "chat_events_unavailable", message: "no stream" }),
+      JSON.stringify({ ok: false, error: "session_runs_unavailable", message: "no stream" }),
       { status: 503, headers: { "Content-Type": "application/json" } }
     )))
     const client = new LabrastroRemoteClient(context as never)
     attachPeer(client)
 
-    await expect(client.streamChatEvents("chat-1", 0, async () => undefined)).rejects.toMatchObject({
+    await expect(client.streamSessionRunEvents("run-1", 0, async () => undefined)).rejects.toMatchObject({
       status: 503,
-      code: "chat_events_unavailable",
+      code: "session_runs_unavailable",
     })
   })
 
@@ -1855,7 +1856,7 @@ describe("LabrastroRemoteClient peer retry strategy", () => {
             server_version: "0.2.9",
             features: {
               sessions: true,
-              chat_events: true,
+              session_runs: true,
               fresh_session_without_session_hint: true,
               peer_token_heartbeat_refresh: true,
             },
@@ -1874,13 +1875,13 @@ describe("LabrastroRemoteClient peer retry strategy", () => {
           headers: { "Content-Type": "application/json" },
         })
       }
-      if (url.pathname === "/remote/chat/events") {
+      if (url.pathname === "/remote/session-runs/events") {
         streamBodies.push(body)
         if (body.peer_token === "stale-peer-token") {
           return new Response(JSON.stringify({ error: "invalid_peer_token" }), { status: 401 })
         }
         return streamTextResponse([
-          `event: chat\ndata: ${JSON.stringify({ events: [], done: true, next_cursor: body.cursor })}\n\n`,
+          `event: session_run\ndata: ${JSON.stringify({ events: [], done: true, next_cursor: body.cursor })}\n\n`,
         ])
       }
       return new Response(JSON.stringify({ error: "unexpected_url", path: url.pathname }), { status: 500 })
@@ -1933,7 +1934,7 @@ describe("LabrastroRemoteClient peer retry strategy", () => {
 
     const batches: JsonBody[] = []
     await expect(
-      client.streamChatEvents("chat-1", 7, async (batch) => {
+      client.streamSessionRunEvents("run-1", 7, async (batch) => {
         batches.push(batch)
       })
     ).resolves.toBeUndefined()
@@ -1941,15 +1942,15 @@ describe("LabrastroRemoteClient peer retry strategy", () => {
     expect(streamBodies).toEqual([
       {
         peer_token: "stale-peer-token",
-        chat_id: "chat-1",
+        session_run_id: "run-1",
         cursor: 7,
-        timeout_sec: CHAT_EVENTS_TIMEOUT_SEC,
+        timeout_sec: SESSION_RUN_EVENTS_TIMEOUT_SEC,
       },
       {
         peer_token: "fresh-peer-token",
-        chat_id: "chat-1",
+        session_run_id: "run-1",
         cursor: 7,
-        timeout_sec: CHAT_EVENTS_TIMEOUT_SEC,
+        timeout_sec: SESSION_RUN_EVENTS_TIMEOUT_SEC,
       },
     ])
     expect(batches).toEqual([{ events: [], done: true, next_cursor: 7 }])

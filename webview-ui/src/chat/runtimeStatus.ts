@@ -11,7 +11,6 @@ export type RuntimeStatusUiAction =
   }
   | { kind: "agent_run_status"; state: AgentRunState }
   | { kind: "ignore" }
-  | { kind: "fallback_view" }
 
 export function resolveRuntimeStatusUiAction(
   payload: Readonly<Record<string, unknown>>,
@@ -21,7 +20,7 @@ export function resolveRuntimeStatusUiAction(
 
   if (phase === "shell_queue") {
     const toolCallId = stringValue(payload.tool_call_id)
-    if (!toolCallId) return { kind: "fallback_view" }
+    if (!toolCallId) return { kind: "ignore" }
     if (status === "queued") {
       return {
         kind: "shell_tool_update",
@@ -37,15 +36,15 @@ export function resolveRuntimeStatusUiAction(
         nextStatus: "running",
       }
     }
-    return { kind: "fallback_view" }
+    return { kind: "ignore" }
   }
 
   if (phase === "agent_queue") {
     const state = agentRunStateFromRuntimeStatus(payload)
-    return state ? { kind: "agent_run_status", state } : { kind: "fallback_view" }
+    return state ? { kind: "agent_run_status", state } : { kind: "ignore" }
   }
 
-  return { kind: "fallback_view" }
+  return { kind: "ignore" }
 }
 
 function stringValue(value: unknown): string | undefined {

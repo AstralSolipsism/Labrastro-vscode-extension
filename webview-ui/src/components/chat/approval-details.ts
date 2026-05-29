@@ -20,6 +20,7 @@ export interface ApprovalDetails {
   toolName: string
   toolSource?: string
   reason?: string
+  intent?: string
   content?: string
   command?: string
   autoApprovalReason?: string
@@ -53,6 +54,7 @@ export function approvalFromPayload(
     toolName: stringValue(payload.tool_name) || fallback.toolName || "tool",
     toolSource: stringValue(payload.tool_source) || fallback.toolSource,
     reason: stringValue(payload.reason) || fallback.reason,
+    intent: stringValue(payload.intent) || fallback.intent,
     content: stringValue(payload.content) || fallback.content,
     command: stringValue(payload.command) || extractApprovalCommandFromArgs(toolArgs) || fallback.command,
     autoApprovalReason: fallback.autoApprovalReason,
@@ -87,7 +89,7 @@ export function approvalSummary(approval: ApprovalDetails): {
   if (category === "execute") {
     return {
       title: "执行命令",
-      primary: command || approval.toolName,
+      primary: approvalIntentText(approval) || command || approval.toolName,
       secondary: approval.autoApprovalReason || approval.reason || "此命令需要批准后执行。",
       icon: "terminal",
       category,
@@ -164,6 +166,18 @@ export function shouldAutoApprove(
 
 export function extractApprovalCommand(approval: ApprovalDetails): string {
   return approval.command || extractApprovalCommandFromArgs(approval.toolArgs)
+}
+
+export function approvalIntentText(approval: ApprovalDetails): string {
+  const intent = stringValue(approval.intent).trim()
+  if (intent) return intent
+  const category = classifyApproval(approval)
+  if (category === "execute") return "执行一条命令。"
+  if (category === "write") return "修改项目文件。"
+  if (category === "delete") return "删除项目内容。"
+  if (category === "mcp") return "调用一个 MCP 工具。"
+  if (category === "readOnly") return "读取项目信息。"
+  return "执行一项操作。"
 }
 
 export function approvalFilePath(approval: ApprovalDetails): string {

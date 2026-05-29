@@ -14,10 +14,10 @@ describe("WebviewBus", () => {
     bus.register("agentManager", agentManager)
     bus.register("taskflow", taskflow)
 
-    bus.broadcast({ type: "chat.events" }, ["sidebar"])
+    bus.broadcast({ type: "sessionRun.events" }, ["sidebar"])
     bus.broadcast({ type: "taskflow.complexity", taskflowId: "tf-1" }, ["taskflow"])
 
-    expect(sidebar).toHaveBeenCalledWith({ type: "chat.events" })
+    expect(sidebar).toHaveBeenCalledWith({ type: "sessionRun.events" })
     expect(settings).not.toHaveBeenCalled()
     expect(agentManager).not.toHaveBeenCalled()
     expect(taskflow).toHaveBeenCalledWith({ type: "taskflow.complexity", taskflowId: "tf-1" })
@@ -35,7 +35,7 @@ describe("WebviewBus", () => {
     bus.register("agentManager", agentManager)
     bus.register("taskflow", taskflow)
 
-    bus.broadcast({ type: "chat.started" }, ["sidebar"])
+    bus.broadcast({ type: "sessionRun.started" }, ["sidebar"])
     bus.broadcast({ type: "session.loaded", sessionId: "s1" }, ["sidebar", "agentManager"])
     bus.broadcast({ type: "taskflow.complexity", taskflowId: "tf-1" }, ["taskflow"])
 

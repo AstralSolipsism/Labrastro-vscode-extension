@@ -14,7 +14,7 @@ export interface ApprovalSubmissionFields {
 }
 
 export interface RecoverablePendingApproval extends ApprovalDetails, ApprovalSubmissionFields {
-  chatId: string
+  sessionRunId: string
 }
 
 export function markApprovalSubmitting<T extends ApprovalSubmissionFields>(
@@ -60,7 +60,7 @@ export function markApprovalSubmitSucceeded<T extends ApprovalSubmissionFields>(
 export function mergeStatusApprovals<T extends RecoverablePendingApproval>(
   items: T[],
   statusApprovals: unknown[],
-  chatId: string,
+  sessionRunId: string,
 ): T[] {
   const next = [...items]
   for (const raw of statusApprovals) {
@@ -71,7 +71,7 @@ export function mergeStatusApprovals<T extends RecoverablePendingApproval>(
     if (!approval.approvalId) continue
     const restored = {
       ...approval,
-      chatId,
+      sessionRunId,
       submittedDecision: undefined,
       submissionState: undefined,
       submissionError: undefined,

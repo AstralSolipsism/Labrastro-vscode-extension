@@ -376,8 +376,9 @@ export class SessionCoordinator {
       return
     }
     try {
-      const payload = await this.options.client.loadSession(sessionId)
+      const loadedPayload = await this.options.client.loadSession(sessionId)
       if (options.isStale?.()) return
+      const payload = await this.loadedPayloadWithServerSessionRunState(loadedPayload)
       const metadata = normalizePayloadSessionMetadata(payload)
       const bundle = buildSessionBundle(payload, metadata)
       const record = sessionRecordFromPayload(payload)
@@ -400,6 +401,25 @@ export class SessionCoordinator {
       }, post)
     } catch (error) {
       post({ type: "session.error", message: errorMessage(error) })
+    }
+  }
+
+  private async loadedPayloadWithServerSessionRunState(
+    payload: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const document = sessionDocumentFromPayload(payload)
+    const sessionRunId = documentSessionRunId(document)
+    if (!sessionRunId || !documentLooksRunning(document)) {
+      return payload
+    }
+    try {
+      await this.options.client.sessionRunStatus(sessionRunId)
+      return payload
+    } catch (error) {
+      if (isRemoteError(error, "session_run_not_found", 404)) {
+        return settleOrphanedSessionRunPayload(payload)
+      }
+      return payload
     }
   }
 
@@ -573,7 +593,7 @@ export class SessionCoordinator {
     }
   }
 
-  async prepareChatSession(
+  async prepareSessionRunSession(
     requestedSessionId: string | undefined,
     post: PostMessage,
     options: PrepareChatSessionOptions
@@ -601,7 +621,7 @@ export class SessionCoordinator {
           fingerprint: this.sessionFingerprint || stringValue(created.fingerprint),
         }, post)
       } catch (error) {
-        post({ type: "chat.error", message: errorMessage(error) })
+        post({ type: "sessionRun.error", message: errorMessage(error) })
         return { ok: false }
       }
     }
@@ -650,7 +670,7 @@ export class SessionCoordinator {
     return this.currentSessionId
   }
 
-  async reloadCurrentAfterChatDone(post: PostMessage): Promise<void> {
+  async reloadCurrentAfterSessionRunDone(post: PostMessage): Promise<void> {
     const result = await this.refreshSessions()
     if (result.status === "unauthenticated") {
       await this.options.postConnectionStateIfAuthRequired(result.error, post)
@@ -818,6 +838,88 @@ function sessionRuntimeStateFromPayload(payload: Record<string, unknown>): Recor
   const camelRuntimeState = objectValue(payload.runtimeState)
   if (Object.keys(camelRuntimeState).length > 0) return camelRuntimeState
   return objectValue(sessionRecordFromPayload(payload).runtime_state)
+}
+
+function documentSessionRunId(document: Record<string, unknown>): string | undefined {
+  const runState = objectValue(document.run_state)
+  return stringValue(runState.session_run_id) || stringValue(runState.sessionRunId)
+}
+
+function documentLooksRunning(document: Record<string, unknown>): boolean {
+  const runState = objectValue(document.run_state)
+  const stats = objectValue(document.stats)
+  return runState.status === "running" || stats.runStatus === "running"
+}
+
+function settleOrphanedSessionRunPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  const next = cloneJsonRecord(payload)
+  const record = objectValue(next.record)
+  const transcript = objectValue(record.transcript)
+  const payloadDocument = objectValue(next.document)
+  const reason = "审批已失效：远端运行已结束，请重新发起任务。"
+
+  if (Object.keys(transcript).length > 0) {
+    settleOrphanedSessionRunDocument(transcript, reason)
+    record.transcript = transcript
+    next.record = record
+  }
+  if (Object.keys(payloadDocument).length > 0 && payloadDocument !== transcript) {
+    settleOrphanedSessionRunDocument(payloadDocument, reason)
+    next.document = payloadDocument
+  }
+  if (Object.keys(transcript).length === 0 && Object.keys(payloadDocument).length === 0) {
+    const document = sessionDocumentFromPayload(next)
+    if (Object.keys(document).length > 0) {
+      settleOrphanedSessionRunDocument(document, reason)
+    }
+  }
+  return next
+}
+
+function settleOrphanedSessionRunDocument(document: Record<string, unknown>, reason: string): void {
+  const stats = objectValue(document.stats)
+  stats.runStatus = "error"
+  document.stats = stats
+  const runState = objectValue(document.run_state)
+  runState.status = "error"
+  runState.error = reason
+  document.run_state = runState
+  const session = objectValue(document.session)
+  session.state = "error"
+  document.session = session
+  document.parts = settlePendingApprovalParts(arrayValue(document.parts), reason)
+  for (const turn of arrayValue(document.turns)) {
+    const turnRecord = objectValue(turn)
+    for (const message of arrayValue(turnRecord.assistantMessages)) {
+      const messageRecord = objectValue(message)
+      const parts = settlePendingApprovalParts(arrayValue(messageRecord.parts), reason)
+      messageRecord.parts = parts
+    }
+  }
+}
+
+function settlePendingApprovalParts(parts: unknown[], reason: string): unknown[] {
+  return parts.map((part) => {
+    const item = objectValue(part)
+    if (
+      item.type !== "tool" ||
+      item.status !== "awaiting_approval" ||
+      !item.approvalId ||
+      item.approvalDecision
+    ) {
+      return part
+    }
+    return {
+      ...item,
+      status: "denied",
+      approvalDecision: "deny_once",
+      approvalResultReason: reason,
+    }
+  })
+}
+
+function cloneJsonRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>
 }
 
 function normalizeSessionMetadataList(value: unknown): SessionMetadataState[] {

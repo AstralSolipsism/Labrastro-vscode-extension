@@ -63,8 +63,9 @@ describe("command auto approval", () => {
     expect(candidates.find((candidate) => candidate.level === "secondArg")?.rules).toEqual(["git push origin"])
   })
 
-  it("uses the exact command candidate as the quick remembered approval rule", () => {
-    expect(defaultCommandRuleCandidateRules("git push origin main")).toEqual(["git push origin main"])
+  it("uses the second-level command candidate as the quick remembered approval rule", () => {
+    expect(defaultCommandRuleCandidateRules("git push origin main")).toEqual(["git push"])
+    expect(defaultCommandRuleCandidateRules("npm view @jshookmcp/jshook@0.1.8 version --json")).toEqual(["npm view"])
   })
 
   it("builds candidates for every subcommand in a command chain", () => {

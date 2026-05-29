@@ -107,14 +107,14 @@ export function agentRunStateFromRuntimeStatus(
   return undefined
 }
 
-export function settleAgentRunStateForChatEvent(
+export function settleAgentRunStateForSessionRunEvent(
   current: AgentRunState,
   eventType: string,
   payload: Readonly<Record<string, unknown>> = {},
   now = Date.now(),
 ): AgentRunState {
-  if (eventType === "chat_end") return initialAgentRunState()
-  if (eventType === "chat_failed") {
+  if (eventType === "session_run_end") return initialAgentRunState()
+  if (eventType === "session_run_failed") {
     return {
       phase: "error",
       kind: current.kind,
@@ -122,7 +122,7 @@ export function settleAgentRunStateForChatEvent(
       updatedAt: now,
     }
   }
-  if (eventType === "chat_interrupted") {
+  if (eventType === "session_run_interrupted") {
     return {
       phase: "error",
       kind: current.kind,

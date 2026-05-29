@@ -38,7 +38,7 @@ export {
 
 export type JsonObject = Record<string, unknown>
 
-export const CHAT_EVENTS_TIMEOUT_SEC = 10
+export const SESSION_RUN_EVENTS_TIMEOUT_SEC = 10
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
 const LEGACY_AUTH_SESSION_KEY = "labrastro.authSession"
 
@@ -49,7 +49,7 @@ export interface BackendFeatures {
   sessions: boolean
   sessionAutoSave: boolean
   sessionHistoryWritable: boolean
-  chatEvents: boolean
+  sessionRuns: boolean
   taskflow: boolean
   issueAssignment: boolean
   freshSessionWithoutSessionHint: boolean
@@ -57,12 +57,12 @@ export interface BackendFeatures {
   agentRuns: AgentRunFeatures
 }
 
-export interface ChatEventsOptions {
+export interface SessionRunEventsOptions {
   timeoutSec?: number
   signal?: AbortSignal
 }
 
-export type ChatEventsHandler = (batch: JsonObject) => void | Promise<void>
+export type SessionRunEventsHandler = (batch: JsonObject) => void | Promise<void>
 
 export interface AgentRunFeatures {
   executorFeatures: Record<string, ExecutorFeature>
@@ -620,7 +620,7 @@ export class LabrastroRemoteClient {
     }))
   }
 
-  async startChat(
+  async startSessionRun(
     prompt: string,
     sessionId?: string,
     options: {
@@ -642,11 +642,11 @@ export class LabrastroRemoteClient {
     const parameters = options.parameters && Object.keys(options.parameters).length
       ? options.parameters
       : undefined
-    return this.postPeerJson("/remote/chat/start", (peer) => ({
+    return this.postPeerJson("/remote/session-runs/start", (peer) => ({
       peer_token: peer.peer_token,
       prompt,
       session_hint: sessionId,
-      client_request_id: options.clientRequestId || `chat-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      client_request_id: options.clientRequestId || `session-run-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
       ...(options.mode?.trim() ? { mode: options.mode.trim() } : {}),
       ...(options.workflowMode?.trim() ? { workflow_mode: options.workflowMode.trim() } : {}),
       ...(taskflowId ? { taskflow_id: taskflowId } : {}),
@@ -922,15 +922,15 @@ export class LabrastroRemoteClient {
     }))
   }
 
-  async streamChatEvents(
-    chatId: string,
+  async streamSessionRunEvents(
+    sessionRunId: string,
     cursor: number,
-    onBatch: ChatEventsHandler,
-    options: ChatEventsOptions = {}
+    onBatch: SessionRunEventsHandler,
+    options: SessionRunEventsOptions = {}
   ): Promise<void> {
     let peer = await this.ensurePeer()
     return retryInvalidPeerTokenOnce(
-      () => this.openChatEventStream(peer, chatId, cursor, onBatch, options),
+      () => this.openSessionRunEventStream(peer, sessionRunId, cursor, onBatch, options),
       async () => {
         await this.stopPeer("invalid_peer_token_retry")
         peer = await this.ensurePeer()
@@ -938,57 +938,57 @@ export class LabrastroRemoteClient {
     )
   }
 
-  async chatStatus(chatId: string, cursor?: number): Promise<JsonObject> {
-    return this.postPeerJson("/remote/chat/status", (peer) => ({
+  async sessionRunStatus(sessionRunId: string, cursor?: number): Promise<JsonObject> {
+    return this.postPeerJson("/remote/session-runs/status", (peer) => ({
       peer_token: peer.peer_token,
-      chat_id: chatId,
+      session_run_id: sessionRunId,
       ...(typeof cursor === "number" ? { cursor } : {}),
     }))
   }
 
-  async cancelChat(chatId: string, reason = "user_cancelled"): Promise<JsonObject> {
-    return this.postPeerJson("/remote/chat/cancel", (peer) => ({
+  async cancelSessionRun(sessionRunId: string, reason = "user_cancelled"): Promise<JsonObject> {
+    return this.postPeerJson("/remote/session-runs/cancel", (peer) => ({
       peer_token: peer.peer_token,
-      chat_id: chatId,
+      session_run_id: sessionRunId,
       reason,
     }))
   }
 
-  async followUpChat(payload: {
-    chatId: string
+  async followUpSessionRun(payload: {
+    sessionRunId: string
     text: string
     followupId?: string
     clientRequestId?: string
   }): Promise<JsonObject> {
-    return this.postPeerJson("/remote/chat/follow-up", (peer) => ({
+    return this.postPeerJson("/remote/session-runs/follow-up", (peer) => ({
       peer_token: peer.peer_token,
-      chat_id: payload.chatId,
+      session_run_id: payload.sessionRunId,
       text: payload.text,
       ...(payload.followupId ? { followup_id: payload.followupId } : {}),
       ...(payload.clientRequestId ? { client_request_id: payload.clientRequestId } : {}),
     }))
   }
 
-  async cancelChatFollowUp(payload: {
-    chatId: string
+  async cancelSessionRunFollowUp(payload: {
+    sessionRunId: string
     followupId: string
     reason?: string
   }): Promise<JsonObject> {
-    return this.postPeerJson("/remote/chat/follow-up/cancel", (peer) => ({
+    return this.postPeerJson("/remote/session-runs/follow-up/cancel", (peer) => ({
       peer_token: peer.peer_token,
-      chat_id: payload.chatId,
+      session_run_id: payload.sessionRunId,
       followup_id: payload.followupId,
       reason: payload.reason || "user_changed_to_queue",
     }))
   }
 
-  async recoverChat(payload: {
-    chatId: string
+  async recoverSessionRun(payload: {
+    sessionRunId: string
     action: "continue" | "retry"
   }): Promise<JsonObject> {
-    return this.postPeerJson("/remote/chat/recover", (peer) => ({
+    return this.postPeerJson("/remote/session-runs/recover", (peer) => ({
       peer_token: peer.peer_token,
-      chat_id: payload.chatId,
+      session_run_id: payload.sessionRunId,
       action: payload.action,
     }))
   }
@@ -1230,14 +1230,14 @@ export class LabrastroRemoteClient {
     )
   }
 
-  private async openChatEventStream(
+  private async openSessionRunEventStream(
     peer: PeerInfo,
-    chatId: string,
+    sessionRunId: string,
     cursor: number,
-    onBatch: ChatEventsHandler,
-    options: ChatEventsOptions
+    onBatch: SessionRunEventsHandler,
+    options: SessionRunEventsOptions
   ): Promise<void> {
-    const pathname = "/remote/chat/events"
+    const pathname = "/remote/session-runs/events"
     const startedAt = Date.now()
     let status: number | undefined
     try {
@@ -1249,9 +1249,9 @@ export class LabrastroRemoteClient {
         },
         body: JSON.stringify({
           peer_token: peer.peer_token,
-          chat_id: chatId,
+          session_run_id: sessionRunId,
           cursor,
-          timeout_sec: options.timeoutSec ?? CHAT_EVENTS_TIMEOUT_SEC,
+          timeout_sec: options.timeoutSec ?? SESSION_RUN_EVENTS_TIMEOUT_SEC,
         }),
         signal: options.signal,
       })
@@ -1262,13 +1262,13 @@ export class LabrastroRemoteClient {
       }
       if (!response.body) {
         throw new RemoteTransportError(
-          "Chat event stream response did not include a readable body.",
+          "Session run event stream response did not include a readable body.",
           "transient_network"
         )
       }
       let completed = false
       await readSseStream(response.body, async (frame) => {
-        if (frame.event !== "chat" && frame.event !== "message" && frame.event !== "done") {
+        if (frame.event !== "session_run" && frame.event !== "message" && frame.event !== "done") {
           return
         }
         const batch = parseSseJson(frame.data)
@@ -1279,7 +1279,7 @@ export class LabrastroRemoteClient {
       })
       if (!completed) {
         throw new RemoteTransportError(
-          "Chat event stream closed before the done frame.",
+          "Session run event stream closed before the done frame.",
           "transient_network"
         )
       }
@@ -1837,9 +1837,9 @@ function parseSseJson(data: string): JsonObject {
       return parsed as JsonObject
     }
   } catch (error) {
-    throw new RemoteTransportError(errorMessage(error), "fatal_chat", error)
+    throw new RemoteTransportError(errorMessage(error), "fatal_session_run", error)
   }
-  throw new RemoteTransportError("Chat event stream data must be a JSON object.", "fatal_chat")
+  throw new RemoteTransportError("Session run event stream data must be a JSON object.", "fatal_session_run")
 }
 
 export async function parseJsonResponse(response: Response): Promise<JsonObject> {
@@ -1875,7 +1875,7 @@ function normalizeBackendFeatures(payload: JsonObject): BackendFeatures {
       features.session_history_writable === false
         ? false
         : features.sessions === true,
-    chatEvents: features.chat_events === true,
+    sessionRuns: features.session_runs === true,
     taskflow: features.taskflow === true,
     issueAssignment: features.issue_assignment === true,
     freshSessionWithoutSessionHint: features.fresh_session_without_session_hint === true,

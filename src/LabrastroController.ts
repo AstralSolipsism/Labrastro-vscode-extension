@@ -11,7 +11,7 @@ import { classifyRemoteError, isRemoteError } from "./remote-errors"
 import { WebviewBus, type PostMessage, type WebviewTarget } from "./WebviewBus"
 import type { WebviewToHostMessage } from "./protocol/messages"
 import { AdminCoordinator } from "./coordinators/AdminCoordinator"
-import { ChatRunCoordinator, type ActiveChatRun } from "./coordinators/ChatRunCoordinator"
+import { SessionRunCoordinator, type ActiveSessionRun } from "./coordinators/SessionRunCoordinator"
 import { EnvironmentCoordinator } from "./coordinators/EnvironmentCoordinator"
 import { SessionCoordinator } from "./coordinators/SessionCoordinator"
 import { normalizeChatLocale, resolveChatLocalePreference } from "./chatLocale"
@@ -76,7 +76,7 @@ interface EnvironmentSnapshot {
   running: boolean
   status: "idle" | "running" | "completed" | "error" | "canceled"
   summary: string
-  chatId?: string
+  sessionRunId?: string
   taskId?: string
   agentId?: string
   sessionId?: string
@@ -104,8 +104,8 @@ interface WorkspaceFileIndex {
   files: string[]
 }
 
-const CHAT_EVENTS_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 15_000]
-const CHAT_EVENTS_RECOVERY_DEADLINE_MS = 5 * 60 * 1000
+const SESSION_RUN_EVENTS_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 15_000]
+const SESSION_RUN_EVENTS_RECOVERY_DEADLINE_MS = 5 * 60 * 1000
 const CHAT_WEBVIEW_TARGETS: readonly WebviewTarget[] = ["sidebar"]
 const SESSION_WEBVIEW_TARGETS: readonly WebviewTarget[] = ["sidebar", "agentManager"]
 const WORKSPACE_FILE_EXCLUDE_GLOB = "{**/node_modules/**,**/.git/**,**/dist/**,**/out/**,**/build/**,**/.next/**,**/target/**}"
@@ -115,7 +115,7 @@ export class LabrastroController implements vscode.Disposable {
   private readonly client: LabrastroRemoteClient
   private readonly approvalDocuments: ApprovalDocumentProvider
   private readonly adminCoordinator: AdminCoordinator
-  private readonly chatRunCoordinator: ChatRunCoordinator
+  private readonly sessionRunCoordinator: SessionRunCoordinator
   private readonly environmentCoordinator: EnvironmentCoordinator
   private readonly sessionCoordinator: SessionCoordinator
   private backendFeatures: BackendFeatures | null | undefined
@@ -123,6 +123,7 @@ export class LabrastroController implements vscode.Disposable {
   private disposed = false
   private workspaceFileIndex: WorkspaceFileIndex | undefined
   private workspaceFileIndexPromise: Promise<WorkspaceFileIndex> | undefined
+  private readonly activeSessionRunEventStreams = new Set<string>()
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.client = new LabrastroRemoteClient(context)
@@ -163,16 +164,16 @@ export class LabrastroController implements vscode.Disposable {
       refreshBackendFeatures: this.refreshBackendFeatures.bind(this),
       ensureBackendFeatures: this.ensureBackendFeatures.bind(this),
       getBackendFeatures: () => this.backendFeatures,
-      isChatActive: () => this.chatRunCoordinator.isActive(),
+      isChatActive: () => this.sessionRunCoordinator.isActive(),
       postConnectionStateIfAuthRequired: this.postConnectionStateIfAuthRequired.bind(this),
     })
-    this.chatRunCoordinator = new ChatRunCoordinator({
+    this.sessionRunCoordinator = new SessionRunCoordinator({
       client: this.client,
       context: this.context,
       approvalDocuments: this.approvalDocuments,
-      startChat: this.startChat.bind(this),
-      cancelChat: this.cancelChat.bind(this),
-      recoverChat: this.recoverChat.bind(this),
+      startSessionRun: this.startSessionRun.bind(this),
+      cancelSessionRun: this.cancelSessionRun.bind(this),
+      recoverSessionRun: this.recoverSessionRun.bind(this),
       postConnectionStateIfAuthRequired: this.postConnectionStateIfAuthRequired.bind(this),
     })
     this.context.subscriptions.push(
@@ -265,7 +266,7 @@ export class LabrastroController implements vscode.Disposable {
     const target = this.webviewBus.targetOf(post)
     const includeSession = target !== "settings" && options.initializeSession !== false
     const includeAdminState = target !== "agentManager"
-    const includeChatResume = target === "sidebar" || !target
+    const includeSessionRunResume = target === "sidebar" || !target
     post({
       type: "ready",
       extensionVersion: contextVersion(this.context),
@@ -285,10 +286,22 @@ export class LabrastroController implements vscode.Disposable {
     if (includeSession) {
       await this.sessionCoordinator.postSessionSyncStatus(post)
     }
-    let activeRunPayload = this.chatRunCoordinator.activeRunPayload()
-    if (activeRunPayload && includeChatResume) {
+    let activeRunPayload = this.sessionRunCoordinator.activeRunPayload()
+    if (activeRunPayload && includeSessionRunResume) {
       activeRunPayload = await this.activeRunPayloadWithServerStatus(activeRunPayload)
-      post({ type: "chat.resume", payload: activeRunPayload })
+      if (activeRunPayload) {
+        post({ type: "sessionRun.resume", payload: activeRunPayload })
+        const sessionRunId = stringValue(activeRunPayload.sessionRunId) || stringValue(activeRunPayload.session_run_id)
+        const sessionId =
+          stringValue(activeRunPayload.sessionId) ||
+          stringValue(activeRunPayload.session_id) ||
+          stringValue(activeRunPayload.draftSessionId) ||
+          stringValue(activeRunPayload.draft_session_id) ||
+          ""
+        if (sessionRunId) {
+          this.ensureSessionRunEventStream(sessionRunId, sessionId, post)
+        }
+      }
     }
     post({
       type: "startup.metric",
@@ -302,35 +315,55 @@ export class LabrastroController implements vscode.Disposable {
 
   private async activeRunPayloadWithServerStatus(
     payload: Record<string, unknown>
-  ): Promise<Record<string, unknown>> {
-    const chatId = stringValue(payload.chatId) || stringValue(payload.chat_id)
-    if (!chatId) return payload
+  ): Promise<Record<string, unknown> | undefined> {
+    const sessionRunId = stringValue(payload.sessionRunId) || stringValue(payload.session_run_id)
+    if (!sessionRunId) return payload
     try {
       const payloadCursor = Number(payload.cursor ?? 0)
       const cursor = Number.isFinite(payloadCursor) ? payloadCursor : 0
-      const status = await this.client.chatStatus(chatId, cursor)
+      const status = await this.client.sessionRunStatus(sessionRunId, cursor)
+      const approvals = Array.isArray(status.approvals) ? status.approvals : []
+      await this.storeStatusApprovals(status.approvals)
       const sessionId =
         stringValue(status.session_id) ||
         stringValue(status.sessionId) ||
         stringValue(payload.sessionId) ||
         stringValue(payload.session_id)
-      this.chatRunCoordinator.patchActiveRun({
+      const statusValue = stringValue(status.status) || stringValue(payload.status) || "running"
+      if (isTerminalSessionRunStatus(statusValue) && approvals.length === 0) {
+        this.sessionRunCoordinator.clearActiveRun()
+        return undefined
+      }
+      this.sessionRunCoordinator.patchActiveRun({
         sessionId,
         lastStreamAt: new Date().toISOString(),
       })
-      const latestRun = this.chatRunCoordinator.activeRunPayload() || payload
+      const latestRun = this.sessionRunCoordinator.activeRunPayload() || payload
       return {
         ...payload,
         ...latestRun,
-        chatId,
+        sessionRunId,
         cursor: Number.isFinite(cursor) ? cursor : 0,
         sessionId,
         session_id: sessionId,
-        status: stringValue(status.status) || stringValue(payload.status) || "running",
-        approvals: Array.isArray(status.approvals) ? status.approvals : [],
+        status: statusValue,
+        approvals,
       }
-    } catch {
+    } catch (error) {
+      if (isRemoteError(error, "session_run_not_found", 404)) {
+        this.sessionRunCoordinator.clearActiveRun()
+        return undefined
+      }
       return payload
+    }
+  }
+
+  private async storeStatusApprovals(approvals: unknown): Promise<void> {
+    if (!Array.isArray(approvals)) return
+    for (const raw of approvals) {
+      const payload = objectValue(raw)
+      if (payload.state && payload.state !== "requested") continue
+      await this.approvalDocuments.store(payload, { openDiff: false })
     }
   }
 
@@ -402,7 +435,7 @@ export class LabrastroController implements vscode.Disposable {
     if (await this.adminCoordinator.handleMessage(message, post)) return true
     if (await this.environmentCoordinator.handleMessage(message, post)) return true
     if (await this.sessionCoordinator.handleMessage(message, post)) return true
-    if (await this.chatRunCoordinator.handleMessage(message, post)) return true
+    if (await this.sessionRunCoordinator.handleMessage(message, post)) return true
     return false
   }
 
@@ -1228,7 +1261,7 @@ export class LabrastroController implements vscode.Disposable {
     )
   }
 
-  private async startChat(
+  private async startSessionRun(
     text: string,
     requestedSessionId: string | undefined,
     post: PostMessage,
@@ -1248,29 +1281,29 @@ export class LabrastroController implements vscode.Disposable {
     try {
       const modelError = chatStartupModelError(options)
       if (modelError) {
-        post({ type: "chat.error", message: modelError })
+        post({ type: "sessionRun.error", message: modelError })
         return
       }
-      this.chatRunCoordinator.setActiveDraftSessionId(options.draftSessionId)
-      const preparedSession = await this.sessionCoordinator.prepareChatSession(
+      this.sessionRunCoordinator.setActiveDraftSessionId(options.draftSessionId)
+      const preparedSession = await this.sessionCoordinator.prepareSessionRunSession(
         requestedSessionId,
         post,
         options
       )
       if (!preparedSession.ok) {
-        this.chatRunCoordinator.clearActiveDraftSessionId()
+        this.sessionRunCoordinator.clearActiveDraftSessionId()
         return
       }
       let sessionId = preparedSession.sessionId
-      this.emitChatMessage({ type: "chat.started", text }, post)
-      const start = await this.client.startChat(text, sessionId, {
+      this.emitChatMessage({ type: "sessionRun.started", text }, post)
+      const start = await this.client.startSessionRun(text, sessionId, {
         ...options,
         locale: this.currentChatLocale(options.locale),
       })
       sessionId = stringValue(start.session_id) || sessionId
-      const chatId = String(start.chat_id || "")
-      this.chatRunCoordinator.setActiveRun({
-        chatId,
+      const sessionRunId = String(start.session_run_id || "")
+      this.sessionRunCoordinator.setActiveRun({
+        sessionRunId,
         cursor: 0,
         sessionId,
         draftSessionId: options.draftSessionId,
@@ -1279,70 +1312,88 @@ export class LabrastroController implements vscode.Disposable {
         reconnectAttempts: 0,
         lastStreamAt: new Date().toISOString(),
       })
-      this.emitChatMessage({ type: "chat.session", chatId, sessionId }, post)
-      await this.consumeChatEventStream(chatId, sessionId || "", post)
+      this.emitChatMessage({ type: "sessionRun.session", sessionRunId, sessionId }, post)
+      await this.consumeSessionRunEventStream(sessionRunId, sessionId || "", post)
     } catch (error) {
-      this.emitChatMessage({ type: "chat.error", message: chatErrorMessage(error) }, post)
+      this.emitChatMessage({ type: "sessionRun.error", message: chatErrorMessage(error) }, post)
       await this.postConnectionStateIfAuthRequired(error, post)
-      this.chatRunCoordinator.clearActiveRun()
+      this.sessionRunCoordinator.clearActiveRun()
     }
   }
 
-  private async consumeChatEventStream(
-    chatId: string,
+  private ensureSessionRunEventStream(sessionRunId: string, sessionId: string, post: PostMessage): void {
+    if (!sessionRunId || this.activeSessionRunEventStreams.has(sessionRunId)) return
+    void this.consumeSessionRunEventStream(sessionRunId, sessionId, post).catch(async (error) => {
+      if (this.disposed) return
+      this.emitChatMessage({ type: "sessionRun.error", message: chatErrorMessage(error) }, post)
+      await this.postConnectionStateIfAuthRequired(error, post)
+      if (this.sessionRunCoordinator.activeRun?.sessionRunId === sessionRunId) {
+        this.sessionRunCoordinator.clearActiveRun()
+      }
+    })
+  }
+
+  private async consumeSessionRunEventStream(
+    sessionRunId: string,
     initialSessionId: string,
     post: PostMessage
   ): Promise<void> {
-    let sessionId = initialSessionId
-    let cursor = this.chatRunCoordinator.activeRun?.cursor ?? 0
-    while (!this.disposed && this.chatRunCoordinator.activeRun?.chatId === chatId) {
-      const abortController = new AbortController()
-      let completed = false
-      const abortInactiveStream = setInterval(() => {
-        if (this.disposed || this.chatRunCoordinator.activeRun?.chatId !== chatId) {
-          abortController.abort()
-        }
-      }, 250)
-      try {
-        await this.client.streamChatEvents(
-          chatId,
-          cursor,
-          async (stream) => {
-            this.markChatEventsConnected(chatId, post)
-            const result = await this.applyChatEventsBatch(
-              chatId,
-              sessionId,
-              cursor,
-              stream,
-              post
-            )
-            sessionId = result.sessionId
-            cursor = result.cursor
-            completed = result.done
-            if (!result.active) {
-              abortController.abort()
-            }
-          },
-          { timeoutSec: 2, signal: abortController.signal }
-        )
-        break
-      } catch (error) {
-        if (completed || (abortController.signal.aborted && this.chatRunCoordinator.activeRun?.chatId !== chatId)) {
+    if (!sessionRunId || this.activeSessionRunEventStreams.has(sessionRunId)) return
+    this.activeSessionRunEventStreams.add(sessionRunId)
+    try {
+      let sessionId = initialSessionId
+      let cursor = this.sessionRunCoordinator.activeRun?.cursor ?? 0
+      while (!this.disposed && this.sessionRunCoordinator.activeRun?.sessionRunId === sessionRunId) {
+        const abortController = new AbortController()
+        let completed = false
+        const abortInactiveStream = setInterval(() => {
+          if (this.disposed || this.sessionRunCoordinator.activeRun?.sessionRunId !== sessionRunId) {
+            abortController.abort()
+          }
+        }, 250)
+        try {
+          await this.client.streamSessionRunEvents(
+            sessionRunId,
+            cursor,
+            async (stream) => {
+              this.markSessionRunEventsConnected(sessionRunId, post)
+              const result = await this.applySessionRunEventsBatch(
+                sessionRunId,
+                sessionId,
+                cursor,
+                stream,
+                post
+              )
+              sessionId = result.sessionId
+              cursor = result.cursor
+              completed = result.done
+              if (!result.active) {
+                abortController.abort()
+              }
+            },
+            { timeoutSec: 2, signal: abortController.signal }
+          )
           break
+        } catch (error) {
+          if (completed || (abortController.signal.aborted && this.sessionRunCoordinator.activeRun?.sessionRunId !== sessionRunId)) {
+            break
+          }
+          if (await this.retrySessionRunEventsAfterError(sessionRunId, error, post)) {
+            continue
+          }
+          throw error
+        } finally {
+          clearInterval(abortInactiveStream)
         }
-        if (await this.retryChatEventsAfterError(chatId, error, post)) {
-          continue
-        }
-        throw error
-      } finally {
-        clearInterval(abortInactiveStream)
       }
+    } finally {
+      this.activeSessionRunEventStreams.delete(sessionRunId)
     }
   }
 
-  private markChatEventsConnected(chatId: string, post: PostMessage): void {
-    const reconnecting = this.chatRunCoordinator.activeRun?.status === "reconnecting"
-    this.chatRunCoordinator.patchActiveRun({
+  private markSessionRunEventsConnected(sessionRunId: string, post: PostMessage): void {
+    const reconnecting = this.sessionRunCoordinator.activeRun?.status === "reconnecting"
+    this.sessionRunCoordinator.patchActiveRun({
       status: "running",
       reconnectAttempts: 0,
       reconnectStartedAt: undefined,
@@ -1350,34 +1401,34 @@ export class LabrastroController implements vscode.Disposable {
       nextRetryAt: undefined,
       lastStreamAt: new Date().toISOString(),
     })
-    if (reconnecting && this.chatRunCoordinator.activeRun) {
+    if (reconnecting && this.sessionRunCoordinator.activeRun) {
       this.emitChatMessage(
         {
-          type: "chat.reconnected",
-          chatId,
-          payload: this.chatRunCoordinator.activeRunPayload(),
+          type: "sessionRun.reconnected",
+          sessionRunId,
+          payload: this.sessionRunCoordinator.activeRunPayload(),
         },
         post
       )
     }
   }
 
-  private async retryChatEventsAfterError(
-    chatId: string,
+  private async retrySessionRunEventsAfterError(
+    sessionRunId: string,
     error: unknown,
     post: PostMessage
   ): Promise<boolean> {
-    const activeRun = this.chatRunCoordinator.activeRun
+    const activeRun = this.sessionRunCoordinator.activeRun
     if (
-      activeRun?.chatId !== chatId ||
+      activeRun?.sessionRunId !== sessionRunId ||
       classifyRemoteError(error) !== "transient_network" ||
-      !canRetryChatEvents(activeRun)
+      !canRetrySessionRunEvents(activeRun)
     ) {
       return false
     }
-    const delayMs = retryDelayForChatRun(activeRun)
+    const delayMs = retryDelayForSessionRun(activeRun)
     const reconnectStartedAt = activeRun.reconnectStartedAt ?? Date.now()
-    const next = this.chatRunCoordinator.patchActiveRun({
+    const next = this.sessionRunCoordinator.patchActiveRun({
       status: "reconnecting",
       reconnectAttempts: activeRun.reconnectAttempts + 1,
       reconnectStartedAt,
@@ -1386,10 +1437,10 @@ export class LabrastroController implements vscode.Disposable {
     })
     this.emitChatMessage(
       {
-        type: "chat.reconnecting",
-        chatId,
+        type: "sessionRun.reconnecting",
+        sessionRunId,
         message: errorMessage(error),
-        payload: next ? this.chatRunCoordinator.activeRunPayload() : undefined,
+        payload: next ? this.sessionRunCoordinator.activeRunPayload() : undefined,
       },
       post
     )
@@ -1397,8 +1448,8 @@ export class LabrastroController implements vscode.Disposable {
     return true
   }
 
-  private async applyChatEventsBatch(
-    chatId: string,
+  private async applySessionRunEventsBatch(
+    sessionRunId: string,
     sessionId: string,
     cursor: number,
     stream: Record<string, unknown>,
@@ -1419,19 +1470,19 @@ export class LabrastroController implements vscode.Disposable {
           )
           if (remoteSessionId && sessionId && remoteSessionId !== sessionId) {
             this.emitChatMessage({
-              type: "chat.error",
+              type: "sessionRun.error",
               message: `会话绑定异常：当前会话 ${sessionId}，远端返回 ${remoteSessionId}。`,
             }, post)
-            this.chatRunCoordinator.clearActiveRun()
+            this.sessionRunCoordinator.clearActiveRun()
             return { sessionId, cursor, done: false, active: false }
           }
           sessionId = (await this.sessionCoordinator.adoptRemoteSession(
             remoteSessionId,
             sessionId,
-            this.chatRunCoordinator.activeDraftSessionId,
+            this.sessionRunCoordinator.activeDraftSessionId,
             post
           )) || sessionId
-          this.chatRunCoordinator.patchActiveRun({
+          this.sessionRunCoordinator.patchActiveRun({
             sessionId,
             draftSessionId: undefined,
           })
@@ -1442,46 +1493,46 @@ export class LabrastroController implements vscode.Disposable {
           await this.approvalDocuments.store(objectValue(event.payload))
         }
       }
-      for (const batch of splitChatEventBatches(events)) {
+      for (const batch of splitSessionRunEventBatches(events)) {
         this.emitChatMessage(
-          { type: batch.live ? "chat.stream" : "chat.events", chatId, events: batch.events },
+          { type: batch.live ? "sessionRun.stream" : "sessionRun.events", sessionRunId, events: batch.events },
           post
         )
       }
     }
     cursor = nextCursor
-    this.chatRunCoordinator.patchActiveRun({
+    this.sessionRunCoordinator.patchActiveRun({
       cursor,
       lastStreamAt: new Date().toISOString(),
     })
     if (stream.done) {
-      await this.sessionCoordinator.reloadCurrentAfterChatDone(post)
-      this.emitChatMessage({ type: "chat.done", chatId }, post)
-      if (this.chatRunCoordinator.activeRun?.chatId === chatId) {
-        this.chatRunCoordinator.setActiveRun(undefined)
+      await this.sessionCoordinator.reloadCurrentAfterSessionRunDone(post)
+      this.emitChatMessage({ type: "sessionRun.done", sessionRunId }, post)
+      if (this.sessionRunCoordinator.activeRun?.sessionRunId === sessionRunId) {
+        this.sessionRunCoordinator.setActiveRun(undefined)
       }
-      this.chatRunCoordinator.clearActiveDraftSessionId()
+      this.sessionRunCoordinator.clearActiveDraftSessionId()
       return { sessionId, cursor, done: true, active: false }
     }
     return {
       sessionId,
       cursor,
       done: false,
-      active: this.chatRunCoordinator.activeRun?.chatId === chatId,
+      active: this.sessionRunCoordinator.activeRun?.sessionRunId === sessionRunId,
     }
   }
 
-  private async recoverChat(
-    chatId: string,
+  private async recoverSessionRun(
+    sessionRunId: string,
     action: "continue" | "retry",
     post: PostMessage
   ): Promise<void> {
     try {
-      await this.client.recoverChat({ chatId, action })
-      const status = await this.client.chatStatus(chatId)
+      await this.client.recoverSessionRun({ sessionRunId, action })
+      const status = await this.client.sessionRunStatus(sessionRunId)
       const sessionId = stringValue(status.session_id) || stringValue(status.sessionId) || ""
-      this.chatRunCoordinator.setActiveRun({
-        chatId,
+      this.sessionRunCoordinator.setActiveRun({
+        sessionRunId,
         cursor: Number(status.next_cursor ?? status.cursor ?? 0),
         sessionId,
         status: "running",
@@ -1490,19 +1541,19 @@ export class LabrastroController implements vscode.Disposable {
         lastStreamAt: new Date().toISOString(),
       })
       this.emitChatMessage({
-        type: "chat.resume",
+        type: "sessionRun.resume",
         payload: {
-          chatId,
+          sessionRunId,
           sessionId,
           status: "running",
           approvals: Array.isArray(status.approvals) ? status.approvals : [],
         },
       }, post)
-      await this.consumeChatEventStream(chatId, sessionId, post)
+      await this.consumeSessionRunEventStream(sessionRunId, sessionId, post)
     } catch (error) {
-      this.emitChatMessage({ type: "chat.error", message: chatErrorMessage(error) }, post)
+      this.emitChatMessage({ type: "sessionRun.error", message: chatErrorMessage(error) }, post)
       await this.postConnectionStateIfAuthRequired(error, post)
-      this.chatRunCoordinator.clearActiveRun()
+      this.sessionRunCoordinator.clearActiveRun()
     }
   }
 
@@ -1514,21 +1565,21 @@ export class LabrastroController implements vscode.Disposable {
     return defaultChatModelFromChatConfig(await this.client.chatConfigRead())
   }
 
-  private async cancelChat(chatId: string | undefined, post: PostMessage): Promise<void> {
-    const targetChatId = chatId || this.chatRunCoordinator.activeChatId
-    if (!targetChatId) {
-      post({ type: "chat.error", message: "当前没有正在运行的会话。" })
+  private async cancelSessionRun(sessionRunId: string | undefined, post: PostMessage): Promise<void> {
+    const targetSessionRunId = sessionRunId || this.sessionRunCoordinator.activeSessionRunId
+    if (!targetSessionRunId) {
+      post({ type: "sessionRun.error", message: "当前没有正在运行的会话。" })
       return
     }
     try {
-      await this.client.cancelChat(targetChatId, "user_cancelled")
-      if (this.chatRunCoordinator.activeRun?.chatId === targetChatId) {
-        this.chatRunCoordinator.setActiveRun(undefined)
+      await this.client.cancelSessionRun(targetSessionRunId, "user_cancelled")
+      if (this.sessionRunCoordinator.activeRun?.sessionRunId === targetSessionRunId) {
+        this.sessionRunCoordinator.setActiveRun(undefined)
       }
-      this.chatRunCoordinator.clearActiveDraftSessionId()
-      this.emitChatMessage({ type: "chat.cancelled", chatId: targetChatId, reason: "user_cancelled" }, post)
+      this.sessionRunCoordinator.clearActiveDraftSessionId()
+      this.emitChatMessage({ type: "sessionRun.cancelled", sessionRunId: targetSessionRunId, reason: "user_cancelled" }, post)
     } catch (error) {
-      post({ type: "chat.error", message: `停止失败：${errorMessage(error)}` })
+      post({ type: "sessionRun.error", message: `停止失败：${errorMessage(error)}` })
     }
   }
 
@@ -1587,7 +1638,6 @@ export class LabrastroController implements vscode.Disposable {
 
   dispose(): void {
     this.disposed = true
-    this.chatRunCoordinator.clearActiveRun()
     this.sessionCoordinator.dispose()
     void this.client.stopPeer("controller.dispose")
   }
@@ -1620,6 +1670,20 @@ function booleanValue(value: unknown): boolean | undefined {
 
 function objectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {}
+}
+
+function isTerminalSessionRunStatus(status: string | undefined): boolean {
+  if (!status) return false
+  return [
+    "cancelled",
+    "canceled",
+    "complete",
+    "completed",
+    "done",
+    "error",
+    "failed",
+    "finished",
+  ].includes(status.toLowerCase())
 }
 
 function workspaceFoldersKey(): string {
@@ -1743,15 +1807,15 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function retryDelayForChatRun(run: ActiveChatRun): number {
-  return CHAT_EVENTS_RETRY_DELAYS_MS[
-    Math.min(run.reconnectAttempts, CHAT_EVENTS_RETRY_DELAYS_MS.length - 1)
+function retryDelayForSessionRun(run: ActiveSessionRun): number {
+  return SESSION_RUN_EVENTS_RETRY_DELAYS_MS[
+    Math.min(run.reconnectAttempts, SESSION_RUN_EVENTS_RETRY_DELAYS_MS.length - 1)
   ]
 }
 
-function canRetryChatEvents(run: ActiveChatRun): boolean {
+function canRetrySessionRunEvents(run: ActiveSessionRun): boolean {
   const startedAt = run.reconnectStartedAt ?? Date.now()
-  return Date.now() - startedAt <= CHAT_EVENTS_RECOVERY_DEADLINE_MS
+  return Date.now() - startedAt <= SESSION_RUN_EVENTS_RECOVERY_DEADLINE_MS
 }
 
 function resolveWorkspacePath(pathValue: string): string | undefined {
@@ -1983,21 +2047,21 @@ function filterManifestItems(
     })
 }
 
-const LIVE_CHAT_EVENT_TYPES = new Set([
+const LIVE_SESSION_RUN_EVENT_TYPES = new Set([
   "assistant_delta",
   "reasoning_delta",
   "tool_call_stream",
 ])
 
-function isLiveChatEvent(event: unknown): boolean {
+function isLiveSessionRunEvent(event: unknown): boolean {
   if (!event || typeof event !== "object") return false
-  return LIVE_CHAT_EVENT_TYPES.has(stringValue((event as Record<string, unknown>).type) || "")
+  return LIVE_SESSION_RUN_EVENT_TYPES.has(stringValue((event as Record<string, unknown>).type) || "")
 }
 
-function splitChatEventBatches(events: unknown[]): Array<{ live: boolean; events: unknown[] }> {
+function splitSessionRunEventBatches(events: unknown[]): Array<{ live: boolean; events: unknown[] }> {
   const batches: Array<{ live: boolean; events: unknown[] }> = []
   for (const event of events) {
-    const live = isLiveChatEvent(event)
+    const live = isLiveSessionRunEvent(event)
     const last = batches[batches.length - 1]
     if (last && last.live === live) {
       last.events.push(event)

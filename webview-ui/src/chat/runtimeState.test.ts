@@ -3,7 +3,7 @@ import {
   agentRunStateFromDelegatedCompletion,
   agentRunStateFromRuntimeStatus,
   remotePeerStateFromReady,
-  settleAgentRunStateForChatEvent,
+  settleAgentRunStateForSessionRunEvent,
 } from "./runtimeState"
 
 describe("runtime state helpers", () => {
@@ -54,22 +54,22 @@ describe("runtime state helpers", () => {
   })
 
   it("clears AgentRun state on chat end", () => {
-    expect(settleAgentRunStateForChatEvent({
+    expect(settleAgentRunStateForSessionRunEvent({
       phase: "running",
       kind: "chat",
       updatedAt: 100,
-    }, "chat_end", {}, 200)).toEqual({ phase: "idle" })
+    }, "session_run_end", {}, 200)).toEqual({ phase: "idle" })
   })
 
   it("marks AgentRun state as error on chat failure", () => {
-    expect(settleAgentRunStateForChatEvent({
+    expect(settleAgentRunStateForSessionRunEvent({
       phase: "running",
       kind: "chat",
       updatedAt: 100,
-    }, "chat_failed", { message: "chat_handler_failed" }, 200)).toEqual({
+    }, "session_run_failed", { message: "session_run_handler_failed" }, 200)).toEqual({
       phase: "error",
       kind: "chat",
-      message: "chat_handler_failed",
+      message: "session_run_handler_failed",
       updatedAt: 200,
     })
   })

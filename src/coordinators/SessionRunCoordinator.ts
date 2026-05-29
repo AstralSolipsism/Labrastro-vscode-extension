@@ -5,10 +5,10 @@ import type { PostMessage } from "../WebviewBus"
 import type { WebviewToHostMessage } from "../protocol/messages"
 import { chatErrorMessage, numberValue, objectValue, stringValue } from "../controller-utils"
 
-const ACTIVE_CHAT_RUN_KEY = "labrastro.activeChatRun"
+const ACTIVE_SESSION_RUN_KEY = "labrastro.activeSessionRun"
 
-export interface ActiveChatRun {
-  chatId: string
+export interface ActiveSessionRun {
+  sessionRunId: string
   cursor: number
   sessionId?: string
   draftSessionId?: string
@@ -21,11 +21,11 @@ export interface ActiveChatRun {
   nextRetryAt?: number
 }
 
-export interface ChatRunCoordinatorOptions {
+export interface SessionRunCoordinatorOptions {
   client: LabrastroRemoteClient
   context: vscode.ExtensionContext
   approvalDocuments: ApprovalDocumentProvider
-  startChat: (
+  startSessionRun: (
     text: string,
     requestedSessionId: string | undefined,
     post: PostMessage,
@@ -42,27 +42,32 @@ export interface ChatRunCoordinatorOptions {
       mentions?: Record<string, unknown>[]
     }
   ) => Promise<void>
-  cancelChat: (chatId: string | undefined, post: PostMessage) => Promise<void>
-  recoverChat: (
-    chatId: string,
+  cancelSessionRun: (sessionRunId: string | undefined, post: PostMessage) => Promise<void>
+  recoverSessionRun: (
+    sessionRunId: string,
     action: "continue" | "retry",
     post: PostMessage
   ) => Promise<void>
   postConnectionStateIfAuthRequired: (error: unknown, post: PostMessage) => Promise<void>
 }
 
-export class ChatRunCoordinator {
-  private run: ActiveChatRun | undefined
+export class SessionRunCoordinator {
+  private run: ActiveSessionRun | undefined
   private draftSessionId: string | undefined
 
-  constructor(private readonly options: ChatRunCoordinatorOptions) {}
+  constructor(private readonly options: SessionRunCoordinatorOptions) {
+    this.run = activeSessionRunFromPayload(
+      this.options.context.workspaceState.get<Record<string, unknown>>(ACTIVE_SESSION_RUN_KEY)
+    )
+    this.draftSessionId = this.run?.draftSessionId
+  }
 
-  get activeRun(): ActiveChatRun | undefined {
+  get activeRun(): ActiveSessionRun | undefined {
     return this.run
   }
 
-  get activeChatId(): string | undefined {
-    return this.run?.chatId
+  get activeSessionRunId(): string | undefined {
+    return this.run?.sessionRunId
   }
 
   get activeDraftSessionId(): string | undefined {
@@ -78,22 +83,22 @@ export class ChatRunCoordinator {
   }
 
   isActive(): boolean {
-    return Boolean(this.run?.chatId)
+    return Boolean(this.run?.sessionRunId)
   }
 
   activeRunPayload(): Record<string, unknown> | undefined {
-    return this.run ? activeChatRunPayload(this.run) : undefined
+    return this.run ? activeSessionRunPayload(this.run) : undefined
   }
 
-  setActiveRun(run: ActiveChatRun | undefined): void {
+  setActiveRun(run: ActiveSessionRun | undefined): void {
     this.run = run
     void this.options.context.workspaceState.update(
-      ACTIVE_CHAT_RUN_KEY,
-      run ? activeChatRunPayload(run) : undefined
+      ACTIVE_SESSION_RUN_KEY,
+      run ? activeSessionRunPayload(run) : undefined
     )
   }
 
-  patchActiveRun(patch: Partial<ActiveChatRun>): ActiveChatRun | undefined {
+  patchActiveRun(patch: Partial<ActiveSessionRun>): ActiveSessionRun | undefined {
     if (!this.run) return undefined
     const next = { ...this.run, ...patch }
     this.setActiveRun(next)
@@ -110,7 +115,7 @@ export class ChatRunCoordinator {
       case "chat.command.dispatch": {
         const text = typeof message.text === "string" ? message.text : ""
         if (!text.trim() || !text.startsWith("/")) {
-          post({ type: "chat.error", message: "无效指令：Chat 指令必须以 / 开头。" })
+          post({ type: "sessionRun.error", message: "无效指令：Chat 指令必须以 / 开头。" })
           return true
         }
         const clientRequestId =
@@ -132,15 +137,15 @@ export class ChatRunCoordinator {
             ),
           })
           const events = arrayValue(result.events)
-          if (events.length) post({ type: "chat.events", events })
+          if (events.length) post({ type: "sessionRun.events", events })
           if (result.ok === false && !events.length) {
-            post({ type: "chat.error", message: stringValue(result.error) || "指令执行失败。" })
+            post({ type: "sessionRun.error", message: stringValue(result.error) || "指令执行失败。" })
           }
-          post({ type: "chat.done" })
+          post({ type: "sessionRun.done" })
         } catch (error) {
-          post({ type: "chat.error", message: chatErrorMessage(error) })
+          post({ type: "sessionRun.error", message: chatErrorMessage(error) })
           await this.options.postConnectionStateIfAuthRequired(error, post)
-          post({ type: "chat.done" })
+          post({ type: "sessionRun.done" })
         }
         return true
       }
@@ -150,7 +155,7 @@ export class ChatRunCoordinator {
           const modelId = stringValue(message.modelId) || stringValue(message.model_id)
           if (!providerId || !modelId) {
             post({
-              type: "chat.error",
+              type: "sessionRun.error",
               message: providerId || modelId
                 ? "模型选择不完整，请重新选择会话模型。"
                 : "请选择会话模型后再发送。",
@@ -161,7 +166,7 @@ export class ChatRunCoordinator {
             (item): item is Record<string, unknown> =>
               Boolean(item && typeof item === "object" && !Array.isArray(item))
           )
-          void this.options.startChat(message.text, stringValue(message.sessionId), post, {
+          void this.options.startSessionRun(message.text, stringValue(message.sessionId), post, {
             mode: stringValue(message.mode),
             workflowMode: stringValue(message.workflowMode) || stringValue(message.workflow_mode),
             taskflowId: stringValue(message.taskflowId) || stringValue(message.taskflow_id),
@@ -181,21 +186,21 @@ export class ChatRunCoordinator {
           })
         }
         return true
-      case "chat.cancel":
-        await this.options.cancelChat(stringValue(message.chatId), post)
+      case "sessionRun.cancel":
+        await this.options.cancelSessionRun(stringValue(message.sessionRunId), post)
         return true
-      case "chat.recover": {
-        const chatId = stringValue(message.chatId) || stringValue(message.chat_id) || this.activeChatId || ""
+      case "sessionRun.recover": {
+        const sessionRunId = stringValue(message.sessionRunId) || stringValue(message.session_run_id) || this.activeSessionRunId || ""
         const rawAction = stringValue(message.action) || "continue"
         const action = rawAction === "retry" ? "retry" : "continue"
-        if (!chatId) return true
-        await this.options.recoverChat(chatId, action, post)
+        if (!sessionRunId) return true
+        await this.options.recoverSessionRun(sessionRunId, action, post)
         return true
       }
-      case "chat.followup": {
-        const chatId = stringValue(message.chatId) || stringValue(message.chat_id) || this.activeChatId || ""
+      case "sessionRun.followup": {
+        const sessionRunId = stringValue(message.sessionRunId) || stringValue(message.session_run_id) || this.activeSessionRunId || ""
         const text = stringValue(message.text) || ""
-        if (!chatId || !text.trim()) return true
+        if (!sessionRunId || !text.trim()) return true
         const followupId = stringValue(message.followupId) || stringValue(message.followup_id)
         const clientRequestId =
           stringValue(message.clientRequestId) ||
@@ -203,51 +208,51 @@ export class ChatRunCoordinator {
           stringValue(message.requestId) ||
           stringValue(message.request_id)
         try {
-          await this.options.client.followUpChat({
-            chatId,
+          await this.options.client.followUpSessionRun({
+            sessionRunId,
             text,
             ...(followupId ? { followupId } : {}),
             ...(clientRequestId ? { clientRequestId } : {}),
           })
         } catch (error) {
-          post({ type: "chat.error", message: chatErrorMessage(error) })
+          post({ type: "sessionRun.error", message: chatErrorMessage(error) })
           await this.options.postConnectionStateIfAuthRequired(error, post)
         }
         return true
       }
-      case "chat.followup.cancel": {
-        const chatId = stringValue(message.chatId) || stringValue(message.chat_id) || this.activeChatId || ""
+      case "sessionRun.followup.cancel": {
+        const sessionRunId = stringValue(message.sessionRunId) || stringValue(message.session_run_id) || this.activeSessionRunId || ""
         const followupId = stringValue(message.followupId) || stringValue(message.followup_id)
-        if (!chatId || !followupId) return true
+        if (!sessionRunId || !followupId) return true
         try {
-          await this.options.client.cancelChatFollowUp({
-            chatId,
+          await this.options.client.cancelSessionRunFollowUp({
+            sessionRunId,
             followupId,
             reason: stringValue(message.reason) || "user_changed_to_queue",
           })
         } catch (error) {
-          post({ type: "chat.error", message: chatErrorMessage(error) })
+          post({ type: "sessionRun.error", message: chatErrorMessage(error) })
           await this.options.postConnectionStateIfAuthRequired(error, post)
         }
         return true
       }
       case "approval.reply": {
-        const chatId =
-          stringValue(message.chatId) ||
-          this.activeChatId ||
+        const sessionRunId =
+          stringValue(message.sessionRunId) ||
+          this.activeSessionRunId ||
           ""
         const approvalId = stringValue(message.approvalId) || ""
         const decision = stringValue(message.decision) || "deny_once"
         try {
           const payload = await this.options.client.approvalReply({
-            chat_id: chatId,
+            session_run_id: sessionRunId,
             approval_id: approvalId,
             decision,
             reason: stringValue(message.reason),
           })
           post({
             type: "approval.reply.ok",
-            chatId,
+            sessionRunId,
             approvalId,
             decision,
             payload,
@@ -256,7 +261,7 @@ export class ChatRunCoordinator {
           const resolvedError = chatErrorMessage(error)
           post({
             type: "approval.reply.error",
-            chatId,
+            sessionRunId,
             approvalId,
             decision,
             message: resolvedError,
@@ -459,10 +464,10 @@ export class ChatRunCoordinator {
   }
 }
 
-export function activeChatRunPayload(run: ActiveChatRun): Record<string, unknown> {
+export function activeSessionRunPayload(run: ActiveSessionRun): Record<string, unknown> {
   return {
-    chatId: run.chatId,
-    chat_id: run.chatId,
+    sessionRunId: run.sessionRunId,
+    session_run_id: run.sessionRunId,
     cursor: run.cursor,
     sessionId: run.sessionId,
     session_id: run.sessionId,
@@ -481,6 +486,41 @@ export function activeChatRunPayload(run: ActiveChatRun): Record<string, unknown
     last_stream_at: run.lastStreamAt,
     nextRetryAt: run.nextRetryAt,
     next_retry_at: run.nextRetryAt,
+  }
+}
+
+export function activeSessionRunFromPayload(payload: unknown): ActiveSessionRun | undefined {
+  const value = objectValue(payload)
+  const sessionRunId = stringValue(value.sessionRunId) || stringValue(value.session_run_id)
+  if (!sessionRunId) return undefined
+  const cursor = numberValue(value.cursor) ?? 0
+  const reconnectAttempts =
+    numberValue(value.reconnectAttempts) ??
+    numberValue(value.reconnect_attempts) ??
+    0
+  const reconnectStartedAt =
+    numberValue(value.reconnectStartedAt) ??
+    numberValue(value.reconnect_started_at)
+  const nextRetryAt =
+    numberValue(value.nextRetryAt) ??
+    numberValue(value.next_retry_at)
+  const statusValue = stringValue(value.status)
+  const status: ActiveSessionRun["status"] = statusValue === "reconnecting" ? "reconnecting" : "running"
+  return {
+    sessionRunId,
+    cursor,
+    sessionId: stringValue(value.sessionId) || stringValue(value.session_id),
+    draftSessionId: stringValue(value.draftSessionId) || stringValue(value.draft_session_id),
+    status,
+    startedAt:
+      stringValue(value.startedAt) ||
+      stringValue(value.started_at) ||
+      new Date().toISOString(),
+    reconnectAttempts,
+    reconnectStartedAt,
+    lastError: stringValue(value.lastError) || stringValue(value.last_error),
+    lastStreamAt: stringValue(value.lastStreamAt) || stringValue(value.last_stream_at),
+    nextRetryAt,
   }
 }
 

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
+  approvalFromPayload,
+  approvalIntentText,
   approvalSummary,
   classifyApproval,
   extractApprovalCommand,
@@ -17,6 +19,20 @@ function approval(overrides: Partial<ApprovalDetails>): ApprovalDetails {
 }
 
 describe("approval details helpers", () => {
+  it("keeps model-declared intent separate from policy reason and command", () => {
+    const details = approvalFromPayload({
+      approval_id: "approval-1",
+      tool_name: "shell",
+      reason: "shell requires approval",
+      intent: "查询 npm 包 demo 的版本信息。",
+      tool_args: { command: "npm view demo version" },
+    })
+
+    expect(details.reason).toBe("shell requires approval")
+    expect(details.intent).toBe("查询 npm 包 demo 的版本信息。")
+    expect(approvalIntentText(details)).toBe("查询 npm 包 demo 的版本信息。")
+  })
+
   it("extracts executable commands from args payloads", () => {
     expect(extractApprovalCommand(approval({
       toolName: "execute_command",

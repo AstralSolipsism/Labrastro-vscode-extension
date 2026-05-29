@@ -3,7 +3,7 @@ import { isHostToWebviewMessage, isWebviewToHostMessage } from "./messages"
 
 describe("protocol message guards", () => {
   it("accepts known host/webview messages", () => {
-    expect(isHostToWebviewMessage({ type: "chat.started", text: "hi" })).toBe(true)
+    expect(isHostToWebviewMessage({ type: "sessionRun.started", text: "hi" })).toBe(true)
     expect(isHostToWebviewMessage({ type: "session.loaded", sessionId: "s1" })).toBe(true)
     expect(isHostToWebviewMessage({ type: "navigate", view: "taskflow", taskflowId: "tf-1" })).toBe(true)
     expect(isHostToWebviewMessage({ type: "taskflow.focusChatInteraction", taskflowId: "tf-1" })).toBe(true)
@@ -20,9 +20,9 @@ describe("protocol message guards", () => {
     expect(isHostToWebviewMessage({ type: "workspace.files", query: "src", files: ["src/index.ts"] })).toBe(true)
     expect(isWebviewToHostMessage({ type: "chat.send", text: "hi" })).toBe(true)
     expect(isWebviewToHostMessage({ type: "chat.command.dispatch", text: "/help" })).toBe(true)
-    expect(isWebviewToHostMessage({ type: "chat.followup", chatId: "chat-1", text: "guide" })).toBe(true)
-    expect(isWebviewToHostMessage({ type: "chat.followup.cancel", chatId: "chat-1", followupId: "f1" })).toBe(true)
-    expect(isWebviewToHostMessage({ type: "chat.recover", chatId: "chat-1", action: "continue" })).toBe(true)
+    expect(isWebviewToHostMessage({ type: "sessionRun.followup", sessionRunId: "run-1", text: "guide" })).toBe(true)
+    expect(isWebviewToHostMessage({ type: "sessionRun.followup.cancel", sessionRunId: "run-1", followupId: "f1" })).toBe(true)
+    expect(isWebviewToHostMessage({ type: "sessionRun.recover", sessionRunId: "run-1", action: "continue" })).toBe(true)
     expect(isWebviewToHostMessage({ type: "chat.sendDuringRunMode.update", mode: "queue" })).toBe(true)
     expect(isWebviewToHostMessage({ type: "workspace.files.search", query: "src" })).toBe(true)
     expect(isWebviewToHostMessage({ type: "session.load", sessionId: "s1" })).toBe(true)

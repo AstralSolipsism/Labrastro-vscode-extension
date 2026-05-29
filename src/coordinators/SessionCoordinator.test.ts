@@ -11,7 +11,7 @@ const writableFeatures: BackendFeatures = {
   sessions: true,
   sessionAutoSave: true,
   sessionHistoryWritable: true,
-  chatEvents: true,
+  sessionRuns: true,
   taskflow: false,
   issueAssignment: false,
   freshSessionWithoutSessionHint: false,
@@ -83,6 +83,7 @@ async function coordinator(
     loadSession: vi.fn(async () => ({
       record: recordFor("remote-1"),
     })),
+    sessionRunStatus: vi.fn(async () => ({ status: "running" })),
     switchSessionMainModel: vi.fn(async () => ({
       record: recordFor("remote-1", "Remote", { active_model_provider: "p1", active_model: "m1" }),
       active_model: { provider_id: "p1", model_id: "m1" },
@@ -140,10 +141,55 @@ describe("SessionCoordinator", () => {
     })
   })
 
+  it("settles loaded pending approval when the backing chat no longer exists", async () => {
+    const document = documentFor("remote-1", "Remote") as any
+    document.stats = { ...document.stats, runStatus: "running" }
+    ;(document as Record<string, unknown>).run_state = {
+      status: "running",
+      session_run_id: "run-missing",
+      error: null,
+    }
+    document.turns[0].assistantMessages[0].parts = [
+      {
+        id: "tool-call-1",
+        type: "tool",
+        tool: "shell",
+        toolCallId: "call-1",
+        status: "awaiting_approval",
+        approvalId: "approval-1",
+        toolInput: { command: "npm view @jshookmcp/jshook@0.1.8 version description dependencies --json 2>&1" },
+      },
+    ]
+    const { client, emitSessionMessage, subject } = await coordinator({
+      loadSession: vi.fn(async () => ({
+        record: { ...recordFor("remote-1"), transcript: document },
+      })),
+      sessionRunStatus: vi.fn(async () => {
+        throw new RemoteError(404, "session_run_not_found", "chat not found", {})
+      }),
+    } as Partial<LabrastroRemoteClient>)
+    const post = vi.fn()
+
+    await subject.loadSession("remote-1", post, { suppressListRefresh: true })
+
+    expect(client.sessionRunStatus).toHaveBeenCalledWith("run-missing")
+    const loaded = emitSessionMessage.mock.calls.find(([message]) => message.type === "session.loaded")?.[0]
+    const tool = loaded?.document.turns[0].assistantMessages[0].parts[0]
+    expect(loaded?.document.stats.runStatus).toBe("error")
+    expect(loaded?.document.run_state.status).toBe("error")
+    expect(loaded?.bundle.stats.runStatus).toBe("error")
+    expect(tool).toMatchObject({
+      status: "denied",
+      approvalDecision: "deny_once",
+      approvalId: "approval-1",
+    })
+    expect(String(tool.approvalResultReason)).toContain("审批已失效")
+  })
+
   it("creates a server session before chat when no session exists", async () => {
     const { client, context, emitSessionMessage, subject } = await coordinator()
 
-    const result = await subject.prepareChatSession(undefined, vi.fn(), {})
+    const result = await subject.prepareSessionRunSession(undefined, vi.fn(), {})
 
     expect(result).toEqual({ ok: true, sessionId: "remote-1" })
     expect(client.newSession).toHaveBeenCalled()
@@ -202,7 +248,7 @@ describe("SessionCoordinator", () => {
     } as Partial<LabrastroRemoteClient>)
     const post = vi.fn()
 
-    await subject.reloadCurrentAfterChatDone(post)
+    await subject.reloadCurrentAfterSessionRunDone(post)
 
     expect(client.loadSession).not.toHaveBeenCalled()
     expect(emitSessionMessage).toHaveBeenCalledWith(

@@ -7,6 +7,7 @@ import {
 import { DialogSurface } from "../common/interaction"
 import {
   approvalFilePath,
+  approvalIntentText,
   approvalSummary,
   extractApprovalCommand,
   formatInlineValue,
@@ -21,6 +22,7 @@ import {
 export {
   DEFAULT_AUTO_APPROVE_OPTIONS,
   approvalFromPayload,
+  approvalIntentText,
   approvalSummary,
   classifyApproval,
   extractApprovalCommand,
@@ -37,9 +39,46 @@ interface ApprovalDetailsDialogProps {
   autoApprovalPending?: boolean
   onClose: () => void
   onDecision: (decision: ApprovalDecision) => void
+  onApproveSession?: (rules?: string[]) => void
+  onApproveAlways?: () => void
   onAlwaysAllow?: () => void
   onRememberDecision?: (decision: ApprovalDecision, rules: string[]) => void
 }
+
+interface ApprovalDecisionButtonsProps {
+  disabled?: boolean
+  pendingLabel?: string
+  canApproveSession?: boolean
+  canApproveAlways?: boolean
+  onDecision: (decision: ApprovalDecision) => void
+  onApproveSession?: () => void
+  onApproveAlways?: () => void
+}
+
+interface ApprovalQuickPromptProps extends ApprovalDecisionButtonsProps {
+  approval: ApprovalDetails
+  onDetails: () => void
+}
+
+export const ApprovalQuickPrompt: Component<ApprovalQuickPromptProps> = (props) => (
+  <article class="approval-quick">
+    <ApprovalIntentHeadline approval={props.approval} />
+    <div class="approval-quick__actions">
+      <ApprovalDecisionButtons
+        disabled={props.disabled}
+        pendingLabel={props.pendingLabel}
+        canApproveSession={props.canApproveSession}
+        canApproveAlways={props.canApproveAlways}
+        onDecision={props.onDecision}
+        onApproveSession={props.onApproveSession}
+        onApproveAlways={props.onApproveAlways}
+      />
+      <button type="button" disabled={props.disabled} onClick={props.onDetails}>
+        查看详情
+      </button>
+    </div>
+  </article>
+)
 
 export const ApprovalDetailsDialog: Component<ApprovalDetailsDialogProps> = (props) => {
   const summary = createMemo(() => approvalSummary(props.approval))
@@ -47,33 +86,53 @@ export const ApprovalDetailsDialog: Component<ApprovalDetailsDialogProps> = (pro
   const commandRuleCandidates = createMemo(() =>
     props.autoApprovalCandidates || buildCommandRuleCandidates(command())
   )
-  const [selectedRuleLevel, setSelectedRuleLevel] = createSignal<CommandRuleLevel>("exact")
+  const [selectedRuleLevel, setSelectedRuleLevel] = createSignal<CommandRuleLevel | undefined>()
+  const defaultRuleCandidate = createMemo(() => preferredCommandRuleCandidate(commandRuleCandidates()))
   const selectedRuleCandidate = createMemo(() =>
     commandRuleCandidates().find((candidate) => candidate.level === selectedRuleLevel()) ||
-    commandRuleCandidates()[0]
+    defaultRuleCandidate()
   )
   const canRememberCommand = createMemo(() =>
     summary().category === "execute" &&
     Boolean(props.onRememberDecision) &&
-    commandRuleCandidates().length > 0
+    Boolean(selectedRuleCandidate()?.rules.length)
   )
-  const canAlwaysAllowCategory = createMemo(() =>
-    summary().category === "mcp" &&
-    Boolean(props.onAlwaysAllow)
+  const canApproveSession = createMemo(() =>
+    summary().category === "execute" &&
+    Boolean(props.onApproveSession) &&
+    Boolean(selectedRuleCandidate()?.rules.length)
   )
-
+  const canApproveAlways = createMemo(() =>
+    summary().category === "execute"
+      ? canRememberCommand()
+      : Boolean(props.onApproveAlways || props.onAlwaysAllow)
+  )
   createEffect(() => {
     const candidates = commandRuleCandidates()
-    if (!candidates.length) return
-    if (!candidates.some((candidate) => candidate.level === selectedRuleLevel())) {
-      setSelectedRuleLevel(candidates[0]!.level)
-    }
+    const selected = selectedRuleLevel()
+    if (selected && candidates.some((candidate) => candidate.level === selected)) return
+    setSelectedRuleLevel(defaultRuleCandidate()?.level)
   })
 
-  const rememberDecision = (decision: ApprovalDecision) => {
+  const approveSession = () => {
+    if (props.autoApprovalPending) return
+    props.onApproveSession?.(selectedRuleCandidate()?.rules)
+  }
+  const approveAlways = () => {
+    if (props.autoApprovalPending) return
     const candidate = selectedRuleCandidate()
-    if (!candidate || props.autoApprovalPending) return
-    props.onRememberDecision?.(decision, candidate.rules)
+    if (summary().category === "execute" && props.onRememberDecision && candidate?.rules.length) {
+      props.onRememberDecision("allow_once", candidate.rules)
+      return
+    }
+    if (props.onApproveAlways) {
+      props.onApproveAlways()
+      return
+    }
+    if (props.onAlwaysAllow) {
+      props.onAlwaysAllow()
+      return
+    }
   }
 
   return (
@@ -89,7 +148,7 @@ export const ApprovalDetailsDialog: Component<ApprovalDetailsDialogProps> = (pro
           <div class="approval-dialog__title">
             <span class={`codicon codicon-${summary().icon}`} aria-hidden="true" />
             <div>
-              <h2>{summary().title}</h2>
+              <h2>操作审批</h2>
               <span>{props.approval.toolName}</span>
             </div>
           </div>
@@ -98,7 +157,7 @@ export const ApprovalDetailsDialog: Component<ApprovalDetailsDialogProps> = (pro
           </button>
         </header>
         <ApprovalDetailsBody approval={props.approval} />
-        <Show when={canRememberCommand()}>
+        <Show when={canRememberCommand() || canApproveSession()}>
           <ApprovalRulePanel
             candidates={commandRuleCandidates()}
             selectedLevel={selectedRuleCandidate()?.level}
@@ -107,53 +166,15 @@ export const ApprovalDetailsDialog: Component<ApprovalDetailsDialogProps> = (pro
           />
         </Show>
         <footer class="approval-dialog__footer">
-          <button class="approval-dialog__button approval-dialog__button--secondary" type="button" onClick={() => props.onClose()}>
-            关闭
-          </button>
-          <button
-            class="approval-dialog__button approval-dialog__button--secondary"
-            type="button"
+          <ApprovalDecisionButtons
             disabled={props.autoApprovalPending}
-            onClick={() => props.onDecision("deny_once")}
-          >
-            拒绝
-          </button>
-          <Show when={canRememberCommand()}>
-            <button
-              class="approval-dialog__button approval-dialog__button--danger"
-              type="button"
-              disabled={props.autoApprovalPending}
-              onClick={() => rememberDecision("deny_once")}
-            >
-              {props.autoApprovalPending ? "写入中..." : "拒绝并记住"}
-            </button>
-            <button
-              class="approval-dialog__button approval-dialog__button--primary"
-              type="button"
-              disabled={props.autoApprovalPending}
-              onClick={() => rememberDecision("allow_once")}
-            >
-              {props.autoApprovalPending ? "写入中..." : "批准并始终运行"}
-            </button>
-          </Show>
-          <Show when={canAlwaysAllowCategory()}>
-            <button
-              class="approval-dialog__button approval-dialog__button--primary"
-              type="button"
-              disabled={props.autoApprovalPending}
-              onClick={() => props.onAlwaysAllow?.()}
-            >
-              {props.autoApprovalPending ? "写入中..." : "批准并始终允许 MCP"}
-            </button>
-          </Show>
-          <button
-            class={`approval-dialog__button ${canRememberCommand() || canAlwaysAllowCategory() ? "approval-dialog__button--secondary" : "approval-dialog__button--primary"}`}
-            type="button"
-            disabled={props.autoApprovalPending}
-            onClick={() => props.onDecision("allow_once")}
-          >
-            批准一次
-          </button>
+            pendingLabel={props.autoApprovalPending ? "提交中..." : ""}
+            canApproveSession={canApproveSession()}
+            canApproveAlways={canApproveAlways()}
+            onDecision={props.onDecision}
+            onApproveSession={approveSession}
+            onApproveAlways={approveAlways}
+          />
         </footer>
     </DialogSurface>
   )
@@ -166,7 +187,8 @@ const ApprovalRulePanel: Component<{
   onSelect: (level: CommandRuleLevel) => void
 }> = (props) => {
   const selectedCandidate = createMemo(() =>
-    props.candidates.find((candidate) => candidate.level === props.selectedLevel) || props.candidates[0]
+    props.candidates.find((candidate) => candidate.level === props.selectedLevel) ||
+    preferredCommandRuleCandidate(props.candidates)
   )
   const activeLevel = createMemo(() => selectedCandidate()?.level)
 
@@ -176,7 +198,7 @@ const ApprovalRulePanel: Component<{
         <span class="codicon codicon-shield" aria-hidden="true" />
         <div>
           <strong>自动批准规则</strong>
-          <small>选择这条命令以后自动处理的匹配范围。</small>
+          <small>选择以后自动放行这类命令的范围。</small>
         </div>
       </div>
       <div class="approval-rule-levels" role="radiogroup" aria-label="自动批准规则等级">
@@ -213,26 +235,64 @@ const ApprovalRulePanel: Component<{
   )
 }
 
+function preferredCommandRuleCandidate(candidates: CommandRuleCandidate[]): CommandRuleCandidate | undefined {
+  return (
+    candidates.find((candidate) => candidate.level === "firstArg") ||
+    candidates.find((candidate) => candidate.level === "exact") ||
+    candidates.find((candidate) => candidate.level === "base") ||
+    candidates[0]
+  )
+}
+
+const ApprovalDecisionButtons: Component<ApprovalDecisionButtonsProps> = (props) => {
+  const pending = () => props.pendingLabel || ""
+  return (
+    <>
+      <button class="approval-dialog__button approval-dialog__button--secondary" type="button" disabled={props.disabled} onClick={() => props.onDecision("deny_once")}>
+        {pending() || "拒绝"}
+      </button>
+      <button class="approval-dialog__button approval-dialog__button--primary" type="button" disabled={props.disabled} onClick={() => props.onDecision("allow_once")}>
+        {pending() || "批准一次"}
+      </button>
+      <button class="approval-dialog__button approval-dialog__button--secondary" type="button" disabled={props.disabled || !props.canApproveSession} onClick={() => props.onApproveSession?.()}>
+        {pending() || "本会话批准"}
+      </button>
+      <button class="approval-dialog__button approval-dialog__button--secondary" type="button" disabled={props.disabled || !props.canApproveAlways} onClick={() => props.onApproveAlways?.()}>
+        {pending() || "总是批准"}
+      </button>
+    </>
+  )
+}
+
 export const ApprovalDetailsBody: Component<{ approval: ApprovalDetails; compact?: boolean }> = (props) => {
-  const summary = createMemo(() => approvalSummary(props.approval))
+  return (
+    <div class="approval-detail-body">
+      <ApprovalIntentHeadline approval={props.approval} />
+      <ApprovalTechnicalDetails approval={props.approval} compact={props.compact} />
+    </div>
+  )
+}
+
+const ApprovalIntentHeadline: Component<{ approval: ApprovalDetails }> = (props) => (
+  <section class="approval-intent">
+    <span>助手想要</span>
+    <strong>{approvalIntentText(props.approval)}</strong>
+  </section>
+)
+
+const ApprovalTechnicalDetails: Component<{ approval: ApprovalDetails; compact?: boolean }> = (props) => {
   const command = createMemo(() => extractApprovalCommand(props.approval))
   const filePath = createMemo(() => approvalFilePath(props.approval))
+  const technicalArgs = createMemo(() => compactObject(stripCommandFields(props.approval.toolArgs)))
+  const technicalPayload = createMemo(() => props.approval.rawPayload ? compactObject(stripCommandFields(props.approval.rawPayload)) : {})
   const visibleSections = createMemo(() => props.approval.sections.filter((section) => section.kind !== "json" || section.id !== "args"))
 
   return (
-    <div class="approval-detail-body">
-      <section class="approval-detail-summary">
-        <div>
-          <span>{summary().title}</span>
-          <strong>{summary().primary}</strong>
-          <Show when={summary().secondary}>
-            <small>{summary().secondary}</small>
-          </Show>
-        </div>
-      </section>
+    <section class="approval-technical">
+      <h3>技术详情</h3>
 
       <Show when={command()}>
-        <ApprovalField title="命令">
+        <ApprovalField title="将执行的命令">
           <pre class="approval-command">{command()}</pre>
         </ApprovalField>
       </Show>
@@ -243,9 +303,9 @@ export const ApprovalDetailsBody: Component<{ approval: ApprovalDetails; compact
         </ApprovalField>
       </Show>
 
-      <Show when={Object.keys(props.approval.toolArgs).length > 0}>
-        <ApprovalField title="关键参数">
-          <KeyValueTable value={props.approval.toolArgs} />
+      <Show when={Object.keys(technicalArgs()).length > 0}>
+        <ApprovalField title="参数">
+          <KeyValueTable value={technicalArgs()} />
         </ApprovalField>
       </Show>
 
@@ -260,13 +320,13 @@ export const ApprovalDetailsBody: Component<{ approval: ApprovalDetails; compact
         </div>
       </Show>
 
-      <Show when={props.approval.rawPayload}>
+      <Show when={Object.keys(technicalPayload()).length > 0 && !props.compact}>
         <details class="approval-raw">
           <summary>原始数据</summary>
-          <pre>{formatJson(props.approval.rawPayload)}</pre>
+          <pre>{formatJson(technicalPayload())}</pre>
         </details>
       </Show>
-    </div>
+    </section>
   )
 }
 
@@ -317,6 +377,34 @@ const KeyValueTable: Component<{ value: Record<string, unknown> }> = (props) => 
     </For>
   </div>
 )
+
+const COMMAND_FIELD_KEYS = new Set(["command", "cmd", "shell", "args", "argv", "command_line", "commandLine", "intent"])
+
+function stripCommandFields(value: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {}
+  for (const [key, item] of Object.entries(value || {})) {
+    if (COMMAND_FIELD_KEYS.has(key)) continue
+    if (key === "tool_args" && item && typeof item === "object" && !Array.isArray(item)) {
+      result[key] = stripCommandFields(item as Record<string, unknown>)
+      continue
+    }
+    result[key] = item
+  }
+  return result
+}
+
+function compactObject(value: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {}
+  for (const [key, item] of Object.entries(value || {})) {
+    if (item && typeof item === "object" && !Array.isArray(item)) {
+      const nested = compactObject(item as Record<string, unknown>)
+      if (Object.keys(nested).length) result[key] = nested
+      continue
+    }
+    if (item !== undefined && item !== "") result[key] = item
+  }
+  return result
+}
 
 function buildTextDiffFallback(section: ApprovalSection): string {
   const original = stringValue(section.original_text)

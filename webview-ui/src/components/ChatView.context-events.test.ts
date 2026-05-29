@@ -24,7 +24,7 @@ describe("ChatView context events", () => {
   })
 
   it("routes live deltas into active stream draft state", () => {
-    expect(source).toContain('msg.type === "chat.stream"')
+    expect(source).toContain('msg.type === "sessionRun.stream"')
     expect(source).toContain("const handleLiveStreamEvent =")
     expect(source).toContain("updateThinkingFromReasoning")
     expect(source).toContain("const REASONING_STREAM_KEY")
@@ -41,7 +41,7 @@ describe("ChatView context events", () => {
     expect(source).toContain("const shouldArchiveActiveStreamBeforeEvent =")
     expect(source).toContain("const isArchivableActiveTranscriptItem =")
     expect(source).toContain("isReasoningThinkingItem(item)")
-    expect(source).toContain('if (type === "chat_end") return false')
+    expect(source).toContain('if (type === "session_run_end") return false')
     expect(source).toContain('"tool_call_start"')
     expect(source).toContain('"tool_call_end"')
     expect(source).toContain('"assistant_message"')
@@ -92,7 +92,7 @@ describe("ChatView context events", () => {
     expect(source).toContain("currentAssistant?.parts.some(isReasoningThinkingItem)")
     expect(source).toContain("const index = findLastItemIndex(parts, isReasoningThinkingItem)")
     expect(source).toContain("streamKey: REASONING_STREAM_KEY")
-    expect(source).toContain('id: `thinking-${activeChatId() || "pending"}`')
+    expect(source).toContain('id: `thinking-${activeSessionRunId() || "pending"}`')
   })
 
   it("only shows the footer working indicator before the running turn has transcript content", () => {
@@ -111,15 +111,22 @@ describe("ChatView context events", () => {
     expect(source).toContain("traceStatusForRunEnd")
   })
 
-  it("keeps chat_end final payload from duplicating an active assistant stream", () => {
-    const branchIndex = source.indexOf('} else if (type === "chat_end") {')
+  it("keeps session_run_end final payload from duplicating an active assistant stream", () => {
+    const branchIndex = source.indexOf('} else if (type === "session_run_end") {')
     const clearIndex = source.indexOf('clearActiveTranscriptItems((part) => part.type === "assistant_text" && part.streamKey === "assistant-stream")', branchIndex)
     const appendIndex = source.indexOf('appendAssistantTextItem(String(payload.response), "final"', branchIndex)
-    const finishIndex = source.indexOf("finishChatRun(doneStatusFromCurrentRun())", branchIndex)
+    const finishIndex = source.indexOf("finishSessionRun(doneStatusFromCurrentRun())", branchIndex)
 
     expect(clearIndex).toBeGreaterThan(branchIndex)
     expect(clearIndex).toBeLessThan(appendIndex)
     expect(appendIndex).toBeLessThan(finishIndex)
+  })
+
+  it("handles only session_run lifecycle event names for recovery and cancellation", () => {
+    expect(source).toContain('} else if (type === "session_run_recovery_start") {')
+    expect(source).toContain('} else if (type === "session_run_cancel_requested") {')
+    expect(source).not.toContain('type === "chat_recovery_start"')
+    expect(source).not.toContain('type === "chat_cancel_requested"')
   })
 
   it("sends the current frontend locale with chat.send", () => {
@@ -129,7 +136,7 @@ describe("ChatView context events", () => {
   it("keeps approval reply failures recoverable in the approval UI", () => {
     expect(source).toContain('msg.type === "approval.reply.error"')
     expect(source).toContain("markApprovalSubmitFailed(items, approvalId, message)")
-    expect(source).toContain("mergeStatusApprovals(items, statusApprovals, chatId)")
+    expect(source).toContain("mergeStatusApprovals(items, statusApprovals, sessionRunId)")
   })
 
   it("clears pending approvals when approval reply succeeds", () => {
@@ -211,5 +218,14 @@ describe("ChatView context events", () => {
     expect(source).toContain("setAgentRunState(action.state)")
     expect(source).not.toContain("runtime-agent-queue-chat")
     expect(source).not.toContain("runtime-agent-queue-delegated-run")
+  })
+
+  it("does not append runtime status fallback view cards to the chat transcript", () => {
+    const runtimeStatusStart = source.indexOf("const applyRuntimeStatusEvent")
+    const usageUpdateStart = source.indexOf("const applyUsageUpdate", runtimeStatusStart)
+    const runtimeStatusSource = source.slice(runtimeStatusStart, usageUpdateStart)
+
+    expect(runtimeStatusSource).toContain('action.kind === "ignore"')
+    expect(runtimeStatusSource).not.toContain("appendViewPart(payload")
   })
 })

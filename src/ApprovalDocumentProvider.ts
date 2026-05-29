@@ -21,11 +21,14 @@ export class ApprovalDocumentProvider implements vscode.TextDocumentContentProvi
     return this.documents.get(uri.toString()) || ""
   }
 
-  async store(payload: Record<string, unknown>): Promise<void> {
+  async store(
+    payload: Record<string, unknown>,
+    options: { openDiff?: boolean } = {}
+  ): Promise<void> {
     const detail = this.toDetail(payload)
     if (!detail.approvalId) return
     this.approvals.set(detail.approvalId, detail)
-    if (detail.diff) {
+    if (detail.diff && options.openDiff !== false) {
       await this.open(detail.approvalId)
     }
   }

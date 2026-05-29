@@ -118,6 +118,58 @@ describe("trace session normalization", () => {
     ])
   })
 
+  it("settles stale awaiting approvals when a loaded session is already terminal", () => {
+    const bundle = normalizeSessionBundle({
+      session: {
+        id: "session-1",
+        title: "历史会话",
+        updatedAt: "2026-05-23T00:00:00.000Z",
+      },
+      stats: {
+        runStatus: "error",
+      },
+      turns: [
+        {
+          userMessage: {
+            id: "user-1",
+            role: "user",
+            text: "问题",
+            parts: [],
+            timestamp: 1,
+          },
+          assistantMessages: [
+            {
+              id: "assistant-1",
+              role: "assistant",
+              text: "",
+              timestamp: 2,
+              parts: [
+                {
+                  id: "tool-1",
+                  type: "tool",
+                  toolName: "shell",
+                  status: "awaiting_approval",
+                  approvalId: "approval-1",
+                  toolCallId: "call-1",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(bundle?.turns[0].assistantMessages[0].parts).toEqual([
+      expect.objectContaining({
+        type: "tool",
+        status: "denied",
+        approvalId: "approval-1",
+        approvalDecision: "deny_once",
+        approvalResultReason: "任务已中断，审批已失效。",
+      }),
+    ])
+  })
+
   it("drops empty structured event cards from persisted history", () => {
     const bundle = normalizeSessionBundle({
       session: {

@@ -246,11 +246,11 @@ export const settingsMessages = {
 
   replyApproval(
     port: SettingsMessagePort,
-    input: { chatId?: string; approvalId: string; decision: string },
+    input: { sessionRunId?: string; approvalId: string; decision: string },
   ): void {
     port.postMessage({
       type: "approval.reply",
-      chatId: input.chatId,
+      sessionRunId: input.sessionRunId,
       approvalId: input.approvalId,
       decision: input.decision,
     })

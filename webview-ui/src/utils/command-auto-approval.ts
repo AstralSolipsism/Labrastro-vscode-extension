@@ -128,7 +128,7 @@ export function buildCommandRuleCandidates(command: string): CommandRuleCandidat
 
   addCandidate({
     level: "exact",
-    label: "精确子命令",
+    label: "完整命令",
     description: "只记住当前完整命令片段。",
     rules: subCommands,
   })
@@ -148,7 +148,13 @@ export function buildCommandRuleCandidates(command: string): CommandRuleCandidat
 }
 
 export function defaultCommandRuleCandidateRules(command: string): string[] {
-  return buildCommandRuleCandidates(command)[0]?.rules || []
+  const candidates = buildCommandRuleCandidates(command)
+  return (
+    candidates.find((candidate) => candidate.level === "firstArg") ||
+    candidates.find((candidate) => candidate.level === "exact") ||
+    candidates.find((candidate) => candidate.level === "base") ||
+    candidates[0]
+  )?.rules || []
 }
 
 export function updateCommandRuleLists(
@@ -425,22 +431,22 @@ function shouldStopCommandRulePrefix(arg: string): boolean {
 function commandRuleLevelLabel(level: Exclude<CommandRuleLevel, "exact">): string {
   switch (level) {
     case "base":
-      return "基础命令"
+      return "一级命令"
     case "firstArg":
-      return "一级子命令"
+      return "二级命令"
     case "secondArg":
-      return "二级子命令"
+      return "三级命令"
   }
 }
 
 function commandRuleLevelDescription(level: Exclude<CommandRuleLevel, "exact">): string {
   switch (level) {
     case "base":
-      return "记住命令入口，例如 git、npm。"
+      return "只记住命令入口，例如 git、npm。"
     case "firstArg":
-      return "记住命令与第一层动作，例如 git push。"
+      return "记住命令与第一层动作，例如 git push、npm view。"
     case "secondArg":
-      return "记住到第二层参数，例如 git push origin。"
+      return "再包含下一层对象，例如 git push origin。"
   }
 }
 

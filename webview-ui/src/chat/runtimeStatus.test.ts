@@ -72,17 +72,17 @@ describe("resolveRuntimeStatusUiAction", () => {
     })
   })
 
-  it("falls back to generic view rendering when shell queue events cannot be mapped safely", () => {
+  it("ignores shell queue runtime status when it cannot be mapped safely", () => {
     expect(resolveRuntimeStatusUiAction({
       phase: "shell_queue",
       status: "queued",
-    })).toEqual({ kind: "fallback_view" })
+    })).toEqual({ kind: "ignore" })
   })
 
-  it("falls back to generic view rendering for unknown runtime phases", () => {
+  it("ignores unknown runtime phases instead of creating transcript cards", () => {
     expect(resolveRuntimeStatusUiAction({
       phase: "mystery_queue",
       status: "queued",
-    })).toEqual({ kind: "fallback_view" })
+    })).toEqual({ kind: "ignore" })
   })
 })

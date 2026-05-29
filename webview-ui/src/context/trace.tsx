@@ -17,6 +17,7 @@ import type {
   TranscriptItem,
   TranscriptOutputFormat,
   TranscriptTextFormat,
+  ToolActivityItem,
 } from "../components/chat/transcript-model"
 import {
   isLocalDraftSessionId,
@@ -340,6 +341,7 @@ function normalizeTranscriptItem(value: unknown, fallbackId: string): Transcript
       endedAt: numberValue(payload.endedAt) ?? numberValue(payload.toolEndedAt),
       approvalId: stringValue(payload.approvalId) || undefined,
       approvalReason: stringValue(payload.approvalReason) || undefined,
+      approvalIntent: stringValue(payload.approvalIntent) || undefined,
       approvalResultReason: stringValue(payload.approvalResultReason) || undefined,
       approvalDecision: stringValue(payload.approvalDecision) || undefined,
       approvalSections: arrayFieldValue(payload, "approvalSections"),
@@ -639,7 +641,7 @@ export function normalizeSessionBundle(value: unknown): MockSessionBundle | unde
   const traceUI = Object.keys(objectValue(payload.traceUI)).length
     ? objectValue(payload.traceUI)
     : objectValue(trace.ui)
-  return {
+  return settleStaleApprovalsForTerminalRun({
     session,
     stats: {
       ...EMPTY_STATS,
@@ -654,6 +656,66 @@ export function normalizeSessionBundle(value: unknown): MockSessionBundle | unde
       ...EMPTY_TRACE_UI,
       ...traceUI,
     },
+  })
+}
+
+function settleStaleApprovalsForTerminalRun(bundle: MockSessionBundle): MockSessionBundle {
+  const outcome = staleApprovalOutcome(bundle.stats.runStatus)
+  if (!outcome) return bundle
+  return {
+    ...bundle,
+    turns: bundle.turns.map((turn) => ({
+      ...turn,
+      assistantMessages: turn.assistantMessages.map((message) => ({
+        ...message,
+        parts: settleStaleApprovalItems(message.parts, outcome),
+      })),
+    })),
+  }
+}
+
+function staleApprovalOutcome(runStatus: MockTaskStats["runStatus"]): {
+  status: ToolExecutionStatus
+  reason: string
+} | undefined {
+  if (runStatus === "cancelled") {
+    return { status: "cancelled", reason: "任务已取消，审批已失效。" }
+  }
+  if (runStatus === "done") {
+    return { status: "denied", reason: "任务已结束，审批已失效。" }
+  }
+  if (runStatus === "error" || runStatus === "interrupted") {
+    return { status: "denied", reason: "任务已中断，审批已失效。" }
+  }
+  return undefined
+}
+
+function settleStaleApprovalItems(
+  items: TranscriptItem[],
+  outcome: { status: ToolExecutionStatus; reason: string },
+): TranscriptItem[] {
+  return items.map((item) => {
+    if (item.type === "tool") return settleStaleApprovalTool(item, outcome)
+    if (item.type === "parallel_tools" || item.type === "parallel_sessions") {
+      return {
+        ...item,
+        items: item.items ? settleStaleApprovalItems(item.items, outcome) : item.items,
+      }
+    }
+    return item
+  })
+}
+
+function settleStaleApprovalTool(
+  item: ToolActivityItem,
+  outcome: { status: ToolExecutionStatus; reason: string },
+): ToolActivityItem {
+  if (item.status !== "awaiting_approval" || !item.approvalId) return item
+  return {
+    ...item,
+    status: outcome.status,
+    approvalDecision: item.approvalDecision || "deny_once",
+    approvalResultReason: item.approvalResultReason || outcome.reason,
   }
 }
 

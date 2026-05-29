@@ -39,14 +39,14 @@ export interface SessionModelSwitchInput {
 }
 
 export interface ChatFollowUpInput {
-  chatId: string
+  sessionRunId: string
   text: string
   followupId: string
   requestId?: string
 }
 
 export interface ChatRecoverInput {
-  chatId: string
+  sessionRunId: string
   action: "continue" | "retry"
 }
 
@@ -119,28 +119,28 @@ export const chatMessages = {
     port.postMessage(buildSessionModelSwitchMessage(input))
   },
 
-  cancel(port: ChatMessagePort, chatId: string | undefined, reason = "user_cancelled"): void {
+  cancel(port: ChatMessagePort, sessionRunId: string | undefined, reason = "user_cancelled"): void {
     port.postMessage({
-      type: "chat.cancel",
-      ...(chatId ? { chatId } : {}),
+      type: "sessionRun.cancel",
+      ...(sessionRunId ? { sessionRunId } : {}),
       reason,
     })
   },
 
   followUp(port: ChatMessagePort, input: ChatFollowUpInput): void {
     port.postMessage({
-      type: "chat.followup",
-      chatId: input.chatId,
+      type: "sessionRun.followup",
+      sessionRunId: input.sessionRunId,
       text: input.text,
       followupId: input.followupId,
       ...(input.requestId ? { requestId: input.requestId } : {}),
     })
   },
 
-  cancelFollowUp(port: ChatMessagePort, chatId: string, followupId: string, reason = "user_changed_to_queue"): void {
+  cancelFollowUp(port: ChatMessagePort, sessionRunId: string, followupId: string, reason = "user_changed_to_queue"): void {
     port.postMessage({
-      type: "chat.followup.cancel",
-      chatId,
+      type: "sessionRun.followup.cancel",
+      sessionRunId,
       followupId,
       reason,
     })
@@ -148,8 +148,8 @@ export const chatMessages = {
 
   recover(port: ChatMessagePort, input: ChatRecoverInput): void {
     port.postMessage({
-      type: "chat.recover",
-      chatId: input.chatId,
+      type: "sessionRun.recover",
+      sessionRunId: input.sessionRunId,
       action: input.action,
     })
   },

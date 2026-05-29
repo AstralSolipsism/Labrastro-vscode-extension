@@ -12,6 +12,7 @@ interface AutoApprovalState {
   options: Record<AutoApprovalOptionKey, boolean>
   allowedCommands: string[]
   deniedCommands: string[]
+  sessionAllowedCommands?: Record<string, string[]>
   platform: NodeJS.Platform
 }
 
@@ -63,10 +64,12 @@ export class AdminCoordinator {
 
   getAutoApprovalState(): AutoApprovalState {
     const stored = objectValue(this.options.context.workspaceState.get(AUTO_APPROVAL_STATE_KEY))
+    const sessionAllowedCommands = sanitizeSessionCommandRules(stored.sessionAllowedCommands)
     return {
       options: sanitizeAutoApprovalOptions(stored.options),
       allowedCommands: sanitizeCommandRules(stored.allowedCommands),
       deniedCommands: sanitizeCommandRules(stored.deniedCommands),
+      ...(Object.keys(sessionAllowedCommands).length ? { sessionAllowedCommands } : {}),
       platform: process.platform,
     }
   }
@@ -536,13 +539,20 @@ export class AdminCoordinator {
       deniedCommands: Object.prototype.hasOwnProperty.call(message, "deniedCommands")
         ? sanitizeCommandRules(message.deniedCommands)
         : current.deniedCommands,
+      sessionAllowedCommands: Object.prototype.hasOwnProperty.call(message, "sessionAllowedCommands")
+        ? sanitizeSessionCommandRules(message.sessionAllowedCommands)
+        : current.sessionAllowedCommands,
       platform: process.platform,
     }
-    await this.options.context.workspaceState.update(AUTO_APPROVAL_STATE_KEY, {
+    const stored: Record<string, unknown> = {
       options: next.options,
       allowedCommands: next.allowedCommands,
       deniedCommands: next.deniedCommands,
-    })
+    }
+    if (next.sessionAllowedCommands && Object.keys(next.sessionAllowedCommands).length) {
+      stored.sessionAllowedCommands = next.sessionAllowedCommands
+    }
+    await this.options.context.workspaceState.update(AUTO_APPROVAL_STATE_KEY, stored)
   }
 
   private broadcastAutoApprovalState(): void {
@@ -649,4 +659,16 @@ function sanitizeCommandRules(value: unknown): string[] {
     rules.push(rule)
   }
   return rules
+}
+
+function sanitizeSessionCommandRules(value: unknown): Record<string, string[]> {
+  const raw = objectValue(value)
+  const result: Record<string, string[]> = {}
+  for (const [sessionId, rules] of Object.entries(raw)) {
+    const cleanSessionId = String(sessionId || "").trim()
+    if (!cleanSessionId || !Array.isArray(rules)) continue
+    const cleaned = sanitizeCommandRules(rules)
+    if (cleaned.length) result[cleanSessionId] = cleaned
+  }
+  return result
 }

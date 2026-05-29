@@ -43,17 +43,7 @@ export type HostToWebviewMessageType =
   | "capabilityPackage.error"
   | "capabilityPackage.ingest.started"
   | "capabilityPackage.ingest.status"
-  | "chat.cancelled"
-  | "chat.done"
-  | "chat.error"
-  | "chat.events"
-  | "chat.reconnected"
-  | "chat.reconnecting"
-  | "chat.resume"
   | "chat.sendDuringRunMode.state"
-  | "chat.session"
-  | "chat.started"
-  | "chat.stream"
   | "chatConfig.error"
   | "chatConfig.state"
   | "connection.result"
@@ -96,6 +86,16 @@ export type HostToWebviewMessageType =
   | "session.model.state"
   | "session.state"
   | "session.syncStatus"
+  | "sessionRun.cancelled"
+  | "sessionRun.done"
+  | "sessionRun.error"
+  | "sessionRun.events"
+  | "sessionRun.reconnected"
+  | "sessionRun.reconnecting"
+  | "sessionRun.resume"
+  | "sessionRun.session"
+  | "sessionRun.started"
+  | "sessionRun.stream"
   | "startup.metric"
   | "capability.actionResult"
   | "capability.error"
@@ -139,12 +139,8 @@ export type WebviewToHostMessageType =
   | "capabilityPackage.enable"
   | "capabilityPackage.ingest.start"
   | "capabilityPackage.ingest.status"
-  | "chat.cancel"
   | "chat.command.dispatch"
   | "chatConfig.read"
-  | "chat.followup"
-  | "chat.followup.cancel"
-  | "chat.recover"
   | "chat.send"
   | "chat.sendDuringRunMode.get"
   | "chat.sendDuringRunMode.update"
@@ -203,6 +199,10 @@ export type WebviewToHostMessageType =
   | "session.model.switch"
   | "session.new"
   | "session.openInChat"
+  | "sessionRun.cancel"
+  | "sessionRun.followup"
+  | "sessionRun.followup.cancel"
+  | "sessionRun.recover"
   | "settingsTabChanged"
   | "showInfo"
   | "taskflow.state.get"
@@ -253,17 +253,7 @@ const HOST_TO_WEBVIEW_TYPES = new Set<HostToWebviewMessageType>([
   "capabilityPackage.error",
   "capabilityPackage.ingest.started",
   "capabilityPackage.ingest.status",
-  "chat.cancelled",
-  "chat.done",
-  "chat.error",
-  "chat.events",
-  "chat.reconnected",
-  "chat.reconnecting",
-  "chat.resume",
   "chat.sendDuringRunMode.state",
-  "chat.session",
-  "chat.started",
-  "chat.stream",
   "chatConfig.error",
   "chatConfig.state",
   "connection.result",
@@ -306,6 +296,16 @@ const HOST_TO_WEBVIEW_TYPES = new Set<HostToWebviewMessageType>([
   "session.model.state",
   "session.state",
   "session.syncStatus",
+  "sessionRun.cancelled",
+  "sessionRun.done",
+  "sessionRun.error",
+  "sessionRun.events",
+  "sessionRun.reconnected",
+  "sessionRun.reconnecting",
+  "sessionRun.resume",
+  "sessionRun.session",
+  "sessionRun.started",
+  "sessionRun.stream",
   "startup.metric",
   "capability.actionResult",
   "capability.error",
@@ -344,12 +344,8 @@ const WEBVIEW_TO_HOST_TYPES = new Set<WebviewToHostMessageType>([
   "capabilityPackage.enable",
   "capabilityPackage.ingest.start",
   "capabilityPackage.ingest.status",
-  "chat.cancel",
   "chat.command.dispatch",
   "chatConfig.read",
-  "chat.followup",
-  "chat.followup.cancel",
-  "chat.recover",
   "chat.send",
   "chat.sendDuringRunMode.get",
   "chat.sendDuringRunMode.update",
@@ -408,6 +404,10 @@ const WEBVIEW_TO_HOST_TYPES = new Set<WebviewToHostMessageType>([
   "session.model.switch",
   "session.new",
   "session.openInChat",
+  "sessionRun.cancel",
+  "sessionRun.followup",
+  "sessionRun.followup.cancel",
+  "sessionRun.recover",
   "settingsTabChanged",
   "showInfo",
   "taskflow.state.get",

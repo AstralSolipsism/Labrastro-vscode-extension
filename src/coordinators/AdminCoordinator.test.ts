@@ -150,6 +150,35 @@ describe("AdminCoordinator", () => {
     })
   })
 
+  it("persists session-scoped command approvals with auto approval state", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+
+    await expect(subject.handleMessage({
+      type: "autoApproval.update",
+      sessionAllowedCommands: {
+        "session-a": [" npm view demo version ", ""],
+        "session-b": "invalid",
+      },
+    }, post)).resolves.toBe(true)
+
+    expect(options.context.workspaceState.update).toHaveBeenCalledWith("labrastro.autoApproval", {
+      options: {
+        readOnly: false,
+        write: false,
+        delete: false,
+        execute: false,
+        mcp: false,
+        unknown: false,
+      },
+      allowedCommands: [],
+      deniedCommands: [],
+      sessionAllowedCommands: {
+        "session-a": ["npm view demo version"],
+      },
+    })
+  })
+
   it("forwards openFile requests to the existing file opener", async () => {
     const { options, coordinator: subject } = coordinator()
 

@@ -13,6 +13,7 @@ import { RunStatusBar } from "./chat/RunStatusBar"
 import { AutoApproveMenu } from "./chat/AutoApproveMenu"
 import {
   ApprovalDetailsDialog,
+  ApprovalQuickPrompt,
   DEFAULT_AUTO_APPROVE_OPTIONS,
   approvalFromPayload,
   approvalSummary,
@@ -62,7 +63,7 @@ import {
   initialRemotePeerState,
   remotePeerStateFromError,
   remotePeerStateFromReady,
-  settleAgentRunStateForChatEvent,
+  settleAgentRunStateForSessionRunEvent,
 } from "../chat/runtimeState"
 import {
   filterSessionHistory,
@@ -71,6 +72,12 @@ import {
   sessionKindBadge,
   type SessionHistorySort,
 } from "../chat/sessionHistoryView"
+import {
+  addSessionCommandRules,
+  evaluateSessionCommandApproval,
+  sanitizeSessionCommandRules,
+  type SessionCommandRules,
+} from "../chat/session-approval-rules"
 import {
   markApprovalSubmitFailed,
   markApprovalSubmitting,
@@ -129,7 +136,7 @@ import type {
 } from "./chat/transcript-model"
 
 interface PendingApproval extends ApprovalDetails, ApprovalSubmissionFields {
-  chatId: string
+  sessionRunId: string
   submissionState?: ApprovalSubmissionState
 }
 
@@ -138,6 +145,7 @@ interface ChatWebviewState {
   autoApprovalAllowedCommands?: string[]
   autoApprovalDeniedCommands?: string[]
   autoApprovalPlatform?: string
+  sessionAllowedCommands?: SessionCommandRules
 }
 
 export interface EnvironmentRunRequest {
@@ -162,7 +170,7 @@ interface ChatViewProps {
 
 const MODEL_SWITCH_TIMEOUT_MS = 20_000
 const REASONING_STREAM_KEY = "reasoning-stream"
-type ChatRunStatus = "idle" | "running" | "stopping" | "cancelled" | "done" | "error" | "interrupted"
+type SessionRunStatus = "idle" | "running" | "stopping" | "cancelled" | "done" | "error" | "interrupted"
 
 function isReasoningThinkingItem(item: TranscriptItem): item is ThinkingItem {
   return item.type === "thinking" && (
@@ -178,11 +186,11 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const [isWorking, setIsWorking] = createSignal(false)
   const [workingText, setWorkingText] = createSignal("正在处理")
   const [workingElapsed, setWorkingElapsed] = createSignal("0:00")
-  const [activeChatId, setActiveChatId] = createSignal<string | undefined>()
+  const [activeSessionRunId, setActiveSessionRunId] = createSignal<string | undefined>()
   const [activeRunSessionId, setActiveRunSessionId] = createSignal("")
-  const [chatStatus, setChatStatus] = createSignal<ChatRunStatus>("idle")
-  const [chatRunSawError, setChatRunSawError] = createSignal(false)
-  const [chatRunSawTerminal, setChatRunSawTerminal] = createSignal(false)
+  const [sessionRunStatus, setSessionRunStatus] = createSignal<SessionRunStatus>("idle")
+  const [sessionRunSawError, setSessionRunSawError] = createSignal(false)
+  const [sessionRunSawTerminal, setSessionRunSawTerminal] = createSignal(false)
   const [pendingCancel, setPendingCancel] = createSignal(false)
   const [environmentRunQueue, setEnvironmentRunQueue] = createSignal<EnvironmentQueueItem[]>([])
   const [lastEnvironmentRunRequestId, setLastEnvironmentRunRequestId] = createSignal("")
@@ -209,6 +217,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
     sanitizeStringArray(initialWebviewState.autoApprovalDeniedCommands)
   )
   const [autoApprovalPlatform, setAutoApprovalPlatform] = createSignal(initialWebviewState.autoApprovalPlatform || "browser")
+  const [sessionAllowedCommands, setSessionAllowedCommands] = createSignal<SessionCommandRules>(
+    sanitizeSessionCommandRules(initialWebviewState.sessionAllowedCommands)
+  )
   const [rememberingApprovalId, setRememberingApprovalId] = createSignal("")
   const [selectedMode, setSelectedMode] = createSignal("")
   const [selectedModelProfile, setSelectedModelProfile] = createSignal("")
@@ -324,6 +335,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       autoApprovalAllowedCommands: autoApprovalAllowedCommands(),
       autoApprovalDeniedCommands: autoApprovalDeniedCommands(),
       autoApprovalPlatform: autoApprovalPlatform(),
+      sessionAllowedCommands: sessionAllowedCommands(),
     })
   })
 
@@ -447,16 +459,16 @@ const ChatView: Component<ChatViewProps> = (props) => {
     return switchModelNow(pending)
   }
 
-  const finishChatRun = (
+  const finishSessionRun = (
     nextStatus: "cancelled" | "done" | "error" | "interrupted",
     options: { startNextEnvironment?: boolean } = {},
   ) => {
     settleAssistantMessageForRunEnd(nextStatus)
     setIsWorking(false)
     setActiveRunSessionId("")
-    setChatStatus(nextStatus)
+    setSessionRunStatus(nextStatus)
     if (nextStatus !== "interrupted") {
-      setActiveChatId(undefined)
+      setActiveSessionRunId(undefined)
       setStreamRecoveryMessage("")
     }
     setPendingCancel(false)
@@ -486,15 +498,15 @@ const ChatView: Component<ChatViewProps> = (props) => {
     }
   }
 
-  const resetChatRunTerminalState = () => {
-    setChatRunSawError(false)
-    setChatRunSawTerminal(false)
+  const resetSessionRunTerminalState = () => {
+    setSessionRunSawError(false)
+    setSessionRunSawTerminal(false)
   }
 
   const doneStatusFromCurrentRun = (): "cancelled" | "done" | "error" | "interrupted" => {
-    if (chatStatus() === "cancelled") return "cancelled"
-    if (chatStatus() === "interrupted") return "interrupted"
-    if (chatStatus() === "error" || chatRunSawError()) return "error"
+    if (sessionRunStatus() === "cancelled") return "cancelled"
+    if (sessionRunStatus() === "interrupted") return "interrupted"
+    if (sessionRunStatus() === "error" || sessionRunSawError()) return "error"
     return "done"
   }
 
@@ -514,7 +526,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       .map((part) => part.markdown || "")
       .join("")
     return {
-      id: `assistant-stream-${activeChatId() || "pending"}`,
+      id: `assistant-stream-${activeSessionRunId() || "pending"}`,
       role: "assistant",
       text,
       parts,
@@ -596,8 +608,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
     payload: Record<string, unknown>,
   ): EventRenderMeta => {
     const sessionEventSeq = numberValue(event.session_event_seq) ?? numberValue(event.sessionEventSeq)
-    const chatSeq = numberValue(event.chat_seq) ?? numberValue(event.seq)
-    const chatId = stringValue(event.chat_id) || activeChatId()
+    const sessionRunSeq = numberValue(event.session_run_seq) ?? numberValue(event.seq)
+    const sessionRunId = stringValue(event.session_run_id) || activeSessionRunId()
     const eventSessionId =
       stringValue(event.session_id) ||
       stringValue(payload.session_id) ||
@@ -606,8 +618,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
     const toolCallId = stringValue(payload.tool_call_id)
     const eventKey = sessionEventSeq !== undefined
       ? `session:${eventSessionId || "unknown"}:${sessionEventSeq}`
-      : chatId && chatSeq !== undefined
-        ? `chat:${chatId}:${chatSeq}:${type}${toolCallId ? `:${toolCallId}` : ""}`
+      : sessionRunId && sessionRunSeq !== undefined
+        ? `session-run:${sessionRunId}:${sessionRunSeq}:${type}${toolCallId ? `:${toolCallId}` : ""}`
         : undefined
     return { eventKey, sessionEventSeq }
   }
@@ -912,7 +924,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     upsertActiveTranscriptItem(
       isReasoningThinkingItem,
       (parts) => withEventMeta({
-        id: `thinking-${activeChatId() || "pending"}`,
+        id: `thinking-${activeSessionRunId() || "pending"}`,
         type: "thinking",
         title: t("chat.thinking"),
         active: true,
@@ -961,7 +973,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
 
   const preparingToolCallId = (payload: Record<string, unknown>): string => {
     const index = numberValue(payload.index) ?? 0
-    return `preparing:${activeChatId() || "pending"}:${index}`
+    return `preparing:${activeSessionRunId() || "pending"}:${index}`
   }
 
   const shouldIgnoreToolCallDelta = (toolCallId: string | undefined, preparingIndex: number): boolean => {
@@ -1193,7 +1205,6 @@ const ChatView: Component<ChatViewProps> = (props) => {
     if (action.kind === "ignore") {
       return
     }
-    appendViewPart(payload, meta)
   }
 
   const applyUsageUpdate = (payload: Record<string, unknown>) => {
@@ -1212,13 +1223,13 @@ const ChatView: Component<ChatViewProps> = (props) => {
       maxOutputTokens: numberValue(payload.max_output_tokens) ?? trace.stats().maxOutputTokens,
       model: stringValue(payload.model) || trace.stats().model,
       mode: stringValue(payload.mode) || trace.stats().mode,
-      runStatus: runStatusValue(payload.run_status) || chatStatus(),
+      runStatus: runStatusValue(payload.run_status) || sessionRunStatus(),
     })
   }
 
   const shouldArchiveActiveStreamBeforeEvent = (type: string, payload: Record<string, unknown>): boolean => {
     if (isStructuredUiEventType(type)) return true
-    if (type === "chat_end") return false
+    if (type === "session_run_end") return false
     return [
       "assistant_message",
       "reasoning_message",
@@ -1235,7 +1246,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       "approval_request",
       "approval_resolved",
       "error",
-      "chat_failed",
+      "session_run_failed",
     ].includes(type)
   }
 
@@ -1244,10 +1255,10 @@ const ChatView: Component<ChatViewProps> = (props) => {
     const payload = (event.payload && typeof event.payload === "object" ? event.payload : {}) as Record<string, unknown>
     const eventMeta = eventRenderMeta(event, type, payload)
     if (shouldSkipEvent(eventMeta)) return
-    if (typeof event.chat_id === "string") {
-      setActiveChatId(event.chat_id)
+    if (typeof event.session_run_id === "string") {
+      setActiveSessionRunId(event.session_run_id)
       if (pendingCancel()) {
-        sendCancel(event.chat_id)
+        sendCancel(event.session_run_id)
         setPendingCancel(false)
       }
     }
@@ -1268,10 +1279,10 @@ const ChatView: Component<ChatViewProps> = (props) => {
     const payload = (event.payload && typeof event.payload === "object" ? event.payload : {}) as Record<string, unknown>
     const eventMeta = eventRenderMeta(event, type, payload)
     if (shouldSkipEvent(eventMeta)) return
-    if (typeof event.chat_id === "string") {
-      setActiveChatId(event.chat_id)
+    if (typeof event.session_run_id === "string") {
+      setActiveSessionRunId(event.session_run_id)
       if (pendingCancel()) {
-        sendCancel(event.chat_id)
+        sendCancel(event.session_run_id)
         setPendingCancel(false)
       }
     }
@@ -1286,7 +1297,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       appendNotice("warning", "连接恢复后发现部分流式事件已过期，正在刷新会话状态。", "events-lost", { meta: eventMeta })
       const sessionId = remoteSessionIdForMutation(trace.currentSessionId())
       if (sessionId) trace.loadSession(sessionId)
-    } else if (type === "chat_start") {
+    } else if (type === "session_run_start") {
       const prompt = stringValue(payload.prompt) || ""
       if (prompt && !trace.turns().some((turn) => turn.userMessage.text === prompt && !turn.assistantMessages.length)) {
         trace.appendTurn({
@@ -1333,7 +1344,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       trace.patchStats({
         model: stringValue(payload.model) || trace.stats().model,
         mode: stringValue(payload.mode) || trace.stats().mode,
-        runStatus: chatStatus(),
+        runStatus: sessionRunStatus(),
       })
       setRemotePeerState(remotePeerStateFromReady(payload))
     } else if (type === "reasoning_message") {
@@ -1377,23 +1388,23 @@ const ChatView: Component<ChatViewProps> = (props) => {
       setAgentRunState(agentRunStateFromDelegatedCompletion(payload))
     } else if (type === "usage_update" || type === "run_stats") {
       applyUsageUpdate(payload)
-    } else if (type === "chat_follow_up_accepted") {
+    } else if (type === "session_run_follow_up_accepted") {
       const itemId = stringValue(payload.client_request_id) || stringValue(payload.request_id)
       const followupId = stringValue(payload.followup_id)
       if (itemId && followupId) {
         setQueuedPrompts((current) => markPromptSubmitted(current, itemId, followupId))
       }
-    } else if (type === "chat_follow_up_consumed") {
+    } else if (type === "session_run_follow_up_consumed") {
       const followupId = stringValue(payload.followup_id)
       if (followupId) {
         setQueuedPrompts((current) => markPromptConsumed(current, followupId))
       }
-    } else if (type === "chat_follow_up_cancelled") {
+    } else if (type === "session_run_follow_up_cancelled") {
       const followupId = stringValue(payload.followup_id)
       if (followupId) {
         setQueuedPrompts((current) => markPromptUnconsumed(current, followupId))
       }
-    } else if (type === "chat_follow_up_unconsumed") {
+    } else if (type === "session_run_follow_up_unconsumed") {
       const followupId = stringValue(payload.followup_id)
       if (followupId) {
         setQueuedPrompts((current) =>
@@ -1414,21 +1425,21 @@ const ChatView: Component<ChatViewProps> = (props) => {
       setStreamRecoveryMessage("")
       setWorkingText("正在继续处理")
       trace.patchStats({ runStatus: "running" })
-    } else if (type === "chat_recovery_start") {
+    } else if (type === "session_run_recovery_start") {
       setStreamRecoveryMessage("")
       setIsWorking(true)
-      setChatStatus("running")
+      setSessionRunStatus("running")
       setWorkingText("正在继续生成")
       trace.patchStats({ runStatus: "running" })
-    } else if (type === "chat_interrupted") {
+    } else if (type === "session_run_interrupted") {
       const message = stringValue(payload.message) || "模型输出流中断，可继续生成。"
-      setChatRunSawTerminal(true)
-      setChatStatus("interrupted")
+      setSessionRunSawTerminal(true)
+      setSessionRunStatus("interrupted")
       setStreamRecoveryMessage(message)
       trace.patchStats({ runStatus: "interrupted" })
       appendNotice("warning", `输出中断：${message}`, "stream-interrupted", { meta: eventMeta })
-      setAgentRunState((current) => settleAgentRunStateForChatEvent(current, type, payload))
-      finishChatRun("interrupted")
+      setAgentRunState((current) => settleAgentRunStateForSessionRunEvent(current, type, payload))
+      finishSessionRun("interrupted")
     } else if (type === "tool_call_start") {
       const toolName = String(payload.tool_name || "tool")
       const toolCallId = requiredToolCallId(payload)
@@ -1496,7 +1507,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     } else if (type === "approval_request") {
       const next: PendingApproval = {
         ...approvalFromPayload(payload),
-        chatId: activeChatId() || String(event.chat_id || ""),
+        sessionRunId: activeSessionRunId() || String(event.session_run_id || ""),
       }
       const autoDecision = evaluateApprovalDecision(next)
       upsertToolPart(next.toolName, {
@@ -1506,6 +1517,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         input: next.toolArgs,
         approvalId: next.approvalId,
         approvalReason: autoDecision.reason || next.reason,
+        approvalIntent: next.intent,
         approvalContent: next.content,
         approvalSections: next.sections as Record<string, unknown>[],
         approvalDecision: autoDecision.decision === "allow" ? "auto_approved" : autoDecision.decision === "deny" ? "auto_denied" : undefined,
@@ -1546,42 +1558,42 @@ const ChatView: Component<ChatViewProps> = (props) => {
           }
         })
       )
-    } else if (type === "chat_cancel_requested") {
-      setChatStatus("stopping")
+    } else if (type === "session_run_cancel_requested") {
+      setSessionRunStatus("stopping")
       setWorkingText("正在停止")
       trace.patchStats({ runStatus: "stopping" })
-    } else if (type === "chat_cancelled") {
-      setChatRunSawTerminal(true)
+    } else if (type === "session_run_cancelled") {
+      setSessionRunSawTerminal(true)
       setPendingCancel(false)
       setPendingApprovals([])
       setSelectedApproval(undefined)
       setAgentRunState(initialAgentRunState())
       markActiveToolsCancelled()
-      finishChatRun("cancelled")
+      finishSessionRun("cancelled")
     } else if (type === "error") {
-      setChatRunSawError(true)
-      setChatStatus("error")
+      setSessionRunSawError(true)
+      setSessionRunStatus("error")
       trace.patchStats({ runStatus: "error" })
       appendNotice("error", `错误：${payload.message || "unknown error"}`, "error", { meta: eventMeta })
-    } else if (type === "chat_failed") {
-      const alreadyHadError = chatRunSawError()
-      setChatRunSawError(true)
-      setChatRunSawTerminal(true)
-      setChatStatus("error")
+    } else if (type === "session_run_failed") {
+      const alreadyHadError = sessionRunSawError()
+      setSessionRunSawError(true)
+      setSessionRunSawTerminal(true)
+      setSessionRunStatus("error")
       trace.patchStats({ runStatus: "error" })
       if (!alreadyHadError) {
         appendNotice("error", `错误：${payload.message || "unknown error"}`, "error", { meta: eventMeta })
       }
-      setAgentRunState((current) => settleAgentRunStateForChatEvent(current, type, payload))
-      finishChatRun("error")
-    } else if (type === "chat_end") {
-      setChatRunSawTerminal(true)
+      setAgentRunState((current) => settleAgentRunStateForSessionRunEvent(current, type, payload))
+      finishSessionRun("error")
+    } else if (type === "session_run_end") {
+      setSessionRunSawTerminal(true)
       if (payload.response && payload.response_rendered !== true) {
         clearActiveTranscriptItems((part) => part.type === "assistant_text" && part.streamKey === "assistant-stream")
         appendAssistantTextItem(String(payload.response), "final", { format: "markdown", meta: eventMeta })
       }
-      setAgentRunState((current) => settleAgentRunStateForChatEvent(current, type, payload))
-      finishChatRun(doneStatusFromCurrentRun())
+      setAgentRunState((current) => settleAgentRunStateForSessionRunEvent(current, type, payload))
+      finishSessionRun(doneStatusFromCurrentRun())
     }
     markRenderedEvent(eventMeta)
   }
@@ -1601,6 +1613,21 @@ const ChatView: Component<ChatViewProps> = (props) => {
     replyReason?: string
   } => {
     const category = classifyApproval(approval)
+    if (category === "execute") {
+      const sessionDecision = evaluateSessionCommandApproval(
+        trace.currentSessionId() || "",
+        extractApprovalCommand(approval),
+        sessionAllowedCommands(),
+        autoApprovalPlatform(),
+      )
+      if (sessionDecision.decision === "allow") {
+        return {
+          decision: "allow",
+          reason: sessionDecision.matchedRule ? "本会话已批准" : undefined,
+          replyReason: `session_auto_approved:execute:${sessionDecision.matchedRule || "matched"}`,
+        }
+      }
+    }
     if (category === "unknown" || autoApproveOptions()[category] !== true) {
       return { decision: "ask" }
     }
@@ -1682,12 +1709,12 @@ const ChatView: Component<ChatViewProps> = (props) => {
   }
 
   const submitGuidePrompt = (item: PendingPromptItem) => {
-    const chatId = activeChatId()
-    if (!chatId || item.mode !== "guide" || item.state !== "pending") return
+    const sessionRunId = activeSessionRunId()
+    if (!sessionRunId || item.mode !== "guide" || item.state !== "pending") return
     const followupId = item.followupId || `follow-${item.id}`
     setQueuedPrompts((current) => markPromptSubmitted(current, item.id, followupId))
     chatMessages.followUp(vscode, {
-      chatId,
+      sessionRunId,
       text: item.text,
       followupId,
       requestId: item.requestId,
@@ -1695,7 +1722,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   }
 
   const submitPendingGuidePrompts = () => {
-    if (!isWorking() || !activeChatId()) return
+    if (!isWorking() || !activeSessionRunId()) return
     const pending = queuedPrompts().items.filter((item) =>
       item.mode === "guide" && item.state === "pending"
     )
@@ -1709,9 +1736,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
   })
 
   const cancelGuidePromptIfSubmitted = (item: PendingPromptItem, reason = "user_changed_to_queue") => {
-    const chatId = activeChatId()
-    if (!chatId || item.mode !== "guide" || !item.followupId) return
-    chatMessages.cancelFollowUp(vscode, chatId, item.followupId, reason)
+    const sessionRunId = activeSessionRunId()
+    if (!sessionRunId || item.mode !== "guide" || !item.followupId) return
+    chatMessages.cancelFollowUp(vscode, sessionRunId, item.followupId, reason)
   }
 
   const switchPendingPromptMode = (item: PendingPromptItem, mode: PendingPromptMode) => {
@@ -1857,12 +1884,12 @@ const ChatView: Component<ChatViewProps> = (props) => {
     setIsWorking(true)
     setActiveRunSessionId(sessionId || "")
     setPendingCancel(false)
-    setActiveChatId(undefined)
-    setChatStatus("running")
+    setActiveSessionRunId(undefined)
+    setSessionRunStatus("running")
     setAgentRunState(initialAgentRunState())
     setRemotePeerState(remoteSessionId ? { status: "connecting", updatedAt: Date.now() } : initialRemotePeerState())
     setStreamRecoveryMessage("")
-    resetChatRunTerminalState()
+    resetSessionRunTerminalState()
     clearActiveStreamDraft()
     setWorkingText("处理中")
     setPendingApprovals([])
@@ -1895,7 +1922,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     mentions?: Record<string, unknown>[]
   }): boolean => {
     const text = input.text
-    if (!text.startsWith("/") || chatStatus() === "stopping") return false
+    if (!text.startsWith("/") || sessionRunStatus() === "stopping") return false
     const command = input.command || findChatCommandByText(chatCommandCatalog(), text)
     if (!command) return false
     if (isWorking() && !command?.availableDuringRun) {
@@ -1908,10 +1935,10 @@ const ChatView: Component<ChatViewProps> = (props) => {
     setIsWorking(true)
     setActiveRunSessionId(sessionId || "")
     setPendingCancel(false)
-    setActiveChatId(undefined)
-    setChatStatus("running")
+    setActiveSessionRunId(undefined)
+    setSessionRunStatus("running")
     setStreamRecoveryMessage("")
-    resetChatRunTerminalState()
+    resetSessionRunTerminalState()
     clearActiveStreamDraft()
     setWorkingText("正在执行指令")
     setPendingApprovals([])
@@ -1947,7 +1974,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   }
 
   const canSubmitComposerAction = () => {
-    if (chatStatus() === "stopping" || modelSwitching()) return false
+    if (sessionRunStatus() === "stopping" || modelSwitching()) return false
     const activeModelResolution = requiredModelSelection()
     if (!activeModelResolution.ok || !activeModelResolution.model) {
       setModelSwitchError(activeModelResolution.message)
@@ -1960,7 +1987,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     const text = submission.text
     const command = findChatCommandByText(chatCommandCatalog(), text)
     if (command) {
-      if (chatStatus() === "stopping") return false
+      if (sessionRunStatus() === "stopping") return false
       return dispatchChatCommand({ text, command, mentions: submission.mentions })
     }
     if (!text.trim() || !canSubmitComposerAction()) return false
@@ -1970,7 +1997,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
 
   const handleCommandSelect = (selection: PromptCommandSelection) => {
     const text = selection.text.trim()
-    if (!text || chatStatus() === "stopping") return false
+    if (!text || sessionRunStatus() === "stopping") return false
     return dispatchChatCommand({
       text,
       commandId: selection.command.id,
@@ -2022,10 +2049,10 @@ const ChatView: Component<ChatViewProps> = (props) => {
     setIsWorking(true)
     setActiveRunSessionId(sessionId || "")
     setPendingCancel(false)
-    setActiveChatId(undefined)
-    setChatStatus("running")
+    setActiveSessionRunId(undefined)
+    setSessionRunStatus("running")
     setStreamRecoveryMessage("")
-    resetChatRunTerminalState()
+    resetSessionRunTerminalState()
     setWorkingText(item.mode === "check" ? "正在检查能力环境" : "正在配置能力环境")
     setPendingApprovals([])
     setSelectedApproval(undefined)
@@ -2082,48 +2109,48 @@ const ChatView: Component<ChatViewProps> = (props) => {
 
   const handleStop = () => {
     setEnvironmentRunQueue([])
-    const chatId = activeChatId()
-    if (chatStatus() === "stopping") return
-    setChatStatus("stopping")
+    const sessionRunId = activeSessionRunId()
+    if (sessionRunStatus() === "stopping") return
+    setSessionRunStatus("stopping")
     setWorkingText("正在停止")
     trace.patchStats({ runStatus: "stopping" })
-    if (!chatId) {
+    if (!sessionRunId) {
       if (isWorking()) {
         setPendingCancel(true)
         markActiveToolsCancelled()
       }
       return
     }
-    sendCancel(chatId)
+    sendCancel(sessionRunId)
   }
 
-  const sendCancel = (chatId: string) => {
-    chatMessages.cancel(vscode, chatId)
+  const sendCancel = (sessionRunId: string) => {
+    chatMessages.cancel(vscode, sessionRunId)
   }
 
   const recoverInterruptedChat = (action: "continue" | "retry") => {
-    const chatId = activeChatId()
-    if (!chatId) return
+    const sessionRunId = activeSessionRunId()
+    if (!sessionRunId) return
     setIsWorking(true)
-    setChatStatus("running")
+    setSessionRunStatus("running")
     setWorkingText(action === "retry" ? "正在重新请求" : "正在继续生成")
     setStreamRecoveryMessage("")
     trace.patchStats({ runStatus: "running" })
     startTimer()
-    chatMessages.recover(vscode, { chatId, action })
+    chatMessages.recover(vscode, { sessionRunId, action })
   }
 
   const dismissInterruptedChat = () => {
     setStreamRecoveryMessage("")
-    setActiveChatId(undefined)
+    setActiveSessionRunId(undefined)
     trace.patchStats({ runStatus: "done" })
-    setChatStatus("done")
+    setSessionRunStatus("done")
   }
 
   const sendApprovalDecision = (approval: PendingApproval, decision: ApprovalDecision, reason?: string) => {
     vscode.postMessage({
       type: "approval.reply",
-      chatId: approval.chatId || activeChatId(),
+      sessionRunId: approval.sessionRunId || activeSessionRunId(),
       approvalId: approval.approvalId,
       decision,
       ...(reason ? { reason } : {}),
@@ -2192,10 +2219,44 @@ const ChatView: Component<ChatViewProps> = (props) => {
     window.setTimeout(() => setRememberingApprovalId(""), 0)
   }
 
-  const quickRememberApprovalDecision = (approval: PendingApproval, decision: ApprovalDecision) => {
+  const approveApprovalForSession = (approval: PendingApproval, selectedRules?: string[]) => {
+    if (rememberingApprovalId()) return
+    const sessionId = trace.currentSessionId()
+    const rules = selectedRules?.length
+      ? selectedRules
+      : defaultCommandRuleCandidateRules(extractApprovalCommand(approval))
+    if (!sessionId || !rules.length) return
+    const next = addSessionCommandRules(sessionAllowedCommands(), sessionId, rules)
+    setRememberingApprovalId(approval.approvalId)
+    setSessionAllowedCommands(next)
+    vscode.postMessage({
+      type: "autoApproval.update",
+      sessionAllowedCommands: next,
+    })
+    replyApproval(approval, "allow_once")
+    window.setTimeout(() => setRememberingApprovalId(""), 0)
+  }
+
+  const approveApprovalAlways = (approval: PendingApproval) => {
+    if (classifyApproval(approval) === "execute") {
+      const rules = defaultCommandRuleCandidateRules(extractApprovalCommand(approval))
+      if (!rules.length) return
+      rememberApprovalDecision(approval, "allow_once", rules)
+      return
+    }
+    alwaysAllowApprovalCategory(approval)
+  }
+
+  const canApproveForSession = (approval: PendingApproval): boolean => {
     const rules = defaultCommandRuleCandidateRules(extractApprovalCommand(approval))
-    if (!rules.length) return
-    rememberApprovalDecision(approval, decision, rules)
+    return classifyApproval(approval) === "execute" && Boolean(trace.currentSessionId()) && rules.length > 0
+  }
+
+  const canApproveAlways = (approval: PendingApproval): boolean => {
+    if (classifyApproval(approval) === "execute") {
+      return defaultCommandRuleCandidateRules(extractApprovalCommand(approval)).length > 0
+    }
+    return isCategoryAlwaysAllowAction(classifyApproval(approval))
   }
 
   const openApprovalDetails = (approval: PendingApproval) => {
@@ -2237,6 +2298,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         setAutoApprovalAllowedCommands(sanitizeStringArray(payload.allowedCommands))
         setAutoApprovalDeniedCommands(sanitizeStringArray(payload.deniedCommands))
         setAutoApprovalPlatform(String(payload.platform || "browser"))
+        setSessionAllowedCommands(sanitizeSessionCommandRules(payload.sessionAllowedCommands))
       }
       const nextSessionOperationError = sessionOperationErrorAfterMessage(sessionOperationError(), msg)
       if (nextSessionOperationError !== sessionOperationError()) {
@@ -2353,15 +2415,15 @@ const ChatView: Component<ChatViewProps> = (props) => {
       if (msg.type === "session.syncStatus" && typeof msg.payload === "object" && msg.payload) {
         setSessionSyncStatus(msg.payload as Record<string, unknown>)
       }
-      if (msg.type === "chat.resume" && typeof msg.payload === "object" && msg.payload) {
+      if (msg.type === "sessionRun.resume" && typeof msg.payload === "object" && msg.payload) {
         const payload = objectValue(msg.payload)
-        const chatId = stringValue(payload.chatId) || stringValue(payload.chat_id)
+        const sessionRunId = stringValue(payload.sessionRunId) || stringValue(payload.session_run_id)
         const sessionId =
           stringValue(payload.sessionId) ||
           stringValue(payload.session_id) ||
           stringValue(payload.draftSessionId) ||
           stringValue(payload.draft_session_id)
-        if (chatId) setActiveChatId(chatId)
+        if (sessionRunId) setActiveSessionRunId(sessionRunId)
         if (sessionId) {
           setActiveRunSessionId(sessionId)
           if (remoteSessionIdForMutation(sessionId) && trace.currentSessionId() !== sessionId) {
@@ -2369,55 +2431,55 @@ const ChatView: Component<ChatViewProps> = (props) => {
           }
         }
         const statusApprovals = Array.isArray(payload.approvals) ? payload.approvals : []
-        if (chatId && statusApprovals.length) {
+        if (sessionRunId && statusApprovals.length) {
           setPendingApprovals((items) =>
-            mergeStatusApprovals(items, statusApprovals, chatId)
+            mergeStatusApprovals(items, statusApprovals, sessionRunId)
           )
         }
         setIsWorking(true)
-        setChatStatus("running")
+        setSessionRunStatus("running")
         setWorkingText(String(payload.status || "") === "reconnecting" ? "正在重连" : "正在继续处理")
         trace.patchStats({ runStatus: "running" })
         if (!timer) startTimer()
       }
-      if (msg.type === "chat.session" && typeof msg.chatId === "string") {
-        setActiveChatId(msg.chatId)
+      if (msg.type === "sessionRun.session" && typeof msg.sessionRunId === "string") {
+        setActiveSessionRunId(msg.sessionRunId)
         const sessionId = stringValue(msg.sessionId) || stringValue(msg.session_id)
         if (sessionId) setActiveRunSessionId(sessionId)
         if (pendingCancel()) {
-          sendCancel(msg.chatId)
+          sendCancel(msg.sessionRunId)
           setPendingCancel(false)
         }
       }
-      if (msg.type === "chat.reconnecting") {
+      if (msg.type === "sessionRun.reconnecting") {
         const payload = objectValue(msg.payload)
-        const chatId = stringValue(msg.chatId) || stringValue(payload.chatId) || stringValue(payload.chat_id)
+        const sessionRunId = stringValue(msg.sessionRunId) || stringValue(payload.sessionRunId) || stringValue(payload.session_run_id)
         const sessionId =
           stringValue(payload.sessionId) ||
           stringValue(payload.session_id) ||
           activeRunSessionId()
-        if (chatId) setActiveChatId(chatId)
+        if (sessionRunId) setActiveSessionRunId(sessionRunId)
         if (sessionId) setActiveRunSessionId(sessionId)
         setIsWorking(true)
-        setChatStatus("running")
+        setSessionRunStatus("running")
         setWorkingText("正在重连")
         trace.patchStats({ runStatus: "running" })
         if (!timer) startTimer()
       }
-      if (msg.type === "chat.reconnected") {
+      if (msg.type === "sessionRun.reconnected") {
         setWorkingText("正在继续处理")
         setIsWorking(true)
-        setChatStatus("running")
+        setSessionRunStatus("running")
         trace.patchStats({ runStatus: "running" })
       }
-      if (msg.type === "chat.events" && Array.isArray(msg.events)) {
+      if (msg.type === "sessionRun.events" && Array.isArray(msg.events)) {
         for (const event of msg.events) {
           if (event && typeof event === "object") {
             handleRemoteEvent(event as Record<string, unknown>)
           }
         }
       }
-      if (msg.type === "chat.stream" && Array.isArray(msg.events)) {
+      if (msg.type === "sessionRun.stream" && Array.isArray(msg.events)) {
         for (const event of msg.events) {
           if (event && typeof event === "object") {
             handleLiveStreamEvent(event as Record<string, unknown>)
@@ -2428,16 +2490,16 @@ const ChatView: Component<ChatViewProps> = (props) => {
         const nextTaskflowId = stringValue(msg.taskflowId) || stringValue(msg.taskflow_id)
         if (nextTaskflowId) setTaskflowId(nextTaskflowId)
       }
-      if (msg.type === "chat.done") {
-        if (chatStatus() === "interrupted") return
-        finishChatRun(doneStatusFromCurrentRun(), { startNextEnvironment: true })
+      if (msg.type === "sessionRun.done") {
+        if (sessionRunStatus() === "interrupted") return
+        finishSessionRun(doneStatusFromCurrentRun(), { startNextEnvironment: true })
       }
       if (msg.type === "environment.run.completed" && isWorking()) {
-        finishChatRun(doneStatusFromCurrentRun(), { startNextEnvironment: true })
+        finishSessionRun(doneStatusFromCurrentRun(), { startNextEnvironment: true })
       }
-      if (msg.type === "chat.cancelled") {
+      if (msg.type === "sessionRun.cancelled") {
         markActiveToolsCancelled()
-        finishChatRun("cancelled")
+        finishSessionRun("cancelled")
       }
       if (msg.type === "approval.reply.ok") {
         const approvalId = stringValue(msg.approvalId) || stringValue(msg.approval_id)
@@ -2467,12 +2529,12 @@ const ChatView: Component<ChatViewProps> = (props) => {
       if (msg.type === "environment.run.error" && isWorking()) {
         appendNotice("error", `环境任务失败：${typeof msg.message === "string" ? msg.message : "unknown error"}`, "error")
         setEnvironmentRunQueue([])
-        finishChatRun("error")
+        finishSessionRun("error")
       }
-      if (msg.type === "chat.error") {
+      if (msg.type === "sessionRun.error") {
         appendNotice("error", `连接错误：${typeof msg.message === "string" ? msg.message : "unknown error"}`, "error")
         setEnvironmentRunQueue([])
-        finishChatRun("error")
+        finishSessionRun("error")
       }
     })
     onCleanup(() => {
@@ -2487,7 +2549,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       visibleIsWorking,
       workingText,
       workingElapsed,
-      chatStatus,
+      sessionRunStatus,
       handleStop,
       handleSend,
       handlePromptSubmit,
@@ -2513,8 +2575,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
     approvals: {
       visiblePendingApprovals,
       openApprovalDetails,
-      quickRememberApprovalDecision,
-      alwaysAllowApprovalCategory,
+      approveApprovalForSession,
+      approveApprovalAlways,
       replyApproval,
     },
     compose: {
@@ -2560,7 +2622,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         contextTokens={trace.stats().contextTokens}
         contextWindow={trace.stats().contextWindow}
         maxOutputTokens={trace.stats().maxOutputTokens}
-        runStatus={trace.stats().runStatus || chatStatus()}
+        runStatus={trace.stats().runStatus || sessionRunStatus()}
         traceNodes={trace.traceNodes()}
         traceEdges={trace.traceEdges()}
         activeTraceNodeId={trace.activeTraceNodeId()}
@@ -2620,61 +2682,29 @@ const ChatView: Component<ChatViewProps> = (props) => {
           <div class="approval-strip">
             <For each={visiblePendingApprovals()}>
               {(approval) => {
-                const summary = () => approvalSummary(approval)
-                const quickRememberRules = () => defaultCommandRuleCandidateRules(extractApprovalCommand(approval))
-                const canQuickRemember = () => summary().category === "execute" && quickRememberRules().length > 0
-                const canAlwaysAllowCategory = () => isCategoryAlwaysAllowAction(summary().category)
                 const remembering = () => rememberingApprovalId() === approval.approvalId
                 const submitting = () => approval.submissionState === "submitting"
                 const failed = () => approval.submissionState === "submit_failed"
                 const actionsDisabled = () => remembering() || submitting()
                 return (
                   <div class="approval-strip__item">
-                    <span class={`codicon codicon-${summary().icon}`} aria-hidden="true" />
+                    <span class={`codicon codicon-${approvalSummary(approval).icon}`} aria-hidden="true" />
                     <span class="approval-strip__body">
-                      <strong>{summary().title}</strong>
-                      <span>{summary().primary}</span>
-                      <small>{summary().secondary}</small>
+                      <ApprovalQuickPrompt
+                        approval={approval}
+                        disabled={actionsDisabled()}
+                        pendingLabel={remembering() ? "写入中..." : submitting() ? "提交中..." : ""}
+                        canApproveSession={canApproveForSession(approval)}
+                        canApproveAlways={canApproveAlways(approval)}
+                        onDetails={() => openApprovalDetails(approval)}
+                        onDecision={(decision) => replyApproval(approval, decision)}
+                        onApproveSession={() => approveApprovalForSession(approval)}
+                        onApproveAlways={() => approveApprovalAlways(approval)}
+                      />
                       <Show when={failed()}>
                         <small class="approval-strip__error">提交失败：{approval.submissionError || "请重试"}</small>
                       </Show>
                     </span>
-                    <div class="approval-strip__actions">
-                      <button type="button" disabled={submitting()} onClick={() => openApprovalDetails(approval)}>查看详情</button>
-                      <Show when={canQuickRemember()}>
-                        <button
-                          type="button"
-                          disabled={actionsDisabled()}
-                          onClick={() => quickRememberApprovalDecision(approval, "allow_once")}
-                        >
-                          {remembering() ? "写入中..." : submitting() ? "提交中..." : "批准并始终运行"}
-                        </button>
-                      </Show>
-                      <Show when={canAlwaysAllowCategory()}>
-                        <button
-                          type="button"
-                          disabled={actionsDisabled()}
-                          onClick={() => alwaysAllowApprovalCategory(approval)}
-                        >
-                          {remembering() ? "写入中..." : submitting() ? "提交中..." : "批准并始终允许 MCP"}
-                        </button>
-                      </Show>
-                      <button type="button" disabled={actionsDisabled()} onClick={() => replyApproval(approval, "allow_once")}>
-                        {submitting() && approval.submittedDecision === "allow_once" ? "提交中..." : failed() ? "重试批准" : "批准一次"}
-                      </button>
-                      <Show when={canQuickRemember()}>
-                        <button
-                          type="button"
-                          disabled={actionsDisabled()}
-                          onClick={() => quickRememberApprovalDecision(approval, "deny_once")}
-                        >
-                          {remembering() ? "写入中..." : submitting() ? "提交中..." : "拒绝并记住"}
-                        </button>
-                      </Show>
-                      <button type="button" disabled={actionsDisabled()} onClick={() => replyApproval(approval, "deny_once")}>
-                        {submitting() && approval.submittedDecision === "deny_once" ? "提交中..." : failed() ? "重试拒绝" : "拒绝"}
-                      </button>
-                    </div>
                   </div>
                 )
               }}
@@ -2688,7 +2718,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
             <span>来源：{forkCompose()!.sourceLabel}</span>
           </div>
         </Show>
-        <Show when={chatStatus() === "interrupted" && activeChatId()}>
+        <Show when={sessionRunStatus() === "interrupted" && activeSessionRunId()}>
           <div class="stream-recovery-banner" role="status">
             <span class="codicon codicon-debug-restart" aria-hidden="true" />
             <div class="stream-recovery-banner__body">
@@ -2748,7 +2778,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
           </div>
         </Show>
         <PromptInput
-          disabled={chatStatus() === "stopping"}
+          disabled={sessionRunStatus() === "stopping"}
           draftText={trace.currentSessionId() === forkCompose()?.sessionId ? forkCompose()?.draftText : undefined}
           draftNonce={forkComposeNonce()}
           modeOptions={modeOptions()}
@@ -2968,7 +2998,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
             autoApprovalPending={rememberingApprovalId() === approval().approvalId || approval().submissionState === "submitting"}
             onClose={() => setSelectedApproval(undefined)}
             onDecision={(decision) => replyApproval(approval(), decision)}
-            onAlwaysAllow={() => alwaysAllowApprovalCategory(approval())}
+            onApproveSession={(rules) => approveApprovalForSession(approval(), rules)}
+            onApproveAlways={() => approveApprovalAlways(approval())}
             onRememberDecision={(decision, rules) => rememberApprovalDecision(approval(), decision, rules)}
           />
         )}
@@ -3042,7 +3073,7 @@ function costStatusValue(value: unknown): "available" | "unavailable" | "unknown
   return value === "available" || value === "unknown" ? value : "unavailable"
 }
 
-function runStatusValue(value: unknown): ChatRunStatus | undefined {
+function runStatusValue(value: unknown): SessionRunStatus | undefined {
   return value === "idle" ||
     value === "running" ||
     value === "stopping" ||

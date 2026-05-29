@@ -12,19 +12,25 @@ function sourceSection(start: string, end: string): string {
   return source.slice(startIndex, endIndex)
 }
 
-describe("LabrastroController chat stream batching", () => {
-  it("splits live stream deltas from replayable chat events", () => {
-    expect(source).toContain("LIVE_CHAT_EVENT_TYPES")
+function sourceFrom(start: string, length = 800): string {
+  const startIndex = source.indexOf(start)
+  expect(startIndex).toBeGreaterThanOrEqual(0)
+  return source.slice(startIndex, startIndex + length)
+}
+
+describe("LabrastroController session run event batching", () => {
+  it("splits live stream deltas from replayable session run events", () => {
+    expect(source).toContain("LIVE_SESSION_RUN_EVENT_TYPES")
     expect(source).toContain('"assistant_delta"')
     expect(source).toContain('"reasoning_delta"')
     expect(source).toContain('"tool_call_stream"')
-    expect(source).toContain("splitChatEventBatches(events)")
-    expect(source).toContain('type: batch.live ? "chat.stream" : "chat.events"')
+    expect(source).toContain("splitSessionRunEventBatches(events)")
+    expect(source).toContain('type: batch.live ? "sessionRun.stream" : "sessionRun.events"')
   })
 
-  it("uses SSE chat events as the only chat transport", () => {
-    expect(source).toContain("streamChatEvents(")
-    expect(source).toContain("consumeChatEventStream(")
+  it("uses SSE session run events as the only run transport", () => {
+    expect(source).toContain("streamSessionRunEvents(")
+    expect(source).toContain("consumeSessionRunEventStream(")
     expect(source).not.toContain("consumeChatStream(")
     expect(source).toContain("AbortController")
     expect(source).not.toContain("pollChatStream")
@@ -33,10 +39,32 @@ describe("LabrastroController chat stream batching", () => {
     expect(source).not.toContain("LIVE_CHAT_STREAM_EVENT_TYPES")
   })
 
-  it("refreshes active run status before chat.resume and forwards pending approvals", () => {
+  it("refreshes active run status before sessionRun.resume and forwards pending approvals", () => {
     expect(source).toContain("activeRunPayloadWithServerStatus")
-    expect(source).toContain("const status = await this.client.chatStatus(chatId")
+    expect(source).toContain("const status = await this.client.sessionRunStatus(sessionRunId")
     expect(source).toContain("approvals: Array.isArray(status.approvals) ? status.approvals : []")
+  })
+
+  it("keeps active run state across extension dispose so Reload Window can recover approvals", () => {
+    const disposeFunction = sourceFrom("dispose(): void {")
+
+    expect(disposeFunction).not.toContain("clearActiveRun()")
+    expect(disposeFunction).toContain('stopPeer("controller.dispose")')
+  })
+
+  it("caches status approvals and reconnects the event stream during session run resume", () => {
+    const resumeStatusFunction = sourceSection(
+      "private async activeRunPayloadWithServerStatus",
+      "private async refreshInitialStateInBackground",
+    )
+    const initialStateFunction = sourceSection(
+      "async postInitialState(",
+      "private async activeRunPayloadWithServerStatus",
+    )
+
+    expect(resumeStatusFunction).toContain("await this.storeStatusApprovals(status.approvals)")
+    expect(resumeStatusFunction).toContain("this.sessionRunCoordinator.clearActiveRun()")
+    expect(initialStateFunction).toContain("this.ensureSessionRunEventStream")
   })
 
   it("does not advance the active run cursor from chat status", () => {
@@ -49,6 +77,17 @@ describe("LabrastroController chat stream batching", () => {
     expect(resumeStatusFunction).not.toContain("patchActiveRun({\n          cursor")
     expect(resumeStatusFunction).toContain("const payloadCursor = Number(payload.cursor")
     expect(resumeStatusFunction).toContain("const cursor = Number.isFinite(payloadCursor) ? payloadCursor : 0")
+  })
+
+  it("clears restored active runs when the server no longer knows the session run", () => {
+    const resumeStatusFunction = sourceSection(
+      "private async activeRunPayloadWithServerStatus",
+      "private async refreshInitialStateInBackground",
+    )
+
+    expect(resumeStatusFunction).toContain('isRemoteError(error, "session_run_not_found", 404)')
+    expect(resumeStatusFunction).toContain("this.sessionRunCoordinator.clearActiveRun()")
+    expect(resumeStatusFunction).toContain("return undefined")
   })
 
   it("prefers the live chat.send locale over saved workspace locale", () => {

@@ -10,7 +10,7 @@ export class RemoteError extends Error {
   }
 }
 
-export type RemoteErrorCategory = "transient_network" | "auth_required" | "fatal_chat"
+export type RemoteErrorCategory = "transient_network" | "auth_required" | "fatal_session_run"
 
 export class RemoteTransportError extends Error {
   constructor(
@@ -40,7 +40,7 @@ export function classifyRemoteError(error: unknown): RemoteErrorCategory {
     if ([408, 429, 500, 502, 503, 504].includes(error.status)) {
       return "transient_network"
     }
-    return "fatal_chat"
+    return "fatal_session_run"
   }
   const code = errorCode(error)
   if (
@@ -55,7 +55,7 @@ export function classifyRemoteError(error: unknown): RemoteErrorCategory {
   ) {
     return "transient_network"
   }
-  return "fatal_chat"
+  return "fatal_session_run"
 }
 
 export function isInvalidPeerTokenError(error: unknown): boolean {
