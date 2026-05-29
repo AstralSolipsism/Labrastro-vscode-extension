@@ -342,7 +342,7 @@ describe("message height estimation", () => {
       type: "tool",
       tool: "grep",
       status: "preparing",
-      toolCallId: "preparing:chat-1:0",
+      toolCallId: "preparing:run-1:0",
       preparingIndex: 0,
     })
     const running = turn("inspect", "working")

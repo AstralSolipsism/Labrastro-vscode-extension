@@ -86,6 +86,7 @@ import {
   type ApprovalSubmissionFields,
   type ApprovalSubmissionState,
 } from "../chat/approval-state"
+import { isSessionRunTranscriptEventType } from "../chat/sessionRunTranscriptReducer"
 import {
   approvalDecisionAfterResolution,
   approvalStatusAfterResolution,
@@ -627,6 +628,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const bundleHasEventKey = (eventKey: string): boolean =>
     trace.turns().some((turn) =>
       [turn.userMessage, ...turn.assistantMessages].some((message) =>
+        message.eventKey === eventKey ||
         message.parts.some((part) => part.eventKey === eventKey)
       )
     )
@@ -643,6 +645,34 @@ const ChatView: Component<ChatViewProps> = (props) => {
     ...(meta?.eventKey ? { eventKey: meta.eventKey } : {}),
     ...(meta?.sessionEventSeq !== undefined ? { sessionEventSeq: meta.sessionEventSeq } : {}),
   })
+
+  const applyTranscriptReducer = (
+    event: Record<string, unknown>,
+    type: string,
+    options: { approvalDecision?: string; approvalReason?: string } = {},
+  ): boolean => {
+    if (!isSessionRunTranscriptEventType(type)) return false
+    const reduction = trace.applySessionRunTranscriptEvent(event, {
+      activeSessionRunId: stringValue(event.session_run_id) || activeSessionRunId(),
+      currentSessionId: trace.currentSessionId(),
+      runStatus: sessionRunStatus(),
+      isWorking: isWorking(),
+      labels: {
+        thinking: t("chat.thinking"),
+        terminalOutput: "终端输出",
+        structuredView: "结构化视图",
+        contextEvent: "上下文事件",
+        memoryContext: t("memoryContext.title"),
+        runEvent: "运行事件",
+        cancelled: "已取消当前请求。",
+        errorPrefix: "错误：",
+        streamInterruptedPrefix: "输出中断：",
+      },
+      approvalDecision: options.approvalDecision,
+      approvalReason: options.approvalReason,
+    })
+    return reduction !== undefined
+  }
 
   const appendAssistantTextItem = (
     text: string,
@@ -1262,14 +1292,10 @@ const ChatView: Component<ChatViewProps> = (props) => {
         setPendingCancel(false)
       }
     }
-    if (type === "reasoning_delta") {
-      updateThinkingFromReasoning(String(payload.content || ""), eventMeta)
-    } else if (type === "assistant_delta") {
-      upsertAssistantStream(String(payload.content || ""), eventMeta)
-    } else if (type === "tool_call_delta") {
-      appendToolCallDeltaToToolPart(payload, eventMeta)
-    } else if (type === "tool_call_stream") {
-      appendToolStreamToToolPart(payload, eventMeta)
+    const transcriptHandled = applyTranscriptReducer(event, type)
+    if (transcriptHandled || isSessionRunTranscriptEventType(type)) {
+      markRenderedEvent(eventMeta)
+      return
     }
     markRenderedEvent(eventMeta)
   }
@@ -1290,7 +1316,21 @@ const ChatView: Component<ChatViewProps> = (props) => {
       handleLiveStreamEvent(event)
       return
     }
-    if (shouldArchiveActiveStreamBeforeEvent(type, payload)) {
+    const pendingApprovalForEvent = type === "approval_request"
+      ? {
+          ...approvalFromPayload(payload),
+          sessionRunId: activeSessionRunId() || String(event.session_run_id || ""),
+        } satisfies PendingApproval
+      : undefined
+    const autoDecisionForEvent = pendingApprovalForEvent
+      ? evaluateApprovalDecision(pendingApprovalForEvent)
+      : undefined
+    const canonicalTranscriptEvent = isSessionRunTranscriptEventType(type)
+    applyTranscriptReducer(event, type, {
+      approvalDecision: autoDecisionForEvent?.decision,
+      approvalReason: autoDecisionForEvent?.reason,
+    })
+    if (!canonicalTranscriptEvent && shouldArchiveActiveStreamBeforeEvent(type, payload)) {
       archiveActiveTranscriptItems()
     }
     if (type === "events_lost") {
@@ -1299,7 +1339,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       if (sessionId) trace.loadSession(sessionId)
     } else if (type === "session_run_start") {
       const prompt = stringValue(payload.prompt) || ""
-      if (prompt && !trace.turns().some((turn) => turn.userMessage.text === prompt && !turn.assistantMessages.length)) {
+      if (!canonicalTranscriptEvent && prompt && !trace.turns().some((turn) => turn.userMessage.text === prompt && !turn.assistantMessages.length)) {
         trace.appendTurn({
           userMessage: {
             id: `u-${eventMeta.sessionEventSeq ?? Date.now()}`,
@@ -1348,42 +1388,50 @@ const ChatView: Component<ChatViewProps> = (props) => {
       })
       setRemotePeerState(remotePeerStateFromReady(payload))
     } else if (type === "reasoning_message") {
-      finalizeReasoningMessage(payload, "reasoning-message", {
-        format: stringValue(payload.format) === "plain" ? "plain" : "markdown",
-        trim: false,
-        meta: eventMeta,
-      })
-      clearActiveTranscriptItems(isReasoningThinkingItem)
-    } else if (type === "assistant_message") {
-      clearActiveTranscriptItems((part) => part.type === "assistant_text" && part.streamKey === "assistant-stream")
-      finalizeAssistantMessage(String(payload.content || ""), "assistant-message", {
-        format: "markdown",
-        meta: eventMeta,
-      })
-    } else if (type === "output") {
-      const format = String(payload.format || "plain")
-      if (format === "terminal") {
-        appendTerminalPart(String(payload.content || ""), "终端输出", eventMeta)
-      } else {
-        appendNotice("info", String(payload.content || ""), "output", {
-          format: format === "markdown" ? "markdown" : "plain",
+      if (!canonicalTranscriptEvent) {
+        finalizeReasoningMessage(payload, "reasoning-message", {
+          format: stringValue(payload.format) === "plain" ? "plain" : "markdown",
+          trim: false,
           meta: eventMeta,
         })
       }
+      clearActiveTranscriptItems(isReasoningThinkingItem)
+    } else if (type === "assistant_message") {
+      clearActiveTranscriptItems((part) => part.type === "assistant_text" && part.streamKey === "assistant-stream")
+      if (!canonicalTranscriptEvent) {
+        finalizeAssistantMessage(String(payload.content || ""), "assistant-message", {
+          format: "markdown",
+          meta: eventMeta,
+        })
+      }
+    } else if (type === "output") {
+      const format = String(payload.format || "plain")
+      if (!canonicalTranscriptEvent) {
+        if (format === "terminal") {
+          appendTerminalPart(String(payload.content || ""), "终端输出", eventMeta)
+        } else {
+          appendNotice("info", String(payload.content || ""), "output", {
+            format: format === "markdown" ? "markdown" : "plain",
+            meta: eventMeta,
+          })
+        }
+      }
     } else if (type === "view") {
-      appendViewPart(payload, eventMeta)
+      if (!canonicalTranscriptEvent) appendViewPart(payload, eventMeta)
     } else if (type === "runtime_status") {
       applyRuntimeStatusEvent(payload, eventMeta)
     } else if (type === "context_event") {
-      if (isMemoryContextPayload(payload)) {
-        appendMemoryContextPart(payload, eventMeta)
-      } else {
-        appendContextEventPart(payload, eventMeta)
+      if (!canonicalTranscriptEvent) {
+        if (isMemoryContextPayload(payload)) {
+          appendMemoryContextPart(payload, eventMeta)
+        } else {
+          appendContextEventPart(payload, eventMeta)
+        }
       }
     } else if (type === "memory_context") {
-      appendMemoryContextPart(payload, eventMeta)
+      if (!canonicalTranscriptEvent) appendMemoryContextPart(payload, eventMeta)
     } else if (isStructuredUiEventType(type)) {
-      appendUiEventPart(type, payload, eventMeta)
+      if (!canonicalTranscriptEvent) appendUiEventPart(type, payload, eventMeta)
     } else if (type === "delegated_run_completed") {
       setAgentRunState(agentRunStateFromDelegatedCompletion(payload))
     } else if (type === "usage_update" || type === "run_stats") {
@@ -1416,7 +1464,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
       setStreamRecoveryMessage(message)
       setWorkingText("正在恢复输出")
       trace.patchStats({ runStatus: "running" })
-      appendNotice("warning", "模型输出流中断，正在尝试恢复。", "stream-recovery", { meta: eventMeta })
+      if (!canonicalTranscriptEvent) {
+        appendNotice("warning", "模型输出流中断，正在尝试恢复。", "stream-recovery", { meta: eventMeta })
+      }
     } else if (type === "provider_stream_recovering") {
       setStreamRecoveryMessage(stringValue(payload.message) || "正在恢复输出。")
       setWorkingText("正在恢复输出")
@@ -1437,22 +1487,26 @@ const ChatView: Component<ChatViewProps> = (props) => {
       setSessionRunStatus("interrupted")
       setStreamRecoveryMessage(message)
       trace.patchStats({ runStatus: "interrupted" })
-      appendNotice("warning", `输出中断：${message}`, "stream-interrupted", { meta: eventMeta })
+      if (!canonicalTranscriptEvent) {
+        appendNotice("warning", `输出中断：${message}`, "stream-interrupted", { meta: eventMeta })
+      }
       setAgentRunState((current) => settleAgentRunStateForSessionRunEvent(current, type, payload))
       finishSessionRun("interrupted")
     } else if (type === "tool_call_start") {
       const toolName = String(payload.tool_name || "tool")
       const toolCallId = requiredToolCallId(payload)
       if (!toolCallId) return
-      upsertToolPart(toolName, {
-        status: "running",
-        toolCallId,
-        source: stringValue(payload.tool_source),
-        startedAt: numberValue(payload.started_at),
-        input: (payload.tool_args || {}) as Record<string, unknown>,
-        resultMeta: {},
-        preparingIndex: numberValue(payload.index),
-      }, toolCallId, { meta: eventMeta, preparingIndex: numberValue(payload.index) })
+      if (!canonicalTranscriptEvent) {
+        upsertToolPart(toolName, {
+          status: "running",
+          toolCallId,
+          source: stringValue(payload.tool_source),
+          startedAt: numberValue(payload.started_at),
+          input: (payload.tool_args || {}) as Record<string, unknown>,
+          resultMeta: {},
+          preparingIndex: numberValue(payload.index),
+        }, toolCallId, { meta: eventMeta, preparingIndex: numberValue(payload.index) })
+      }
     } else if (type === "tool_call_protocol_error") {
       const toolName = String(payload.tool_name || "tool")
       const toolCallId = requiredToolCallId(payload)
@@ -1464,64 +1518,67 @@ const ChatView: Component<ChatViewProps> = (props) => {
       const resultMeta: Record<string, unknown> = {}
       if (code) resultMeta.code = code
       if (message) resultMeta.message = message
-      upsertToolPart(toolName, {
-        status: "protocol_error",
-        toolCallId,
-        output,
-        outputFormat: "plain",
-        resultMeta,
-      }, toolCallId, { meta: eventMeta })
+      if (!canonicalTranscriptEvent) {
+        upsertToolPart(toolName, {
+          status: "protocol_error",
+          toolCallId,
+          output,
+          outputFormat: "plain",
+          resultMeta,
+        }, toolCallId, { meta: eventMeta })
+      }
     } else if (type === "tool_call_end") {
       const toolName = String(payload.tool_name || "tool")
       const toolCallId = requiredToolCallId(payload)
       if (!toolCallId) return
       clearActiveTranscriptItems((part) => part.type === "tool" && part.toolCallId === toolCallId)
-      const outputFormat = stringValue(payload.format) || stringValue(payload.output_format) || stringValue(payload.tool_output_format) || stringValue(payload.tool_result_format)
-      const toolSource = stringValue(payload.tool_source)
-      const finalOutput = String(payload.tool_result || "")
-      const parts = ensureAssistantMessage().parts
-      const existingIndex = resolveToolPartIndex(parts, toolName, toolCallId, true)
-      const existing = existingIndex >= 0 ? parts[existingIndex] as ToolActivityItem : undefined
-      const resolvedToolSource = toolSource || existing?.source
-      const isShell = isShellToolName(toolName, resolvedToolSource)
-      const reconciledShellOutput = isShell
-        ? reconcileShellFinalOutput(existing?.output, finalOutput, existing?.outputChunks)
-        : finalOutput
-      const shellChunks = isShell
-        ? existing?.outputChunks?.length
-          ? existing.outputChunks
-          : shellChunksFromText(reconciledShellOutput)
-        : existing?.outputChunks
-      const patch: Partial<ToolActivityItem> = {
-        status: statusAfterToolReturn(existing?.status),
-        source: resolvedToolSource,
-        endedAt: numberValue(payload.ended_at),
-        output: reconciledShellOutput,
-        outputFormat: inferToolOutputFormat(toolName, resolvedToolSource, outputFormat),
-        outputChunks: shellChunks,
-        finalOutput: isShell ? finalOutput : undefined,
-        resultMeta: objectValue(payload.meta),
+      if (!canonicalTranscriptEvent) {
+        const outputFormat = stringValue(payload.format) || stringValue(payload.output_format) || stringValue(payload.tool_output_format) || stringValue(payload.tool_result_format)
+        const toolSource = stringValue(payload.tool_source)
+        const finalOutput = String(payload.tool_result || "")
+        const parts = ensureAssistantMessage().parts
+        const existingIndex = resolveToolPartIndex(parts, toolName, toolCallId, true)
+        const existing = existingIndex >= 0 ? parts[existingIndex] as ToolActivityItem : undefined
+        const resolvedToolSource = toolSource || existing?.source
+        const isShell = isShellToolName(toolName, resolvedToolSource)
+        const reconciledShellOutput = isShell
+          ? reconcileShellFinalOutput(existing?.output, finalOutput, existing?.outputChunks)
+          : finalOutput
+        const shellChunks = isShell
+          ? existing?.outputChunks?.length
+            ? existing.outputChunks
+            : shellChunksFromText(reconciledShellOutput)
+          : existing?.outputChunks
+        const patch: Partial<ToolActivityItem> = {
+          status: statusAfterToolReturn(existing?.status),
+          source: resolvedToolSource,
+          endedAt: numberValue(payload.ended_at),
+          output: reconciledShellOutput,
+          outputFormat: inferToolOutputFormat(toolName, resolvedToolSource, outputFormat),
+          outputChunks: shellChunks,
+          finalOutput: isShell ? finalOutput : undefined,
+          resultMeta: objectValue(payload.meta),
+        }
+        if (toolCallId) patch.toolCallId = toolCallId
+        upsertToolPart(toolName, patch, toolCallId, { matchReturn: true, meta: eventMeta })
       }
-      if (toolCallId) patch.toolCallId = toolCallId
-      upsertToolPart(toolName, patch, toolCallId, { matchReturn: true, meta: eventMeta })
     } else if (type === "approval_request") {
-      const next: PendingApproval = {
-        ...approvalFromPayload(payload),
-        sessionRunId: activeSessionRunId() || String(event.session_run_id || ""),
+      const next = pendingApprovalForEvent!
+      const autoDecision = autoDecisionForEvent || evaluateApprovalDecision(next)
+      if (!canonicalTranscriptEvent) {
+        upsertToolPart(next.toolName, {
+          status: autoDecision.decision === "allow" ? "approved" : autoDecision.decision === "deny" ? "denied" : "awaiting_approval",
+          toolCallId: next.toolCallId,
+          source: next.toolSource,
+          input: next.toolArgs,
+          approvalId: next.approvalId,
+          approvalReason: autoDecision.reason || next.reason,
+          approvalIntent: next.intent,
+          approvalContent: next.content,
+          approvalSections: next.sections as Record<string, unknown>[],
+          approvalDecision: autoDecision.decision === "allow" ? "auto_approved" : autoDecision.decision === "deny" ? "auto_denied" : undefined,
+        }, next.toolCallId, { meta: eventMeta })
       }
-      const autoDecision = evaluateApprovalDecision(next)
-      upsertToolPart(next.toolName, {
-        status: autoDecision.decision === "allow" ? "approved" : autoDecision.decision === "deny" ? "denied" : "awaiting_approval",
-        toolCallId: next.toolCallId,
-        source: next.toolSource,
-        input: next.toolArgs,
-        approvalId: next.approvalId,
-        approvalReason: autoDecision.reason || next.reason,
-        approvalIntent: next.intent,
-        approvalContent: next.content,
-        approvalSections: next.sections as Record<string, unknown>[],
-        approvalDecision: autoDecision.decision === "allow" ? "auto_approved" : autoDecision.decision === "deny" ? "auto_denied" : undefined,
-      }, next.toolCallId, { meta: eventMeta })
       const pendingApproval = {
         ...next,
         autoApprovalReason: autoDecision.reason,
@@ -1544,20 +1601,22 @@ const ChatView: Component<ChatViewProps> = (props) => {
       const reason = stringValue(payload.reason)
       setPendingApprovals((items) => items.filter((item) => item.approvalId !== approvalId))
       if (selectedApproval()?.approvalId === approvalId) setSelectedApproval(undefined)
-      updateAssistantItems((parts) =>
-        parts.map((part) => {
-          if (part.type !== "tool") return part
-          if (toolCallId && part.toolCallId !== toolCallId) return part
-          if (!toolCallId && part.approvalId !== approvalId) return part
-          return {
-            ...part,
-            ...withEventMeta(part, eventMeta),
-            approvalDecision: approvalDecisionAfterResolution(part.approvalDecision, decision),
-            approvalResultReason: reason || part.approvalResultReason,
-            status: approvalStatusAfterResolution(decision, part.status),
-          }
-        })
-      )
+      if (!canonicalTranscriptEvent) {
+        updateAssistantItems((parts) =>
+          parts.map((part) => {
+            if (part.type !== "tool") return part
+            if (toolCallId && part.toolCallId !== toolCallId) return part
+            if (!toolCallId && part.approvalId !== approvalId) return part
+            return {
+              ...part,
+              ...withEventMeta(part, eventMeta),
+              approvalDecision: approvalDecisionAfterResolution(part.approvalDecision, decision),
+              approvalResultReason: reason || part.approvalResultReason,
+              status: approvalStatusAfterResolution(decision, part.status),
+            }
+          })
+        )
+      }
     } else if (type === "session_run_cancel_requested") {
       setSessionRunStatus("stopping")
       setWorkingText("正在停止")
@@ -1568,27 +1627,28 @@ const ChatView: Component<ChatViewProps> = (props) => {
       setPendingApprovals([])
       setSelectedApproval(undefined)
       setAgentRunState(initialAgentRunState())
-      markActiveToolsCancelled()
       finishSessionRun("cancelled")
     } else if (type === "error") {
       setSessionRunSawError(true)
       setSessionRunStatus("error")
       trace.patchStats({ runStatus: "error" })
-      appendNotice("error", `错误：${payload.message || "unknown error"}`, "error", { meta: eventMeta })
+      if (!canonicalTranscriptEvent) {
+        appendNotice("error", `错误：${payload.message || "unknown error"}`, "error", { meta: eventMeta })
+      }
     } else if (type === "session_run_failed") {
       const alreadyHadError = sessionRunSawError()
       setSessionRunSawError(true)
       setSessionRunSawTerminal(true)
       setSessionRunStatus("error")
       trace.patchStats({ runStatus: "error" })
-      if (!alreadyHadError) {
+      if (!canonicalTranscriptEvent && !alreadyHadError) {
         appendNotice("error", `错误：${payload.message || "unknown error"}`, "error", { meta: eventMeta })
       }
       setAgentRunState((current) => settleAgentRunStateForSessionRunEvent(current, type, payload))
       finishSessionRun("error")
     } else if (type === "session_run_end") {
       setSessionRunSawTerminal(true)
-      if (payload.response && payload.response_rendered !== true) {
+      if (!canonicalTranscriptEvent && payload.response && payload.response_rendered !== true) {
         clearActiveTranscriptItems((part) => part.type === "assistant_text" && part.streamKey === "assistant-stream")
         appendAssistantTextItem(String(payload.response), "final", { format: "markdown", meta: eventMeta })
       }
@@ -2498,7 +2558,6 @@ const ChatView: Component<ChatViewProps> = (props) => {
         finishSessionRun(doneStatusFromCurrentRun(), { startNextEnvironment: true })
       }
       if (msg.type === "sessionRun.cancelled") {
-        markActiveToolsCancelled()
         finishSessionRun("cancelled")
       }
       if (msg.type === "approval.reply.ok") {

@@ -23,30 +23,38 @@ describe("ChatView context events", () => {
     expect(source).toContain('} else if (type === "usage_update" || type === "run_stats") {')
   })
 
-  it("routes live deltas into active stream draft state", () => {
+  it("routes live deltas into the canonical transcript reducer", () => {
     expect(source).toContain('msg.type === "sessionRun.stream"')
     expect(source).toContain("const handleLiveStreamEvent =")
-    expect(source).toContain("updateThinkingFromReasoning")
-    expect(source).toContain("const REASONING_STREAM_KEY")
-    expect(source).toContain("upsertAssistantStream")
-    expect(source).toContain("appendToolCallDeltaToToolPart")
-    expect(source).toContain("appendToolStreamToToolPart")
-    expect(source).toContain("archiveActiveTranscriptItems")
+    expect(source).toContain("applyTranscriptReducer(event, type)")
+    expect(source).toContain("trace.applySessionRunTranscriptEvent(event")
+    expect(source).toContain("if (transcriptHandled || isSessionRunTranscriptEventType(type)) {")
+    const liveHandlerStart = source.indexOf("const handleLiveStreamEvent =")
+    const remoteHandlerStart = source.indexOf("const handleRemoteEvent =", liveHandlerStart)
+    const liveHandlerSource = source.slice(liveHandlerStart, remoteHandlerStart)
+    expect(liveHandlerSource).not.toContain("updateThinkingFromReasoning")
+    expect(liveHandlerSource).not.toContain("upsertAssistantStream")
+    expect(liveHandlerSource).not.toContain("appendToolCallDeltaToToolPart")
+    expect(liveHandlerSource).not.toContain("appendToolStreamToToolPart")
     expect(source).toContain("const visibleTurns =")
     expect(source).toContain('format: "markdown"')
     expect(source).toContain('type: "thinking"')
   })
 
-  it("archives active reasoning/text before persistent tool and message events", () => {
+  it("keeps active draft archiving outside canonical session-run transcript events", () => {
     expect(source).toContain("const shouldArchiveActiveStreamBeforeEvent =")
     expect(source).toContain("const isArchivableActiveTranscriptItem =")
     expect(source).toContain("isReasoningThinkingItem(item)")
     expect(source).toContain('if (type === "session_run_end") return false')
+    expect(source).toContain("if (!canonicalTranscriptEvent && shouldArchiveActiveStreamBeforeEvent")
     expect(source).toContain('"tool_call_start"')
     expect(source).toContain('"tool_call_end"')
     expect(source).toContain('"assistant_message"')
     expect(source).toContain('"reasoning_message"')
-    expect(source).toContain("appendToolStreamToToolPart(payload, eventMeta)")
+    const remoteHandlerStart = source.indexOf("const handleRemoteEvent =")
+    const runtimeControllerStart = source.indexOf("const sendCancel =", remoteHandlerStart)
+    const remoteHandlerSource = source.slice(remoteHandlerStart, runtimeControllerStart)
+    expect(remoteHandlerSource).not.toContain("appendToolStreamToToolPart(payload, eventMeta)")
     expect(source).toContain('type === "tool_call_delta"')
   })
 
@@ -101,10 +109,11 @@ describe("ChatView context events", () => {
     expect(source).toContain("showWorkingIndicator={visibleIsWorking() && !hasVisibleRunTranscriptItems()}")
   })
 
-  it("settles active assistant stream and thinking state when a run ends", () => {
+  it("settles active assistant stream and thinking state when a run ends without bypassing canonical transcript", () => {
     expect(source).toContain("const settleAssistantMessageForRunEnd =")
     expect(source).toContain("settleAssistantMessageForRunEnd(nextStatus)")
     expect(source).toContain("normalizeTranscriptItemForRunEnd")
+    expect(source).toContain('if (!canonicalTranscriptEvent && payload.response && payload.response_rendered !== true)')
     expect(source).toContain('streaming: false')
     expect(source).toContain('streamKey: "assistant-message"')
     expect(source).toContain("active: false")
@@ -116,7 +125,9 @@ describe("ChatView context events", () => {
     const clearIndex = source.indexOf('clearActiveTranscriptItems((part) => part.type === "assistant_text" && part.streamKey === "assistant-stream")', branchIndex)
     const appendIndex = source.indexOf('appendAssistantTextItem(String(payload.response), "final"', branchIndex)
     const finishIndex = source.indexOf("finishSessionRun(doneStatusFromCurrentRun())", branchIndex)
+    const guardIndex = source.indexOf("if (!canonicalTranscriptEvent && payload.response", branchIndex)
 
+    expect(guardIndex).toBeGreaterThan(branchIndex)
     expect(clearIndex).toBeGreaterThan(branchIndex)
     expect(clearIndex).toBeLessThan(appendIndex)
     expect(appendIndex).toBeLessThan(finishIndex)

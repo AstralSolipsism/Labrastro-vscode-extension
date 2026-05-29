@@ -314,7 +314,7 @@ describe("transcript presentation", () => {
         type: "tool",
         tool: "grep",
         status: "preparing",
-        toolCallId: "preparing:chat-1:0",
+        toolCallId: "preparing:run-1:0",
         input: { arguments_preview: '{"pattern":"remotePeerState"}' },
         preparingIndex: 0,
       },
@@ -338,7 +338,7 @@ describe("transcript presentation", () => {
         type: "tool",
         tool: "tool",
         status: "preparing",
-        toolCallId: "preparing:chat-1:0",
+        toolCallId: "preparing:run-1:0",
       },
     ]
 

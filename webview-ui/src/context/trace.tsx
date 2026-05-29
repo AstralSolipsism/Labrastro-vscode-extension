@@ -27,6 +27,11 @@ import {
   shouldPreserveExistingSessionContent,
 } from "../utils/session-history"
 import { buildOrchestrationGraph, getRootSessionId } from "../utils/trace-orchestration"
+import {
+  applySessionRunTranscriptEvent,
+  type SessionRunTranscriptContext,
+  type SessionRunTranscriptReduction,
+} from "../chat/sessionRunTranscriptReducer"
 import { useVSCode, type ExtensionMessage } from "./vscode"
 
 function cloneValue<T>(value: T): T {
@@ -791,6 +796,10 @@ interface TraceContextValue {
   startDraftTask: (taskText: string, initialTurn?: MockTurn) => string
   appendTurn: (turn: MockTurn) => void
   replaceLastAssistantMessages: (assistantMessages: MockTurn["assistantMessages"]) => void
+  applySessionRunTranscriptEvent: (
+    event: Record<string, unknown>,
+    context?: SessionRunTranscriptContext,
+  ) => SessionRunTranscriptReduction | undefined
   patchStats: (patch: Partial<MockTaskStats>) => void
 }
 
@@ -1512,6 +1521,21 @@ export const TraceProvider: ParentComponent = (props) => {
     })
   }
 
+  const applyCurrentSessionRunTranscriptEvent = (
+    event: Record<string, unknown>,
+    context: SessionRunTranscriptContext = {},
+  ): SessionRunTranscriptReduction | undefined => {
+    let reduction: SessionRunTranscriptReduction | undefined
+    updateCurrentBundle((bundle) => {
+      reduction = applySessionRunTranscriptEvent(bundle, event, {
+        ...context,
+        currentSessionId: context.currentSessionId ?? currentSessionId(),
+      })
+      return reduction.bundle
+    })
+    return reduction
+  }
+
   const patchStats = (patch: Partial<MockTaskStats>) => {
     updateCurrentBundle((bundle) => ({
       ...bundle,
@@ -1675,6 +1699,7 @@ export const TraceProvider: ParentComponent = (props) => {
     startDraftTask,
     appendTurn,
     replaceLastAssistantMessages,
+    applySessionRunTranscriptEvent: applyCurrentSessionRunTranscriptEvent,
     patchStats,
   }
 
