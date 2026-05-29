@@ -28,7 +28,7 @@ function coordinatorWithStoredSessionRun(stored: unknown) {
 }
 
 describe("SessionRunCoordinator semantic contract", () => {
-  it("persists active session run state with sessionRunId only", () => {
+  it("persists active session run state without legacy chat id fields", () => {
     const { options, coordinator } = coordinatorWithStoredSessionRun(undefined)
     const run: ActiveSessionRun = {
       sessionRunId: "run-1",

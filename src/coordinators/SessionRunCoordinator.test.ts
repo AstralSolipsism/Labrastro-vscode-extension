@@ -168,11 +168,11 @@ describe("SessionRunCoordinator", () => {
     expect(options.client.dispatchChatCommand).not.toHaveBeenCalled()
   })
 
-  it("uses the active chat id for approval replies when the message omits sessionRunId", async () => {
+  it("uses the active session run id for approval replies when the message omits sessionRunId", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
     subject.setActiveRun({
-      sessionRunId: "active-chat",
+      sessionRunId: "active-run",
       cursor: 0,
       status: "running",
       startedAt: "2026-01-01T00:00:00.000Z",
@@ -187,7 +187,34 @@ describe("SessionRunCoordinator", () => {
     }, post)
 
     expect(options.client.approvalReply).toHaveBeenCalledWith({
-      session_run_id: "active-chat",
+      session_run_id: "active-run",
+      approval_id: "approval-1",
+      decision: "allow_once",
+      reason: "ok",
+    })
+  })
+
+  it("uses snake_case session_run_id for approval replies", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    subject.setActiveRun({
+      sessionRunId: "active-run",
+      cursor: 0,
+      status: "running",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reconnectAttempts: 0,
+    })
+
+    await subject.handleMessage({
+      type: "approval.reply",
+      session_run_id: "snake-run",
+      approvalId: "approval-1",
+      decision: "allow_once",
+      reason: "ok",
+    }, post)
+
+    expect(options.client.approvalReply).toHaveBeenCalledWith({
+      session_run_id: "snake-run",
       approval_id: "approval-1",
       decision: "allow_once",
       reason: "ok",
@@ -202,7 +229,7 @@ describe("SessionRunCoordinator", () => {
       state: "already_resolved",
     })
     subject.setActiveRun({
-      sessionRunId: "active-chat",
+      sessionRunId: "active-run",
       cursor: 0,
       status: "running",
       startedAt: "2026-01-01T00:00:00.000Z",
@@ -218,7 +245,7 @@ describe("SessionRunCoordinator", () => {
 
     expect(post).toHaveBeenCalledWith({
       type: "approval.reply.ok",
-      sessionRunId: "active-chat",
+      sessionRunId: "active-run",
       approvalId: "approval-1",
       decision: "allow_once",
       payload: {
@@ -228,12 +255,12 @@ describe("SessionRunCoordinator", () => {
     })
   })
 
-  it("reports approval reply failures without converting the chat run to a fatal chat error", async () => {
+  it("reports approval reply failures without converting the session run to a fatal run error", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
     options.client.approvalReply.mockRejectedValueOnce(new Error("fetch failed"))
     subject.setActiveRun({
-      sessionRunId: "active-chat",
+      sessionRunId: "active-run",
       cursor: 0,
       status: "running",
       startedAt: "2026-01-01T00:00:00.000Z",
@@ -249,20 +276,32 @@ describe("SessionRunCoordinator", () => {
 
     expect(post).toHaveBeenCalledWith({
       type: "approval.reply.error",
-      sessionRunId: "active-chat",
+      sessionRunId: "active-run",
       approvalId: "approval-1",
       decision: "allow_once",
       message: "fetch failed",
     })
     expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "sessionRun.error" }))
-    expect(subject.activeRun?.sessionRunId).toBe("active-chat")
+    expect(subject.activeRun?.sessionRunId).toBe("active-run")
   })
 
-  it("routes chat follow-ups to the active run and supports cancellation", async () => {
+  it("routes sessionRun.cancel with snake_case session_run_id", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+
+    await subject.handleMessage({
+      type: "sessionRun.cancel",
+      session_run_id: "snake-run",
+    }, post)
+
+    expect(options.cancelSessionRun).toHaveBeenCalledWith("snake-run", post)
+  })
+
+  it("routes session run follow-ups to the active run and supports cancellation", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
     subject.setActiveRun({
-      sessionRunId: "active-chat",
+      sessionRunId: "active-run",
       cursor: 0,
       status: "running",
       startedAt: "2026-01-01T00:00:00.000Z",
@@ -282,23 +321,23 @@ describe("SessionRunCoordinator", () => {
     }, post)
 
     expect(options.client.followUpSessionRun).toHaveBeenCalledWith({
-      sessionRunId: "active-chat",
+      sessionRunId: "active-run",
       text: "use this extra constraint",
       followupId: "follow-1",
       clientRequestId: "req-1",
     })
     expect(options.client.cancelSessionRunFollowUp).toHaveBeenCalledWith({
-      sessionRunId: "active-chat",
+      sessionRunId: "active-run",
       followupId: "follow-1",
       reason: "user_changed_to_queue",
     })
   })
 
-  it("routes sessionRun.recover to the active interrupted chat", async () => {
+  it("routes sessionRun.recover to the active interrupted session run", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
     subject.setActiveRun({
-      sessionRunId: "active-chat",
+      sessionRunId: "active-run",
       cursor: 7,
       status: "running",
       startedAt: "2026-01-01T00:00:00.000Z",
@@ -310,7 +349,7 @@ describe("SessionRunCoordinator", () => {
       action: "retry",
     }, post)
 
-    expect(options.recoverSessionRun).toHaveBeenCalledWith("active-chat", "retry", post)
+    expect(options.recoverSessionRun).toHaveBeenCalledWith("active-run", "retry", post)
   })
 
   it("routes taskflow complexity requests and posts results", async () => {
@@ -505,7 +544,7 @@ describe("SessionRunCoordinator", () => {
     const { options, coordinator: subject } = coordinator()
 
     subject.setActiveRun({
-      sessionRunId: "chat-1",
+      sessionRunId: "run-1",
       cursor: 4,
       sessionId: "session-1",
       draftSessionId: "session-local",
@@ -515,10 +554,10 @@ describe("SessionRunCoordinator", () => {
       nextRetryAt: 123,
     })
 
-    expect(subject.activeSessionRunId).toBe("chat-1")
+    expect(subject.activeSessionRunId).toBe("run-1")
     expect(subject.activeRunPayload()).toMatchObject({
-      sessionRunId: "chat-1",
-      session_run_id: "chat-1",
+      sessionRunId: "run-1",
+      session_run_id: "run-1",
       cursor: 4,
       sessionId: "session-1",
       session_id: "session-1",
@@ -532,13 +571,13 @@ describe("SessionRunCoordinator", () => {
     })
     expect(options.context.workspaceState.update).toHaveBeenCalledWith(
       "labrastro.activeSessionRun",
-      expect.objectContaining({ sessionRunId: "chat-1", session_run_id: "chat-1" })
+      expect.objectContaining({ sessionRunId: "run-1", session_run_id: "run-1" })
     )
   })
 
   it("restores active run state from workspaceState on construction", () => {
     const { coordinator: subject } = coordinatorWithStoredActiveRun({
-      sessionRunId: "chat-restored",
+      sessionRunId: "run-restored",
       session_run_id: "ignored-snake-id",
       cursor: "7",
       session_id: "session-restored",
@@ -550,10 +589,10 @@ describe("SessionRunCoordinator", () => {
       next_retry_at: "1234",
     })
 
-    expect(subject.activeSessionRunId).toBe("chat-restored")
+    expect(subject.activeSessionRunId).toBe("run-restored")
     expect(subject.activeRunPayload()).toMatchObject({
-      sessionRunId: "chat-restored",
-      session_run_id: "chat-restored",
+      sessionRunId: "run-restored",
+      session_run_id: "run-restored",
       cursor: 7,
       sessionId: "session-restored",
       session_id: "session-restored",
@@ -567,13 +606,13 @@ describe("SessionRunCoordinator", () => {
   })
 
   it("ignores invalid stored active run payloads", () => {
-    const { coordinator: missingChatId } = coordinatorWithStoredActiveRun({
+    const { coordinator: missingSessionRunId } = coordinatorWithStoredActiveRun({
       cursor: 4,
       status: "running",
     })
     const { coordinator: arrayPayload } = coordinatorWithStoredActiveRun([])
 
-    expect(missingChatId.activeRun).toBeUndefined()
+    expect(missingSessionRunId.activeRun).toBeUndefined()
     expect(arrayPayload.activeRun).toBeUndefined()
   })
 })

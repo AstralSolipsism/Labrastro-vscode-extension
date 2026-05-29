@@ -187,7 +187,10 @@ export class SessionRunCoordinator {
         }
         return true
       case "sessionRun.cancel":
-        await this.options.cancelSessionRun(stringValue(message.sessionRunId), post)
+        await this.options.cancelSessionRun(
+          stringValue(message.sessionRunId) || stringValue(message.session_run_id) || this.activeSessionRunId,
+          post
+        )
         return true
       case "sessionRun.recover": {
         const sessionRunId = stringValue(message.sessionRunId) || stringValue(message.session_run_id) || this.activeSessionRunId || ""
@@ -239,6 +242,7 @@ export class SessionRunCoordinator {
       case "approval.reply": {
         const sessionRunId =
           stringValue(message.sessionRunId) ||
+          stringValue(message.session_run_id) ||
           this.activeSessionRunId ||
           ""
         const approvalId = stringValue(message.approvalId) || ""

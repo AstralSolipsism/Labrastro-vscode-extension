@@ -12,7 +12,7 @@ interface TestApproval extends RecoverablePendingApproval, ApprovalSubmissionFie
 
 const approval = (id = "approval-1"): TestApproval => ({
   approvalId: id,
-  sessionRunId: "chat-1",
+  sessionRunId: "run-1",
   toolName: "shell",
   toolArgs: {},
   sections: [],
@@ -25,7 +25,7 @@ describe("approval-state", () => {
     expect(next).toMatchObject([
       {
         approvalId: "approval-1",
-        sessionRunId: "chat-1",
+        sessionRunId: "run-1",
         toolName: "shell",
         submittedDecision: "allow_once",
         submissionState: "submitting",
@@ -42,7 +42,7 @@ describe("approval-state", () => {
     expect(next).toMatchObject([
       {
         approvalId: "approval-1",
-        sessionRunId: "chat-1",
+        sessionRunId: "run-1",
         toolName: "shell",
         submittedDecision: "allow_once",
         submissionState: "submit_failed",
@@ -60,7 +60,7 @@ describe("approval-state", () => {
     expect(next).toMatchObject([
       {
         approvalId: "approval-2",
-        sessionRunId: "chat-1",
+        sessionRunId: "run-1",
         toolName: "shell",
       },
     ])
@@ -88,13 +88,13 @@ describe("approval-state", () => {
           state: "requested",
         },
       ],
-      "chat-1",
+      "run-1",
     )
 
     expect(next).toMatchObject([
       {
         approvalId: "approval-1",
-        sessionRunId: "chat-1",
+        sessionRunId: "run-1",
         toolName: "shell",
         submissionState: undefined,
         submissionError: undefined,
@@ -102,7 +102,7 @@ describe("approval-state", () => {
       },
       {
         approvalId: "approval-2",
-        sessionRunId: "chat-1",
+        sessionRunId: "run-1",
         toolName: "edit_file",
       },
     ])
