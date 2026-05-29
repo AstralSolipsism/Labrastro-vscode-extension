@@ -22,7 +22,7 @@
 
 Labrastro 后端基座负责远端 relay、会话持久化、Provider 管理、MCP 分发、环境清单、Agent Runtime 和任务控制面。VS Code 插件连接这个基座，把中心化配置和任务调度落到当前本地工作区。
 
-当前工作区中，`dogcode` 是 VS Code/Webview MVP 的事实来源；ReuleauxCoder/Labrastro server 是后端控制面与执行基座。插件前端已经完成基础建设，不应被视为缺失项。
+当前工作区中，`Labrastro-vscode-extension` 是 VS Code/Webview MVP 的事实来源；ReuleauxCoder/Labrastro server 是后端控制面与执行基座。插件前端已经完成基础建设，不应被视为缺失项。
 
 ## 架构关系
 
@@ -126,8 +126,8 @@ https://labrastro.example.com -> Nginx/Caddy -> labrastro-host:8765
 ### 2. 启动 VS Code 插件
 
 ```bash
-git clone https://github.com/AstralSolipsism/Labrastro.git
-cd Labrastro
+git clone https://github.com/AstralSolipsism/Labrastro-vscode-extension.git
+cd Labrastro-vscode-extension
 npm install
 npm run compile
 ```

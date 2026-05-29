@@ -14,11 +14,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/AstralSolipsism/Labrastro.git"
+    "url": "https://github.com/AstralSolipsism/Labrastro-vscode-extension.git"
   },
-  "homepage": "https://github.com/AstralSolipsism/Labrastro#readme",
+  "homepage": "https://github.com/AstralSolipsism/Labrastro-vscode-extension#readme",
   "bugs": {
-    "url": "https://github.com/AstralSolipsism/Labrastro/issues"
+    "url": "https://github.com/AstralSolipsism/Labrastro-vscode-extension/issues"
   },
   "activationEvents": [
     "onView:labrastro.SidebarProvider",
