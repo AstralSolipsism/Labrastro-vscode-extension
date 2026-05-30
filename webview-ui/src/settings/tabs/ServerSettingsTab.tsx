@@ -40,7 +40,7 @@ export const ServerSettingsTab: Component<TabProps> = (props) => {
   const [sandboxType, setSandboxType] = createSignal("none")
   const [sandboxHostBaseUrl, setSandboxHostBaseUrl] = createSignal("")
   const [sandboxWorkerImage, setSandboxWorkerImage] = createSignal("labrastro-host:test")
-  const [sandboxWorkspaceVolumeRoot, setSandboxWorkspaceVolumeRoot] = createSignal("ezcode-workspaces")
+  const [sandboxWorkspaceVolumeRoot, setSandboxWorkspaceVolumeRoot] = createSignal("labrastro-workspaces")
   const [sandboxNetwork, setSandboxNetwork] = createSignal("")
   const [sandboxCpuLimit, setSandboxCpuLimit] = createSignal("")
   const [sandboxMemoryLimit, setSandboxMemoryLimit] = createSignal("")
@@ -71,7 +71,7 @@ export const ServerSettingsTab: Component<TabProps> = (props) => {
     setSandboxType(stringValue(sandbox.type, "none"))
     setSandboxHostBaseUrl(stringValue(sandbox.host_base_url))
     setSandboxWorkerImage(stringValue(sandbox.worker_image, "labrastro-host:test"))
-    setSandboxWorkspaceVolumeRoot(stringValue(sandbox.workspace_volume_root, "ezcode-workspaces"))
+    setSandboxWorkspaceVolumeRoot(stringValue(sandbox.workspace_volume_root, "labrastro-workspaces"))
     setSandboxNetwork(stringValue(sandbox.network))
     setSandboxCpuLimit(stringValue(sandbox.cpu_limit))
     setSandboxMemoryLimit(stringValue(sandbox.memory_limit))
@@ -90,7 +90,7 @@ export const ServerSettingsTab: Component<TabProps> = (props) => {
           type: sandboxType(),
           host_base_url: sandboxHostBaseUrl().trim(),
           worker_image: sandboxWorkerImage().trim() || "labrastro-host:test",
-          workspace_volume_root: sandboxWorkspaceVolumeRoot().trim() || "ezcode-workspaces",
+          workspace_volume_root: sandboxWorkspaceVolumeRoot().trim() || "labrastro-workspaces",
           network: sandboxNetwork().trim(),
           cpu_limit: sandboxCpuLimit().trim(),
           memory_limit: sandboxMemoryLimit().trim(),
