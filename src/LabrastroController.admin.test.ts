@@ -9,6 +9,7 @@ const vscodeMock = vi.hoisted(() => ({
     onDidDelete: vi.fn(),
     dispose: vi.fn(),
   })),
+  executeCommand: vi.fn(async () => undefined),
 }))
 
 vi.mock("vscode", () => ({
@@ -18,7 +19,9 @@ vi.mock("vscode", () => ({
     workspaceFolders: [],
   },
   window: {},
-  commands: {},
+  commands: {
+    executeCommand: vscodeMock.executeCommand,
+  },
   languages: {},
   ViewColumn: { Active: -1 },
   Uri: {
@@ -233,5 +236,70 @@ describe("LabrastroController session run start", () => {
     expect((controller as unknown as {
       sessionRunCoordinator: { activeRun: unknown }
     }).sessionRunCoordinator.activeRun).toBeUndefined()
+  })
+
+  it("starts capability package ingestion as a session run", async () => {
+    const controller = new LabrastroController(context())
+    const capabilityPackageIngestSessionStart = vi.fn(async () => ({
+      session_run_id: "run-cap",
+      session_id: "session-cap",
+      runtime_state: {
+        workflow: "capability_package_ingest",
+        agent_id: "capability_packager",
+      },
+    }))
+    const prepareSessionRunSession = vi.fn(async () => ({ ok: true, sessionId: "session-cap" }))
+    const setActiveRun = vi.fn()
+    const consumeSessionRunEventStream = vi.fn(async () => undefined)
+    ;(controller as unknown as {
+      client: { capabilityPackageIngestSessionStart: typeof capabilityPackageIngestSessionStart }
+    }).client = { capabilityPackageIngestSessionStart }
+    ;(controller as unknown as {
+      sessionCoordinator: { prepareSessionRunSession: typeof prepareSessionRunSession }
+    }).sessionCoordinator = { prepareSessionRunSession }
+    ;(controller as unknown as {
+      sessionRunCoordinator: { setActiveRun: typeof setActiveRun; clearActiveRun: () => void }
+    }).sessionRunCoordinator = { setActiveRun, clearActiveRun: vi.fn() }
+    ;(controller as unknown as {
+      consumeSessionRunEventStream: typeof consumeSessionRunEventStream
+    }).consumeSessionRunEventStream = consumeSessionRunEventStream
+    const post = vi.fn()
+
+    await (controller as unknown as {
+      startCapabilityPackageIngestSession: (
+        message: Record<string, unknown>,
+        post: (message: Record<string, unknown>) => void,
+      ) => Promise<void>
+    }).startCapabilityPackageIngestSession({
+      type: "capabilityPackage.ingest.session.start",
+      payload: { source: { type: "github_repo", url: "https://github.com/acme/tool" } },
+    }, post)
+
+    expect(prepareSessionRunSession).toHaveBeenCalledWith(undefined, post, {
+      mode: "capability_package",
+      workflowMode: "capability_package_ingest",
+    })
+    expect(capabilityPackageIngestSessionStart).toHaveBeenCalledWith(expect.objectContaining({
+      session_id: "session-cap",
+      source: { type: "github_repo", url: "https://github.com/acme/tool" },
+    }))
+    expect(setActiveRun).toHaveBeenCalledWith(expect.objectContaining({
+      sessionRunId: "run-cap",
+      sessionId: "session-cap",
+      status: "running",
+    }))
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: "sessionRun.session",
+      sessionRunId: "run-cap",
+      sessionId: "session-cap",
+      runtimeState: {
+        workflow: "capability_package_ingest",
+        agent_id: "capability_packager",
+      },
+    }))
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: "capabilityPackage.ingest.session.started",
+    }))
+    expect(consumeSessionRunEventStream).toHaveBeenCalledWith("run-cap", "session-cap", post)
   })
 })

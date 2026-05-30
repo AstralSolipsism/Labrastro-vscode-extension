@@ -91,10 +91,62 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
 
   const [section, setSection] = createSignal<AgentConfigSection>("profiles")
   const profileIds = () => Object.keys(profileDrafts())
-  const agentIds = () => Object.keys(agentDrafts()).filter((id) => agentDrafts()[id]?.visibility === "user")
-  const systemAgentIds = () => Object.keys(agentDrafts()).filter((id) => agentDrafts()[id]?.visibility !== "user")
+  const agentIds = () => Object.keys(agentDrafts())
+  const currentAgentReadOnly = () => Boolean(currentAgentDraft() && currentAgentDraft()!.visibility !== "user")
   const mcpChoiceOptions = () => registeredMcpServers().map((id: string) => ({ id, label: id, kind: "MCP" }))
   const capabilityChoiceOptions = () => capabilityPackageOptions().map((id: string) => ({ id, label: id, kind: "能力包" }))
+  const readonlyValue = (value: unknown) => {
+    const text = String(value ?? "").trim()
+    return text || "—"
+  }
+  const readonlyBooleanValue = (value: unknown) => value ? "是" : "否"
+  const readonlyRoleLabel = (role: unknown) => {
+    switch (String(role || "")) {
+      case "coordinator":
+        return t("agentConfig.agent.role.coordinator")
+      case "worker":
+        return t("agentConfig.agent.role.worker")
+      case "reviewer":
+        return t("agentConfig.agent.role.reviewer")
+      case "environment":
+        return t("agentConfig.agent.role.environment")
+      default:
+        return readonlyValue(role)
+    }
+  }
+  const ReadonlyField: Component<{
+    label: string
+    value: () => unknown
+    help?: string
+    full?: boolean
+    multiline?: boolean
+  }> = (field) => (
+    <div
+      classList={{
+        "field-label": true,
+        "field-label--full": field.full === true,
+      }}
+      data-agent-config-readonly="true"
+    >
+      <span>{field.label}</span>
+      <Show
+        when={field.multiline === true}
+        fallback={<div class="settings-result settings-result--inline">{readonlyValue(field.value())}</div>}
+      >
+        <pre class="settings-result">{readonlyValue(field.value())}</pre>
+      </Show>
+      <Show when={field.help}>
+        <small class="field-help">{field.help}</small>
+      </Show>
+    </div>
+  )
+  const ReadonlyBooleanField: Component<{
+    label: string
+    value: () => unknown
+    help?: string
+  }> = (field) => (
+    <ReadonlyField label={field.label} value={() => readonlyBooleanValue(field.value())} help={field.help} />
+  )
   const renderCapabilityGroup = (label: string, items: any[], empty: string) => (
     <div class="settings-detail-section">
       <span>{label}</span>
@@ -340,95 +392,141 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
               renderItem={(aid) => (
                 <div class="settings-master-item__info">
                   <strong>{agentDrafts()[aid]?.name || aid}</strong>
-                  <small>{agentDrafts()[aid]?.runtime_profile || "—"}</small>
+                  <small>{agentDrafts()[aid]?.visibility} · {agentDrafts()[aid]?.runtime_profile || "—"}</small>
                 </div>
               )}
               renderAction={(aid) => (
-                <button class="btn-icon" type="button" onClick={() => deleteAgent(aid)} title={t("agentConfig.agent.delete")} aria-label={t("agentConfig.agent.delete")}>
-                  <span class="codicon codicon-trash" aria-hidden="true" />
-                </button>
+                <Show when={agentDrafts()[aid]?.visibility === "user"}>
+                  <button class="btn-icon" type="button" onClick={() => deleteAgent(aid)} title={t("agentConfig.agent.delete")} aria-label={t("agentConfig.agent.delete")}>
+                    <span class="codicon codicon-trash" aria-hidden="true" />
+                  </button>
+                </Show>
               )}
             />
-            <Show when={systemAgentIds().length > 0}>
-              <div class="settings-system-agent-list">
-                <small>{t("agentConfig.agent.systemAgents")}</small>
-                <For each={systemAgentIds()}>
-                  {(aid) => (
-                    <div class="settings-system-agent">
-                      <strong>{agentDrafts()[aid]?.name || aid}</strong>
-                      <span>{agentDrafts()[aid]?.visibility}</span>
-                    </div>
-                  )}
-                </For>
-              </div>
-            </Show>
           </div>
           <div class="settings-detail-panel">
             <Show when={currentAgentDraft()} fallback={<p class="settings-empty-note">{t("agentConfig.agent.noSelection")}</p>}>
               <div class="settings-form-grid">
-                <label class="field-label field-label--full"><span>{t("agentConfig.agent.id")}</span>
-                  <input
-                    value={currentAgentDraft()!.id}
-                    disabled={currentAgentIdLocked()}
-                    onChange={(e) => renameAgent(e.currentTarget.value, e.currentTarget)}
-                  />
-                  <small class="field-help">
-                    {currentAgentIdLocked() ? t("agentConfig.agent.idLocked") : t("agentConfig.agent.idHelp")}
-                  </small>
-                </label>
-                <label class="field-label"><span>{t("agentConfig.agent.name")}</span>
-                  <input ref={setAgentNameInput} value={currentAgentDraft()!.name} onInput={(e) => updateAgentField("name", e.currentTarget.value)} />
-                </label>
-                <label class="field-label"><span>{t("agentConfig.agent.description")}</span>
-                  <input value={currentAgentDraft()!.description} onInput={(e) => updateAgentField("description", e.currentTarget.value)} />
-                </label>
-                <label class="field-label"><span>{t("agentConfig.agent.role")}</span>
-                  <select value={currentAgentDraft()!.role} onChange={(e) => updateAgentField("role", e.currentTarget.value)}>
-                    <option value="coordinator">{t("agentConfig.agent.role.coordinator")}</option>
-                    <option value="worker">{t("agentConfig.agent.role.worker")}</option>
-                    <option value="reviewer">{t("agentConfig.agent.role.reviewer")}</option>
-                    <option value="environment">{t("agentConfig.agent.role.environment")}</option>
-                  </select>
-                  <small class="field-help">{t("agentConfig.agent.roleDesc")}</small>
-                </label>
-                <label class="field-label agent-config-toggle">
-                  <input
-                    type="checkbox"
-                    checked={currentAgentDraft()!.chat_entrypoint}
-                    onChange={(e) => updateAgentField("chat_entrypoint", e.currentTarget.checked)}
-                  />
-                  <span>{t("agentConfig.agent.entrypoint")}</span>
-                  <small class="field-help">{t("agentConfig.agent.entrypointDesc")}</small>
-                </label>
-                <label class="field-label agent-config-toggle">
-                  <input
-                    type="checkbox"
-                    checked={currentAgentDraft()!.delegable}
-                    onChange={(e) => updateAgentField("delegable", e.currentTarget.checked)}
-                  />
-                  <span>{t("agentConfig.agent.delegable")}</span>
-                  <small class="field-help">{t("agentConfig.agent.delegableDesc")}</small>
-                </label>
-                <label class="field-label agent-config-toggle">
-                  <input
-                    type="checkbox"
-                    checked={currentAgentDraft()!.taskflow_eligible}
-                    onChange={(e) => updateAgentField("taskflow_eligible", e.currentTarget.checked)}
-                  />
-                  <span>{t("agentConfig.agent.taskflowEligible")}</span>
-                  <small class="field-help">{t("agentConfig.agent.taskflowEligibleDesc")}</small>
-                </label>
+                <Show
+                  when={currentAgentReadOnly()}
+                  fallback={
+                    <label class="field-label field-label--full"><span>{t("agentConfig.agent.id")}</span>
+                      <input
+                        value={currentAgentDraft()!.id}
+                        disabled={currentAgentIdLocked()}
+                        onChange={(e) => renameAgent(e.currentTarget.value, e.currentTarget)}
+                      />
+                      <small class="field-help">
+                        {currentAgentIdLocked() ? t("agentConfig.agent.idLocked") : t("agentConfig.agent.idHelp")}
+                      </small>
+                    </label>
+                  }
+                >
+                  <ReadonlyField label={t("agentConfig.agent.id")} value={() => currentAgentDraft()!.id} help={t("agentConfig.agent.idLocked")} full />
+                </Show>
+                <Show
+                  when={currentAgentReadOnly()}
+                  fallback={
+                    <label class="field-label"><span>{t("agentConfig.agent.name")}</span>
+                      <input ref={setAgentNameInput} value={currentAgentDraft()!.name} onInput={(e) => updateAgentField("name", e.currentTarget.value)} />
+                    </label>
+                  }
+                >
+                  <ReadonlyField label={t("agentConfig.agent.name")} value={() => currentAgentDraft()!.name} />
+                </Show>
+                <Show
+                  when={currentAgentReadOnly()}
+                  fallback={
+                    <label class="field-label"><span>{t("agentConfig.agent.description")}</span>
+                      <input value={currentAgentDraft()!.description} onInput={(e) => updateAgentField("description", e.currentTarget.value)} />
+                    </label>
+                  }
+                >
+                  <ReadonlyField label={t("agentConfig.agent.description")} value={() => currentAgentDraft()!.description} />
+                </Show>
 
-                <label class="field-label"><span>{t("agentConfig.agent.runtimeProfile")}</span>
-                  <select value={currentAgentDraft()!.runtime_profile} onChange={(e) => updateAgentField("runtime_profile", e.currentTarget.value)}>
-                    <Show when={profileIdList().length === 0 || !currentAgentDraft()!.runtime_profile}>
-                      <option value="" disabled>{t("agentConfig.agent.runtimeProfile.required")}</option>
-                    </Show>
-                    <For each={profileIdList()}>{(pid) => <option value={pid}>{pid}</option>}</For>
-                  </select>
-                  <small class="field-help">{t("agentConfig.agent.runtimeProfileDesc")}</small>
-                </label>
-                <label class="field-label"><span>{t("agentConfig.agent.model")}</span>
+                <Show
+                  when={currentAgentReadOnly()}
+                  fallback={
+                    <label class="field-label"><span>{t("agentConfig.agent.role")}</span>
+                      <select value={currentAgentDraft()!.role} onChange={(e) => updateAgentField("role", e.currentTarget.value)}>
+                        <option value="coordinator">{t("agentConfig.agent.role.coordinator")}</option>
+                        <option value="worker">{t("agentConfig.agent.role.worker")}</option>
+                        <option value="reviewer">{t("agentConfig.agent.role.reviewer")}</option>
+                        <option value="environment">{t("agentConfig.agent.role.environment")}</option>
+                      </select>
+                      <small class="field-help">{t("agentConfig.agent.roleDesc")}</small>
+                    </label>
+                  }
+                >
+                  <ReadonlyField label={t("agentConfig.agent.role")} value={() => readonlyRoleLabel(currentAgentDraft()!.role)} help={t("agentConfig.agent.roleDesc")} />
+                </Show>
+                <Show
+                  when={currentAgentReadOnly()}
+                  fallback={
+                    <label class="field-label agent-config-toggle">
+                      <input
+                        type="checkbox"
+                        checked={currentAgentDraft()!.chat_entrypoint}
+                        onChange={(e) => updateAgentField("chat_entrypoint", e.currentTarget.checked)}
+                      />
+                      <span>{t("agentConfig.agent.entrypoint")}</span>
+                      <small class="field-help">{t("agentConfig.agent.entrypointDesc")}</small>
+                    </label>
+                  }
+                >
+                  <ReadonlyBooleanField label={t("agentConfig.agent.entrypoint")} value={() => currentAgentDraft()!.chat_entrypoint} help={t("agentConfig.agent.entrypointDesc")} />
+                </Show>
+                <Show
+                  when={currentAgentReadOnly()}
+                  fallback={
+                    <label class="field-label agent-config-toggle">
+                      <input
+                        type="checkbox"
+                        checked={currentAgentDraft()!.delegable}
+                        onChange={(e) => updateAgentField("delegable", e.currentTarget.checked)}
+                      />
+                      <span>{t("agentConfig.agent.delegable")}</span>
+                      <small class="field-help">{t("agentConfig.agent.delegableDesc")}</small>
+                    </label>
+                  }
+                >
+                  <ReadonlyBooleanField label={t("agentConfig.agent.delegable")} value={() => currentAgentDraft()!.delegable} help={t("agentConfig.agent.delegableDesc")} />
+                </Show>
+                <Show
+                  when={currentAgentReadOnly()}
+                  fallback={
+                    <label class="field-label agent-config-toggle">
+                      <input
+                        type="checkbox"
+                        checked={currentAgentDraft()!.taskflow_eligible}
+                        onChange={(e) => updateAgentField("taskflow_eligible", e.currentTarget.checked)}
+                      />
+                      <span>{t("agentConfig.agent.taskflowEligible")}</span>
+                      <small class="field-help">{t("agentConfig.agent.taskflowEligibleDesc")}</small>
+                    </label>
+                  }
+                >
+                  <ReadonlyBooleanField label={t("agentConfig.agent.taskflowEligible")} value={() => currentAgentDraft()!.taskflow_eligible} help={t("agentConfig.agent.taskflowEligibleDesc")} />
+                </Show>
+
+                <Show
+                  when={currentAgentReadOnly()}
+                  fallback={
+                    <label class="field-label"><span>{t("agentConfig.agent.runtimeProfile")}</span>
+                      <select value={currentAgentDraft()!.runtime_profile} onChange={(e) => updateAgentField("runtime_profile", e.currentTarget.value)}>
+                        <Show when={profileIdList().length === 0 || !currentAgentDraft()!.runtime_profile}>
+                          <option value="" disabled>{t("agentConfig.agent.runtimeProfile.required")}</option>
+                        </Show>
+                        <For each={profileIdList()}>{(pid) => <option value={pid}>{pid}</option>}</For>
+                      </select>
+                      <small class="field-help">{t("agentConfig.agent.runtimeProfileDesc")}</small>
+                    </label>
+                  }
+                >
+                  <ReadonlyField label={t("agentConfig.agent.runtimeProfile")} value={() => currentAgentDraft()!.runtime_profile} help={t("agentConfig.agent.runtimeProfileDesc")} />
+                </Show>
+                <label class="field-label"><span>{selectedAgentId() === "capability_packager" ? "能力包生成使用的模型" : t("agentConfig.agent.model")}</span>
                   <select value={currentAgentDraft()!.modelKey} onChange={(e) => updateAgentField("modelKey", e.currentTarget.value)}>
                     <option value="">{t("agentConfig.agent.model.none")}</option>
                     <For each={runtimeModelOptions()}>{(option) => (
@@ -439,39 +537,81 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
                     {runtimeModelOptions().length > 0 ? t("agentConfig.agent.model.help") : t("agentConfig.agent.model.empty")}
                   </small>
                 </label>
-                <label class="field-label"><span>{t("agentConfig.agent.maxConcurrentTasks")}</span>
-                  <input type="number" min="1" step="1" value={currentAgentDraft()!.max_concurrent_tasks} onInput={(e) => updateAgentField("max_concurrent_tasks", Math.max(1, Math.floor(Number(e.currentTarget.value) || 1)))} />
-                  <small class="field-help">{t("agentConfig.agent.maxConcurrentTasksDesc")}</small>
-                </label>
-                <label class="field-label field-label--full"><span>{t("agentConfig.agent.dispatchProfile")}</span>
-                  <textarea rows={5} value={currentAgentDraft()!.dispatchProfileText} onInput={(e) => updateAgentField("dispatchProfileText", e.currentTarget.value)} />
-                  <small class="field-help">{t("agentConfig.agent.dispatchProfileDesc")}</small>
-                </label>
-                <label class="field-label field-label--full"><span>{t("agentConfig.agent.dispatchExamples")}</span>
-                  <textarea rows={4} value={currentAgentDraft()!.dispatchExamplesText} onInput={(e) => updateAgentField("dispatchExamplesText", e.currentTarget.value)} />
-                  <small class="field-help">{t("agentConfig.agent.dispatchExamplesDesc")}</small>
-                </label>
-                <label class="field-label field-label--full"><span>{t("agentConfig.agent.dispatchAvoid")}</span>
-                  <textarea rows={3} value={currentAgentDraft()!.dispatchAvoidText} onInput={(e) => updateAgentField("dispatchAvoidText", e.currentTarget.value)} />
-                  <small class="field-help">{t("agentConfig.agent.dispatchAvoidDesc")}</small>
-                </label>
-                <label class="field-label field-label--full"><span>{t("agentConfig.agent.systemAppend")}</span>
-                  <textarea rows={4} value={currentAgentDraft()!.systemAppend} onInput={(e) => updateAgentField("systemAppend", e.currentTarget.value)} />
-                  <small class="field-help">{t("agentConfig.agent.systemAppendDesc")}</small>
-                </label>
-                <label class="field-label field-label--full"><span>{t("agentConfig.agent.capabilityRefs")}</span>
-                  <ChoiceMultiSelect
-                    ariaLabel={t("agentConfig.agent.capabilityRefs")}
-                    options={capabilityChoiceOptions()}
-                    valueText={currentAgentDraft()!.capabilityRefsText}
-                    delimiter=", "
-                    onChangeText={(next) => updateAgentField("capabilityRefsText", formatAgentConfigList(parseAgentConfigListText(next), ", "))}
-                    emptyMessage={t("agentConfig.agent.capabilityRefs.empty")}
-                    searchPlaceholder="搜索能力包"
-                    unknownLabel={t("agentConfig.choice.custom")}
-                  />
-                  <small class="field-help">{t("agentConfig.agent.capabilityRefsDesc")}</small>
-                </label>
+                <Show
+                  when={currentAgentReadOnly()}
+                  fallback={
+                    <label class="field-label"><span>{t("agentConfig.agent.maxConcurrentTasks")}</span>
+                      <input type="number" min="1" step="1" value={currentAgentDraft()!.max_concurrent_tasks} onInput={(e) => updateAgentField("max_concurrent_tasks", Math.max(1, Math.floor(Number(e.currentTarget.value) || 1)))} />
+                      <small class="field-help">{t("agentConfig.agent.maxConcurrentTasksDesc")}</small>
+                    </label>
+                  }
+                >
+                  <ReadonlyField label={t("agentConfig.agent.maxConcurrentTasks")} value={() => currentAgentDraft()!.max_concurrent_tasks} help={t("agentConfig.agent.maxConcurrentTasksDesc")} />
+                </Show>
+                <Show
+                  when={currentAgentReadOnly()}
+                  fallback={
+                    <label class="field-label field-label--full"><span>{t("agentConfig.agent.dispatchProfile")}</span>
+                      <textarea rows={5} value={currentAgentDraft()!.dispatchProfileText} onInput={(e) => updateAgentField("dispatchProfileText", e.currentTarget.value)} />
+                      <small class="field-help">{t("agentConfig.agent.dispatchProfileDesc")}</small>
+                    </label>
+                  }
+                >
+                  <ReadonlyField label={t("agentConfig.agent.dispatchProfile")} value={() => currentAgentDraft()!.dispatchProfileText} help={t("agentConfig.agent.dispatchProfileDesc")} full multiline />
+                </Show>
+                <Show
+                  when={currentAgentReadOnly()}
+                  fallback={
+                    <label class="field-label field-label--full"><span>{t("agentConfig.agent.dispatchExamples")}</span>
+                      <textarea rows={4} value={currentAgentDraft()!.dispatchExamplesText} onInput={(e) => updateAgentField("dispatchExamplesText", e.currentTarget.value)} />
+                      <small class="field-help">{t("agentConfig.agent.dispatchExamplesDesc")}</small>
+                    </label>
+                  }
+                >
+                  <ReadonlyField label={t("agentConfig.agent.dispatchExamples")} value={() => currentAgentDraft()!.dispatchExamplesText} help={t("agentConfig.agent.dispatchExamplesDesc")} full multiline />
+                </Show>
+                <Show
+                  when={currentAgentReadOnly()}
+                  fallback={
+                    <label class="field-label field-label--full"><span>{t("agentConfig.agent.dispatchAvoid")}</span>
+                      <textarea rows={3} value={currentAgentDraft()!.dispatchAvoidText} onInput={(e) => updateAgentField("dispatchAvoidText", e.currentTarget.value)} />
+                      <small class="field-help">{t("agentConfig.agent.dispatchAvoidDesc")}</small>
+                    </label>
+                  }
+                >
+                  <ReadonlyField label={t("agentConfig.agent.dispatchAvoid")} value={() => currentAgentDraft()!.dispatchAvoidText} help={t("agentConfig.agent.dispatchAvoidDesc")} full multiline />
+                </Show>
+                <Show
+                  when={currentAgentReadOnly()}
+                  fallback={
+                    <label class="field-label field-label--full"><span>{t("agentConfig.agent.systemAppend")}</span>
+                      <textarea rows={4} value={currentAgentDraft()!.systemAppend} onInput={(e) => updateAgentField("systemAppend", e.currentTarget.value)} />
+                      <small class="field-help">{t("agentConfig.agent.systemAppendDesc")}</small>
+                    </label>
+                  }
+                >
+                  <ReadonlyField label={t("agentConfig.agent.systemAppend")} value={() => currentAgentDraft()!.systemAppend} help={t("agentConfig.agent.systemAppendDesc")} full multiline />
+                </Show>
+                <Show
+                  when={currentAgentReadOnly()}
+                  fallback={
+                    <label class="field-label field-label--full"><span>{t("agentConfig.agent.capabilityRefs")}</span>
+                      <ChoiceMultiSelect
+                        ariaLabel={t("agentConfig.agent.capabilityRefs")}
+                        options={capabilityChoiceOptions()}
+                        valueText={currentAgentDraft()!.capabilityRefsText}
+                        delimiter=", "
+                        onChangeText={(next) => updateAgentField("capabilityRefsText", formatAgentConfigList(parseAgentConfigListText(next), ", "))}
+                        emptyMessage={t("agentConfig.agent.capabilityRefs.empty")}
+                        searchPlaceholder="搜索能力包"
+                        unknownLabel={t("agentConfig.choice.custom")}
+                      />
+                      <small class="field-help">{t("agentConfig.agent.capabilityRefsDesc")}</small>
+                    </label>
+                  }
+                >
+                  <ReadonlyField label={t("agentConfig.agent.capabilityRefs")} value={() => currentAgentDraft()!.capabilityRefsText} help={t("agentConfig.agent.capabilityRefsDesc")} full />
+                </Show>
                 <Show when={selectedAgentCapabilityPackages().length > 0}>
                   <div class="settings-detail-section field-label--full">
                     <span>{t("agentConfig.agent.capabilityPackagesPreview")}</span>
@@ -491,14 +631,28 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
                     {t("agentConfig.advanced")}
                   </summary>
                   <div class="settings-form-grid">
-                    <label class="field-label field-label--full"><span>{t("agentConfig.agent.credentialRefs")}</span>
-                      <textarea rows={3} value={currentAgentDraft()!.credentialRefsText} onInput={(e) => updateAgentField("credentialRefsText", e.currentTarget.value)} placeholder={t("agentConfig.agent.credentialRefsPlaceholder")} />
-                      <small class="field-help">{t("agentConfig.agent.credentialRefsDesc")}</small>
-                    </label>
-                    <label class="field-label field-label--full"><span>{t("agentConfig.agent.systemFlowOnly")}</span>
-                      <textarea rows={3} value={currentAgentDraft()!.systemFlowOnlyText} onInput={(e) => updateAgentField("systemFlowOnlyText", e.currentTarget.value)} />
-                      <small class="field-help">{t("agentConfig.agent.systemFlowOnlyDesc")}</small>
-                    </label>
+                    <Show
+                      when={currentAgentReadOnly()}
+                      fallback={
+                        <label class="field-label field-label--full"><span>{t("agentConfig.agent.credentialRefs")}</span>
+                          <textarea rows={3} value={currentAgentDraft()!.credentialRefsText} onInput={(e) => updateAgentField("credentialRefsText", e.currentTarget.value)} placeholder={t("agentConfig.agent.credentialRefsPlaceholder")} />
+                          <small class="field-help">{t("agentConfig.agent.credentialRefsDesc")}</small>
+                        </label>
+                      }
+                    >
+                      <ReadonlyField label={t("agentConfig.agent.credentialRefs")} value={() => currentAgentDraft()!.credentialRefsText} help={t("agentConfig.agent.credentialRefsDesc")} full multiline />
+                    </Show>
+                    <Show
+                      when={currentAgentReadOnly()}
+                      fallback={
+                        <label class="field-label field-label--full"><span>{t("agentConfig.agent.systemFlowOnly")}</span>
+                          <textarea rows={3} value={currentAgentDraft()!.systemFlowOnlyText} onInput={(e) => updateAgentField("systemFlowOnlyText", e.currentTarget.value)} />
+                          <small class="field-help">{t("agentConfig.agent.systemFlowOnlyDesc")}</small>
+                        </label>
+                      }
+                    >
+                      <ReadonlyField label={t("agentConfig.agent.systemFlowOnly")} value={() => currentAgentDraft()!.systemFlowOnlyText} help={t("agentConfig.agent.systemFlowOnlyDesc")} full multiline />
+                    </Show>
                   </div>
                 </details>
               </div>

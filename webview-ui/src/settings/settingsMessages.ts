@@ -117,23 +117,7 @@ export const settingsMessages = {
   },
 
   startCapabilityPackageIngest(port: SettingsMessagePort, payload: Record<string, unknown>): void {
-    port.postMessage({ type: "capabilityPackage.ingest.start", payload })
-  },
-
-  capabilityPackageIngestStatus(port: SettingsMessagePort, agentRunId: string): void {
-    port.postMessage({ type: "capabilityPackage.ingest.status", payload: { agent_run_id: agentRunId } })
-  },
-
-  acceptCapabilityPackageDraft(
-    port: SettingsMessagePort,
-    draft: Record<string, unknown>,
-    sourceBundle?: Record<string, unknown>,
-  ): void {
-    const payload: Record<string, unknown> = { draft }
-    if (sourceBundle && Object.keys(sourceBundle).length) {
-      payload.source_bundle = sourceBundle
-    }
-    port.postMessage({ type: "capabilityPackage.draft.accept", payload })
+    port.postMessage({ type: "capabilityPackage.ingest.session.start", payload })
   },
 
   deleteCapabilityPackage(port: SettingsMessagePort, packageId: string): void {

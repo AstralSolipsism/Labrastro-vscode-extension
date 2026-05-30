@@ -749,7 +749,41 @@ function profileDraftToPayload(draft: RuntimeProfileDraft): Record<string, unkno
 }
 
 /** 将 draft 转回后端 agent payload 格式 */
-function agentDraftToPayload(draft: AgentDefinitionDraft): Record<string, unknown> {
+function modelParametersFromProfile(profile: Record<string, unknown>): Record<string, unknown> {
+  const parameters: Record<string, unknown> = {}
+  for (const key of [
+    "max_tokens",
+    "max_context_tokens",
+    "temperature",
+    "preserve_reasoning_content",
+    "backfill_reasoning_content_for_tool_calls",
+    "reasoning_effort",
+    "thinking_enabled",
+    "reasoning_replay_mode",
+    "reasoning_replay_placeholder",
+  ]) {
+    const value = profile[key]
+    if (value !== undefined && value !== null && value !== "") parameters[key] = value
+  }
+  return parameters
+}
+
+function agentModelPayload(
+  draft: AgentDefinitionDraft,
+  modelParametersByKey: Record<string, Record<string, unknown>> = {},
+): Record<string, unknown> | undefined {
+  const [providerId, modelId] = splitModelOptionKey(draft.modelKey)
+  if (!providerId || !modelId) return undefined
+  const modelPayload: Record<string, unknown> = { provider: providerId, model: modelId }
+  const parameters = modelParametersByKey[draft.modelKey]
+  if (parameters && Object.keys(parameters).length) modelPayload.parameters = parameters
+  return modelPayload
+}
+
+function agentDraftToPayload(
+  draft: AgentDefinitionDraft,
+  modelParametersByKey: Record<string, Record<string, unknown>> = {},
+): Record<string, unknown> {
   const payload: Record<string, unknown> = {
     name: draft.name || draft.id,
     max_concurrent_tasks: Math.max(1, Math.floor(draft.max_concurrent_tasks)),
@@ -764,8 +798,8 @@ function agentDraftToPayload(draft: AgentDefinitionDraft): Record<string, unknow
   const systemFlowOnly = parseAgentConfigListText(draft.systemFlowOnlyText)
   if (systemFlowOnly.length) payload.system_flow_only = systemFlowOnly
   if (draft.runtime_profile) payload.runtime_profile = draft.runtime_profile
-  const [providerId, modelId] = splitModelOptionKey(draft.modelKey)
-  if (providerId && modelId) payload.model = { provider: providerId, model: modelId }
+  const modelPayload = agentModelPayload(draft, modelParametersByKey)
+  if (modelPayload) payload.model = modelPayload
   const dispatch: Record<string, unknown> = {}
   if (draft.dispatchProfileText.trim()) dispatch.profile = draft.dispatchProfileText.trim()
   const dispatchExamples = parseAgentConfigListText(draft.dispatchExamplesText)
@@ -781,6 +815,23 @@ function agentDraftToPayload(draft: AgentDefinitionDraft): Record<string, unknow
   if (capabilityRefs.length) payload.capability_refs = capabilityRefs
   const credRefs = textToKvObject(draft.credentialRefsText)
   if (Object.keys(credRefs).length) payload.credential_refs = credRefs
+  return payload
+}
+
+function systemAgentDraftToPayload(
+  draft: AgentDefinitionDraft,
+  original: Record<string, unknown> | undefined,
+  modelParametersByKey: Record<string, Record<string, unknown>> = {},
+): Record<string, unknown> {
+  if (!original) return agentDraftToPayload(draft, modelParametersByKey)
+  const payload: Record<string, unknown> = { ...original }
+  delete payload.id
+  const modelPayload = agentModelPayload(draft, modelParametersByKey)
+  if (modelPayload) {
+    payload.model = modelPayload
+  } else {
+    delete payload.model
+  }
   return payload
 }
 
@@ -828,6 +879,7 @@ const settingsTabDefs: Array<{ id: SettingsTab; labelKey: string; icon: string }
   { id: "autoApproval", labelKey: "settings.tab.autoApproval", icon: "shield" },
   { id: "serverSettings", labelKey: "settings.tab.serverSettings", icon: "server-environment" },
   { id: "integrations", labelKey: "settings.tab.integrations", icon: "plug" },
+  { id: "other", labelKey: "settings.tab.other", icon: "settings" },
   { id: "diagnostics", labelKey: "settings.tab.diagnostics", icon: "pulse" },
   { id: "accounts", labelKey: "settings.tab.accounts", icon: "account" },
 ]
@@ -854,10 +906,10 @@ export function normalizeSettingsTab(value: unknown): SettingsTab | undefined {
       return "autoApproval"
     case "integrations":
       return "integrations"
+    case "other":
+      return "other"
     case "diagnostics":
       return "diagnostics"
-    case "other":
-      return "conversation"
 
     default:
       return undefined
@@ -2671,6 +2723,17 @@ export function createSettingsController(props: SettingsViewProps) {
     }
     return result
   })
+  const modelParametersByKey = createMemo(() => {
+    const result: Record<string, Record<string, unknown>> = {}
+    for (const item of profiles()) {
+      const provider = stringValue(item.provider_id || item.provider)
+      const model = stringValue(item.model_id || item.model || item.id)
+      const key = modelOptionKey(provider, model)
+      if (!provider || !model || result[key]) continue
+      result[key] = modelParametersFromProfile(item)
+    }
+    return result
+  })
   const profileMcpValidationWarnings = createMemo(() => {
     const draft = currentProfileDraft()
     if (!draft) return []
@@ -2795,8 +2858,6 @@ export function createSettingsController(props: SettingsViewProps) {
   })
 
   let agentRunPollTimer: ReturnType<typeof setInterval> | undefined
-  let capabilityIngestPollTimer: ReturnType<typeof setInterval> | undefined
-
   const stopAgentRunPolling = () => {
     if (agentRunPollTimer) {
       clearInterval(agentRunPollTimer)
@@ -2822,24 +2883,6 @@ export function createSettingsController(props: SettingsViewProps) {
   }
 
   onCleanup(stopAgentRunPolling)
-
-  const stopCapabilityIngestPolling = () => {
-    if (capabilityIngestPollTimer) {
-      clearInterval(capabilityIngestPollTimer)
-      capabilityIngestPollTimer = undefined
-    }
-  }
-
-  const startCapabilityIngestPolling = (agentRunId: string) => {
-    stopCapabilityIngestPolling()
-    if (!agentRunId) return
-    settingsMessages.capabilityPackageIngestStatus(vscode, agentRunId)
-    capabilityIngestPollTimer = setInterval(() => {
-      settingsMessages.capabilityPackageIngestStatus(vscode, agentRunId)
-    }, 2000)
-  }
-
-  onCleanup(stopCapabilityIngestPolling)
 
   onMount(() => {
     const unsubscribe = vscode.onMessage((msg) => {
@@ -2956,44 +2999,16 @@ export function createSettingsController(props: SettingsViewProps) {
         stopAgentRunPolling()
         setAgentRunError(message || "Runtime request failed")
       }
-      if (msg.type === "capabilityPackage.ingest.started" && typeof msg.payload === "object" && msg.payload) {
-        const payload = objectValue(msg.payload)
-        const task = objectValue(payload.agent_run)
-        const agentRunId = stringValue(task.id || task.agent_run_id)
+      if (msg.type === "capabilityPackage.ingest.session.started" && typeof msg.payload === "object" && msg.payload) {
         markOperationSuccess("capabilityIngestStart")
         setCapabilityPackageIngestState((current) => ({
           ...current,
-          running: true,
-          agentRunId,
-          status: stringValue(task.status, "queued"),
-          source: objectValue(payload.source),
-          sourceBundle: objectValue(payload.source_bundle),
+          running: false,
+          status: "session_started",
           draft: undefined,
           validationMessages: [],
           error: "",
         }))
-        if (agentRunId) startCapabilityIngestPolling(agentRunId)
-      }
-      if (msg.type === "capabilityPackage.ingest.status" && typeof msg.payload === "object" && msg.payload) {
-        const payload = objectValue(msg.payload)
-        const task = objectValue(payload.agent_run)
-        const status = stringValue(task.status, "queued")
-        const draft = objectValue(payload.draft)
-        const sourceBundle = objectValue(payload.source_bundle)
-        markOperationSuccess("capabilityIngestStatus")
-        setCapabilityPackageIngestState((current) => ({
-          ...current,
-          running: !["completed", "failed", "cancelled", "blocked"].includes(status),
-          agentRunId: stringValue(task.id || task.agent_run_id, current.agentRunId),
-          status,
-          draft: Object.keys(draft).length ? draft : current.draft,
-          sourceBundle: Object.keys(sourceBundle).length ? sourceBundle : current.sourceBundle,
-          validationMessages: stringArray(objectValue(payload.validation).messages),
-          error: "",
-        }))
-        if (["completed", "failed", "cancelled", "blocked"].includes(status)) {
-          stopCapabilityIngestPolling()
-        }
       }
       if (msg.type === "capabilityPackage.actionResult") {
         setCapabilityPackageIngestState((current) => ({
@@ -3004,8 +3019,6 @@ export function createSettingsController(props: SettingsViewProps) {
       }
       if (msg.type === "capabilityPackage.error") {
         if (operationBusy("capabilityIngestStart")) markOperationError("capabilityIngestStart", message)
-        if (operationBusy("capabilityIngestStatus")) markOperationError("capabilityIngestStatus", message)
-        stopCapabilityIngestPolling()
         const payload = objectValue(msg.payload)
         const validationMessages = [
           ...stringArray(msg.messages),
@@ -3067,7 +3080,7 @@ export function createSettingsController(props: SettingsViewProps) {
       if (agent.visibility === "user" && !agent.runtime_profile) {
         throw new Error(`Agent ${id} 必须选择 Runtime Profile。`)
       }
-      if (agent.runtime_profile && !profiles[agent.runtime_profile]) {
+      if (agent.visibility === "user" && agent.runtime_profile && !profiles[agent.runtime_profile]) {
         throw new Error(`Agent ${id} 引用的 Runtime Profile 不存在：${agent.runtime_profile}`)
       }
       if (
@@ -3091,8 +3104,12 @@ export function createSettingsController(props: SettingsViewProps) {
         profiles[id] = profileDraftToPayload(draft)
       }
       agents = {}
+      const modelParameters = modelParametersByKey()
+      const originalAgents = Object.fromEntries(agentRunsAgents().map((agent) => [agent.id, agent]))
       for (const [id, draft] of Object.entries(agentDrafts())) {
-        agents[id] = agentDraftToPayload(draft)
+        agents[id] = draft.visibility === "user"
+          ? agentDraftToPayload(draft, modelParameters)
+          : systemAgentDraftToPayload(draft, originalAgents[id], modelParameters)
       }
     } catch (error) {
       setAgentConfigError(error instanceof Error ? error.message : String(error))
@@ -3621,7 +3638,7 @@ export function createSettingsController(props: SettingsViewProps) {
     setCapabilityPackageIngestState({
       running: true,
       agentRunId: "",
-      status: "starting",
+      status: "opening_session",
       error: "",
       validationMessages: [],
       draft: undefined,
@@ -3636,18 +3653,6 @@ export function createSettingsController(props: SettingsViewProps) {
         package_id_hint: capabilityPackageIdHint().trim(),
       },
     })
-  }
-  const refreshCapabilityPackageIngestStatus = () => {
-    const agentRunId = capabilityPackageIngestState().agentRunId
-    if (!agentRunId) return
-    if (operationBusy("capabilityIngestStatus")) return
-    markOperationStarted("capabilityIngestStatus", "loading")
-    settingsMessages.capabilityPackageIngestStatus(vscode, agentRunId)
-  }
-  const acceptCapabilityPackageDraft = () => {
-    const draft = capabilityPackageIngestState().draft
-    if (!draft) return
-    settingsMessages.acceptCapabilityPackageDraft(vscode, draft, capabilityPackageIngestState().sourceBundle)
   }
   const deleteCapabilityPackage = (packageId: string) => {
     if (!packageId || packageId === "environment") return
@@ -4265,7 +4270,6 @@ export function createSettingsController(props: SettingsViewProps) {
     capabilityPackageIdHint,
     setCapabilityPackageIdHint,
     capabilityPackageIngestState,
-    setCapabilityPackageIngestState,
     capabilityRunSerial,
     setCapabilityRunSerial,
     serverMaxRunningAgents,
@@ -4467,8 +4471,6 @@ export function createSettingsController(props: SettingsViewProps) {
     enableCapability,
     deleteCapabilityRecord,
     startCapabilityPackageIngest,
-    refreshCapabilityPackageIngestStatus,
-    acceptCapabilityPackageDraft,
     deleteCapabilityPackage,
     enableCapabilityPackage,
     updateAutoApproval,

@@ -45,10 +45,8 @@ function normalizeProviderCompat(value: unknown): ProviderCompat {
 
 export const ProvidersTab: Component<TabProps> = (props) => {
   const {
-    operations,
     pageRefreshing,
     refreshPage,
-    serverSettingsSaveBusy,
     providerWriteBusy,
     providerModelRefreshBusy,
     server,
@@ -62,9 +60,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
     providerId,
     selectProvider,
     stringValue,
-    objectValue,
     numberValue,
-    formatTimestamp,
     providerBaseUrl,
     providerEnabled,
     selectedProvider,
@@ -112,9 +108,6 @@ export const ProvidersTab: Component<TabProps> = (props) => {
     setReasoningEffort,
     thinkingEnabled,
     setThinkingEnabled,
-    modelCapabilitiesStatus,
-    refreshModelCapabilities,
-    saveCapabilitySyncSettings,
     modelCapabilityRecommendation,
     applyModelCapabilityRecommendation,
     saveModelPreset,
@@ -131,9 +124,6 @@ export const ProvidersTab: Component<TabProps> = (props) => {
   const [copiedModelId, setCopiedModelId] = createSignal("")
   const [apiKeyDisplay, setApiKeyDisplay] = createSignal("")
   const [apiKeyDisplaySource, setApiKeyDisplaySource] = createSignal("")
-  const [capabilitySyncDirty, setCapabilitySyncDirty] = createSignal(false)
-  const [capabilitySyncEnabled, setCapabilitySyncEnabled] = createSignal(true)
-  const [capabilitySyncIntervalSec, setCapabilitySyncIntervalSec] = createSignal(86400)
   let kindSelectorRef: HTMLDivElement | undefined
   let kindSearchRef: HTMLInputElement | undefined
   let customModelInputRef: HTMLInputElement | undefined
@@ -194,62 +184,8 @@ export const ProvidersTab: Component<TabProps> = (props) => {
     if (id === "__error__") return "当前环境不能直接访问剪贴板。"
     return `已复制 ${id}`
   })
-  const capabilityStatus = createMemo(() => modelCapabilitiesStatus ? modelCapabilitiesStatus() : {})
-  const serverSettings = createMemo(() => {
-    const direct = objectValue(server.serverSettingsState()?.settings)
-    if (Object.keys(direct).length > 0) return direct
-    return {}
-  })
-  const capabilitySettings = createMemo(() => objectValue(serverSettings().model_capabilities))
-  const capabilityUpdatedAt = createMemo(() => stringValue(capabilityStatus().updated_at))
-  const capabilitySources = createMemo(() => {
-    const raw = capabilityStatus().sources
-    if (!Array.isArray(raw)) return []
-    return raw
-      .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
-      .map((item) => stringValue(item.source))
-      .filter(Boolean)
-  })
-  const capabilityError = createMemo(() => stringValue(server.modelCapabilitiesError?.()))
   const recommendation = createMemo(() => modelCapabilityRecommendation ? modelCapabilityRecommendation() : {})
   const recommendationAvailable = createMemo(() => Object.keys(recommendation()).length > 0)
-  const capabilitySyncIntervalPreset = createMemo(() => {
-    const interval = capabilitySyncIntervalSec()
-    if (interval === 86400 || interval === 43200 || interval === 3600) return String(interval)
-    return "custom"
-  })
-  const capabilitySyncIntervalLabel = createMemo(() => {
-    const preset = capabilitySyncIntervalPreset()
-    if (preset === "86400") return "每日"
-    if (preset === "43200") return "每 12 小时"
-    if (preset === "3600") return "每小时"
-    return `${capabilitySyncIntervalSec()} 秒`
-  })
-
-  createEffect(() => {
-    if (capabilitySyncDirty()) return
-    const settings = capabilitySettings()
-    setCapabilitySyncEnabled(settings.enabled !== false)
-    setCapabilitySyncIntervalSec(Math.max(60, Math.floor(numberValue(settings.interval_sec, 86400))))
-  })
-
-  const updateCapabilitySync = (patch: { enabled?: boolean; intervalSec?: number }) => {
-    if (patch.enabled !== undefined) setCapabilitySyncEnabled(patch.enabled)
-    if (patch.intervalSec !== undefined) setCapabilitySyncIntervalSec(Math.max(60, Math.floor(patch.intervalSec)))
-    setCapabilitySyncDirty(true)
-  }
-
-  const saveCapabilitySync = () => {
-    saveCapabilitySyncSettings({
-      settings: {
-        model_capabilities: {
-          enabled: capabilitySyncEnabled(),
-          interval_sec: Math.max(60, Math.floor(capabilitySyncIntervalSec())),
-        },
-      },
-    })
-    setCapabilitySyncDirty(false)
-  }
   const modelCapabilityFlags = (model: {
     supports_tools?: unknown
     supports_reasoning?: unknown
@@ -731,67 +667,6 @@ export const ProvidersTab: Component<TabProps> = (props) => {
                 </RefreshButton>
               </SettingsActionRail>
             </div>
-            <div class="model-capability-sync">
-              <div class="model-capability-sync__meta">
-                <span>模型能力同步</span>
-                <small>
-                  {numberValue(capabilityStatus().model_count, 0)} 个模型 · 最近同步 {formatTimestamp(capabilityUpdatedAt())}
-                </small>
-                <small>
-                  后台同步：{capabilitySyncEnabled() ? "开启" : "关闭"} · 周期 {capabilitySyncIntervalLabel()}
-                </small>
-                <Show when={capabilitySources().length}>
-                  <small>来源：{capabilitySources().join(" / ")}</small>
-                </Show>
-              </div>
-              <label class="field-label field-label--checkbox">
-                <input
-                  type="checkbox"
-                  checked={capabilitySyncEnabled()}
-                  onChange={(event) => updateCapabilitySync({ enabled: event.currentTarget.checked })}
-                />
-                <span>每日后台同步</span>
-              </label>
-              <label class="field-label model-capability-sync__interval">
-                <span>同步周期</span>
-                <select
-                  value={capabilitySyncIntervalPreset()}
-                  onChange={(event) => {
-                    const value = event.currentTarget.value
-                    if (value !== "custom") updateCapabilitySync({ intervalSec: Number(value) })
-                  }}
-                >
-                  <option value="86400">每日</option>
-                  <option value="43200">每 12 小时</option>
-                  <option value="3600">每小时</option>
-                  <option value="custom">自定义</option>
-                </select>
-                <Show when={capabilitySyncIntervalPreset() === "custom"}>
-                  <input
-                    type="number"
-                    min="60"
-                    value={capabilitySyncIntervalSec()}
-                    onInput={(event) => updateCapabilitySync({ intervalSec: Number(event.currentTarget.value) || 60 })}
-                  />
-                </Show>
-              </label>
-              <button class="btn btn-secondary" type="button" disabled={!capabilitySyncDirty() || serverSettingsSaveBusy() || providerActionBusy()} onClick={saveCapabilitySync}>
-                <span class="codicon codicon-save" aria-hidden="true" />
-                保存同步设置
-              </button>
-              <RefreshButton
-                class="btn-secondary"
-                icon="sync"
-                onClick={() => refreshModelCapabilities()}
-                disabled={!adminUsable() || providerActionBusy()}
-                loading={operations.isBusy("modelCapabilities")}
-              >
-                同步能力表
-              </RefreshButton>
-            </div>
-            <Show when={capabilityError()}>
-              <p class="settings-empty-note settings-empty-note--error">{capabilityError()}</p>
-            </Show>
             <Show when={customModelInlineOpen()}>
               <div id="provider-custom-model-form" class="settings-inline-form provider-custom-model-inline">
                 <input

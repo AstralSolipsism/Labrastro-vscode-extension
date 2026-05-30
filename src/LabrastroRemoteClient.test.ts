@@ -333,7 +333,6 @@ function remoteContractFixtures(): Array<{
     path.resolve(__dirname, "..", "..", relativeContractPath),
     path.resolve(__dirname, "..", "..", "Labrastro", relativeContractPath),
     path.resolve(__dirname, "..", "..", "ReuleauxCoder", relativeContractPath),
-    path.resolve(__dirname, "..", "..", "ezcode", relativeContractPath),
   ]
   const contractPath = candidates.find((candidate) => fsSync.existsSync(candidate))
   if (!contractPath) {
@@ -1185,6 +1184,58 @@ describe("LabrastroRemoteClient session run start", () => {
       parameters: { max_context_tokens: 1000000 },
       locale: "zh-CN",
       mentions: [{ kind: "file", name: "README.md", path: "README.md" }],
+    })
+  })
+
+  it("starts capability package ingestion sessions with bearer auth and peer token", async () => {
+    vscodeMock.labrastroValue = "http://127.0.0.1:8765"
+    const context = {
+      secrets: {
+        get: vi.fn(async () => undefined),
+      },
+    }
+    let postedBody: Record<string, unknown> | undefined
+    let authorization = ""
+    let pathname = ""
+    const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
+      pathname = new URL(String(input)).pathname
+      authorization = String((init?.headers as Record<string, string>)?.Authorization || "")
+      postedBody = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>
+      return new Response(JSON.stringify({ session_run_id: "run-cap", session_id: "session-cap" }), {
+        headers: { "Content-Type": "application/json" },
+      })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    const client = new LabrastroRemoteClient(context as never)
+    ;(client as unknown as { accessToken: string; accessTokenExpiresAt: number }).accessToken = "access-1"
+    ;(client as unknown as { accessTokenExpiresAt: number }).accessTokenExpiresAt = Date.now() / 1000 + 3600
+    ;(client as unknown as { peerInfo: { peer_id: string; peer_token: string } }).peerInfo = {
+      peer_id: "peer-1",
+      peer_token: "peer-token-1",
+    }
+    const peerProcess = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter
+      stderr: EventEmitter
+      exitCode: number | null
+      kill: ReturnType<typeof vi.fn>
+    }
+    peerProcess.stdout = new EventEmitter()
+    peerProcess.stderr = new EventEmitter()
+    peerProcess.exitCode = null
+    peerProcess.kill = vi.fn()
+    ;(client as unknown as { peerProcess: typeof peerProcess }).peerProcess = peerProcess
+
+    await expect(client.capabilityPackageIngestSessionStart({
+      session_id: "session-cap",
+      source: { type: "github_repo", url: "https://github.com/acme/tool" },
+    })).resolves.toMatchObject({ session_run_id: "run-cap" })
+
+    expect(pathname).toBe("/remote/admin/capability-packages/ingest/session/start")
+    expect(authorization).toBe("Bearer access-1")
+    expect(postedBody).toMatchObject({
+      peer_token: "peer-token-1",
+      session_id: "session-cap",
+      source: { type: "github_repo", url: "https://github.com/acme/tool" },
     })
   })
 

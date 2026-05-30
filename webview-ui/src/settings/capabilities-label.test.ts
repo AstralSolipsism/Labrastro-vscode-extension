@@ -40,11 +40,13 @@ describe("capabilities settings label", () => {
     expect(agentToolPermissionLabel("deny")).toBe("未授权")
   })
 
-  it("splits behavior management into clear catalog tabs", () => {
+  it("keeps capability packages as the lifecycle entry and avoids flat dependency tabs", () => {
     const labels = CAPABILITY_SECTIONS.map((section) => section.label)
-    expect(labels).toEqual(["能力", "能力包", "能力依赖", "行为管理", "运行日志"])
+    expect(labels).toEqual(["能力", "能力包", "行为管理"])
     expect(labels).not.toContain("环境看板")
     expect(labels).not.toContain("环境依赖")
+    expect(labels).not.toContain("能力依赖")
+    expect(labels).not.toContain("运行日志")
     expect(labels).not.toContain("行为" + "目录")
     expect(labels).toContain("能力包")
     expect(labels).not.toContain("组件清单")
@@ -58,6 +60,10 @@ describe("capabilities settings label", () => {
     expect(capabilitiesTabSource).toContain("groupCapabilityPackageComponents")
     expect(capabilitiesTabSource).toContain("提供的能力")
     expect(capabilitiesTabSource).toContain("所需能力依赖")
+    expect(capabilitiesTabSource).toContain("检查该包依赖")
+    expect(capabilitiesTabSource).toContain("配置该包依赖")
+    expect(capabilitiesTabSource).toContain("全部能力依赖资源")
+    expect(capabilitiesTabSource).toContain("运行日志")
     expect(capabilitiesTabSource).toContain("Agent 不可用")
     expect(capabilitiesTabSource).toContain("安装路径")
     expect(capabilitiesTabSource).toContain("来源路径")

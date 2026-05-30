@@ -271,10 +271,10 @@ describe("settings utils", () => {
     })
   })
 
-  it("normalizes settings tab ids with legacy other compatibility", () => {
+  it("normalizes settings tab ids including the dedicated other page", () => {
     expect(normalizeSettingsTab("conversation")).toBe("conversation")
     expect(normalizeSettingsTab("diagnostics")).toBe("diagnostics")
-    expect(normalizeSettingsTab("other")).toBe("conversation")
+    expect(normalizeSettingsTab("other")).toBe("other")
     expect(normalizeSettingsTab("unknown")).toBeUndefined()
   })
 

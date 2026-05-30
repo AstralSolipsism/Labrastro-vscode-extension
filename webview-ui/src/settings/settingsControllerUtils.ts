@@ -11,6 +11,7 @@ export type SettingsTab =
   | "agentConfig"
   | "autoApproval"
   | "integrations"
+  | "other"
   | "diagnostics"
 
 export function normalizeSettingsTab(value: unknown): SettingsTab | undefined {
@@ -35,10 +36,10 @@ export function normalizeSettingsTab(value: unknown): SettingsTab | undefined {
       return "autoApproval"
     case "integrations":
       return "integrations"
+    case "other":
+      return "other"
     case "diagnostics":
       return "diagnostics"
-    case "other":
-      return "conversation"
     default:
       return undefined
   }

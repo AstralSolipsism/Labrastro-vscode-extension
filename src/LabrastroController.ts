@@ -330,6 +330,7 @@ export class LabrastroController implements vscode.Disposable {
         stringValue(payload.sessionId) ||
         stringValue(payload.session_id)
       const statusValue = stringValue(status.status) || stringValue(payload.status) || "running"
+      const runtimeState = objectValue(status.runtime_state || status.runtimeState)
       if (isTerminalSessionRunStatus(statusValue) && approvals.length === 0) {
         this.sessionRunCoordinator.clearActiveRun()
         return undefined
@@ -347,6 +348,8 @@ export class LabrastroController implements vscode.Disposable {
         sessionId,
         session_id: sessionId,
         status: statusValue,
+        runtimeState,
+        runtime_state: runtimeState,
         approvals,
       }
     } catch (error) {
@@ -430,6 +433,10 @@ export class LabrastroController implements vscode.Disposable {
   ): Promise<boolean> {
     if (message.type === "workspace.files.search") {
       await this.searchWorkspaceFiles(message, post)
+      return true
+    }
+    if (message.type === "capabilityPackage.ingest.session.start") {
+      await this.startCapabilityPackageIngestSession(message, post)
       return true
     }
     if (await this.adminCoordinator.handleMessage(message, post)) return true
@@ -1324,6 +1331,62 @@ export class LabrastroController implements vscode.Disposable {
     }
   }
 
+  private async startCapabilityPackageIngestSession(
+    message: WebviewToHostMessage,
+    post: PostMessage
+  ): Promise<void> {
+    try {
+      await vscode.commands.executeCommand("workbench.view.extension.labrastro-ActivityBar")
+      const payload = objectValue(message.payload)
+      const preparedSession = await this.sessionCoordinator.prepareSessionRunSession(
+        stringValue(payload.session_id) || stringValue(payload.sessionId),
+        post,
+        {
+          mode: "capability_package",
+          workflowMode: "capability_package_ingest",
+        }
+      )
+      if (!preparedSession.ok) return
+      const sessionId = preparedSession.sessionId
+      const start = await this.client.capabilityPackageIngestSessionStart({
+        ...payload,
+        session_id: sessionId,
+        client_request_id:
+          stringValue(payload.client_request_id) ||
+          stringValue(payload.clientRequestId) ||
+          `capability-package-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      })
+      const sessionRunId = stringValue(start.session_run_id)
+      if (!sessionRunId) {
+        throw new Error("capability package session start failed: empty session run id")
+      }
+      const resolvedSessionId = stringValue(start.session_id) || sessionId || ""
+      this.sessionRunCoordinator.setActiveRun({
+        sessionRunId,
+        cursor: 0,
+        sessionId: resolvedSessionId,
+        status: "running",
+        startedAt: new Date().toISOString(),
+        reconnectAttempts: 0,
+        lastStreamAt: new Date().toISOString(),
+      })
+      this.emitChatMessage({
+        type: "sessionRun.session",
+        sessionRunId,
+        sessionId: resolvedSessionId,
+        runtimeState: objectValue(start.runtime_state || start.runtimeState),
+        payload: start,
+      }, post)
+      post({ type: "capabilityPackage.ingest.session.started", payload: start })
+      await this.consumeSessionRunEventStream(sessionRunId, resolvedSessionId, post)
+    } catch (error) {
+      post({ type: "capabilityPackage.error", message: errorMessage(error) })
+      this.emitChatMessage({ type: "sessionRun.error", message: chatErrorMessage(error) }, post)
+      await this.postConnectionStateIfAuthRequired(error, post)
+      this.sessionRunCoordinator.clearActiveRun()
+    }
+  }
+
   private ensureSessionRunEventStream(sessionRunId: string, sessionId: string, post: PostMessage): void {
     if (!sessionRunId || this.activeSessionRunEventStreams.has(sessionRunId)) return
     void this.consumeSessionRunEventStream(sessionRunId, sessionId, post).catch(async (error) => {
@@ -1534,6 +1597,7 @@ export class LabrastroController implements vscode.Disposable {
       await this.client.recoverSessionRun({ sessionRunId, action })
       const status = await this.client.sessionRunStatus(sessionRunId)
       const sessionId = stringValue(status.session_id) || stringValue(status.sessionId) || ""
+      const runtimeState = objectValue(status.runtime_state || status.runtimeState)
       this.sessionRunCoordinator.setActiveRun({
         sessionRunId,
         cursor: Number(status.next_cursor ?? status.cursor ?? 0),
@@ -1549,6 +1613,8 @@ export class LabrastroController implements vscode.Disposable {
           sessionRunId,
           sessionId,
           status: "running",
+          runtimeState,
+          runtime_state: runtimeState,
           approvals: Array.isArray(status.approvals) ? status.approvals : [],
         },
       }, post)

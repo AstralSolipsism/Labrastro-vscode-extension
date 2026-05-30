@@ -12,6 +12,7 @@ import { AutoApprovalTab } from "./tabs/AutoApprovalTab"
 import { IntegrationsTab } from "./tabs/IntegrationsTab"
 import { ConversationTab } from "./tabs/ConversationTab"
 import { DiagnosticsTab } from "./tabs/DiagnosticsTab"
+import { OtherTab } from "./tabs/OtherTab"
 
 interface SettingsShellProps {
   controller: SettingsController
@@ -60,6 +61,7 @@ export const SettingsShell: Component<SettingsShellProps> = (props) => {
             <Match when={controller.activeTab() === "agentConfig"}><AgentConfigTab controller={controller} /></Match>
             <Match when={controller.activeTab() === "autoApproval"}><AutoApprovalTab controller={controller} /></Match>
             <Match when={controller.activeTab() === "integrations"}><IntegrationsTab controller={controller} /></Match>
+            <Match when={controller.activeTab() === "other"}><OtherTab controller={controller} /></Match>
             <Match when={controller.activeTab() === "diagnostics"}><DiagnosticsTab controller={controller} /></Match>
           </Switch>
         </main>

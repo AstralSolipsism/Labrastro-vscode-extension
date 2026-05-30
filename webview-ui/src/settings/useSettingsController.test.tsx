@@ -346,71 +346,34 @@ describe("settings controller capability model", () => {
     })
   })
 
-  it("stores capability package validation messages from status and accept errors", () => {
-    expect(settingsControllerSource).toContain("validationMessages?: string[]")
-    expect(settingsControllerSource).toContain("validationMessages: stringArray(objectValue(payload.validation).messages)")
-    expect(settingsControllerSource).toContain("...stringArray(msg.messages)")
-    expect(settingsControllerSource).toContain("...stringArray(payload.messages)")
-  })
-
-  it("stores capability package source bundle from started and status messages", () => {
-    expect(settingsControllerSource).toContain("sourceBundle?: Record<string, unknown>")
-    expect(settingsControllerSource).toContain("sourceBundle: objectValue(payload.source_bundle)")
-    expect(settingsControllerSource).toContain("sourceBundle: Object.keys(sourceBundle).length ? sourceBundle : current.sourceBundle")
-  })
-
-  it("sends stored source bundle when accepting a capability package draft", () => {
+  it("launches capability package generation through a chat session", () => {
     withController(makeServer(), (controller) => {
-      const sourceBundle = {
-        source: { type: "project_notes" },
-        evidence: [{ title: "Project notes", excerpt: "Install gh." }],
-      }
-      const draft = { id: "github-cli", name: "GitHub CLI" }
-
-      controller.setCapabilityPackageIngestState({
-        running: false,
-        agentRunId: "run-1",
-        status: "completed",
-        error: "",
-        draft,
-        sourceBundle,
-      } as any)
-
+      controller.setCapabilitySourceType("github_repo")
+      controller.setCapabilitySourceUrl("https://github.com/acme/tool")
+      controller.setCapabilitySourceNotes("需要安装与配置")
+      controller.setCapabilityPackageIdHint("acme-tool")
       mocks.vscode.postMessage.mockClear()
-      controller.acceptCapabilityPackageDraft()
+      controller.startCapabilityPackageIngest()
 
       expect(mocks.vscode.postMessage).toHaveBeenCalledWith({
-        type: "capabilityPackage.draft.accept",
+        type: "capabilityPackage.ingest.session.start",
         payload: {
-          draft,
-          source_bundle: sourceBundle,
+          source: {
+            type: "github_repo",
+            url: "https://github.com/acme/tool",
+            notes: "需要安装与配置",
+            package_id_hint: "acme-tool",
+          },
         },
       })
     })
   })
 
-  it("omits empty source bundle when accepting a manually supplied capability package draft", () => {
-    withController(makeServer(), (controller) => {
-      const draft = { id: "dotnet-sdk", name: "Dotnet SDK" }
-
-      controller.setCapabilityPackageIngestState({
-        running: false,
-        agentRunId: "run-2",
-        status: "completed",
-        error: "",
-        draft,
-      } as any)
-
-      mocks.vscode.postMessage.mockClear()
-      controller.acceptCapabilityPackageDraft()
-
-      expect(mocks.vscode.postMessage).toHaveBeenCalledWith({
-        type: "capabilityPackage.draft.accept",
-        payload: {
-          draft,
-        },
-      })
-    })
+  it("does not keep settings-owned capability package polling or draft approval paths", () => {
+    expect(settingsControllerSource).not.toContain("capabilityPackage.draft.accept")
+    expect(settingsControllerSource).not.toContain("capabilityPackage.ingest.status")
+    expect(settingsControllerSource).not.toContain("capabilityIngestPollTimer")
+    expect(settingsControllerSource).not.toContain("acceptCapabilityPackageDraft")
   })
 
   it("persists runtime profile worker identity and model request origin", () => {
@@ -473,6 +436,108 @@ describe("settings controller capability model", () => {
         },
       }),
     })
+  })
+
+  it("persists agent model binding with model profile parameters", () => {
+    const controller = withController(makeServer({
+      connectionState: () => ({ status: "ready", authenticated: true, role: "superadmin" }),
+      serverSettingsState: () => ({
+        settings: {
+          agent_registry: {
+            agents: {
+              capability_packager: {
+                name: "Capability Packager",
+                visibility: "system",
+                role: "worker",
+                system_flow_only: ["capability_ingest"],
+                runtime_profile: "capability_packager_sandbox",
+                capability_refs: ["capability_packager_builtin_tools"],
+                max_concurrent_tasks: 1,
+              },
+            },
+          },
+        },
+      }),
+      modelProfilesState: () => ({
+        model_profiles: [
+          {
+            id: "deepseek-main",
+            provider: "deepseek",
+            model: "deepseek-v4-pro",
+            max_tokens: 384000,
+            max_context_tokens: 1000000,
+            temperature: 0.2,
+            thinking_enabled: true,
+          },
+        ],
+      }),
+    }), (controller) => controller)
+
+    controller.setProfileDrafts({
+      capability_packager_sandbox: runtimeProfileDraft({
+        id: "capability_packager_sandbox",
+        worker_kind: "sandbox_worker",
+      }),
+    })
+    controller.setAgentDrafts({
+      capability_packager: {
+        id: "capability_packager",
+        name: "Capability Packager",
+        description: "",
+        role: "coordinator",
+        chat_entrypoint: true,
+        visibility: "system",
+        delegable: true,
+        taskflow_eligible: true,
+        systemFlowOnlyText: "wrong_flow",
+        runtime_profile: "wrong_profile",
+        modelKey: "deepseek::deepseek-v4-pro",
+        dispatchProfileText: "changed dispatch",
+        dispatchExamplesText: "changed example",
+        dispatchAvoidText: "changed avoid",
+        systemAppend: "changed prompt",
+        agentMd: "",
+        capabilityRefsText: "wrong_capability",
+        max_concurrent_tasks: 1,
+        credentialRefsText: "secret=wrong",
+      },
+    })
+
+    controller.saveAgentConfig()
+
+    expect(mocks.vscode.postMessage).toHaveBeenCalledWith({
+      type: "serverSettings.update",
+      payload: expect.objectContaining({
+        agent_registry: {
+          agents: {
+            capability_packager: expect.objectContaining({
+              role: "worker",
+              system_flow_only: ["capability_ingest"],
+              runtime_profile: "capability_packager_sandbox",
+              capability_refs: ["capability_packager_builtin_tools"],
+              model: {
+                provider: "deepseek",
+                model: "deepseek-v4-pro",
+                parameters: expect.objectContaining({
+                  max_tokens: 384000,
+                  max_context_tokens: 1000000,
+                  temperature: 0.2,
+                  thinking_enabled: true,
+                }),
+              },
+            }),
+          },
+        },
+      }),
+    })
+    const posted = mocks.vscode.postMessage.mock.calls.at(-1)?.[0] as any
+    const savedAgent = posted.payload.agent_registry.agents.capability_packager
+    expect(savedAgent).not.toHaveProperty("chat_entrypoint")
+    expect(savedAgent).not.toHaveProperty("delegable")
+    expect(savedAgent).not.toHaveProperty("taskflow_eligible")
+    expect(savedAgent).not.toHaveProperty("dispatch")
+    expect(savedAgent).not.toHaveProperty("prompt")
+    expect(savedAgent).not.toHaveProperty("credential_refs")
   })
 
   it("infers missing model request origin from executor and worker identity", () => {

@@ -41,8 +41,7 @@ export type HostToWebviewMessageType =
   | "backend.features"
   | "capabilityPackage.actionResult"
   | "capabilityPackage.error"
-  | "capabilityPackage.ingest.started"
-  | "capabilityPackage.ingest.status"
+  | "capabilityPackage.ingest.session.started"
   | "chat.sendDuringRunMode.state"
   | "chatConfig.error"
   | "chatConfig.state"
@@ -135,10 +134,8 @@ export type WebviewToHostMessageType =
   | "autoApproval.get"
   | "autoApproval.update"
   | "capabilityPackage.delete"
-  | "capabilityPackage.draft.accept"
   | "capabilityPackage.enable"
-  | "capabilityPackage.ingest.start"
-  | "capabilityPackage.ingest.status"
+  | "capabilityPackage.ingest.session.start"
   | "chat.command.dispatch"
   | "chatConfig.read"
   | "chat.send"
@@ -251,8 +248,7 @@ const HOST_TO_WEBVIEW_TYPES = new Set<HostToWebviewMessageType>([
   "backend.features",
   "capabilityPackage.actionResult",
   "capabilityPackage.error",
-  "capabilityPackage.ingest.started",
-  "capabilityPackage.ingest.status",
+  "capabilityPackage.ingest.session.started",
   "chat.sendDuringRunMode.state",
   "chatConfig.error",
   "chatConfig.state",
@@ -340,10 +336,8 @@ const WEBVIEW_TO_HOST_TYPES = new Set<WebviewToHostMessageType>([
   "autoApproval.get",
   "autoApproval.update",
   "capabilityPackage.delete",
-  "capabilityPackage.draft.accept",
   "capabilityPackage.enable",
-  "capabilityPackage.ingest.start",
-  "capabilityPackage.ingest.status",
+  "capabilityPackage.ingest.session.start",
   "chat.command.dispatch",
   "chatConfig.read",
   "chat.send",

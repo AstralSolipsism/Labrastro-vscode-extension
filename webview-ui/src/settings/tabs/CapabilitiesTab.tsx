@@ -210,8 +210,6 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
     setCapabilityPackageIdHint,
     capabilityPackageIngestState,
     startCapabilityPackageIngest,
-    refreshCapabilityPackageIngestStatus,
-    acceptCapabilityPackageDraft,
     deleteCapabilityPackage,
     enableCapabilityPackage,
   } = props.controller
@@ -258,40 +256,9 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
       .sort((a, b) => a.id.localeCompare(b.id))
   })
   const capabilityComponents = createMemo(() => objectValue(serverSettings().capability_components))
-  const currentCapabilityDraft = createMemo(() => objectValue(capabilityPackageIngestState().draft))
-  const currentDraftComponents = createMemo(() => {
-    const draft = currentCapabilityDraft()
-    const components = draft.components
-    if (!Array.isArray(components)) return []
-    return components.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
-  })
-  const currentDraftEvidence = createMemo(() => {
-    const evidence = currentCapabilityDraft().evidence
-    if (!Array.isArray(evidence)) return []
-    return evidence.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
-  })
-  const currentDraftValidationMessages = createMemo(() =>
-    stringArrayValue(capabilityPackageIngestState().validationMessages)
-  )
-  const currentDraftReady = createMemo(() => {
-    const draft = currentCapabilityDraft()
-    return Boolean(stringValue(draft.id) && currentDraftComponents().length > 0 && currentDraftValidationMessages().length === 0)
-  })
   const skillDisplayOptions = () => ({
     skillsEnabled: skillsEnabled(),
     disabledSkills: parseListText(skillsDisabledText()),
-  })
-  const currentDraftComponentGroups = createMemo(() =>
-    groupCapabilityPackageComponents(currentDraftComponents(), {}, skillDisplayOptions())
-  )
-  const currentDraftComponentCounts = createMemo(() => {
-    const groups = currentDraftComponentGroups()
-    return {
-      capabilities: groups.capabilities.length,
-      dependencies: groups.dependencies.length,
-      other: groups.other.length,
-      total: groups.capabilities.length + groups.dependencies.length + groups.other.length,
-    }
   })
   const packageComponentGroups = (pkg: CapabilityPackageView) =>
     groupCapabilityPackageComponents(pkg.components, capabilityComponents(), skillDisplayOptions())
@@ -307,6 +274,15 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
       other: groups.other.length,
       total: groups.capabilities.length + groups.dependencies.length + groups.other.length,
     }
+  }
+  const packageDependencyIds = (pkg: CapabilityPackageView) =>
+    packageComponentGroups(pkg).dependencies.map((item) => item.id).filter(Boolean)
+  const packageEnvironmentActionDisabled = (pkg: CapabilityPackageView) =>
+    packageDependencyIds(pkg).length === 0 || environmentSnapshot().running || !environmentAgentAvailable()
+  const runCapabilityPackageEnvironment = (mode: "check" | "configure", pkg: CapabilityPackageView) => {
+    const dependencyIds = packageDependencyIds(pkg)
+    if (!dependencyIds.length) return
+    runEnvironment(mode, dependencyIds)
   }
   const dependencyItems = createMemo<any[]>(() => capabilityDependencyViews() as any[])
   const dependencyById = createMemo(() => new Map(dependencyItems().map((item) => [item.id, item])))
@@ -1177,7 +1153,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
           <For each={CAPABILITY_SECTIONS}>
             {(item) => (
               <SettingsSubTabButton
-                active={section() === item.id}
+                active={section() === item.id || (item.id === "packages" && (section() === "dependencies" || section() === "logs"))}
                 icon={item.icon}
                 onClick={() => setSection(item.id)}
               >
@@ -1388,6 +1364,10 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
                 onInput={setCapabilitySearch}
               />
               <SettingsActionRail align="right">
+                <button class="btn btn-secondary btn--compact" type="button" onClick={() => setSection("packages")}>
+                  <span class="codicon codicon-arrow-left" aria-hidden="true" />
+                  返回能力包
+                </button>
                 <SettingsCompactField label="环境 Agent">
                   <input value={environmentAgentLabel()} disabled />
                 </SettingsCompactField>
@@ -1584,17 +1564,9 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
           <SettingsSectionHeading>
             <span>能力包生成</span>
             <SettingsActionRail align="right">
-              <button class="btn btn-secondary" type="button" disabled={!capabilityPackageIngestState().agentRunId || operations.isBusy("capabilityIngestStatus")} onClick={refreshCapabilityPackageIngestStatus}>
-                <span class="codicon codicon-refresh" aria-hidden="true" />
-                刷新草案
-              </button>
               <button class="btn btn-primary" type="button" disabled={operations.isBusy("capabilityIngestStart")} onClick={startCapabilityPackageIngest}>
                 <span class="codicon codicon-play" aria-hidden="true" />
-                生成草案
-              </button>
-              <button class="btn btn-primary" type="button" disabled={!currentDraftReady()} onClick={acceptCapabilityPackageDraft}>
-                <span class="codicon codicon-check" aria-hidden="true" />
-                确认安装
+                在会话中生成能力包
               </button>
             </SettingsActionRail>
           </SettingsSectionHeading>
@@ -1604,16 +1576,19 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
           <Show when={capabilityPackageIngestState().error}>
             <div class="settings-error">{capabilityPackageIngestState().error}</div>
           </Show>
-          <Show when={currentDraftValidationMessages().length}>
-            <div class="settings-error">
-              <strong>草案校验未通过</strong>
-              <ul class="capability-text-list">
-                <For each={currentDraftValidationMessages()}>
-                  {(item) => <li>{item}</li>}
-                </For>
-              </ul>
-            </div>
-          </Show>
+          <SettingsSectionHeading compact>
+            <span>能力包运行环境</span>
+            <SettingsActionRail align="right">
+              <button class="btn btn-secondary btn--compact" type="button" onClick={() => setSection("dependencies")}>
+                <span class="codicon codicon-symbol-method" aria-hidden="true" />
+                全部能力依赖资源
+              </button>
+              <button class="btn btn-secondary btn--compact" type="button" onClick={() => setSection("logs")}>
+                <span class="codicon codicon-output" aria-hidden="true" />
+                运行日志
+              </button>
+            </SettingsActionRail>
+          </SettingsSectionHeading>
 
           <div class="capability-package-workbench">
             <div class="capability-source-panel">
@@ -1637,99 +1612,9 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
                   <textarea rows={5} value={capabilitySourceNotes()} onInput={(event) => setCapabilitySourceNotes(event.currentTarget.value)} placeholder="目标场景、预期命令、凭据边界" />
                 </label>
               </div>
-              <div class="capability-ingest-status">
-                <StatusBadge tone={capabilityPackageIngestState().running ? "warning" : capabilityPackageIngestState().status === "completed" ? "success" : "muted"}>
-                  {capabilityPackageIngestState().status || "idle"}
-                </StatusBadge>
-                <Show when={capabilityPackageIngestState().agentRunId}>
-                  <code>{capabilityPackageIngestState().agentRunId}</code>
-                </Show>
-              </div>
-            </div>
-
-            <div class="capability-draft-panel">
-              <SettingsSectionHeading compact>
-                <span>待确认草案</span>
-                <StatusBadge tone={currentDraftReady() ? "success" : "muted"}>
-                  {currentDraftReady() ? "ready" : "empty"}
-                </StatusBadge>
-              </SettingsSectionHeading>
-              <Show when={Object.keys(currentCapabilityDraft()).length > 0} fallback={<p class="settings-empty-note">暂无草案。</p>}>
-                <div class="capability-draft-card">
-                  <div class="capability-package-card__head">
-                    <div>
-                      <strong>{stringValue(currentCapabilityDraft().id, "未命名能力包")}</strong>
-                      <small>{stringValue(currentCapabilityDraft().name)}</small>
-                    </div>
-                    <StatusBadge>{stringValue(currentCapabilityDraft().risk_level, "unrated")}</StatusBadge>
-                  </div>
-                  <Show when={stringValue(currentCapabilityDraft().description)}>
-                    <p>{stringValue(currentCapabilityDraft().description)}</p>
-                  </Show>
-                  <SettingsDetailGrid>
-                    <SettingsDetailBlock>
-                      <span>组件摘要</span>
-                      <strong>{currentDraftComponentCounts().total} 个组件</strong>
-                      <small>{currentDraftComponentCounts().capabilities} 能力 · {currentDraftComponentCounts().dependencies} 依赖 · {currentDraftComponentCounts().other} 其他</small>
-                    </SettingsDetailBlock>
-                    <SettingsDetailBlock>
-                      <span>确认状态</span>
-                      <strong>{currentDraftReady() ? "ready" : "empty"}</strong>
-                      <small>{stringValue(currentCapabilityDraft().risk_level, "未标注风险")}</small>
-                    </SettingsDetailBlock>
-                  </SettingsDetailGrid>
-                  {renderComponentGroupsDetails(currentDraftComponentGroups())}
-                  <Show when={stringArrayValue(currentCapabilityDraft().install_plan).length}>
-                    <SettingsDetailSection>
-                      <span>安装方式</span>
-                      <ul class="capability-text-list">
-                        <For each={stringArrayValue(currentCapabilityDraft().install_plan)}>
-                          {(item) => <li>{item}</li>}
-                        </For>
-                      </ul>
-                    </SettingsDetailSection>
-                  </Show>
-                  <Show when={stringArrayValue(currentCapabilityDraft().usage).length}>
-                    <SettingsDetailSection>
-                      <span>调用方式</span>
-                      <ul class="capability-text-list">
-                        <For each={stringArrayValue(currentCapabilityDraft().usage)}>
-                          {(item) => <li>{item}</li>}
-                        </For>
-                      </ul>
-                    </SettingsDetailSection>
-                  </Show>
-                  <Show when={stringArrayValue(currentCapabilityDraft().effective_capabilities).length}>
-                    <SettingsDetailSection>
-                      <span>增强能力</span>
-                      <ul class="capability-text-list">
-                        <For each={stringArrayValue(currentCapabilityDraft().effective_capabilities)}>
-                          {(item) => <li>{item}</li>}
-                        </For>
-                      </ul>
-                    </SettingsDetailSection>
-                  </Show>
-                  <Show when={stringArrayValue(currentCapabilityDraft().credentials).length}>
-                    <SettingsDetailSection>
-                      <span>凭据需求</span>
-                      <small>{stringArrayValue(currentCapabilityDraft().credentials).join(", ")}</small>
-                    </SettingsDetailSection>
-                  </Show>
-                  <Show when={currentDraftEvidence().length}>
-                    <SettingsDetailSection>
-                      <span>证据来源</span>
-                      <div class="capability-evidence-list">
-                        <For each={currentDraftEvidence().slice(0, 5)}>
-                          {(evidence) => (
-                            <div>
-                              <strong>{stringValue(evidence.title) || stringValue(evidence.url) || "evidence"}</strong>
-                              <small>{stringValue(evidence.excerpt) || stringValue(evidence.url)}</small>
-                            </div>
-                          )}
-                        </For>
-                      </div>
-                    </SettingsDetailSection>
-                  </Show>
+              <Show when={capabilityPackageIngestState().running}>
+                <div class="capability-ingest-status">
+                  <StatusBadge tone="warning">opening session</StatusBadge>
                 </div>
               </Show>
             </div>
@@ -1786,6 +1671,14 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
                             <StatusBadge tone={pkg().enabled ? "success" : "muted"}>{pkg().enabled ? "enabled" : "disabled"}</StatusBadge>
                           </SettingsDetailHeader>
                           <SettingsDetailActions>
+                            <button class="btn btn-secondary btn--compact" type="button" disabled={packageEnvironmentActionDisabled(pkg())} onClick={() => runCapabilityPackageEnvironment("check", pkg())}>
+                              <span class="codicon codicon-search" aria-hidden="true" />
+                              检查该包依赖
+                            </button>
+                            <button class="btn btn-secondary btn--compact" type="button" disabled={packageEnvironmentActionDisabled(pkg())} onClick={() => runCapabilityPackageEnvironment("configure", pkg())}>
+                              <span class="codicon codicon-tools" aria-hidden="true" />
+                              配置该包依赖
+                            </button>
                             <button class="btn btn-secondary btn--compact" type="button" disabled={pkg().id === "environment"} onClick={() => enableCapabilityPackage(pkg().id, !pkg().enabled)}>
                               {pkg().enabled ? "停用" : "启用"}
                             </button>
@@ -1835,7 +1728,13 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
         <SettingsFlatSection hidden={section() !== "logs"}>
           <SettingsSectionHeading>
             <span>运行日志</span>
-            <StatusBadge>{String(environmentSnapshot().logs.length)}</StatusBadge>
+            <SettingsActionRail align="right">
+              <StatusBadge>{String(environmentSnapshot().logs.length)}</StatusBadge>
+              <button class="btn btn-secondary btn--compact" type="button" onClick={() => setSection("packages")}>
+                <span class="codicon codicon-arrow-left" aria-hidden="true" />
+                返回能力包
+              </button>
+            </SettingsActionRail>
           </SettingsSectionHeading>
           <div class="environment-log-list">
             <Show when={environmentSnapshot().logs.length} fallback={<p class="settings-empty-note">环境检查或配置任务运行后会显示最近输出。</p>}>

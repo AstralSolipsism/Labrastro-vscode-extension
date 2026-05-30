@@ -36,10 +36,24 @@ describe("settings operations", () => {
     ])
   })
 
-  it("maps providers refresh to provider, profile, and capability resources", () => {
+  it("maps providers refresh to provider and profile resources", () => {
     expect(settingsPageOperationKeys("providers")).toEqual([
       "providers",
       "modelProfiles",
+    ])
+  })
+
+  it("maps agent config refresh to server settings and model profiles", () => {
+    expect(settingsPageOperationKeys("agentConfig")).toEqual([
+      "serverSettings",
+      "chatConfig",
+      "modelProfiles",
+    ])
+  })
+
+  it("maps other refresh to global maintenance resources", () => {
+    expect(settingsPageOperationKeys("other")).toEqual([
+      "serverSettings",
       "modelCapabilities",
     ])
   })

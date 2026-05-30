@@ -140,14 +140,15 @@ export const SETTINGS_OPERATION_KEYS: SettingsOperationKey[] = [
 export const SETTINGS_PAGE_RESOURCES: Record<SettingsTab, SettingsOperationKey[]> = {
   executors: [],
   accounts: ["accounts"],
-  providers: ["providers", "modelProfiles", "modelCapabilities"],
+  providers: ["providers", "modelProfiles"],
   capabilities: ["serverSettings", "capabilities", "environmentManifest"],
   conversation: ["chatConfig", "serverSettings", "reasoningDisplay", "chatSendDuringRunMode"],
   sessionPolicy: ["serverSettings"],
   serverSettings: ["serverSettings"],
-  agentConfig: ["serverSettings", "chatConfig"],
+  agentConfig: ["serverSettings", "chatConfig", "modelProfiles"],
   autoApproval: ["serverSettings", "autoApproval"],
   integrations: ["serverSettings", "github"],
+  other: ["serverSettings", "modelCapabilities"],
   diagnostics: ["serverSettings", "peerDiagnosticsLogging", "toolDiagnostics"],
 }
 

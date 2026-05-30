@@ -471,16 +471,11 @@ export class LabrastroRemoteClient {
     return this.authenticatedPost("/remote/admin/models/activate", payload)
   }
 
-  async capabilityPackageIngestStart(payload: JsonObject): Promise<JsonObject> {
-    return this.authenticatedPost("/remote/admin/capability-packages/ingest/start", payload)
-  }
-
-  async capabilityPackageIngestStatus(payload: JsonObject): Promise<JsonObject> {
-    return this.authenticatedPost("/remote/admin/capability-packages/ingest/status", payload)
-  }
-
-  async capabilityPackageDraftAccept(payload: JsonObject): Promise<JsonObject> {
-    return this.authenticatedPost("/remote/admin/capability-packages/drafts/accept", payload)
+  async capabilityPackageIngestSessionStart(payload: JsonObject): Promise<JsonObject> {
+    return this.authenticatedPeerPost("/remote/admin/capability-packages/ingest/session/start", (peer) => ({
+      ...payload,
+      peer_token: peer.peer_token,
+    }))
   }
 
   async capabilityPackageDelete(payload: JsonObject): Promise<JsonObject> {
@@ -1079,6 +1074,20 @@ export class LabrastroRemoteClient {
       const retryToken = await this.refreshAccessToken()
       return this.getJson(pathname, { Authorization: `Bearer ${retryToken}` })
     }
+  }
+
+  private async authenticatedPeerPost(
+    pathname: string,
+    payload: (peer: PeerInfo) => JsonObject
+  ): Promise<JsonObject> {
+    let peer = await this.ensurePeer()
+    return retryInvalidPeerTokenOnce(
+      () => this.authenticatedPost(pathname, payload(peer)),
+      async () => {
+        await this.stopPeer("invalid_peer_token_retry")
+        peer = await this.ensurePeer()
+      }
+    )
   }
 
   private async ensureAccessToken(): Promise<string> {

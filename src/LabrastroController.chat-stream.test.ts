@@ -42,6 +42,8 @@ describe("LabrastroController session run event batching", () => {
   it("refreshes active run status before sessionRun.resume and forwards pending approvals", () => {
     expect(source).toContain("activeRunPayloadWithServerStatus")
     expect(source).toContain("const status = await this.client.sessionRunStatus(sessionRunId")
+    expect(source).toContain("const runtimeState = objectValue(status.runtime_state || status.runtimeState)")
+    expect(source).toContain("runtime_state: runtimeState")
     expect(source).toContain("approvals: Array.isArray(status.approvals) ? status.approvals : []")
   })
 
