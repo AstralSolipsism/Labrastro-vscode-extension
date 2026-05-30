@@ -37,6 +37,7 @@ export type ProcessTimelineItem =
   | { type: "timeline_text"; part: AssistantTextItem }
   | { type: "timeline_process_group"; group: ProcessGroup }
   | { type: "timeline_notice"; part: NoticeItem }
+  | { type: "timeline_part"; part: TranscriptItem }
 
 export interface ProcessSummary {
   id: string
@@ -60,6 +61,7 @@ export function processTimelineItemKey(item: ProcessTimelineItem, index = 0): st
   if (item.type === "timeline_process_group") return item.group.id
   if (item.type === "timeline_text") return `timeline_text:${item.part.id}`
   if (item.type === "timeline_notice") return `timeline_notice:${item.part.id}`
+  if (item.type === "timeline_part") return `timeline_part:${item.part.id}`
   return `timeline:${index}`
 }
 
@@ -67,7 +69,8 @@ export function transcriptPresentationItemKey(item: TranscriptPresentationItem, 
   if (
     item.type === "timeline_process_group" ||
     item.type === "timeline_text" ||
-    item.type === "timeline_notice"
+    item.type === "timeline_notice" ||
+    item.type === "timeline_part"
   ) {
     return processTimelineItemKey(item, index)
   }
@@ -103,6 +106,12 @@ export const RUN_TOOLS = new Set([
   "run_terminal_cmd",
 ])
 
+// Presentation contract:
+// TranscriptItem[] is canonical event storage, while this function owns the
+// user-facing projection. Reasoning is always collected into one
+// reasoning_panel. Before final output starts it is shown after the process
+// timeline; after final output starts the order is process_summary,
+// reasoning_panel, then final_answer.
 export function buildTranscriptPresentation(
   parts: TranscriptItem[],
   message?: Pick<MockMessage, "id" | "traceNodeStatus">,
@@ -177,55 +186,59 @@ function buildTimelineItems(
   message?: Pick<MockMessage, "id" | "traceNodeStatus">,
 ): ProcessTimelineItem[] {
   const items: ProcessTimelineItem[] = []
-  let current: { key: string; info: ProcessGroupInfo; items: TranscriptItem[] } | undefined
+  let currentProcess: { key: string; info: ProcessGroupInfo; items: TranscriptItem[] } | undefined
 
-  const flush = () => {
-    if (!current?.items.length) {
-      current = undefined
+  const flushProcess = () => {
+    if (!currentProcess?.items.length) {
+      currentProcess = undefined
       return
     }
-    const first = current.items[0]
+    const first = currentProcess.items[0]
     items.push({
       type: "timeline_process_group",
       group: {
-        id: `process-group:${message?.id || "message"}:${first.id}:${current.key}`,
-        groupKey: current.key,
-        kind: current.info.kind,
-        label: current.info.label,
-        state: processItemsState(current.items),
-        count: current.items.length,
-        failureCount: processFailureCount(current.items),
-        currentLabel: processItemCurrentLabel(current.items[current.items.length - 1]),
-        items: current.items,
+        id: `process-group:${message?.id || "message"}:${first.id}:${currentProcess.key}`,
+        groupKey: currentProcess.key,
+        kind: currentProcess.info.kind,
+        label: currentProcess.info.label,
+        state: processItemsState(currentProcess.items),
+        count: currentProcess.items.length,
+        failureCount: processFailureCount(currentProcess.items),
+        currentLabel: processItemCurrentLabel(currentProcess.items[currentProcess.items.length - 1]),
+        items: currentProcess.items,
       },
     })
-    current = undefined
+    currentProcess = undefined
   }
 
   for (const part of parts) {
     if (part.type === "assistant_text") {
-      flush()
+      flushProcess()
       items.push({ type: "timeline_text", part })
       continue
     }
     if (part.type === "notice") {
-      flush()
+      flushProcess()
       items.push({ type: "timeline_notice", part })
       continue
     }
+    if (part.type === "thinking" || part.type === "reasoning") {
+      continue
+    }
     if (!isProcessItem(part)) {
-      flush()
+      flushProcess()
+      items.push({ type: "timeline_part", part })
       continue
     }
     const info = processGroupInfoForPart(part)
-    if (!current || current.key !== info.key) {
-      flush()
-      current = { key: info.key, info, items: [part] }
+    if (!currentProcess || currentProcess.key !== info.key) {
+      flushProcess()
+      currentProcess = { key: info.key, info, items: [part] }
       continue
     }
-    current.items.push(part)
+    currentProcess.items.push(part)
   }
-  flush()
+  flushProcess()
 
   return items
 }
@@ -256,7 +269,7 @@ function buildProcessSummary(
 }
 
 function timelineItemStableId(item: ProcessTimelineItem): string {
-  if (item.type === "timeline_text" || item.type === "timeline_notice") return item.part.id
+  if (item.type === "timeline_text" || item.type === "timeline_notice" || item.type === "timeline_part") return item.part.id
   return item.group.id
 }
 
@@ -294,6 +307,19 @@ function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {
     if (predicate(items[index])) return index
   }
   return -1
+}
+
+function appendReasoningText(current: string, next: string): string {
+  if (!current) return next
+  if (!next) return current
+  if (/\s$/.test(current) || /^\s/.test(next)) return `${current}${next}`
+  return `${current}\n${next}`
+}
+
+function mergeProcessState(left: ProcessState, right: ProcessState): ProcessState {
+  if (left === "error" || right === "error") return "error"
+  if (left === "running" || right === "running") return "running"
+  return "completed"
 }
 
 interface ProcessGroupInfo {
@@ -412,19 +438,6 @@ function compactLabel(value: string): string {
   return value.length > 72 ? `${value.slice(0, 69)}...` : value
 }
 
-function appendReasoningText(current: string, next: string): string {
-  if (!current) return next
-  if (!next) return current
-  if (/\s$/.test(current) || /^\s/.test(next)) return `${current}${next}`
-  return `${current}\n${next}`
-}
-
-function mergeProcessState(left: ProcessState, right: ProcessState): ProcessState {
-  if (left === "error" || right === "error") return "error"
-  if (left === "running" || right === "running") return "running"
-  return "completed"
-}
-
 export function processGroupKindForPart(part: TranscriptItem): ProcessGroupKind {
   return processGroupInfoForPart(part).kind
 }
@@ -466,6 +479,7 @@ export function getToolActionLabel(toolName?: string): string {
     search_files: t("tool.searchFiles"),
     apply_patch: t("tool.applyPatch"),
     replace_in_file: t("tool.applyPatch"),
+    install_capability_package: t("tool.installCapabilityPackage"),
   }
   const normalized = (toolName || "").trim()
   return labels[normalized] || normalized || "tool"

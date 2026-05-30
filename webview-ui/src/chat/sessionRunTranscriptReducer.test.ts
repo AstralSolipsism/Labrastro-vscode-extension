@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest"
 import type { MockSessionBundle } from "../components/chat/mock-data"
-import { applySessionRunTranscriptEvent } from "./sessionRunTranscriptReducer"
+import {
+  applySessionRunTranscriptEvent,
+  applySessionRunTranscriptEvents,
+} from "./sessionRunTranscriptReducer"
 
 function bundle(): MockSessionBundle {
   return {
@@ -46,13 +49,7 @@ function reduce(
 ): MockSessionBundle {
   return applySessionRunTranscriptEvent(
     current,
-    {
-      type,
-      session_run_id: runId,
-      seq,
-      session_event_seq: seq,
-      payload,
-    },
+    sessionRunEvent(type, payload, seq, runId),
     {
       activeSessionRunId: runId,
       currentSessionId: "session-1",
@@ -63,8 +60,83 @@ function reduce(
   ).bundle
 }
 
+function sessionRunEvent(
+  type: string,
+  payload: Record<string, unknown>,
+  seq: number,
+  runId = "run-1",
+): Record<string, unknown> {
+  return {
+    type,
+    session_run_id: runId,
+    seq,
+    session_event_seq: seq,
+    payload,
+  }
+}
+
 describe("sessionRunTranscriptReducer", () => {
-  it("keeps streamed assistant text and final assistant text in the same block", () => {
+  it("batch-reduces live deltas to the same transcript while returning every event key", () => {
+    const events = [
+      sessionRunEvent("session_run_start", { prompt: "hi" }, 1),
+      sessionRunEvent("assistant_delta", { content: "hel" }, 2),
+      sessionRunEvent("assistant_delta", { content: "lo" }, 3),
+      sessionRunEvent("reasoning_delta", { content: "plan " }, 4),
+      sessionRunEvent("reasoning_delta", { content: "more" }, 5),
+      sessionRunEvent("tool_call_stream", {
+        tool_call_id: "tool-1",
+        tool_name: "shell",
+        stream: "stdout",
+        content: "ok",
+      }, 6),
+    ]
+    const context = {
+      activeSessionRunId: "run-1",
+      currentSessionId: "session-1",
+      isWorking: true,
+      now: 1000,
+      labels: { thinking: "正在思考" },
+    }
+    const batch = applySessionRunTranscriptEvents(bundle(), events, context)
+    const sequential = events.reduce(
+      (current, event) => applySessionRunTranscriptEvent(current, event, context).bundle,
+      bundle(),
+    )
+
+    expect(batch.bundle).toEqual(sequential)
+    expect(batch.eventKeys).toEqual([
+      "session:session-1:1",
+      "session:session-1:2",
+      "session:session-1:3",
+      "session:session-1:4",
+      "session:session-1:5",
+      "session:session-1:6",
+    ])
+    expect(batch.changed).toBe(true)
+  })
+
+  it("does not replay batch events whose event keys are already in the transcript", () => {
+    const events = [
+      sessionRunEvent("session_run_start", { prompt: "hi" }, 1),
+      sessionRunEvent("assistant_delta", { content: "hello" }, 2),
+    ]
+    const context = {
+      activeSessionRunId: "run-1",
+      currentSessionId: "session-1",
+      isWorking: true,
+      now: 1000,
+      labels: { thinking: "正在思考" },
+    }
+    const first = applySessionRunTranscriptEvents(bundle(), events, context)
+    const replay = applySessionRunTranscriptEvents(first.bundle, events, context)
+
+    expect(replay.changed).toBe(false)
+    expect(replay.bundle).toBe(first.bundle)
+    expect(replay.eventKeys).toEqual(first.eventKeys)
+    expect(first.bundle.turns[0].assistantMessages[0].parts).toHaveLength(1)
+  })
+
+  it("finalizes a contiguous streamed assistant text block in place", () => {
     let current = bundle()
     current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
     current = reduce(current, "assistant_delta", { content: "hel" }, 2)
@@ -83,7 +155,7 @@ describe("sessionRunTranscriptReducer", () => {
 
     expect(parts).toHaveLength(1)
     expect(parts[0].id).toBe(streamingPart.id)
-    expect(parts[0].id).toBe("assistant-stream-run-1")
+    expect(parts[0].id).toBe("assistant-stream-2-0")
     expect(parts[0]).toMatchObject({
       type: "assistant_text",
       markdown: "hello",
@@ -92,7 +164,7 @@ describe("sessionRunTranscriptReducer", () => {
     })
   })
 
-  it("keeps streamed reasoning and final reasoning in the same block", () => {
+  it("finalizes a contiguous streamed reasoning block in place", () => {
     let current = bundle()
     current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
     current = reduce(current, "reasoning_delta", { content: "plan " }, 2)
@@ -110,11 +182,154 @@ describe("sessionRunTranscriptReducer", () => {
 
     expect(parts).toHaveLength(1)
     expect(parts[0].id).toBe(thinkingPart.id)
-    expect(parts[0].id).toBe("thinking-run-1")
+    expect(parts[0].id).toBe("thinking-2-0")
     expect(parts[0]).toMatchObject({
       type: "reasoning",
       raw: "plan more",
       format: "markdown",
+    })
+  })
+
+  it("does not merge assistant deltas across an intervening tool card", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
+    current = reduce(current, "assistant_delta", { content: "A" }, 2)
+    current = reduce(current, "tool_call_start", {
+      tool_call_id: "tool-1",
+      tool_name: "shell",
+      tool_args: { command: "npm test" },
+    }, 3)
+    current = reduce(current, "assistant_delta", { content: "B" }, 4)
+
+    const parts = current.turns[0].assistantMessages[0].parts
+    expect(parts).toHaveLength(3)
+    expect(parts[0]).toMatchObject({
+      type: "assistant_text",
+      markdown: "A",
+      streaming: false,
+      streamKey: "assistant-message",
+    })
+    expect(parts[1]).toMatchObject({
+      type: "tool",
+      toolCallId: "tool-1",
+    })
+    expect(parts[2]).toMatchObject({
+      type: "assistant_text",
+      markdown: "B",
+      streaming: true,
+      streamKey: "assistant-stream",
+    })
+  })
+
+  it("does not merge assistant deltas across intervening view and context cards", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
+    current = reduce(current, "assistant_delta", { content: "A" }, 2)
+    current = reduce(current, "view", { title: "结构化视图", payload: { value: 1 } }, 3)
+    current = reduce(current, "assistant_delta", { content: "B" }, 4)
+    current = reduce(current, "context_event", { message: "上下文事件", value: 2 }, 5)
+    current = reduce(current, "assistant_delta", { content: "C" }, 6)
+
+    const parts = current.turns[0].assistantMessages[0].parts
+    expect(parts.map((part) => part.type)).toEqual([
+      "assistant_text",
+      "view",
+      "assistant_text",
+      "context_event",
+      "assistant_text",
+    ])
+    expect(parts[0]).toMatchObject({ markdown: "A", streamKey: "assistant-message" })
+    expect(parts[2]).toMatchObject({ markdown: "B", streamKey: "assistant-message" })
+    expect(parts[4]).toMatchObject({ markdown: "C", streamKey: "assistant-stream" })
+  })
+
+  it("continues the same reasoning stream across tool, view, and context cards", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
+    current = reduce(current, "reasoning_delta", { content: "A" }, 2)
+    current = reduce(current, "view", { title: "结构化视图", payload: { value: 1 } }, 3)
+    current = reduce(current, "context_event", { message: "上下文事件", value: 2 }, 4)
+    current = reduce(current, "tool_call_delta", {
+      index: 0,
+      tool_name: "shell",
+      content: "{\"command\":\"npm test\"}",
+    }, 5)
+    current = reduce(current, "reasoning_delta", { content: "B" }, 6)
+
+    const parts = current.turns[0].assistantMessages[0].parts
+    expect(parts).toHaveLength(4)
+    expect(parts.filter((part) => part.type === "thinking")).toHaveLength(1)
+    expect(parts[0]).toMatchObject({
+      type: "thinking",
+      raw: "AB",
+      active: true,
+    })
+    expect(parts[1]).toMatchObject({
+      type: "view",
+    })
+    expect(parts[2]).toMatchObject({
+      type: "context_event",
+    })
+    expect(parts[3]).toMatchObject({
+      type: "tool",
+      toolCallId: "preparing:run-1:0",
+      status: "preparing",
+    })
+  })
+
+  it("finalizes reasoning in place across intervening process cards", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
+    current = reduce(current, "reasoning_delta", { content: "plan" }, 2)
+    current = reduce(current, "tool_call_start", {
+      tool_call_id: "tool-1",
+      tool_name: "shell",
+      tool_args: { command: "npm test" },
+    }, 3)
+    current = reduce(current, "reasoning_message", { content: "plan final", format: "markdown" }, 4)
+
+    const parts = current.turns[0].assistantMessages[0].parts
+    expect(parts).toHaveLength(2)
+    expect(parts[0]).toMatchObject({
+      type: "reasoning",
+      id: "thinking-2-0",
+      raw: "plan final",
+      format: "markdown",
+    })
+    expect(parts[1]).toMatchObject({
+      type: "tool",
+      toolCallId: "tool-1",
+    })
+  })
+
+  it("only finalizes the trailing assistant stream on session run end", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
+    current = reduce(current, "assistant_delta", { content: "A" }, 2)
+    current = reduce(current, "tool_call_start", {
+      tool_call_id: "tool-1",
+      tool_name: "shell",
+      tool_args: { command: "npm test" },
+    }, 3)
+    current = reduce(current, "assistant_delta", { content: "B" }, 4)
+    current = reduce(current, "session_run_end", { response: "B final", response_rendered: false }, 5)
+
+    const parts = current.turns[0].assistantMessages[0].parts
+    expect(parts).toHaveLength(3)
+    expect(parts[0]).toMatchObject({
+      type: "assistant_text",
+      markdown: "A",
+      streamKey: "assistant-message",
+    })
+    expect(parts[1]).toMatchObject({
+      type: "tool",
+      toolCallId: "tool-1",
+    })
+    expect(parts[2]).toMatchObject({
+      type: "assistant_text",
+      markdown: "B final",
+      streaming: false,
+      streamKey: "assistant-message",
     })
   })
 
@@ -198,7 +413,7 @@ describe("sessionRunTranscriptReducer", () => {
     const parts = current.turns[0].assistantMessages[0].parts
     expect(parts).toHaveLength(1)
     expect(parts[0]).toMatchObject({
-      id: "assistant-stream-run-1",
+      id: "assistant-stream-2-0",
       type: "assistant_text",
       markdown: "hello",
       streaming: false,

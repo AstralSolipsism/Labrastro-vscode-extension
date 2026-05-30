@@ -1,7 +1,16 @@
+import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 import { normalizeRemoteSessionPayload, normalizeSessionBundle } from "./trace"
 
+const traceSource = readFileSync(new URL("./trace.tsx", import.meta.url), "utf8")
+
 describe("trace session normalization", () => {
+  it("supports writing session-run transcript batches to a target session without focusing it", () => {
+    expect(traceSource).toContain("applySessionRunTranscriptEventsToSession")
+    expect(traceSource).toContain("applyToCurrent: sessionId === currentSessionId()")
+    expect(traceSource).toContain("currentSessionId: context.currentSessionId ?? sessionId")
+  })
+
   it("normalizes persisted session-document parts into transcript items", () => {
     const bundle = normalizeSessionBundle({
       session: {

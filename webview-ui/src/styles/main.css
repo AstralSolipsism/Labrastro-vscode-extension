@@ -2923,14 +2923,12 @@ button.settings-list-card.is-selected,
 
 .capability-package-workbench {
   display: grid;
-  grid-template-columns: minmax(260px, 0.92fr) minmax(0, 1.08fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   align-items: start;
 }
 
-.capability-source-panel,
-.capability-draft-panel,
-.capability-draft-card {
+.capability-source-panel {
   min-width: 0;
   padding: 12px;
   border: 1px solid var(--ez-border);
@@ -2960,12 +2958,6 @@ button.settings-list-card.is-selected,
   white-space: nowrap;
 }
 
-.capability-draft-card {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
 .capability-package-card__head {
   justify-content: space-between;
 }
@@ -2978,14 +2970,12 @@ button.settings-list-card.is-selected,
 }
 
 .capability-package-card__head strong,
-.capability-package-card__head small,
-.capability-draft-card p {
+.capability-package-card__head small {
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
-.capability-package-card__head small,
-.capability-draft-card p {
+.capability-package-card__head small {
   color: var(--ez-muted);
   line-height: 1.45;
 }

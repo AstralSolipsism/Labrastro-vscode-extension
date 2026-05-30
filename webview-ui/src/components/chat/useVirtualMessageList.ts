@@ -63,6 +63,7 @@ export interface UseVirtualMessageListResult {
   bindScroll: (element: HTMLDivElement) => void
   bindItem: (item: VirtualTurnItem) => (element: HTMLDivElement) => void
   handleScroll: (event: Event) => void
+  notifyUserLayoutIntent: () => void
   userScrolled: Accessor<boolean>
   scrollToBottom: () => void
 }
@@ -81,6 +82,7 @@ const DEFAULT_OVERSCAN = 6
 const DEFAULT_VIEWPORT_HEIGHT = 640
 const DEFAULT_CONTENT_WIDTH = 360
 const BOTTOM_THRESHOLD = 28
+const USER_LAYOUT_INTENT_WINDOW_MS = 1500
 
 export function computeOffsets(itemHeights: readonly number[]): number[] {
   const offsets = [0]
@@ -165,12 +167,14 @@ export type HeightChangeScrollAction = "anchor" | "follow" | "detach" | "none"
 
 export function resolveHeightChangeScrollAction(input: {
   userScrolled: boolean
+  userLayoutIntent?: boolean
   followLiveOutput: boolean
   isWorking: boolean
   itemTop: number
   scrollTop: number
   delta: number
 }): HeightChangeScrollAction {
+  if (input.userLayoutIntent && input.delta > 0) return "detach"
   if (input.userScrolled && input.itemTop < input.scrollTop) return "anchor"
   if (input.userScrolled) return "none"
   if (!input.userScrolled && input.followLiveOutput) return "follow"
@@ -199,6 +203,7 @@ export function useVirtualMessageList(options: UseVirtualMessageListOptions): Us
   let lastDiagnosticsAt = 0
   let followLiveOutput = false
   let observedTurnCount: number | undefined
+  let userLayoutIntentUntil = 0
   const observedItems = new Map<string, { element: HTMLDivElement; observer?: ResizeObserver }>()
 
   const turnRecords = createMemo<TurnRecord[]>(() => {
@@ -207,9 +212,11 @@ export function useVirtualMessageList(options: UseVirtualMessageListOptions): Us
     const measured = measuredHeights()
     const estimator = options.estimateHeight || estimateTurnHeight
     return options.turns().map((turn, index) => {
-      const heightKey = turnHeightCacheKey(turn, width)
       const measureKey = virtualTurnMeasureKey(turn, width, index)
       const measuredHeight = measured.get(measureKey)
+      const heightKey = measuredHeight !== undefined
+        ? `measured:${measureKey}`
+        : turnHeightCacheKey(turn, width)
       return {
         id: turn.userMessage.id,
         turn,
@@ -282,10 +289,17 @@ export function useVirtualMessageList(options: UseVirtualMessageListOptions): Us
   }
 
   const scrollToBottom = () => {
+    userLayoutIntentUntil = 0
     followLiveOutput = true
     setUserScrolled(false)
     scheduleScrollToBottom()
   }
+
+  const notifyUserLayoutIntent = () => {
+    userLayoutIntentUntil = Date.now() + USER_LAYOUT_INTENT_WINDOW_MS
+  }
+
+  const hasUserLayoutIntent = () => userLayoutIntentUntil > Date.now()
 
   const scheduleScrollToBottom = () => {
     if (pendingScrollFrame) return
@@ -347,6 +361,7 @@ export function useVirtualMessageList(options: UseVirtualMessageListOptions): Us
     if (!elementScroll) return
     const action = resolveHeightChangeScrollAction({
       userScrolled: untrack(userScrolled),
+      userLayoutIntent: hasUserLayoutIntent(),
       followLiveOutput,
       isWorking: untrack(options.isWorking),
       itemTop,
@@ -364,6 +379,7 @@ export function useVirtualMessageList(options: UseVirtualMessageListOptions): Us
       return
     }
     if (action === "detach") {
+      followLiveOutput = false
       setUserScrolled(true)
     }
   }
@@ -395,7 +411,7 @@ export function useVirtualMessageList(options: UseVirtualMessageListOptions): Us
     const turnStats = getTurnHeightCacheStats()
     if (now - lastDiagnosticsAt < 1500) return
     lastDiagnosticsAt = now
-    console.debug("[EZCode] virtual-message-list", {
+    console.debug("[Labrastro] virtual-message-list", {
       turns: turnRecords().length,
       visible: visibleItems().length,
       range: [state.startIndex, state.endIndex],
@@ -426,6 +442,7 @@ export function useVirtualMessageList(options: UseVirtualMessageListOptions): Us
     bindScroll,
     bindItem,
     handleScroll,
+    notifyUserLayoutIntent,
     userScrolled,
     scrollToBottom,
   }

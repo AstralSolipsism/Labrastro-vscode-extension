@@ -118,12 +118,15 @@ function estimateAssistantMessageHeight(message: MockMessage, width: number, met
 function estimatePresentationItemHeight(item: TranscriptPresentationItem, width: number, metrics: TurnHeightMetrics): number {
   if (item.type === "timeline_text") return estimateTextPartHeight(item.part, width, metrics)
   if (item.type === "timeline_notice") return estimatePlainCardHeight(item.part.text, width, 32, metrics)
+  if (item.type === "timeline_part") return estimatePartHeight(item.part, width, metrics)
+  if (item.type === "timeline_process_group") return 38
+  if (item.type === "process_summary") return 38
+  if (item.type === "reasoning_panel") return 38
   if (item.type === "final_answer") {
     const heights = item.parts.map((part) => estimateTextPartHeight(part, width, metrics))
-    const gaps = Math.max(0, heights.length - 1) * metrics.partGap
-    return heights.reduce((sum, height) => sum + height, 0) + gaps
+    return heights.reduce((sum, height) => sum + height, 0) + Math.max(0, heights.length - 1) * metrics.partGap
   }
-  return 30
+  return 38
 }
 
 function estimatePartHeight(part: TranscriptItem, width: number, metrics: TurnHeightMetrics): number {
@@ -319,6 +322,12 @@ function presentationDigestSource(item: TranscriptPresentationItem): Record<stri
       format: item.part.format,
     }
   }
+  if (item.type === "timeline_process_group") {
+    return {
+      type: item.type,
+      group: processGroupDigestSource(item.group),
+    }
+  }
   if (item.type === "reasoning_panel") {
     return {
       type: item.type,
@@ -327,12 +336,6 @@ function presentationDigestSource(item: TranscriptPresentationItem): Record<stri
       raw: textDigestSource(item.panel.raw),
       summary: textDigestSource(item.panel.summary || ""),
       count: item.panel.count,
-    }
-  }
-  if (item.type === "timeline_process_group") {
-    return {
-      type: item.type,
-      group: processGroupDigestSource(item.group),
     }
   }
   if (item.type === "process_summary") {
@@ -345,16 +348,25 @@ function presentationDigestSource(item: TranscriptPresentationItem): Record<stri
       items: item.summary.items.map(processTimelineItemDigestSource),
     }
   }
-  return {
-    type: item.type,
-    parts: item.parts.map((part) => ({
-      id: part.id,
-      markdown: part.markdown,
-      format: part.format,
-      streaming: part.streaming,
-      streamKey: part.streamKey,
-    })),
+  if (item.type === "final_answer") {
+    return {
+      type: item.type,
+      parts: item.parts.map((part) => ({
+        id: part.id,
+        markdown: textDigestSource(part.markdown || ""),
+        format: part.format,
+        streaming: part.streaming,
+        streamKey: part.streamKey,
+      })),
+    }
   }
+  if (item.type === "timeline_part") {
+    return {
+      type: item.type,
+      part: processPartDigestSource(item.part),
+    }
+  }
+  return {}
 }
 
 function processTimelineItemDigestSource(item: ProcessTimelineItem): Record<string, unknown> {
@@ -375,6 +387,12 @@ function processTimelineItemDigestSource(item: ProcessTimelineItem): Record<stri
       level: item.part.level,
       text: item.part.text,
       format: item.part.format,
+    }
+  }
+  if (item.type === "timeline_part") {
+    return {
+      type: item.type,
+      part: processPartDigestSource(item.part),
     }
   }
   return {
@@ -403,9 +421,15 @@ function processPartDigestSource(part: TranscriptItem): Record<string, unknown> 
     type: part.type,
     trace: part.traceNodeStatus,
     title: "title" in part ? part.title : undefined,
+    markdown: part.type === "assistant_text" ? textDigestSource(part.markdown || "") : undefined,
+    raw: part.type === "thinking" || part.type === "reasoning" ? textDigestSource(part.raw || "") : undefined,
     text: part.type === "notice" ? part.text : undefined,
     level: "level" in part ? part.level : undefined,
+    active: part.type === "thinking" ? part.active : undefined,
     summary: part.type === "session" || part.type === "parallel_tools" || part.type === "parallel_sessions" ? part.summary : undefined,
+    reasoningSummary: part.type === "reasoning" ? textDigestSource(part.summary || "") : undefined,
+    streaming: part.type === "assistant_text" ? part.streaming : undefined,
+    streamKey: part.type === "assistant_text" || part.type === "thinking" ? part.streamKey : undefined,
     tool: part.type === "tool" ? part.tool : undefined,
     source: part.type === "tool" ? part.source : undefined,
     outputFormat: part.type === "tool" ? part.outputFormat : undefined,

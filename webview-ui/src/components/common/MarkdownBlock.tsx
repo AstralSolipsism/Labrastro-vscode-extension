@@ -12,7 +12,7 @@ interface MarkdownBlockProps {
 const UNSAFE_PROTOCOL = /^(?:javascript|command|data|vbscript):/i
 const DRIVE_LINE_TARGET = /^([A-Za-z]:[\\/].*?)(?::(\d+))(?::(\d+))?$/
 const PATH_LINE_TARGET = /^(.+?)(?::(\d+))(?::(\d+))?$/
-const STREAMING_RENDER_INTERVAL_MS = 64
+const STREAMING_RENDER_INTERVAL_MS = 32
 
 export const MarkdownBlock: Component<MarkdownBlockProps> = (props) => {
   const vscode = useVSCode()
@@ -65,7 +65,9 @@ export const MarkdownBlock: Component<MarkdownBlockProps> = (props) => {
       return
     }
     const elapsed = Date.now() - lastStreamingRenderAt
-    const delay = Math.max(0, STREAMING_RENDER_INTERVAL_MS - elapsed)
+    const delay = typeof document !== "undefined" && document.visibilityState === "hidden"
+      ? STREAMING_RENDER_INTERVAL_MS
+      : Math.max(0, STREAMING_RENDER_INTERVAL_MS - elapsed)
     const scheduleFrame = () => {
       timeoutId = undefined
       if (typeof requestAnimationFrame === "function") {

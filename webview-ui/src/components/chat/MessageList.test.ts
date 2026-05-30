@@ -14,4 +14,11 @@ describe("MessageList working indicator", () => {
     expect(source).toContain("runningProcessLabel={props.workingText}")
     expect(source).toContain("runningProcessLabel={props.runningProcessLabel}")
   })
+
+  it("marks card layout toggles before virtualization handles height growth", () => {
+    expect(source).toContain("const LAYOUT_TOGGLE_SELECTOR")
+    expect(source).toContain("virtualList.notifyUserLayoutIntent()")
+    expect(source).toContain("onPointerDown={markUserLayoutIntent}")
+    expect(source).toContain("onKeyDown={markKeyboardLayoutIntent}")
+  })
 })

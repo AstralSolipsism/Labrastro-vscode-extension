@@ -26,12 +26,24 @@ describe("ChatView context events", () => {
   it("routes live deltas into the canonical transcript reducer", () => {
     expect(source).toContain('msg.type === "sessionRun.stream"')
     expect(source).toContain("const handleLiveStreamEvent =")
-    expect(source).toContain("applyTranscriptReducer(event, type)")
-    expect(source).toContain("trace.applySessionRunTranscriptEvent(event")
-    expect(source).toContain("if (transcriptHandled || isSessionRunTranscriptEventType(type)) {")
+    expect(source).toContain("const isBufferableLiveTranscriptEvent =")
+    expect(source).toContain("LIVE_TRANSCRIPT_EVENT_TYPES.has(type) && isSessionRunTranscriptEventType(type)")
+    expect(source).toContain("let liveTranscriptEvents")
+    expect(source).toContain("const pendingLiveEventKeys = new Set<string>()")
+    expect(source).toContain("scheduleLiveTranscriptFlush()")
+    expect(source).toContain("trace.applySessionRunTranscriptEventsToSession(")
+    expect(source).toContain("LIVE_TRANSCRIPT_FLUSH_MAX_DELAY_MS = 32")
     const liveHandlerStart = source.indexOf("const handleLiveStreamEvent =")
     const remoteHandlerStart = source.indexOf("const handleRemoteEvent =", liveHandlerStart)
     const liveHandlerSource = source.slice(liveHandlerStart, remoteHandlerStart)
+    expect(liveHandlerSource).toContain("const liveEvent = createLiveTranscriptEvent(event, payload, eventMeta)")
+    expect(liveHandlerSource).toContain("markPendingLiveEvent(eventMeta)")
+    expect(liveHandlerSource).toContain("liveTranscriptEvents.push(liveEvent)")
+    const bufferedBranch = liveHandlerSource.slice(
+      liveHandlerSource.indexOf("if (liveEvent) {"),
+      liveHandlerSource.indexOf("if (applyTranscriptReducer(event, type))")
+    )
+    expect(bufferedBranch).not.toContain("markRenderedEvent(eventMeta)")
     expect(liveHandlerSource).not.toContain("updateThinkingFromReasoning")
     expect(liveHandlerSource).not.toContain("upsertAssistantStream")
     expect(liveHandlerSource).not.toContain("appendToolCallDeltaToToolPart")
@@ -39,6 +51,35 @@ describe("ChatView context events", () => {
     expect(source).toContain("const visibleTurns =")
     expect(source).toContain('format: "markdown"')
     expect(source).toContain('type: "thinking"')
+  })
+
+  it("keeps session-run transcript events on the canonical reducer path", () => {
+    const reducerStart = source.indexOf("const applyTranscriptReducer =")
+    const appendAssistantStart = source.indexOf("const appendAssistantTextItem =", reducerStart)
+    const reducerSource = source.slice(reducerStart, appendAssistantStart)
+    const remoteHandlerStart = source.indexOf("const handleRemoteEvent =")
+    const sendCancelStart = source.indexOf("const sendCancel =", remoteHandlerStart)
+    const remoteHandlerSource = source.slice(remoteHandlerStart, sendCancelStart)
+
+    expect(reducerSource).toContain("if (!isSessionRunTranscriptEventType(type)) return false")
+    expect(reducerSource).toContain("trace.applySessionRunTranscriptEvent(event")
+    expect(remoteHandlerSource).toContain("const canonicalTranscriptEvent = isSessionRunTranscriptEventType(type)")
+    expect(remoteHandlerSource).toContain("applyTranscriptReducer(event, type, {")
+    expect(remoteHandlerSource).toContain("if (!canonicalTranscriptEvent && shouldArchiveActiveStreamBeforeEvent")
+    expect(remoteHandlerSource).toContain("if (!canonicalTranscriptEvent && prompt")
+    expect(remoteHandlerSource).toContain("if (!canonicalTranscriptEvent && payload.response")
+  })
+
+  it("flushes buffered live transcript events before structural session-run events", () => {
+    const remoteHandlerStart = source.indexOf("const handleRemoteEvent =")
+    const sendCancelStart = source.indexOf("const sendCancel =", remoteHandlerStart)
+    const remoteHandlerSource = source.slice(remoteHandlerStart, sendCancelStart)
+
+    expect(source).toContain("const flushLiveTranscriptEvents =")
+    expect(source).toContain('if (msg.type !== "sessionRun.stream")')
+    expect(source).toContain("flushLiveTranscriptEvents()")
+    expect(remoteHandlerSource).toContain("handleLiveStreamEvent(event)")
+    expect(remoteHandlerSource).toContain("flushLiveTranscriptEvents()")
   })
 
   it("keeps active draft archiving outside canonical session-run transcript events", () => {
@@ -166,6 +207,35 @@ describe("ChatView context events", () => {
     expect(source).toContain("findChatCommandByText(chatCommandCatalog(), text)")
     expect(source).toContain("isWorking() && !command?.availableDuringRun")
     expect(source).toContain("当前运行中不能执行该指令")
+  })
+
+  it("routes capability package draft revision text through the main input follow-up path", () => {
+    const handleSendStart = source.indexOf("const handleSend =")
+    const handleSubmitStart = source.indexOf("const canSubmitComposerAction =", handleSendStart)
+    const handleSendSource = source.slice(handleSendStart, handleSubmitStart)
+
+    expect(source).toContain("const shouldRouteCapabilityPackageRevisionInput =")
+    expect(source).toContain('approval.toolName === "install_capability_package"')
+    expect(source).toContain('mode === "capability_package"')
+    expect(source).toContain('workflow === "capability_package_ingest"')
+    expect(handleSendSource).toContain("shouldRouteCapabilityPackageRevisionInput()")
+    expect(handleSendSource).toContain('? "guide"')
+    expect(handleSendSource).toContain("enqueuePrompt(current, rawText, mode")
+    const revisionRouteIndex = handleSendSource.indexOf("shouldRouteCapabilityPackageRevisionInput()")
+    const chatSendIndex = handleSendSource.indexOf("sendChatText(rawText")
+    expect(revisionRouteIndex).toBeGreaterThanOrEqual(0)
+    expect(chatSendIndex).toBeGreaterThan(revisionRouteIndex)
+    expect(handleSendSource.slice(revisionRouteIndex, chatSendIndex)).toContain("return")
+    expect(source).toContain("chatMessages.followUp(vscode")
+  })
+
+  it("restores capability package runtime state from resumed session runs", () => {
+    const resumeStart = source.indexOf('if (msg.type === "sessionRun.resume"')
+    const sessionStart = source.indexOf('if (msg.type === "sessionRun.session"', resumeStart)
+    const resumeSource = source.slice(resumeStart, sessionStart)
+
+    expect(resumeSource).toContain("sessionRuntimeStateFromMessage(msg as Record<string, unknown>, payload)")
+    expect(resumeSource).toContain("setSessionRuntimeState(runtime)")
   })
 
   it("preserves raw non-command text so leading-space slash input stays chat text", () => {

@@ -28,7 +28,7 @@ import {
 } from "../utils/session-history"
 import { buildOrchestrationGraph, getRootSessionId } from "../utils/trace-orchestration"
 import {
-  applySessionRunTranscriptEvent,
+  applySessionRunTranscriptEvents,
   type SessionRunTranscriptContext,
   type SessionRunTranscriptReduction,
 } from "../chat/sessionRunTranscriptReducer"
@@ -800,6 +800,15 @@ interface TraceContextValue {
     event: Record<string, unknown>,
     context?: SessionRunTranscriptContext,
   ) => SessionRunTranscriptReduction | undefined
+  applySessionRunTranscriptEventsToSession: (
+    sessionId: string,
+    events: readonly Record<string, unknown>[],
+    context?: SessionRunTranscriptContext,
+  ) => SessionRunTranscriptReduction | undefined
+  applySessionRunTranscriptEvents: (
+    events: readonly Record<string, unknown>[],
+    context?: SessionRunTranscriptContext,
+  ) => SessionRunTranscriptReduction | undefined
   patchStats: (patch: Partial<MockTaskStats>) => void
 }
 
@@ -1525,15 +1534,41 @@ export const TraceProvider: ParentComponent = (props) => {
     event: Record<string, unknown>,
     context: SessionRunTranscriptContext = {},
   ): SessionRunTranscriptReduction | undefined => {
-    let reduction: SessionRunTranscriptReduction | undefined
-    updateCurrentBundle((bundle) => {
-      reduction = applySessionRunTranscriptEvent(bundle, event, {
-        ...context,
-        currentSessionId: context.currentSessionId ?? currentSessionId(),
-      })
-      return reduction.bundle
+    return applyCurrentSessionRunTranscriptEvents([event], context)
+  }
+
+  const applySessionRunTranscriptEventsToSession = (
+    targetSessionId: string,
+    events: readonly Record<string, unknown>[],
+    context: SessionRunTranscriptContext = {},
+  ): SessionRunTranscriptReduction | undefined => {
+    const sessionId = stringValue(targetSessionId)
+    if (!sessionId || !events.length) return undefined
+
+    const bundle = getSessionBundle(sessionId)
+    if (!bundle) return undefined
+
+    const reduction = applySessionRunTranscriptEvents(bundle, events, {
+      ...context,
+      currentSessionId: context.currentSessionId ?? sessionId,
     })
+    if (reduction.changed) {
+      writeSessionBundle(sessionId, reduction.bundle, {
+        applyToCurrent: sessionId === currentSessionId(),
+        preserveIntent: true,
+      })
+    }
     return reduction
+  }
+
+  const applyCurrentSessionRunTranscriptEvents = (
+    events: readonly Record<string, unknown>[],
+    context: SessionRunTranscriptContext = {},
+  ): SessionRunTranscriptReduction | undefined => {
+    const sessionId = currentSessionId()
+    return sessionId
+      ? applySessionRunTranscriptEventsToSession(sessionId, events, context)
+      : undefined
   }
 
   const patchStats = (patch: Partial<MockTaskStats>) => {
@@ -1700,6 +1735,8 @@ export const TraceProvider: ParentComponent = (props) => {
     appendTurn,
     replaceLastAssistantMessages,
     applySessionRunTranscriptEvent: applyCurrentSessionRunTranscriptEvent,
+    applySessionRunTranscriptEventsToSession,
+    applySessionRunTranscriptEvents: applyCurrentSessionRunTranscriptEvents,
     patchStats,
   }
 

@@ -9,6 +9,19 @@ import type { MockTurn, MockSession, MockMessage } from "./mock-data"
 import type { ToolActivityItem, TranscriptItem } from "./transcript-model"
 import type { SessionListState } from "../../context/trace"
 
+const LAYOUT_TOGGLE_SELECTOR = [
+  ".tool-card__header",
+  ".shell-card__details-toggle",
+  ".terminal-card__header",
+  ".reasoning-card__header",
+  ".view-card__header",
+  ".context-event-card__header",
+  ".memory-context-card__header",
+  ".ui-event-card__header",
+  ".process-summary-card__header",
+  ".process-group-card__header",
+].join(", ")
+
 interface MessageListProps {
   turns: MockTurn[]
   recentSessions: MockSession[]
@@ -36,12 +49,24 @@ export const MessageList: Component<MessageListProps> = (props) => {
     overscan: 6,
   })
   const isEmpty = () => props.turns.length === 0
+  const markUserLayoutIntent = (event: Event) => {
+    const target = event.target
+    if (!(target instanceof Element)) return
+    if (!target.closest(LAYOUT_TOGGLE_SELECTOR)) return
+    virtualList.notifyUserLayoutIntent()
+  }
+  const markKeyboardLayoutIntent = (event: KeyboardEvent) => {
+    if (event.key !== "Enter" && event.key !== " ") return
+    markUserLayoutIntent(event)
+  }
 
   return (
     <div class="message-list-container">
       <div
         ref={virtualList.bindScroll}
         onScroll={virtualList.handleScroll}
+        onPointerDown={markUserLayoutIntent}
+        onKeyDown={markKeyboardLayoutIntent}
         class="message-list"
         role="log"
         aria-live="polite"

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 import {
   applyMeasuredHeight,
@@ -8,6 +9,8 @@ import {
   virtualTurnMeasureKey,
 } from "./useVirtualMessageList"
 import type { MockTurn } from "./mock-data"
+
+const source = readFileSync(new URL("./useVirtualMessageList.ts", import.meta.url), "utf8")
 
 function turn(text: string): MockTurn {
   return {
@@ -73,6 +76,19 @@ describe("virtual message list windowing", () => {
     )
   })
 
+  it("uses measured row heights without recomputing content-digest height keys", () => {
+    const measuredBranch = source.slice(
+      source.indexOf("const measureKey = virtualTurnMeasureKey"),
+      source.indexOf("return {", source.indexOf("const measureKey = virtualTurnMeasureKey")),
+    )
+
+    expect(measuredBranch).toContain("const measuredHeight = measured.get(measureKey)")
+    expect(measuredBranch).toContain("const heightKey = measuredHeight !== undefined")
+    expect(measuredBranch.indexOf("const measureKey = virtualTurnMeasureKey")).toBeLessThan(
+      measuredBranch.indexOf("turnHeightCacheKey(turn, width)")
+    )
+  })
+
   it("follows streaming height growth while anchored to the bottom", () => {
     expect(resolveHeightChangeScrollAction({
       userScrolled: false,
@@ -114,5 +130,26 @@ describe("virtual message list windowing", () => {
       scrollTop: 800,
       delta: 24,
     })).toBe("follow")
+  })
+
+  it("detaches when a user layout toggle grows a card", () => {
+    expect(resolveHeightChangeScrollAction({
+      userScrolled: false,
+      userLayoutIntent: true,
+      followLiveOutput: true,
+      isWorking: true,
+      itemTop: 800,
+      scrollTop: 800,
+      delta: 24,
+    })).toBe("detach")
+    expect(resolveHeightChangeScrollAction({
+      userScrolled: true,
+      userLayoutIntent: true,
+      followLiveOutput: true,
+      isWorking: true,
+      itemTop: 200,
+      scrollTop: 800,
+      delta: 24,
+    })).toBe("detach")
   })
 })

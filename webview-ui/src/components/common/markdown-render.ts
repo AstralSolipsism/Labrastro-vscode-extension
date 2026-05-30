@@ -170,14 +170,29 @@ export function renderMarkdown(value: string, context = "default", options: Mark
 
 export function renderStreamingMarkdown(value: string, context = "default", options: MarkdownRenderOptions = {}): MarkdownRenderPart[] {
   const split = splitOpenCodeFence(value)
-  if (!split.openCode) return [{ type: "html", html: renderMarkdown(value, context, options) }]
+  const renderClosedMarkdown = (markdown: string, closedContext: string): MarkdownRenderPart[] => {
+    if (options.highlightCode !== false) {
+      return [{ type: "html", html: renderMarkdown(markdown, closedContext, options) }]
+    }
+    const stableSplit = splitStableStreamingMarkdown(markdown)
+    if (!stableSplit) {
+      return [{ type: "html", html: renderMarkdown(markdown, closedContext, options) }]
+    }
+    const parts: MarkdownRenderPart[] = []
+    if (stableSplit.stable) {
+      parts.push({ type: "html", html: renderMarkdown(stableSplit.stable, `${closedContext}:stable`, options) })
+    }
+    if (stableSplit.tail) {
+      parts.push({ type: "html", html: renderMarkdown(stableSplit.tail, `${closedContext}:tail`, options) })
+    }
+    return parts.length ? parts : [{ type: "html", html: renderMarkdown(markdown, closedContext, options) }]
+  }
+
+  if (!split.openCode) return renderClosedMarkdown(value, context)
 
   const parts: MarkdownRenderPart[] = []
   if (split.closedMarkdown.trim()) {
-    parts.push({
-      type: "html",
-      html: renderMarkdown(split.closedMarkdown, `${context}:closed`, options),
-    })
+    parts.push(...renderClosedMarkdown(split.closedMarkdown, `${context}:closed`))
   }
   parts.push({
     type: "open-code",
@@ -185,6 +200,19 @@ export function renderStreamingMarkdown(value: string, context = "default", opti
     language: split.openCode.language,
   })
   return parts
+}
+
+function splitStableStreamingMarkdown(value: string): { stable: string; tail: string } | undefined {
+  if (value.length < 1200) return undefined
+  const searchStart = Math.max(0, value.length - 3000)
+  const boundary = value.lastIndexOf("\n\n", value.length - 2)
+  if (boundary < searchStart || boundary <= 0) return undefined
+  const tailStart = boundary + 2
+  if (value.length - tailStart > 1600) return undefined
+  return {
+    stable: value.slice(0, tailStart),
+    tail: value.slice(tailStart),
+  }
 }
 
 export function clearMarkdownRenderCache(): void {

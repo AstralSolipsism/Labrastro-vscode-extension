@@ -52,6 +52,8 @@ export interface SessionRunTranscriptReduction {
   changed: boolean
   eventKey?: string
   sessionEventSeq?: number
+  eventKeys?: string[]
+  sessionEventSeqs?: number[]
 }
 
 type EventRenderMeta = { eventKey?: string; sessionEventSeq?: number }
@@ -110,8 +112,66 @@ const DEFAULT_LABELS: SessionRunTranscriptLabels = {
 }
 
 const REASONING_STREAM_KEY = "reasoning-stream"
+const ASSISTANT_STREAM_KEY = "assistant-stream"
+const ASSISTANT_MESSAGE_KEY = "assistant-message"
 
 export function applySessionRunTranscriptEvent(
+  bundle: MockSessionBundle,
+  event: Record<string, unknown>,
+  context: SessionRunTranscriptContext = {},
+): SessionRunTranscriptReduction {
+  const reduction = applySessionRunTranscriptEvents(bundle, [event], context)
+  return {
+    ...reduction,
+    eventKey: reduction.eventKeys?.[0] ?? reduction.eventKey,
+    sessionEventSeq: reduction.sessionEventSeqs?.[0] ?? reduction.sessionEventSeq,
+  }
+}
+
+// TranscriptItem[] stores canonical session-run event facts only. User-facing
+// grouping, reasoning placement, and final-answer ordering belong to
+// buildTranscriptPresentation().
+
+export function applySessionRunTranscriptEvents(
+  bundle: MockSessionBundle,
+  events: readonly Record<string, unknown>[],
+  context: SessionRunTranscriptContext = {},
+): SessionRunTranscriptReduction {
+  if (!events.length) {
+    return { bundle, changed: false, eventKeys: [], sessionEventSeqs: [] }
+  }
+
+  const next = cloneBundle(bundle)
+  const eventKeys: string[] = []
+  const sessionEventSeqs: number[] = []
+  let changed = false
+  let lastEventKey: string | undefined
+  let lastSessionEventSeq: number | undefined
+
+  for (const event of events) {
+    const reduction = applySessionRunTranscriptEventToBundle(next, event, context)
+    if (reduction.eventKey) {
+      eventKeys.push(reduction.eventKey)
+      lastEventKey = reduction.eventKey
+    }
+    if (reduction.sessionEventSeq !== undefined) {
+      sessionEventSeqs.push(reduction.sessionEventSeq)
+      lastSessionEventSeq = reduction.sessionEventSeq
+    }
+    changed = reduction.changed || changed
+  }
+
+  return {
+    bundle: changed ? next : bundle,
+    changed,
+    eventKey: lastEventKey,
+    sessionEventSeq: lastSessionEventSeq,
+    eventKeys,
+    sessionEventSeqs,
+  }
+}
+
+function applySessionRunTranscriptEventToBundle(
   bundle: MockSessionBundle,
   event: Record<string, unknown>,
   context: SessionRunTranscriptContext = {},
@@ -123,7 +183,7 @@ export function applySessionRunTranscriptEvent(
     return { bundle, changed: false, ...meta }
   }
 
-  const next = cloneBundle(bundle)
+  const next = bundle
   const labels = { ...DEFAULT_LABELS, ...context.labels }
   const now = context.now ?? Date.now()
   let changed = false
@@ -140,16 +200,19 @@ export function applySessionRunTranscriptEvent(
     const clean = stripAnsi(text)
     const content = options.trim === false ? clean : clean.trim()
     if (!content) return
-    updateAssistantItems(next, (parts) => [
-      ...parts,
-      withEventMeta({
-        id: stablePartId(prefix, meta, now, parts.length),
-        type: "notice",
-        level,
-        text: content,
-        format: options.format || "plain",
-      }, meta),
-    ], context)
+    updateAssistantItems(next, (parts) => {
+      const nextParts = closeTrailingInlineStream(parts)
+      return [
+        ...nextParts,
+        withEventMeta({
+          id: stablePartId(prefix, meta, now, nextParts.length),
+          type: "notice",
+          level,
+          text: content,
+          format: options.format || "plain",
+        }, meta),
+      ]
+    }, context)
     markChanged()
   }
 
@@ -284,7 +347,7 @@ export function applySessionRunTranscriptEvent(
     markChanged()
   }
 
-  return { bundle: changed ? next : bundle, changed, ...meta }
+  return { bundle: next, changed, ...meta }
 }
 
 function cloneBundle(bundle: MockSessionBundle): MockSessionBundle {
@@ -334,6 +397,35 @@ function withEventMeta<T extends TranscriptItem>(item: T, meta?: EventRenderMeta
 
 function stablePartId(prefix: string, meta: EventRenderMeta, now: number, index: number): string {
   return `${prefix}-${meta.sessionEventSeq ?? now}-${index}`
+}
+
+function closeTrailingInlineStream(parts: TranscriptItem[]): TranscriptItem[] {
+  const last = parts[parts.length - 1]
+  if (!last) return parts
+
+  let nextLast: TranscriptItem | undefined
+  if (last.type === "assistant_text" && last.streamKey === ASSISTANT_STREAM_KEY) {
+    nextLast = {
+      ...last,
+      streaming: false,
+      streamKey: ASSISTANT_MESSAGE_KEY,
+    }
+  } else if (isReasoningThinkingItem(last)) {
+    nextLast = {
+      ...last,
+      active: false,
+    }
+  }
+
+  if (!nextLast) return parts
+  return [...parts.slice(0, -1), nextLast]
+}
+
+function findLastItemIndex<T>(items: T[], predicate: (item: T) => boolean): number {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (predicate(items[index])) return index
+  }
+  return -1
 }
 
 function ensureAssistantMessage(bundle: MockSessionBundle, context: SessionRunTranscriptContext): MockMessage {
@@ -392,16 +484,19 @@ function appendAssistantText(
   const content = options.trim === false ? clean : clean.trim()
   if (!content) return
   const now = context.now ?? Date.now()
-  updateAssistantItems(bundle, (parts) => [
-    ...parts,
-    withEventMeta({
-      id: stablePartId(prefix, meta, now, parts.length),
-      type: "assistant_text",
-      markdown: content,
-      format: options.format || "plain",
-      streamKey: prefix,
-    }, meta),
-  ], context)
+  updateAssistantItems(bundle, (parts) => {
+    const nextParts = closeTrailingInlineStream(parts)
+    return [
+      ...nextParts,
+      withEventMeta({
+        id: stablePartId(prefix, meta, now, nextParts.length),
+        type: "assistant_text",
+        markdown: content,
+        format: options.format || "plain",
+        streamKey: prefix,
+      }, meta),
+    ]
+  }, context)
 }
 
 function upsertAssistantStream(
@@ -413,30 +508,29 @@ function upsertAssistantStream(
   const content = stripAnsi(text)
   if (!content) return
   updateAssistantItems(bundle, (parts) => {
-    const index = findLastItemIndex(parts, (part) =>
-      part.type === "assistant_text" && part.streamKey === "assistant-stream"
-    )
-    if (index >= 0) {
+    const last = parts[parts.length - 1]
+    if (last?.type === "assistant_text" && last.streamKey === ASSISTANT_STREAM_KEY) {
       const next = [...parts]
-      const current = next[index] as AssistantTextItem
-      next[index] = withEventMeta({
+      const current = last
+      next[next.length - 1] = withEventMeta({
         ...current,
         markdown: `${current.markdown || ""}${content}`,
         format: "markdown",
         streaming: true,
-        streamKey: "assistant-stream",
+        streamKey: ASSISTANT_STREAM_KEY,
       }, meta)
       return next
     }
+    const nextParts = closeTrailingInlineStream(parts)
     return [
-      ...parts,
+      ...nextParts,
       withEventMeta({
-        id: `assistant-stream-${context.activeSessionRunId || meta.sessionEventSeq || "pending"}`,
+        id: stablePartId("assistant-stream", meta, context.now ?? Date.now(), nextParts.length),
         type: "assistant_text",
         markdown: content,
         format: "markdown",
         streaming: true,
-        streamKey: "assistant-stream",
+        streamKey: ASSISTANT_STREAM_KEY,
       }, meta),
     ]
   }, context)
@@ -451,29 +545,28 @@ function finalizeAssistant(
   const content = stripAnsi(text).trim()
   if (!content) return
   updateAssistantItems(bundle, (parts) => {
-    const streamIndex = findLastItemIndex(parts, (part) =>
-      part.type === "assistant_text" && part.streamKey === "assistant-stream"
-    )
-    if (streamIndex >= 0) {
+    const last = parts[parts.length - 1]
+    if (last?.type === "assistant_text" && last.streamKey === ASSISTANT_STREAM_KEY) {
       const next = [...parts]
-      next[streamIndex] = withEventMeta({
-        ...next[streamIndex] as AssistantTextItem,
+      next[next.length - 1] = withEventMeta({
+        ...last,
         markdown: content,
         format: "markdown",
         streaming: false,
-        streamKey: "assistant-message",
+        streamKey: ASSISTANT_MESSAGE_KEY,
       }, meta)
       return next
     }
+    const nextParts = closeTrailingInlineStream(parts)
     return [
-      ...parts,
+      ...nextParts,
       withEventMeta({
-        id: stablePartId("assistant-message", meta, context.now ?? Date.now(), parts.length),
+        id: stablePartId("assistant-message", meta, context.now ?? Date.now(), nextParts.length),
         type: "assistant_text",
         markdown: content,
         format: "markdown",
         streaming: false,
-        streamKey: "assistant-message",
+        streamKey: ASSISTANT_MESSAGE_KEY,
       }, meta),
     ]
   }, context)
@@ -497,16 +590,17 @@ function upsertReasoningThinking(
       raw: `${part.raw || ""}${content}`,
       streamKey: REASONING_STREAM_KEY,
     }, meta)
-    const index = findLastItemIndex(parts, isReasoningThinkingItem)
-    if (index >= 0) {
+    const thinkingIndex = findLastItemIndex(parts, isReasoningThinkingItem)
+    if (thinkingIndex >= 0) {
       const next = [...parts]
-      next[index] = updateThinkingItem(next[index] as ThinkingItem)
+      next[thinkingIndex] = updateThinkingItem(parts[thinkingIndex] as ThinkingItem)
       return next
     }
+    const nextParts = closeTrailingInlineStream(parts)
     return [
-      ...parts,
+      ...nextParts,
       withEventMeta({
-        id: `thinking-${context.activeSessionRunId || meta.sessionEventSeq || "pending"}`,
+        id: stablePartId("thinking", meta, context.now ?? Date.now(), nextParts.length),
         type: "thinking",
         title: labels.thinking,
         active: true,
@@ -540,17 +634,20 @@ function finalizeReasoning(
     const thinkingIndex = findLastItemIndex(parts, isReasoningThinkingItem)
     if (thinkingIndex >= 0) {
       const next = [...parts]
-      next[thinkingIndex] = createReasoning(next[thinkingIndex].id)
+      next[thinkingIndex] = createReasoning(parts[thinkingIndex].id)
       return next
     }
     const reasoningIndex = findLastItemIndex(parts, (part) => part.type === "reasoning")
     if (reasoningIndex >= 0) {
       const next = [...parts]
-      const current = next[reasoningIndex] as ReasoningItem
-      next[reasoningIndex] = createReasoning(current.id)
+      next[reasoningIndex] = createReasoning(parts[reasoningIndex].id)
       return next
     }
-    return [...parts, createReasoning(stablePartId("reasoning-message", meta, context.now ?? Date.now(), parts.length))]
+    const nextParts = closeTrailingInlineStream(parts)
+    return [
+      ...nextParts,
+      createReasoning(stablePartId("reasoning-message", meta, context.now ?? Date.now(), nextParts.length)),
+    ]
   }, context)
 }
 
@@ -563,15 +660,18 @@ function appendTerminal(
 ): void {
   const clean = stripAnsi(content).trim()
   if (!clean || isRemotePeerReadyTui(clean)) return
-  updateAssistantItems(bundle, (parts) => [
-    ...parts,
-    withEventMeta({
-      id: stablePartId("terminal", meta, context.now ?? Date.now(), parts.length),
-      type: "terminal",
-      title,
-      content: clean,
-    }, meta),
-  ], context)
+  updateAssistantItems(bundle, (parts) => {
+    const nextParts = closeTrailingInlineStream(parts)
+    return [
+      ...nextParts,
+      withEventMeta({
+        id: stablePartId("terminal", meta, context.now ?? Date.now(), nextParts.length),
+        type: "terminal",
+        title,
+        content: clean,
+      }, meta),
+    ]
+  }, context)
 }
 
 function appendView(
@@ -585,17 +685,20 @@ function appendView(
   const nestedPayload = objectValue(payload.payload)
   const viewPayload = Object.keys(nestedPayload).length ? nestedPayload : payload
   if (!hasMeaningfulPayload(viewPayload)) return
-  updateAssistantItems(bundle, (parts) => [
-    ...parts,
-    withEventMeta({
-      id: stablePartId("view", meta, now, parts.length),
-      type: "view",
-      title: String(payload.title || payload.message || labels.structuredView),
-      viewType: String(payload.view_type || payload.kind || "view"),
-      level: String(payload.level || "info"),
-      payload: viewPayload,
-    }, meta),
-  ], context)
+  updateAssistantItems(bundle, (parts) => {
+    const nextParts = closeTrailingInlineStream(parts)
+    return [
+      ...nextParts,
+      withEventMeta({
+        id: stablePartId("view", meta, now, nextParts.length),
+        type: "view",
+        title: String(payload.title || payload.message || labels.structuredView),
+        viewType: String(payload.view_type || payload.kind || "view"),
+        level: String(payload.level || "info"),
+        payload: viewPayload,
+      }, meta),
+    ]
+  }, context)
 }
 
 function appendContextEvent(
@@ -606,15 +709,18 @@ function appendContextEvent(
   labels: SessionRunTranscriptLabels,
   now: number,
 ): void {
-  updateAssistantItems(bundle, (parts) => [
-    ...parts,
-    withEventMeta({
-      id: stablePartId("context", meta, now, parts.length),
-      type: "context_event",
-      title: String(payload.message || payload.phase || labels.contextEvent),
-      payload,
-    }, meta),
-  ], context)
+  updateAssistantItems(bundle, (parts) => {
+    const nextParts = closeTrailingInlineStream(parts)
+    return [
+      ...nextParts,
+      withEventMeta({
+        id: stablePartId("context", meta, now, nextParts.length),
+        type: "context_event",
+        title: String(payload.message || payload.phase || labels.contextEvent),
+        payload,
+      }, meta),
+    ]
+  }, context)
 }
 
 function appendMemoryContext(
@@ -625,15 +731,18 @@ function appendMemoryContext(
   labels: SessionRunTranscriptLabels,
   now: number,
 ): void {
-  updateAssistantItems(bundle, (parts) => [
-    ...parts,
-    withEventMeta({
-      id: stablePartId("memory", meta, now, parts.length),
-      type: "memory_context",
-      title: String(payload.title || labels.memoryContext),
-      payload,
-    }, meta),
-  ], context)
+  updateAssistantItems(bundle, (parts) => {
+    const nextParts = closeTrailingInlineStream(parts)
+    return [
+      ...nextParts,
+      withEventMeta({
+        id: stablePartId("memory", meta, now, nextParts.length),
+        type: "memory_context",
+        title: String(payload.title || labels.memoryContext),
+        payload,
+      }, meta),
+    ]
+  }, context)
 }
 
 function appendUiEvent(
@@ -645,17 +754,20 @@ function appendUiEvent(
   labels: SessionRunTranscriptLabels,
   now: number,
 ): void {
-  updateAssistantItems(bundle, (parts) => [
-    ...parts,
-    withEventMeta({
-      id: stablePartId(eventType, meta, now, parts.length),
-      type: "ui_event",
-      kind: String(payload.kind || eventType.replace("_event", "")),
-      level: String(payload.level || "info"),
-      title: String(payload.title || payload.message || uiEventTitle(eventType, labels)),
-      payload,
-    }, meta),
-  ], context)
+  updateAssistantItems(bundle, (parts) => {
+    const nextParts = closeTrailingInlineStream(parts)
+    return [
+      ...nextParts,
+      withEventMeta({
+        id: stablePartId(eventType, meta, now, nextParts.length),
+        type: "ui_event",
+        kind: String(payload.kind || eventType.replace("_event", "")),
+        level: String(payload.level || "info"),
+        title: String(payload.title || payload.message || uiEventTitle(eventType, labels)),
+        payload,
+      }, meta),
+    ]
+  }, context)
 }
 
 function appendToolStream(
@@ -675,6 +787,7 @@ function appendToolStream(
   updateAssistantItems(bundle, (parts) => {
     const existingIndex = resolveToolPartIndex(parts, toolName, toolCallId)
     const existing = existingIndex >= 0 ? parts[existingIndex] as ToolActivityItem : undefined
+    const targetParts = existingIndex >= 0 ? parts : closeTrailingInlineStream(parts)
     const resolvedToolSource = toolSource || existing?.source
     const isShell = isShellToolName(toolName, resolvedToolSource)
     const shellOutput = isShell
@@ -692,7 +805,7 @@ function appendToolStream(
       outputChunks: shellOutput?.chunks || existing?.outputChunks,
       outputTruncated: shellOutput?.truncated || existing?.outputTruncated,
     }
-    return upsertToolPartInParts(parts, toolName, patch, { fallbackId: toolCallId }).map((part) => (
+    return upsertToolPartInParts(targetParts, toolName, patch, { fallbackId: toolCallId }).map((part) => (
       part.type === "tool" && part.toolCallId === toolCallId ? withEventMeta(part, meta) : part
     ))
   }, context)
@@ -917,7 +1030,8 @@ function upsertToolPartWithPreparing(
       return next
     }
   }
-  return upsertToolPartInParts(parts, toolName, patch, {
+  const targetParts = existingIndex >= 0 ? parts : closeTrailingInlineStream(parts)
+  return upsertToolPartInParts(targetParts, toolName, patch, {
     fallbackId,
     matchReturn: options.matchReturn,
   }).map((part) => (
@@ -953,11 +1067,11 @@ function normalizeTranscriptItemForRunEnd(
   item: TranscriptItem,
   traceNodeStatus: MockMessage["traceNodeStatus"],
 ): TranscriptItem {
-  if (item.type === "assistant_text" && item.streamKey === "assistant-stream") {
+  if (item.type === "assistant_text" && item.streamKey === ASSISTANT_STREAM_KEY) {
     return {
       ...item,
       streaming: false,
-      streamKey: "assistant-message",
+      streamKey: ASSISTANT_MESSAGE_KEY,
       traceNodeStatus,
     }
   }
@@ -1026,16 +1140,6 @@ function hasNoticeLevel(bundle: MockSessionBundle, level: NoticeLevel): boolean 
 
 function isReasoningThinkingItem(item: TranscriptItem): item is ThinkingItem {
   return item.type === "thinking" && item.streamKey === REASONING_STREAM_KEY
-}
-
-function findLastItemIndex(
-  parts: TranscriptItem[],
-  predicate: (item: TranscriptItem) => boolean,
-): number {
-  for (let index = parts.length - 1; index >= 0; index -= 1) {
-    if (predicate(parts[index])) return index
-  }
-  return -1
 }
 
 function inferToolOutputFormat(

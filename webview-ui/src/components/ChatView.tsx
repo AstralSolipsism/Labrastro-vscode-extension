@@ -171,6 +171,8 @@ interface ChatViewProps {
 
 const MODEL_SWITCH_TIMEOUT_MS = 20_000
 const REASONING_STREAM_KEY = "reasoning-stream"
+const LIVE_TRANSCRIPT_FLUSH_MAX_DELAY_MS = 32
+const LIVE_TRANSCRIPT_EVENT_TYPES = new Set(["assistant_delta", "reasoning_delta", "tool_call_delta", "tool_call_stream"])
 type SessionRunStatus = "idle" | "running" | "stopping" | "cancelled" | "done" | "error" | "interrupted"
 
 function isReasoningThinkingItem(item: TranscriptItem): item is ThinkingItem {
@@ -233,6 +235,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const [pendingModelProfile, setPendingModelProfile] = createSignal("")
   const [taskflowId, setTaskflowId] = createSignal("")
   const renderedEventKeys = new Set<string>()
+  const pendingLiveEventKeys = new Set<string>()
   const [activeTranscriptItems, setActiveTranscriptItems] = createSignal<TranscriptItem[]>([])
   const [remotePeerState, setRemotePeerState] = createSignal(initialRemotePeerState())
   const [agentRunState, setAgentRunState] = createSignal(initialAgentRunState())
@@ -519,6 +522,24 @@ const ChatView: Component<ChatViewProps> = (props) => {
 
   const visibleIsWorking = () => isWorking() && currentRunSessionMatches()
   const visiblePendingApprovals = () => (currentRunSessionMatches() ? pendingApprovals() : [])
+  const isCapabilityPackageSessionRun = () => {
+    const runtime = sessionRuntimeState()
+    const mode = stringValue(runtime.mode)
+    const workflow =
+      stringValue(runtime.workflow_mode) ||
+      stringValue(runtime.workflowMode) ||
+      stringValue(runtime.workflow)
+    return mode === "capability_package" || workflow === "capability_package_ingest"
+  }
+  const hasCapabilityPackageInstallApproval = () =>
+    visiblePendingApprovals().some((approval) => approval.toolName === "install_capability_package")
+  const shouldRouteCapabilityPackageRevisionInput = () =>
+    Boolean(
+      isWorking() &&
+      activeSessionRunId() &&
+      isCapabilityPackageSessionRun() &&
+      hasCapabilityPackageInstallApproval()
+    )
   const activeStreamMessage = createMemo<MockMessage | undefined>(() => {
     const parts = activeTranscriptItems()
     if (!parts.length || !currentRunSessionMatches()) return undefined
@@ -634,11 +655,35 @@ const ChatView: Component<ChatViewProps> = (props) => {
     )
 
   const shouldSkipEvent = (meta: EventRenderMeta): boolean =>
-    Boolean(meta.eventKey && (renderedEventKeys.has(meta.eventKey) || bundleHasEventKey(meta.eventKey)))
+    Boolean(meta.eventKey && (
+      renderedEventKeys.has(meta.eventKey) ||
+      pendingLiveEventKeys.has(meta.eventKey) ||
+      bundleHasEventKey(meta.eventKey)
+    ))
 
   const markRenderedEvent = (meta: EventRenderMeta) => {
     if (meta.eventKey) renderedEventKeys.add(meta.eventKey)
   }
+
+  const markPendingLiveEvent = (meta: EventRenderMeta) => {
+    if (meta.eventKey) pendingLiveEventKeys.add(meta.eventKey)
+  }
+
+  const releasePendingLiveEvent = (meta: EventRenderMeta) => {
+    if (meta.eventKey) pendingLiveEventKeys.delete(meta.eventKey)
+  }
+
+  const transcriptLabels = () => ({
+    thinking: t("chat.thinking"),
+    terminalOutput: "终端输出",
+    structuredView: "结构化视图",
+    contextEvent: "上下文事件",
+    memoryContext: t("memoryContext.title"),
+    runEvent: "运行事件",
+    cancelled: "已取消当前请求。",
+    errorPrefix: "错误：",
+    streamInterruptedPrefix: "输出中断：",
+  })
 
   const withEventMeta = <T extends TranscriptItem>(item: T, meta?: EventRenderMeta): T => ({
     ...item,
@@ -657,17 +702,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       currentSessionId: trace.currentSessionId(),
       runStatus: sessionRunStatus(),
       isWorking: isWorking(),
-      labels: {
-        thinking: t("chat.thinking"),
-        terminalOutput: "终端输出",
-        structuredView: "结构化视图",
-        contextEvent: "上下文事件",
-        memoryContext: t("memoryContext.title"),
-        runEvent: "运行事件",
-        cancelled: "已取消当前请求。",
-        errorPrefix: "错误：",
-        streamInterruptedPrefix: "输出中断：",
-      },
+      labels: transcriptLabels(),
       approvalDecision: options.approvalDecision,
       approvalReason: options.approvalReason,
     })
@@ -1280,6 +1315,136 @@ const ChatView: Component<ChatViewProps> = (props) => {
     ].includes(type)
   }
 
+  type LiveTranscriptEvent = {
+    event: Record<string, unknown>
+    meta: EventRenderMeta
+    targetSessionId: string
+    targetSessionRunId: string
+    runStatus: ReturnType<typeof sessionRunStatus>
+    isWorking: boolean
+    labels: ReturnType<typeof transcriptLabels>
+  }
+
+  let liveTranscriptEvents: LiveTranscriptEvent[] = []
+  let liveTranscriptFrameId: number | undefined
+  let liveTranscriptTimeoutId: number | undefined
+
+  const clearLiveTranscriptFlushSchedule = () => {
+    if (liveTranscriptFrameId !== undefined) {
+      if (typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(liveTranscriptFrameId)
+      }
+      liveTranscriptFrameId = undefined
+    }
+    if (liveTranscriptTimeoutId !== undefined) {
+      window.clearTimeout(liveTranscriptTimeoutId)
+      liveTranscriptTimeoutId = undefined
+    }
+  }
+
+  const flushLiveTranscriptEvents = () => {
+    clearLiveTranscriptFlushSchedule()
+    if (!liveTranscriptEvents.length) return
+    const events = liveTranscriptEvents
+    liveTranscriptEvents = []
+    const retryEvents: LiveTranscriptEvent[] = []
+    for (let index = 0; index < events.length;) {
+      const first = events[index]
+      const batch: LiveTranscriptEvent[] = [first]
+      index += 1
+      while (
+        index < events.length &&
+        events[index].targetSessionId === first.targetSessionId &&
+        events[index].targetSessionRunId === first.targetSessionRunId
+      ) {
+        batch.push(events[index])
+        index += 1
+      }
+      const reduction = trace.applySessionRunTranscriptEventsToSession(
+        first.targetSessionId,
+        batch.map((item) => item.event),
+        {
+          activeSessionRunId: first.targetSessionRunId || activeSessionRunId(),
+          currentSessionId: first.targetSessionId,
+          runStatus: first.runStatus,
+          isWorking: first.isWorking,
+          labels: first.labels,
+        }
+      )
+      if (reduction === undefined) {
+        retryEvents.push(...batch)
+        continue
+      }
+      for (const item of batch) {
+        releasePendingLiveEvent(item.meta)
+        markRenderedEvent(item.meta)
+      }
+    }
+    if (retryEvents.length) {
+      liveTranscriptEvents = [...retryEvents, ...liveTranscriptEvents]
+    }
+  }
+
+  const scheduleLiveTranscriptFlush = () => {
+    if (liveTranscriptFrameId !== undefined || liveTranscriptTimeoutId !== undefined) return
+    const flush = () => {
+      flushLiveTranscriptEvents()
+    }
+    if (typeof requestAnimationFrame === "function") {
+      liveTranscriptFrameId = requestAnimationFrame(flush)
+    }
+    liveTranscriptTimeoutId = window.setTimeout(flush, LIVE_TRANSCRIPT_FLUSH_MAX_DELAY_MS)
+  }
+
+  const isBufferableLiveTranscriptEvent = (type: string): boolean =>
+    LIVE_TRANSCRIPT_EVENT_TYPES.has(type) && isSessionRunTranscriptEventType(type)
+
+  const targetSessionIdForLiveEvent = (
+    event: Record<string, unknown>,
+    payload: Record<string, unknown>,
+  ): string =>
+    stringValue(event.session_id) ||
+    stringValue(event.sessionId) ||
+    stringValue(payload.session_id) ||
+    stringValue(payload.sessionId) ||
+    activeRunSessionId() ||
+    trace.currentSessionId() ||
+    ""
+
+  const targetSessionRunIdForLiveEvent = (
+    event: Record<string, unknown>,
+    payload: Record<string, unknown>,
+  ): string =>
+    stringValue(event.session_run_id) ||
+    stringValue(event.sessionRunId) ||
+    stringValue(payload.session_run_id) ||
+    stringValue(payload.sessionRunId) ||
+    activeSessionRunId() ||
+    ""
+
+  const createLiveTranscriptEvent = (
+    event: Record<string, unknown>,
+    payload: Record<string, unknown>,
+    meta: EventRenderMeta,
+  ): LiveTranscriptEvent | undefined => {
+    const targetSessionId = targetSessionIdForLiveEvent(event, payload)
+    if (!targetSessionId) return undefined
+    return {
+      event,
+      meta,
+      targetSessionId,
+      targetSessionRunId: targetSessionRunIdForLiveEvent(event, payload),
+      runStatus: sessionRunStatus(),
+      isWorking: isWorking(),
+      labels: transcriptLabels(),
+    }
+  }
+
+  const retryLiveTranscriptFlushSoon = () => {
+    if (!liveTranscriptEvents.length) return
+    window.setTimeout(flushLiveTranscriptEvents, 0)
+  }
+
   const handleLiveStreamEvent = (event: Record<string, unknown>) => {
     const type = String(event.type || "")
     const payload = (event.payload && typeof event.payload === "object" ? event.payload : {}) as Record<string, unknown>
@@ -1292,6 +1457,20 @@ const ChatView: Component<ChatViewProps> = (props) => {
         setPendingCancel(false)
       }
     }
+    if (isBufferableLiveTranscriptEvent(type)) {
+      const liveEvent = createLiveTranscriptEvent(event, payload, eventMeta)
+      if (liveEvent) {
+        markPendingLiveEvent(eventMeta)
+        liveTranscriptEvents.push(liveEvent)
+        scheduleLiveTranscriptFlush()
+        return
+      }
+      if (applyTranscriptReducer(event, type)) {
+        markRenderedEvent(eventMeta)
+      }
+      return
+    }
+    flushLiveTranscriptEvents()
     const transcriptHandled = applyTranscriptReducer(event, type)
     if (transcriptHandled || isSessionRunTranscriptEventType(type)) {
       markRenderedEvent(eventMeta)
@@ -1316,6 +1495,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       handleLiveStreamEvent(event)
       return
     }
+    flushLiveTranscriptEvents()
     const pendingApprovalForEvent = type === "approval_request"
       ? {
           ...approvalFromPayload(payload),
@@ -2021,7 +2201,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
     const rawText = submission.text
     if (!rawText.trim()) return
     if (isWorking()) {
-      const mode = sendDuringRunMode()
+      const mode: PendingPromptMode = shouldRouteCapabilityPackageRevisionInput()
+        ? "guide"
+        : sendDuringRunMode()
       setQueuedPrompts((current) =>
         enqueuePrompt(current, rawText, mode, {
           requestId: `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -2346,6 +2528,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
   onMount(() => {
     vscode.postMessage({ type: "autoApproval.get" })
     const unsubscribe = vscode.onMessage((msg) => {
+      if (msg.type !== "sessionRun.stream") {
+        flushLiveTranscriptEvents()
+      }
       if (msg.type === "workspace.files" && Array.isArray(msg.files)) {
         const requestId = stringValue(msg.requestId) || ""
         const activeRequest = workspaceMentionRequest()
@@ -2391,6 +2576,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         if (Object.keys(runtime).length) {
           setSessionRuntimeState(runtime)
         }
+        retryLiveTranscriptFlushSoon()
       }
       if (msg.type === "session.forked" && typeof msg.sessionId === "string") {
         const composeText = stringValue(msg.composeText) || ""
@@ -2496,6 +2682,10 @@ const ChatView: Component<ChatViewProps> = (props) => {
             mergeStatusApprovals(items, statusApprovals, sessionRunId)
           )
         }
+        const runtime = sessionRuntimeStateFromMessage(msg as Record<string, unknown>, payload)
+        if (Object.keys(runtime).length) {
+          setSessionRuntimeState(runtime)
+        }
         setIsWorking(true)
         setSessionRunStatus("running")
         setWorkingText(String(payload.status || "") === "reconnecting" ? "正在重连" : "正在继续处理")
@@ -2506,10 +2696,15 @@ const ChatView: Component<ChatViewProps> = (props) => {
         setActiveSessionRunId(msg.sessionRunId)
         const sessionId = stringValue(msg.sessionId) || stringValue(msg.session_id)
         if (sessionId) setActiveRunSessionId(sessionId)
+        const runtime = sessionRuntimeStateFromMessage(msg as Record<string, unknown>)
+        if (Object.keys(runtime).length) {
+          setSessionRuntimeState(runtime)
+        }
         if (pendingCancel()) {
           sendCancel(msg.sessionRunId)
           setPendingCancel(false)
         }
+        retryLiveTranscriptFlushSoon()
       }
       if (msg.type === "sessionRun.reconnecting") {
         const payload = objectValue(msg.payload)
@@ -2598,6 +2793,11 @@ const ChatView: Component<ChatViewProps> = (props) => {
     })
     onCleanup(() => {
       unsubscribe()
+      clearLiveTranscriptFlushSchedule()
+      for (const item of liveTranscriptEvents) {
+        releasePendingLiveEvent(item.meta)
+      }
+      liveTranscriptEvents = []
       stopTimer()
       clearModelSwitchTimer()
     })

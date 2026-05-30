@@ -644,6 +644,7 @@ const zhCN: Record<string, string> = {
   "tool.listDirectory": "列出目录",
   "tool.searchFiles": "搜索文件",
   "tool.applyPatch": "修改文件",
+  "tool.installCapabilityPackage": "安装能力包",
   "tool.preparingCall": "正在准备调用 {tool}",
   "tool.preparingGeneric": "正在准备调用工具",
   "tool.section.params": "参数",

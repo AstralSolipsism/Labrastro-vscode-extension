@@ -64,6 +64,19 @@ describe("markdown renderer", () => {
     expect(html).toContain("data-copy-code")
   })
 
+  it("reuses stable streaming prefixes while only reparsing the live tail", () => {
+    const stablePrefix = `${"Stable **paragraph**. ".repeat(80)}\n\n`
+
+    renderStreamingMarkdown(`${stablePrefix}tail one`, "stream", { highlightCode: false })
+    renderStreamingMarkdown(`${stablePrefix}tail two`, "stream", { highlightCode: false })
+
+    expect(getMarkdownRenderCacheStats()).toMatchObject({
+      entries: 3,
+      hits: 1,
+      misses: 3,
+    })
+  })
+
   it("removes unsafe html, inline style, and unsafe link protocols", () => {
     const html = renderMarkdown('<script>alert(1)</script><a href="javascript:alert(1)" style="color:red">bad</a><strong>ok</strong>')
 

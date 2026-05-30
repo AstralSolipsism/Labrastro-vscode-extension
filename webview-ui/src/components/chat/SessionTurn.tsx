@@ -38,9 +38,9 @@ import {
   transcriptPresentationItemKey,
   type ProcessGroup,
   type ProcessSummary,
+  type ProcessState,
   type ProcessTimelineItem,
   type ReasoningPanel,
-  type ProcessState,
   type TranscriptPresentationItem,
 } from "./transcript-presentation"
 import { RoseFourLoader } from "./RoseFourLoader"
@@ -63,6 +63,7 @@ const TOOL_ICONS: Record<string, string> = {
   search_file: "search",
   search_files: "search",
   apply_patch: "diff-modified",
+  install_capability_package: "package",
 }
 
 const CARD_OPEN_STATE = new Map<string, boolean>()
@@ -787,6 +788,68 @@ const ReasoningPart: Component<ItemProps<ReasoningItem>> = (props) => {
   )
 }
 
+interface ReasoningPanelPartProps {
+  panel: ReasoningPanel
+  defaultReasoningOpen?: boolean
+}
+
+const ReasoningPanelPart: Component<ReasoningPanelPartProps> = (props) => {
+  const [open, setOpen] = createSignal(initialCardOpenState(props.panel.id, props.defaultReasoningOpen === true))
+  let contentRef: HTMLDivElement | undefined
+  createEffect(() => {
+    CARD_OPEN_STATE.set(props.panel.id, open())
+  })
+  createEffect(() => {
+    props.panel.raw
+    props.panel.state
+    if (!open() || props.panel.state !== "running" || !contentRef) return
+    queueMicrotask(() => {
+      if (contentRef) contentRef.scrollTop = contentRef.scrollHeight
+    })
+  })
+  const title = () => props.panel.state === "running" ? t("process.group.reasoning.running") : t("process.group.reasoning")
+  const detailsText = () => props.panel.raw || props.panel.summary || ""
+
+  return (
+    <div
+      class="reasoning-card"
+      classList={{ "reasoning-card--running": props.panel.state === "running" }}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <button
+        type="button"
+        class="reasoning-card__header"
+        onClick={(event) => {
+          event.stopPropagation()
+          setOpen((value) => {
+            const next = !value
+            CARD_OPEN_STATE.set(props.panel.id, next)
+            return next
+          })
+        }}
+      >
+        {props.panel.state === "running" ? (
+          <RoseFourLoader class="process-card__loader" />
+        ) : (
+          <span class="codicon codicon-comment-discussion" aria-hidden="true" />
+        )}
+        <span class="reasoning-card__body">
+          <span class="reasoning-card__title">{title()}</span>
+          <Show when={props.panel.summary}>
+            <span class="reasoning-card__meta">{props.panel.summary}</span>
+          </Show>
+        </span>
+        <span class={`codicon codicon-chevron-${open() ? "down" : "right"}`} aria-hidden="true" />
+      </button>
+      <Show when={open()}>
+        <div class="reasoning-card__content" ref={contentRef}>
+          <MarkdownBlock text={detailsText()} class="reasoning-card__markdown" />
+        </div>
+      </Show>
+    </div>
+  )
+}
+
 const NoticePart: Component<ItemProps<NoticeItem>> = (props) => (
   <div class="notice-row" classList={{ [`notice-row--${props.part.level}`]: true }} onClick={(event) => event.stopPropagation()}>
     <span class={`codicon codicon-${props.part.level === "error" ? "error" : props.part.level === "warning" ? "warning" : "info"}`} aria-hidden="true" />
@@ -1048,67 +1111,6 @@ const UiEventPart: Component<ItemProps<Extract<TranscriptItem, { type: "ui_event
   )
 }
 
-interface ReasoningPanelPartProps {
-  panel: ReasoningPanel
-}
-
-const ReasoningPanelPart: Component<ReasoningPanelPartProps> = (props) => {
-  const [open, setOpen] = createSignal(initialCardOpenState(props.panel.id, false))
-  let contentRef: HTMLDivElement | undefined
-  createEffect(() => {
-    CARD_OPEN_STATE.set(props.panel.id, open())
-  })
-  createEffect(() => {
-    props.panel.raw
-    props.panel.state
-    if (!open() || props.panel.state !== "running" || !contentRef) return
-    queueMicrotask(() => {
-      if (contentRef) contentRef.scrollTop = contentRef.scrollHeight
-    })
-  })
-  const title = () => props.panel.state === "running" ? t("process.group.reasoning.running") : t("process.group.reasoning")
-  const detailsText = () => props.panel.raw || props.panel.summary || ""
-
-  return (
-    <div
-      class="reasoning-card"
-      classList={{ "reasoning-card--running": props.panel.state === "running" }}
-      onClick={(event) => event.stopPropagation()}
-    >
-      <button
-        type="button"
-        class="reasoning-card__header"
-        onClick={(event) => {
-          event.stopPropagation()
-          setOpen((value) => {
-            const next = !value
-            CARD_OPEN_STATE.set(props.panel.id, next)
-            return next
-          })
-        }}
-      >
-        {props.panel.state === "running" ? (
-          <RoseFourLoader class="process-card__loader" />
-        ) : (
-          <span class="codicon codicon-comment-discussion" aria-hidden="true" />
-        )}
-        <span class="reasoning-card__body">
-          <span class="reasoning-card__title">{title()}</span>
-          <Show when={props.panel.summary}>
-            <span class="reasoning-card__meta">{props.panel.summary}</span>
-          </Show>
-        </span>
-        <span class={`codicon codicon-chevron-${open() ? "down" : "right"}`} aria-hidden="true" />
-      </button>
-      <Show when={open()}>
-        <div class="reasoning-card__content" ref={contentRef}>
-          <MarkdownBlock text={detailsText()} class="reasoning-card__markdown" />
-        </div>
-      </Show>
-    </div>
-  )
-}
-
 interface TimelineTextPartProps {
   part: AssistantTextItem
 }
@@ -1234,24 +1236,17 @@ const ProcessSummaryPart: Component<ProcessSummaryPartProps> = (props) => {
   createEffect(() => {
     CARD_OPEN_STATE.set(props.summary.id, open())
   })
-  const icon = () => {
-    if (props.summary.state === "error") return "warning"
-    return "list-tree"
-  }
-  const meta = () => {
-    return [
-      props.summary.state === "error" ? processStateLabel(props.summary.state) : "",
-      props.summary.failureCount ? processFailureLabel(props.summary.failureCount) : "",
-      processCountLabel(props.summary.count),
-    ].filter(Boolean).join(" · ")
-  }
+  const icon = () => props.summary.state === "error" ? "warning" : "list-tree"
+  const meta = () => [
+    props.summary.state === "error" ? processStateLabel(props.summary.state) : "",
+    props.summary.failureCount ? processFailureLabel(props.summary.failureCount) : "",
+    processCountLabel(props.summary.count),
+  ].filter(Boolean).join(" · ")
 
   return (
     <div
       class="process-summary-card"
-      classList={{
-        "process-summary-card--error": props.summary.state === "error",
-      }}
+      classList={{ "process-summary-card--error": props.summary.state === "error" }}
       onClick={(event) => event.stopPropagation()}
     >
       <button
@@ -1266,10 +1261,7 @@ const ProcessSummaryPart: Component<ProcessSummaryPartProps> = (props) => {
           })
         }}
       >
-        <span
-          class={`codicon codicon-${icon()}`}
-          aria-hidden="true"
-        />
+        <span class={`codicon codicon-${icon()}`} aria-hidden="true" />
         <span class="process-card__body">
           <span class="process-card__title">{t("process.summary")}</span>
           <span class="process-card__meta">{meta()}</span>
@@ -1319,6 +1311,18 @@ const ProcessTimeline: Component<ProcessTimelineProps> = (props) => (
         </Match>
         <Match when={item().type === "timeline_notice"}>
           <NoticePart part={(item() as Extract<ProcessTimelineItem, { type: "timeline_notice" }>).part} />
+        </Match>
+        <Match when={item().type === "timeline_part"}>
+          <TranscriptItemView
+            part={(item() as Extract<ProcessTimelineItem, { type: "timeline_part" }>).part}
+            selectedTraceNodeId={props.selectedTraceNodeId}
+            onSelectSession={props.onSelectSession}
+            onTraceNodeSelect={props.onTraceNodeSelect}
+            onCopyToolCommand={props.onCopyToolCommand}
+            onCopyToolOutput={props.onCopyToolOutput}
+            onForkPart={props.onForkPart}
+            defaultReasoningOpen={props.defaultReasoningOpen}
+          />
         </Match>
       </Switch>
     )}
@@ -1438,6 +1442,8 @@ export const SessionTurn: Component<SessionTurnProps> = (props) => {
       <Index each={props.turn.assistantMessages}>
         {(message) => {
           const selected = () => Boolean(message().traceNodeId && message().traceNodeId === props.selectedTraceNodeId)
+          // Render the presentation projection exactly as produced here; do
+          // not reorder canonical transcript parts inside SessionTurn.
           const presentation = createMemo(() => buildTranscriptPresentation(message().parts, message(), {
             runningProcessLabel: props.runningProcessLabel,
           }))
@@ -1494,11 +1500,24 @@ export const SessionTurn: Component<SessionTurnProps> = (props) => {
                       <Match when={item().type === "reasoning_panel"}>
                         <ReasoningPanelPart
                           panel={(item() as Extract<TranscriptPresentationItem, { type: "reasoning_panel" }>).panel}
+                          defaultReasoningOpen={props.defaultReasoningOpen}
                         />
                       </Match>
                       <Match when={item().type === "final_answer"}>
                         <FinalAnswerPart
                           parts={(item() as Extract<TranscriptPresentationItem, { type: "final_answer" }>).parts}
+                        />
+                      </Match>
+                      <Match when={item().type === "timeline_part"}>
+                        <TranscriptItemView
+                          part={(item() as Extract<TranscriptPresentationItem, { type: "timeline_part" }>).part}
+                          selectedTraceNodeId={props.selectedTraceNodeId}
+                          onSelectSession={props.onSelectSession}
+                          onTraceNodeSelect={props.onTraceNodeSelect}
+                          onCopyToolCommand={props.onCopyToolCommand}
+                          onCopyToolOutput={props.onCopyToolOutput}
+                          onForkPart={props.onForkPart}
+                          defaultReasoningOpen={props.defaultReasoningOpen}
                         />
                       </Match>
                     </Switch>

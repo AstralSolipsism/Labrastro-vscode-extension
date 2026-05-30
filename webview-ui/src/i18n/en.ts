@@ -644,6 +644,7 @@ const en: Record<string, string> = {
   "tool.listDirectory": "List Directory",
   "tool.searchFiles": "Search Files",
   "tool.applyPatch": "Apply Patch",
+  "tool.installCapabilityPackage": "Install Capability Package",
   "tool.preparingCall": "Preparing to call {tool}",
   "tool.preparingGeneric": "Preparing to call tool",
   "tool.section.params": "Parameters",
