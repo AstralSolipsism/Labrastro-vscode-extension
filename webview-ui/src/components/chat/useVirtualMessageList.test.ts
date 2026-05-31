@@ -152,4 +152,15 @@ describe("virtual message list windowing", () => {
       delta: 24,
     })).toBe("detach")
   })
+
+  it("detaches live bottom follow as soon as the user toggles card layout", () => {
+    const intentBody = source.slice(
+      source.indexOf("const notifyUserLayoutIntent"),
+      source.indexOf("const hasUserLayoutIntent"),
+    )
+
+    expect(intentBody).toContain("userLayoutIntentUntil = Date.now() + USER_LAYOUT_INTENT_WINDOW_MS")
+    expect(intentBody).toContain("followLiveOutput = false")
+    expect(intentBody).toContain("setUserScrolled(true)")
+  })
 })

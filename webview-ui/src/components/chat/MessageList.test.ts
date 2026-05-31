@@ -17,6 +17,8 @@ describe("MessageList working indicator", () => {
 
   it("marks card layout toggles before virtualization handles height growth", () => {
     expect(source).toContain("const LAYOUT_TOGGLE_SELECTOR")
+    expect(source).toContain(".process-summary-card__header")
+    expect(source).toContain(".process-group-card__header")
     expect(source).toContain("virtualList.notifyUserLayoutIntent()")
     expect(source).toContain("onPointerDown={markUserLayoutIntent}")
     expect(source).toContain("onKeyDown={markKeyboardLayoutIntent}")

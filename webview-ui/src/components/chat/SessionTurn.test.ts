@@ -102,6 +102,26 @@ describe("SessionTurn source order", () => {
     expect(source).not.toContain("<For each={presentation()}>")
   })
 
+  it("keeps process card open state tied to stable projection ids", () => {
+    const presentationSource = readFileSync(new URL("./transcript-presentation.ts", import.meta.url), "utf8")
+    const groupStart = source.indexOf("const TimelineProcessGroupPart")
+    const summaryStart = source.indexOf("const ProcessSummaryPart")
+    const transcriptViewStart = source.indexOf("const TranscriptItemView")
+    const groupSource = source.slice(groupStart, summaryStart)
+    const summarySource = source.slice(summaryStart, transcriptViewStart)
+    const summaryBuilderSource = presentationSource.slice(
+      presentationSource.indexOf("function buildProcessSummary"),
+      presentationSource.indexOf("function timelineItemStableId"),
+    )
+
+    expect(groupSource).toContain("initialCardOpenState(props.group.id, false)")
+    expect(groupSource).toContain("CARD_OPEN_STATE.set(props.group.id, open())")
+    expect(summarySource).toContain("initialCardOpenState(props.summary.id, false)")
+    expect(summarySource).toContain("CARD_OPEN_STATE.set(props.summary.id, open())")
+    expect(summaryBuilderSource).toContain("id: `process-summary:${message?.id || \"message\"}:${firstId}`")
+    expect(summaryBuilderSource).not.toContain("lastId")
+  })
+
   it("uses action labels and a second-level details toggle for tool cards", () => {
     const toolPartStart = source.indexOf("const ToolPart")
 

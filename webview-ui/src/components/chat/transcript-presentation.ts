@@ -254,13 +254,11 @@ function buildProcessSummary(
   const summaryItems = items.filter((item) => item.type !== "timeline_notice")
   if (!summaryItems.length) return undefined
   const first = summaryItems[0]
-  const last = summaryItems[summaryItems.length - 1]
   const firstId = timelineItemStableId(first)
-  const lastId = timelineItemStableId(last)
   const failureCount = processFailureCount(processItems)
 
   return {
-    id: `process-summary:${message?.id || "message"}:${firstId}:${lastId}`,
+    id: `process-summary:${message?.id || "message"}:${firstId}`,
     state: failureCount > 0 ? "error" : "completed",
     count: processItems.length,
     failureCount,

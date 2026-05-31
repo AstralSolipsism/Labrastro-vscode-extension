@@ -85,6 +85,29 @@ describe("transcript presentation", () => {
     expect(presentation[2]).toMatchObject({ type: "final_answer", parts: [{ id: "text-1" }] })
   })
 
+  it("keeps process_summary id stable while process events append before final answer", () => {
+    const firstParts: TranscriptItem[] = [
+      { id: "tool-1", type: "tool", tool: "read_file", status: "returned", input: { path: "src/index.ts" } },
+      { id: "text-1", type: "assistant_text", markdown: "答案", format: "markdown", streamKey: "assistant-stream", streaming: true },
+    ]
+    const nextParts: TranscriptItem[] = [
+      { id: "tool-1", type: "tool", tool: "read_file", status: "returned", input: { path: "src/index.ts" } },
+      { id: "tool-2", type: "tool", tool: "shell", status: "running", input: { command: "npm test" } },
+      { id: "text-1", type: "assistant_text", markdown: "答案", format: "markdown", streamKey: "assistant-stream", streaming: true },
+    ]
+
+    const firstSummary = processSummary(buildTranscriptPresentation(firstParts, assistant(firstParts, "active")))
+    const nextSummary = processSummary(buildTranscriptPresentation(nextParts, assistant(nextParts, "active")))
+
+    expect(firstSummary?.id).toBe(nextSummary?.id)
+    expect(nextSummary?.count).toBe(2)
+    expect(nextSummary?.items.map((item) => item.type)).toEqual([
+      "timeline_process_group",
+      "timeline_process_group",
+    ])
+    expect(nextSummary?.id).not.toContain("tool-2")
+  })
+
   it("collects all reasoning into one reasoning_panel across process cards", () => {
     const parts: TranscriptItem[] = [
       { id: "thinking-1", type: "thinking", title: "正在思考", active: false, raw: "first" },

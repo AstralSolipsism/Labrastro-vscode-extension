@@ -297,6 +297,8 @@ export function useVirtualMessageList(options: UseVirtualMessageListOptions): Us
 
   const notifyUserLayoutIntent = () => {
     userLayoutIntentUntil = Date.now() + USER_LAYOUT_INTENT_WINDOW_MS
+    followLiveOutput = false
+    setUserScrolled(true)
   }
 
   const hasUserLayoutIntent = () => userLayoutIntentUntil > Date.now()
