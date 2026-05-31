@@ -32,6 +32,7 @@ vi.mock("../context/vscode", () => ({
 }))
 
 import { createSettingsController, profileToDraft } from "./useSettingsController"
+import { setLocale } from "../i18n"
 
 const settingsControllerSource = readFileSync(join(__dirname, "useSettingsController.tsx"), "utf8")
 
@@ -126,6 +127,7 @@ describe("settings controller capability model", () => {
     mocks.messageHandlers.splice(0)
     mocks.vscode.postMessage.mockClear()
     mocks.vscode.onMessage.mockClear()
+    setLocale("zh-CN")
   })
 
   it("keeps list configuration when dashboard only carries status summary", () => {
@@ -358,6 +360,7 @@ describe("settings controller capability model", () => {
       expect(mocks.vscode.postMessage).toHaveBeenCalledWith({
         type: "capabilityPackage.ingest.session.start",
         payload: {
+          locale: "zh-CN",
           source: {
             type: "github_repo",
             url: "https://github.com/acme/tool",

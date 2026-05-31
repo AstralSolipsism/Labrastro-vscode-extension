@@ -22,6 +22,9 @@ vi.mock("vscode", () => ({
   commands: {
     executeCommand: vscodeMock.executeCommand,
   },
+  env: {
+    language: "zh-cn",
+  },
   languages: {},
   ViewColumn: { Active: -1 },
   Uri: {
@@ -250,7 +253,7 @@ describe("LabrastroController session run start", () => {
     }))
     const prepareSessionRunSession = vi.fn(async () => ({ ok: true, sessionId: "session-cap" }))
     const setActiveRun = vi.fn()
-    const consumeSessionRunEventStream = vi.fn(async () => undefined)
+    const ensureSessionRunEventStream = vi.fn()
     ;(controller as unknown as {
       client: { capabilityPackageIngestSessionStart: typeof capabilityPackageIngestSessionStart }
     }).client = { capabilityPackageIngestSessionStart }
@@ -261,8 +264,8 @@ describe("LabrastroController session run start", () => {
       sessionRunCoordinator: { setActiveRun: typeof setActiveRun; clearActiveRun: () => void }
     }).sessionRunCoordinator = { setActiveRun, clearActiveRun: vi.fn() }
     ;(controller as unknown as {
-      consumeSessionRunEventStream: typeof consumeSessionRunEventStream
-    }).consumeSessionRunEventStream = consumeSessionRunEventStream
+      ensureSessionRunEventStream: typeof ensureSessionRunEventStream
+    }).ensureSessionRunEventStream = ensureSessionRunEventStream
     const post = vi.fn()
 
     await (controller as unknown as {
@@ -281,6 +284,7 @@ describe("LabrastroController session run start", () => {
     })
     expect(capabilityPackageIngestSessionStart).toHaveBeenCalledWith(expect.objectContaining({
       session_id: "session-cap",
+      locale: "zh-CN",
       source: { type: "github_repo", url: "https://github.com/acme/tool" },
     }))
     expect(setActiveRun).toHaveBeenCalledWith(expect.objectContaining({
@@ -300,6 +304,9 @@ describe("LabrastroController session run start", () => {
     expect(post).toHaveBeenCalledWith(expect.objectContaining({
       type: "capabilityPackage.ingest.session.started",
     }))
-    expect(consumeSessionRunEventStream).toHaveBeenCalledWith("run-cap", "session-cap", post)
+    expect(ensureSessionRunEventStream).toHaveBeenCalledWith("run-cap", "session-cap", post)
+    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({
+      type: "capabilityPackage.error",
+    }))
   })
 })

@@ -18,7 +18,7 @@ import {
   toggleAgentConfigListValue,
   validateAgentConfigId,
 } from "../utils/agent-config"
-import { setLocale, t, type Locale } from "../i18n"
+import { locale, setLocale, t, type Locale } from "../i18n"
 import { updateCommandRuleLists } from "../utils/command-auto-approval"
 import { settingsMessages } from "./settingsMessages"
 import {
@@ -3646,6 +3646,7 @@ export function createSettingsController(props: SettingsViewProps) {
     })
     markOperationStarted("capabilityIngestStart", "saving")
     settingsMessages.startCapabilityPackageIngest(vscode, {
+      locale: locale(),
       source: {
         type: sourceType,
         url,

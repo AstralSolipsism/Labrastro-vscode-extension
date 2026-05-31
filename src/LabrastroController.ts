@@ -1348,9 +1348,11 @@ export class LabrastroController implements vscode.Disposable {
       )
       if (!preparedSession.ok) return
       const sessionId = preparedSession.sessionId
+      const locale = this.currentChatLocale(stringValue(payload.locale))
       const start = await this.client.capabilityPackageIngestSessionStart({
         ...payload,
         session_id: sessionId,
+        locale,
         client_request_id:
           stringValue(payload.client_request_id) ||
           stringValue(payload.clientRequestId) ||
@@ -1378,7 +1380,7 @@ export class LabrastroController implements vscode.Disposable {
         payload: start,
       }, post)
       post({ type: "capabilityPackage.ingest.session.started", payload: start })
-      await this.consumeSessionRunEventStream(sessionRunId, resolvedSessionId, post)
+      this.ensureSessionRunEventStream(sessionRunId, resolvedSessionId, post)
     } catch (error) {
       post({ type: "capabilityPackage.error", message: errorMessage(error) })
       this.emitChatMessage({ type: "sessionRun.error", message: chatErrorMessage(error) }, post)
