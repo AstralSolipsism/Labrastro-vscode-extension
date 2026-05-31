@@ -59,11 +59,40 @@ export function upsertToolPartInParts(
   const definedPatch = Object.fromEntries(
     Object.entries(patch).filter(([, value]) => value !== undefined)
   ) as Partial<ToolActivityItem>
-  const next = { ...current, ...definedPatch, id, type: "tool", tool: toolName } as ToolActivityItem
+  const rawEventRefs = mergeRawEventRefs(current.rawEventRefs, definedPatch.rawEventRefs)
+  const next = {
+    ...current,
+    ...definedPatch,
+    ...(rawEventRefs ? { rawEventRefs } : {}),
+    id,
+    type: "tool",
+    tool: toolName,
+  } as ToolActivityItem
   if (index < 0) return [...parts, next]
   const updated = [...parts]
   updated[index] = next
   return updated
+}
+
+function mergeRawEventRefs(
+  current: ToolActivityItem["rawEventRefs"],
+  incoming: ToolActivityItem["rawEventRefs"],
+): ToolActivityItem["rawEventRefs"] {
+  if (!current?.length && !incoming?.length) return undefined
+  const merged: NonNullable<ToolActivityItem["rawEventRefs"]> = []
+  const seen = new Set<string>()
+  for (const ref of [...(current || []), ...(incoming || [])]) {
+    const key = [
+      String(ref.agent_run_id || ""),
+      String(ref.seq ?? ""),
+      String(ref.type || ""),
+      String(ref.id || ""),
+    ].join(":")
+    if (seen.has(key)) continue
+    seen.add(key)
+    merged.push(ref)
+  }
+  return merged.length ? merged : undefined
 }
 
 export function statusAfterToolReturn(currentStatus?: ToolExecutionStatus): ToolExecutionStatus {

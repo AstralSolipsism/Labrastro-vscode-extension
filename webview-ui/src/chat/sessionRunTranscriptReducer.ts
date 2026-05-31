@@ -2,6 +2,7 @@ import type { MockMessage, MockSessionBundle, MockTaskStats, MockTurn } from "..
 import type {
   AssistantTextItem,
   NoticeLevel,
+  RawEventRef,
   ReasoningItem,
   ThinkingItem,
   ToolActivityItem,
@@ -34,6 +35,10 @@ export interface SessionRunTranscriptLabels {
   cancelled: string
   errorPrefix: string
   streamInterruptedPrefix: string
+  providerStreamInterrupted: string
+  streamInterruptedCanContinue: string
+  capabilityPackageSessionFailed: string
+  capabilityPackageDraft: string
 }
 
 export interface SessionRunTranscriptContext {
@@ -67,6 +72,7 @@ export const SESSION_RUN_TRANSCRIPT_EVENT_TYPES = new Set([
   "output",
   "view",
   "context_event",
+  "capability_package_draft",
   "memory_context",
   "remote_event",
   "mcp_event",
@@ -109,6 +115,10 @@ const DEFAULT_LABELS: SessionRunTranscriptLabels = {
   cancelled: "已取消当前请求。",
   errorPrefix: "错误：",
   streamInterruptedPrefix: "输出中断：",
+  providerStreamInterrupted: "模型输出流中断，正在尝试恢复。",
+  streamInterruptedCanContinue: "模型输出流中断，可继续生成。",
+  capabilityPackageSessionFailed: "能力包流程执行失败。",
+  capabilityPackageDraft: "能力包草案",
 }
 
 const REASONING_STREAM_KEY = "reasoning-stream"
@@ -195,7 +205,7 @@ function applySessionRunTranscriptEventToBundle(
     level: NoticeLevel,
     text: string,
     prefix = "notice",
-    options: { format?: "plain" | "markdown"; trim?: boolean } = {},
+    options: { format?: "plain" | "markdown"; trim?: boolean; rawEventRefs?: RawEventRef[] } = {},
   ) => {
     const clean = stripAnsi(text)
     const content = options.trim === false ? clean : clean.trim()
@@ -210,6 +220,7 @@ function applySessionRunTranscriptEventToBundle(
           level,
           text: content,
           format: options.format || "plain",
+          rawEventRefs: options.rawEventRefs,
         }, meta),
       ]
     }, context)
@@ -245,24 +256,25 @@ function applySessionRunTranscriptEventToBundle(
     }
     markChanged()
   } else if (type === "reasoning_delta") {
-    upsertReasoningThinking(next, String(payload.content || ""), meta, context, labels)
+    upsertReasoningThinking(next, String(payload.content || ""), payload, meta, context, labels)
     markChanged()
   } else if (type === "reasoning_message") {
     finalizeReasoning(next, payload, meta, context, labels)
     markChanged()
   } else if (type === "assistant_delta") {
-    upsertAssistantStream(next, String(payload.content || ""), meta, context)
+    upsertAssistantStream(next, String(payload.content || ""), payload, meta, context)
     markChanged()
   } else if (type === "assistant_message") {
-    finalizeAssistant(next, String(payload.content || ""), meta, context)
+    finalizeAssistant(next, String(payload.content || ""), payload, meta, context)
     markChanged()
   } else if (type === "output") {
     const format = String(payload.format || "plain")
     if (format === "terminal") {
-      appendTerminal(next, String(payload.content || ""), labels.terminalOutput, meta, context)
+      appendTerminal(next, String(payload.content || ""), labels.terminalOutput, payload, meta, context)
     } else {
       appendNotice(noticeLevelValue(payload.level), String(payload.content || ""), "output", {
         format: format === "markdown" ? "markdown" : "plain",
+        rawEventRefs: rawEventRefsFromPayload(payload),
       })
     }
     markChanged()
@@ -276,6 +288,9 @@ function applySessionRunTranscriptEventToBundle(
       appendContextEvent(next, payload, meta, context, labels, now)
     }
     markChanged()
+  } else if (type === "capability_package_draft") {
+    appendCapabilityPackageDraft(next, payload, meta, context, labels, now)
+    markChanged()
   } else if (type === "memory_context") {
     appendMemoryContext(next, payload, meta, context, labels, now)
     markChanged()
@@ -285,12 +300,20 @@ function applySessionRunTranscriptEventToBundle(
   } else if (type === "provider_stream_interrupted") {
     appendNotice(
       "warning",
-      String(payload.message || "模型输出流中断，正在尝试恢复。"),
+      sessionEventMessage(
+        payload,
+        labels,
+        "provider_stream_interrupted.recovering",
+        labels.providerStreamInterrupted,
+      ),
       "stream-recovery",
+      { rawEventRefs: rawEventRefsFromPayload(payload) },
     )
   } else if (type === "session_run_interrupted") {
-    const message = stringValue(payload.message) || "模型输出流中断，可继续生成。"
-    appendNotice("warning", `${labels.streamInterruptedPrefix}${message}`, "stream-interrupted")
+    const message = sessionEventMessage(payload, labels, "", labels.streamInterruptedCanContinue)
+    appendNotice("warning", `${labels.streamInterruptedPrefix}${message}`, "stream-interrupted", {
+      rawEventRefs: rawEventRefsFromPayload(payload),
+    })
     finalizeRunTranscriptItems(next, "interrupted", context)
     patchRunStatus(next, "interrupted")
     markChanged()
@@ -320,16 +343,16 @@ function applySessionRunTranscriptEventToBundle(
     markChanged()
   } else if (type === "session_run_cancelled") {
     settlePendingApprovalTools(next, "cancelled", String(payload.reason || "session_run_cancelled"), meta)
-    appendNotice("info", labels.cancelled, "cancelled")
+    appendNotice("info", labels.cancelled, "cancelled", { rawEventRefs: rawEventRefsFromPayload(payload) })
     finalizeRunTranscriptItems(next, "cancelled", context)
     patchRunStatus(next, "cancelled")
     next.session = { ...next.session, state: "cancelled" }
     markChanged()
   } else if (type === "error" || type === "session_run_failed") {
-    const message = String(payload.message || "unknown error")
+    const message = sessionEventMessage(payload, labels, "", "unknown error")
     settlePendingApprovalTools(next, "denied", message, meta)
     if (type === "error" || !hasNoticeLevel(next, "error")) {
-      appendNotice("error", `${labels.errorPrefix}${message}`, "error")
+      appendNotice("error", `${labels.errorPrefix}${message}`, "error", { rawEventRefs: rawEventRefsFromPayload(payload) })
     }
     finalizeRunTranscriptItems(next, "error", context)
     patchRunStatus(next, "error")
@@ -338,7 +361,7 @@ function applySessionRunTranscriptEventToBundle(
   } else if (type === "session_run_end") {
     const response = String(payload.response || "")
     if (response && payload.response_rendered !== true) {
-      finalizeAssistant(next, response, meta, context)
+      finalizeAssistant(next, response, payload, meta, context)
     }
     finalizeRunTranscriptItems(next, "done", context)
     settlePendingApprovalTools(next, "denied", "session_run_closed", meta)
@@ -478,7 +501,7 @@ function appendAssistantText(
   prefix: string,
   meta: EventRenderMeta,
   context: SessionRunTranscriptContext,
-  options: { format?: "plain" | "markdown"; trim?: boolean } = {},
+  options: { format?: "plain" | "markdown"; trim?: boolean; rawEventRefs?: RawEventRef[] } = {},
 ): void {
   const clean = stripAnsi(text)
   const content = options.trim === false ? clean : clean.trim()
@@ -494,6 +517,7 @@ function appendAssistantText(
         markdown: content,
         format: options.format || "plain",
         streamKey: prefix,
+        rawEventRefs: options.rawEventRefs,
       }, meta),
     ]
   }, context)
@@ -502,11 +526,13 @@ function appendAssistantText(
 function upsertAssistantStream(
   bundle: MockSessionBundle,
   text: string,
+  payload: Record<string, unknown>,
   meta: EventRenderMeta,
   context: SessionRunTranscriptContext,
 ): void {
   const content = stripAnsi(text)
   if (!content) return
+  const rawEventRefs = rawEventRefsFromPayload(payload)
   updateAssistantItems(bundle, (parts) => {
     const last = parts[parts.length - 1]
     if (last?.type === "assistant_text" && last.streamKey === ASSISTANT_STREAM_KEY) {
@@ -518,6 +544,7 @@ function upsertAssistantStream(
         format: "markdown",
         streaming: true,
         streamKey: ASSISTANT_STREAM_KEY,
+        rawEventRefs: mergeRawEventRefs(current.rawEventRefs, rawEventRefs),
       }, meta)
       return next
     }
@@ -531,6 +558,7 @@ function upsertAssistantStream(
         format: "markdown",
         streaming: true,
         streamKey: ASSISTANT_STREAM_KEY,
+        rawEventRefs,
       }, meta),
     ]
   }, context)
@@ -539,11 +567,13 @@ function upsertAssistantStream(
 function finalizeAssistant(
   bundle: MockSessionBundle,
   text: string,
+  payload: Record<string, unknown>,
   meta: EventRenderMeta,
   context: SessionRunTranscriptContext,
 ): void {
   const content = stripAnsi(text).trim()
   if (!content) return
+  const rawEventRefs = rawEventRefsFromPayload(payload)
   updateAssistantItems(bundle, (parts) => {
     const last = parts[parts.length - 1]
     if (last?.type === "assistant_text" && last.streamKey === ASSISTANT_STREAM_KEY) {
@@ -554,6 +584,7 @@ function finalizeAssistant(
         format: "markdown",
         streaming: false,
         streamKey: ASSISTANT_MESSAGE_KEY,
+        rawEventRefs: mergeRawEventRefs(last.rawEventRefs, rawEventRefs),
       }, meta)
       return next
     }
@@ -567,6 +598,7 @@ function finalizeAssistant(
         format: "markdown",
         streaming: false,
         streamKey: ASSISTANT_MESSAGE_KEY,
+        rawEventRefs,
       }, meta),
     ]
   }, context)
@@ -575,12 +607,14 @@ function finalizeAssistant(
 function upsertReasoningThinking(
   bundle: MockSessionBundle,
   text: string,
+  payload: Record<string, unknown>,
   meta: EventRenderMeta,
   context: SessionRunTranscriptContext,
   labels: SessionRunTranscriptLabels,
 ): void {
   const content = stripAnsi(text)
   if (!content) return
+  const rawEventRefs = rawEventRefsFromPayload(payload)
   updateAssistantItems(bundle, (parts) => {
     const updateThinkingItem = (part: ThinkingItem): ThinkingItem => withEventMeta({
       ...part,
@@ -589,6 +623,7 @@ function upsertReasoningThinking(
       active: true,
       raw: `${part.raw || ""}${content}`,
       streamKey: REASONING_STREAM_KEY,
+      rawEventRefs: mergeRawEventRefs(part.rawEventRefs, rawEventRefs),
     }, meta)
     const thinkingIndex = findLastItemIndex(parts, isReasoningThinkingItem)
     if (thinkingIndex >= 0) {
@@ -606,6 +641,7 @@ function upsertReasoningThinking(
         active: true,
         raw: content,
         streamKey: REASONING_STREAM_KEY,
+        rawEventRefs,
       }, meta),
     ]
   }, context)
@@ -623,24 +659,26 @@ function finalizeReasoning(
   const raw = stripAnsi(rawValue)
   const summary = stripAnsi(summaryValue)
   if (!raw && !summary) return
+  const rawEventRefs = rawEventRefsFromPayload(payload)
   updateAssistantItems(bundle, (parts) => {
-    const createReasoning = (id: string): ReasoningItem => withEventMeta({
+    const createReasoning = (id: string, existingRefs?: RawEventRef[]): ReasoningItem => withEventMeta({
       id,
       type: "reasoning",
       summary: summary || undefined,
       raw: raw || summary,
       format: stringValue(payload.format) === "plain" ? "plain" : "markdown",
+      rawEventRefs: mergeRawEventRefs(existingRefs, rawEventRefs),
     }, meta)
     const thinkingIndex = findLastItemIndex(parts, isReasoningThinkingItem)
     if (thinkingIndex >= 0) {
       const next = [...parts]
-      next[thinkingIndex] = createReasoning(parts[thinkingIndex].id)
+      next[thinkingIndex] = createReasoning(parts[thinkingIndex].id, parts[thinkingIndex].rawEventRefs)
       return next
     }
     const reasoningIndex = findLastItemIndex(parts, (part) => part.type === "reasoning")
     if (reasoningIndex >= 0) {
       const next = [...parts]
-      next[reasoningIndex] = createReasoning(parts[reasoningIndex].id)
+      next[reasoningIndex] = createReasoning(parts[reasoningIndex].id, parts[reasoningIndex].rawEventRefs)
       return next
     }
     const nextParts = closeTrailingInlineStream(parts)
@@ -655,6 +693,7 @@ function appendTerminal(
   bundle: MockSessionBundle,
   content: string,
   title: string,
+  payload: Record<string, unknown>,
   meta: EventRenderMeta,
   context: SessionRunTranscriptContext,
 ): void {
@@ -669,6 +708,7 @@ function appendTerminal(
         type: "terminal",
         title,
         content: clean,
+        rawEventRefs: rawEventRefsFromPayload(payload),
       }, meta),
     ]
   }, context)
@@ -696,6 +736,7 @@ function appendView(
         viewType: String(payload.view_type || payload.kind || "view"),
         level: String(payload.level || "info"),
         payload: viewPayload,
+        rawEventRefs: rawEventRefsFromPayload(payload),
       }, meta),
     ]
   }, context)
@@ -718,6 +759,34 @@ function appendContextEvent(
         type: "context_event",
         title: String(payload.message || payload.phase || labels.contextEvent),
         payload,
+        rawEventRefs: rawEventRefsFromPayload(payload),
+      }, meta),
+    ]
+  }, context)
+}
+
+function appendCapabilityPackageDraft(
+  bundle: MockSessionBundle,
+  payload: Record<string, unknown>,
+  meta: EventRenderMeta,
+  context: SessionRunTranscriptContext,
+  labels: SessionRunTranscriptLabels,
+  now: number,
+): void {
+  updateAssistantItems(bundle, (parts) => {
+    const nextParts = closeTrailingInlineStream(parts)
+    const draft = objectValue(payload.draft)
+    return [
+      ...nextParts,
+      withEventMeta({
+        id: stablePartId("capability-draft", meta, now, nextParts.length),
+        type: "capability_package_draft",
+        title: String(payload.title || payload.message || labels.capabilityPackageDraft),
+        packageId: stringValue(payload.package_id) || stringValue(draft.id),
+        draft,
+        validation: objectValue(payload.validation),
+        payload,
+        rawEventRefs: rawEventRefsFromPayload(payload),
       }, meta),
     ]
   }, context)
@@ -740,6 +809,7 @@ function appendMemoryContext(
         type: "memory_context",
         title: String(payload.title || labels.memoryContext),
         payload,
+        rawEventRefs: rawEventRefsFromPayload(payload),
       }, meta),
     ]
   }, context)
@@ -765,6 +835,7 @@ function appendUiEvent(
         level: String(payload.level || "info"),
         title: String(payload.title || payload.message || uiEventTitle(eventType, labels)),
         payload,
+        rawEventRefs: rawEventRefsFromPayload(payload),
       }, meta),
     ]
   }, context)
@@ -804,6 +875,7 @@ function appendToolStream(
         : `${existing?.output || ""}${content}`,
       outputChunks: shellOutput?.chunks || existing?.outputChunks,
       outputTruncated: shellOutput?.truncated || existing?.outputTruncated,
+      rawEventRefs: rawEventRefsFromPayload(payload),
     }
     return upsertToolPartInParts(targetParts, toolName, patch, { fallbackId: toolCallId }).map((part) => (
       part.type === "tool" && part.toolCallId === toolCallId ? withEventMeta(part, meta) : part
@@ -850,6 +922,7 @@ function appendToolCallDelta(
       startedAt: numberValue(payload.started_at),
       input: argumentsPreview ? { arguments_preview: argumentsPreview } : undefined,
       preparingIndex,
+      rawEventRefs: rawEventRefsFromPayload(payload),
     }, toolCallId, { meta, preparingIndex })
   }, context)
 }
@@ -872,6 +945,7 @@ function appendToolStart(
       input: objectValue(payload.tool_args),
       resultMeta: {},
       preparingIndex: numberValue(payload.index),
+      rawEventRefs: rawEventRefsFromPayload(payload),
     }, toolCallId, { meta, preparingIndex: numberValue(payload.index) }),
   context)
 }
@@ -898,6 +972,7 @@ function appendToolProtocolError(
       output,
       outputFormat: "plain",
       resultMeta,
+      rawEventRefs: rawEventRefsFromPayload(payload),
     }, toolCallId, { meta }),
   context)
 }
@@ -940,6 +1015,7 @@ function appendToolEnd(
       outputChunks: shellChunks,
       finalOutput: isShell ? finalOutput : undefined,
       resultMeta: objectValue(payload.meta),
+      rawEventRefs: rawEventRefsFromPayload(payload),
     }
     return upsertToolPartWithPreparing(parts, toolName, patch, toolCallId, { matchReturn: true, meta })
   }, context)
@@ -966,6 +1042,7 @@ function appendApprovalRequest(
       approvalContent: stringValue(payload.content),
       approvalSections: Array.isArray(payload.sections) ? payload.sections as Record<string, unknown>[] : undefined,
       approvalDecision: decision === "allow" ? "auto_approved" : decision === "deny" ? "auto_denied" : undefined,
+      rawEventRefs: rawEventRefsFromPayload(payload),
     }, toolCallId, { meta }),
   context)
 }
@@ -990,6 +1067,7 @@ function appendApprovalResolved(
         approvalDecision: approvalDecisionAfterResolution(part.approvalDecision, decision),
         approvalResultReason: reason || part.approvalResultReason,
         status: approvalStatusAfterResolution(decision, part.status),
+        rawEventRefs: mergeRawEventRefs(part.rawEventRefs, rawEventRefsFromPayload(payload)),
       }, meta)
     }),
   context)
@@ -1021,6 +1099,7 @@ function upsertToolPartWithPreparing(
       next[draftIndex] = withEventMeta({
         ...current,
         ...definedPatch,
+        rawEventRefs: mergeRawEventRefs(current.rawEventRefs, definedPatch.rawEventRefs),
         id: current.id,
         type: "tool",
         tool: toolName,
@@ -1208,6 +1287,21 @@ function uiEventTitle(type: string, labels: SessionRunTranscriptLabels): string 
   return titles[type] || labels.runEvent
 }
 
+function sessionEventMessage(
+  payload: Record<string, unknown>,
+  labels: SessionRunTranscriptLabels,
+  defaultKey: string,
+  defaultMessage: string,
+): string {
+  const explicit = stringValue(payload.message)
+  if (explicit) return explicit
+  const key = stringValue(payload.message_key) || defaultKey
+  if (key === "provider_stream_interrupted.recovering") return labels.providerStreamInterrupted
+  if (key === "provider_stream.interrupted_can_continue") return labels.streamInterruptedCanContinue
+  if (key === "capability_package.session_failed") return labels.capabilityPackageSessionFailed
+  return defaultMessage
+}
+
 function isRemotePeerReadyTui(content: string): boolean {
   const normalized = content.replace(/\r\n/g, "\n")
   const titleMatch = normalized.match(/╭[─\s]*([A-Z_ ]+?)[─\s]*╮/)
@@ -1250,6 +1344,36 @@ function objectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {}
+}
+
+function rawEventRefsFromPayload(payload: Record<string, unknown>): RawEventRef[] | undefined {
+  const refs = payload.raw_event_refs ?? payload.rawEventRefs
+  if (!Array.isArray(refs)) return undefined
+  const normalized = refs
+    .map((item) => objectValue(item))
+    .filter((item) => Object.keys(item).length > 0) as RawEventRef[]
+  return normalized.length ? normalized : undefined
+}
+
+function mergeRawEventRefs(
+  current: RawEventRef[] | undefined,
+  incoming: RawEventRef[] | undefined,
+): RawEventRef[] | undefined {
+  if (!current?.length && !incoming?.length) return undefined
+  const merged: RawEventRef[] = []
+  const seen = new Set<string>()
+  for (const ref of [...(current || []), ...(incoming || [])]) {
+    const key = [
+      String(ref.agent_run_id || ""),
+      String(ref.seq ?? ""),
+      String(ref.type || ""),
+      String(ref.id || ""),
+    ].join(":")
+    if (seen.has(key)) continue
+    seen.add(key)
+    merged.push(ref)
+  }
+  return merged.length ? merged : undefined
 }
 
 function defined<T extends Record<string, unknown>>(value: T): Partial<T> {

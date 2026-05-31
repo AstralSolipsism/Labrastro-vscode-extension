@@ -14,6 +14,15 @@ export interface TranscriptMeta {
   traceNodeId?: string
   traceNodeKind?: TraceNodeKind
   traceNodeStatus?: TraceNodeStatus
+  rawEventRefs?: RawEventRef[]
+}
+
+export interface RawEventRef {
+  agent_run_id?: string
+  seq?: number
+  type?: string
+  id?: string
+  [key: string]: unknown
 }
 
 export interface AssistantTextItem extends TranscriptMeta {
@@ -110,6 +119,15 @@ export interface ContextEventItem extends TranscriptMeta {
   payload?: Record<string, unknown>
 }
 
+export interface CapabilityPackageDraftItem extends TranscriptMeta {
+  type: "capability_package_draft"
+  title?: string
+  packageId?: string
+  draft?: Record<string, unknown>
+  validation?: Record<string, unknown>
+  payload?: Record<string, unknown>
+}
+
 export interface MemoryContextItem extends TranscriptMeta {
   type: "memory_context"
   title?: string
@@ -143,6 +161,7 @@ export type TranscriptItem =
   | TerminalItem
   | ViewItem
   | ContextEventItem
+  | CapabilityPackageDraftItem
   | MemoryContextItem
   | UiEventItem
   | ParallelTranscriptItem

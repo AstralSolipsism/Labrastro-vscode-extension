@@ -408,6 +408,34 @@ describe("sessionRunTranscriptReducer", () => {
     })
   })
 
+  it("preserves raw AgentRun event references on merged tool cards", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
+    current = reduce(current, "tool_call_start", {
+      tool_call_id: "tool-1",
+      tool_name: "fetch_capabilities",
+      tool_args: { repo: "repo" },
+      raw_event_refs: [{ agent_run_id: "agent-run-1", seq: 10, type: "tool_use" }],
+    }, 2)
+    current = reduce(current, "tool_call_end", {
+      tool_call_id: "tool-1",
+      tool_name: "fetch_capabilities",
+      tool_result: "ok",
+      raw_event_refs: [{ agent_run_id: "agent-run-1", seq: 11, type: "tool_result" }],
+    }, 3)
+
+    const parts = current.turns[0].assistantMessages[0].parts
+    expect(parts).toHaveLength(1)
+    expect(parts[0]).toMatchObject({
+      type: "tool",
+      toolCallId: "tool-1",
+      rawEventRefs: [
+        { agent_run_id: "agent-run-1", seq: 10, type: "tool_use" },
+        { agent_run_id: "agent-run-1", seq: 11, type: "tool_result" },
+      ],
+    })
+  })
+
   it("turns run end into metadata-only completion when the response was already rendered", () => {
     let current = bundle()
     current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
@@ -457,6 +485,88 @@ describe("sessionRunTranscriptReducer", () => {
       text: "stream lost",
       format: "plain",
     })
+  })
+
+  it("falls back to labels for provider stream interruption message keys", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
+    current = applySessionRunTranscriptEvent(current, {
+      type: "provider_stream_interrupted",
+      payload: { message_key: "provider_stream_interrupted.recovering" },
+      session_run_id: "run-1",
+      seq: 2,
+    }, {
+      labels: { providerStreamInterrupted: "stream recovering" },
+    }).bundle
+
+    const parts = current.turns[0].assistantMessages[0].parts
+    expect(parts[0]).toMatchObject({
+      type: "notice",
+      level: "warning",
+      text: "stream recovering",
+    })
+  })
+
+  it("falls back to labels for capability package failure message keys", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
+    current = applySessionRunTranscriptEvent(current, {
+      type: "session_run_failed",
+      payload: {
+        code: "capability_package_session_failed",
+        message_key: "capability_package.session_failed",
+      },
+      session_run_id: "run-1",
+      seq: 2,
+    }, {
+      labels: { capabilityPackageSessionFailed: "package failed" },
+    }).bundle
+
+    const parts = current.turns[0].assistantMessages[0].parts
+    expect(parts[0]).toMatchObject({
+      type: "notice",
+      level: "error",
+      text: "错误：package failed",
+    })
+  })
+
+  it("stores capability package drafts as structured transcript cards", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "package" }, 1)
+    current = reduce(current, "capability_package_draft", {
+      package_id: "review",
+      title: "能力包草案 review 已生成",
+      draft: {
+        id: "review",
+        description: "Review package",
+        contributions: {
+          skills: [
+            {
+              id: "skill:code-review",
+              kind: "skill",
+              name: "code-review",
+              has_skill_content: true,
+              skill_content_chars: 120,
+            },
+          ],
+        },
+      },
+      validation: { ok: true },
+      raw_event_refs: [{ agent_run_id: "agent-run-1", seq: 20, type: "result" }],
+    }, 2)
+
+    const parts = current.turns[0].assistantMessages[0].parts
+    expect(parts[0]).toMatchObject({
+      type: "capability_package_draft",
+      packageId: "review",
+      title: "能力包草案 review 已生成",
+      draft: {
+        id: "review",
+      },
+      validation: { ok: true },
+      rawEventRefs: [{ agent_run_id: "agent-run-1", seq: 20, type: "result" }],
+    })
+    expect(JSON.stringify(parts[0])).not.toContain('"skill_content":')
   })
 
   it("settles running tool cards and appends a notice when the run is cancelled", () => {
