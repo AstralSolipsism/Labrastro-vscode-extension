@@ -82,6 +82,17 @@ describe("ChatView context events", () => {
     expect(remoteHandlerSource).toContain("flushLiveTranscriptEvents()")
   })
 
+  it("loads raw AgentRun audit events from transcript card references", () => {
+    expect(source).toContain("rawAuditAgentRunQuery(refs)")
+    expect(source).toContain("rawAuditEventKey(refs)")
+    expect(source).toContain('type: "agentRun.events"')
+    expect(source).toContain("requestId: key")
+    expect(source).toContain('msg.type === "agentRun.events"')
+    expect(source).toContain("filterRawAuditEvents(events, refs)")
+    expect(source).toContain("onLoadRawAuditEvents={loadRawAuditEvents}")
+    expect(source).toContain("rawAuditEvents={rawAuditEvents()}")
+  })
+
   it("keeps active draft archiving outside canonical session-run transcript events", () => {
     expect(source).toContain("const shouldArchiveActiveStreamBeforeEvent =")
     expect(source).toContain("const isArchivableActiveTranscriptItem =")

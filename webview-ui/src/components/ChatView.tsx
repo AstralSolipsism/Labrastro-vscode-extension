@@ -86,6 +86,12 @@ import {
   type ApprovalSubmissionFields,
   type ApprovalSubmissionState,
 } from "../chat/approval-state"
+import {
+  filterRawAuditEvents,
+  rawAuditAgentRunQuery,
+  rawAuditEventKey,
+  type RawAuditEventSnapshot,
+} from "../chat/raw-audit"
 import { isSessionRunTranscriptEventType } from "../chat/sessionRunTranscriptReducer"
 import {
   approvalDecisionAfterResolution,
@@ -130,6 +136,7 @@ import type { MockMessage, MockTurn } from "./chat/mock-data"
 import type {
   AssistantTextItem,
   NoticeLevel,
+  RawEventRef,
   ReasoningItem,
   ThinkingItem,
   ToolActivityItem,
@@ -195,6 +202,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const [sessionRunSawError, setSessionRunSawError] = createSignal(false)
   const [sessionRunSawTerminal, setSessionRunSawTerminal] = createSignal(false)
   const [pendingCancel, setPendingCancel] = createSignal(false)
+  const [rawAuditEvents, setRawAuditEvents] = createSignal<Record<string, RawAuditEventSnapshot>>({})
   const [environmentRunQueue, setEnvironmentRunQueue] = createSignal<EnvironmentQueueItem[]>([])
   const [lastEnvironmentRunRequestId, setLastEnvironmentRunRequestId] = createSignal("")
   const [pendingApprovals, setPendingApprovals] = createSignal<PendingApproval[]>([])
@@ -682,8 +690,41 @@ const ChatView: Component<ChatViewProps> = (props) => {
     runEvent: "运行事件",
     cancelled: "已取消当前请求。",
     errorPrefix: "错误：",
-    streamInterruptedPrefix: "输出中断：",
+    streamInterruptedPrefix: t("chat.streamRecovery.interruptedPrefix"),
+    providerStreamInterrupted: t("chat.streamRecovery.interruptedRecovering"),
+    streamInterruptedCanContinue: t("chat.streamRecovery.interruptedCanContinue"),
+    capabilityPackageSessionFailed: t("chat.capabilityPackage.sessionFailed"),
+    capabilityPackageDraft: t("chat.capabilityPackage.draft"),
   })
+
+  const sessionNoticeMessage = (
+    payload: Record<string, unknown>,
+    defaultKey: string,
+    fallback: string,
+  ): string => {
+    const explicit = stringValue(payload.message)
+    if (explicit) return explicit
+    const key = stringValue(payload.message_key) || defaultKey
+    if (key === "provider_stream_interrupted.recovering") {
+      return t("chat.streamRecovery.interruptedRecovering")
+    }
+    if (key === "provider_stream.recovering") {
+      return t("chat.streamRecovery.recovering")
+    }
+    if (key === "provider_stream.continuing") {
+      return t("chat.streamRecovery.continuing")
+    }
+    if (key === "provider_stream.continue_generating") {
+      return t("chat.streamRecovery.continueGenerating")
+    }
+    if (key === "provider_stream.interrupted_can_continue") {
+      return t("chat.streamRecovery.interruptedCanContinue")
+    }
+    if (key === "capability_package.session_failed") {
+      return t("chat.capabilityPackage.sessionFailed")
+    }
+    return fallback
+  }
 
   const withEventMeta = <T extends TranscriptItem>(item: T, meta?: EventRenderMeta): T => ({
     ...item,
@@ -1640,35 +1681,49 @@ const ChatView: Component<ChatViewProps> = (props) => {
         )
       }
     } else if (type === "provider_stream_interrupted") {
-      const message = stringValue(payload.message) || "模型输出流中断，正在尝试恢复。"
+      const message = sessionNoticeMessage(
+        payload,
+        "provider_stream_interrupted.recovering",
+        t("chat.streamRecovery.interruptedRecovering"),
+      )
       setStreamRecoveryMessage(message)
-      setWorkingText("正在恢复输出")
+      setWorkingText(t("chat.streamRecovery.recovering"))
       trace.patchStats({ runStatus: "running" })
       if (!canonicalTranscriptEvent) {
-        appendNotice("warning", "模型输出流中断，正在尝试恢复。", "stream-recovery", { meta: eventMeta })
+        appendNotice("warning", message, "stream-recovery", { meta: eventMeta })
       }
     } else if (type === "provider_stream_recovering") {
-      setStreamRecoveryMessage(stringValue(payload.message) || "正在恢复输出。")
-      setWorkingText("正在恢复输出")
+      setStreamRecoveryMessage(
+        sessionNoticeMessage(
+          payload,
+          "provider_stream.recovering",
+          t("chat.streamRecovery.recovering"),
+        ),
+      )
+      setWorkingText(t("chat.streamRecovery.recovering"))
       trace.patchStats({ runStatus: "running" })
     } else if (type === "provider_stream_recovered") {
       setStreamRecoveryMessage("")
-      setWorkingText("正在继续处理")
+      setWorkingText(t("chat.streamRecovery.continuing"))
       trace.patchStats({ runStatus: "running" })
     } else if (type === "session_run_recovery_start") {
       setStreamRecoveryMessage("")
       setIsWorking(true)
       setSessionRunStatus("running")
-      setWorkingText("正在继续生成")
+      setWorkingText(t("chat.streamRecovery.continueGenerating"))
       trace.patchStats({ runStatus: "running" })
     } else if (type === "session_run_interrupted") {
-      const message = stringValue(payload.message) || "模型输出流中断，可继续生成。"
+      const message = sessionNoticeMessage(
+        payload,
+        "provider_stream.interrupted_can_continue",
+        t("chat.streamRecovery.interruptedCanContinue"),
+      )
       setSessionRunSawTerminal(true)
       setSessionRunStatus("interrupted")
       setStreamRecoveryMessage(message)
       trace.patchStats({ runStatus: "interrupted" })
       if (!canonicalTranscriptEvent) {
-        appendNotice("warning", `输出中断：${message}`, "stream-interrupted", { meta: eventMeta })
+        appendNotice("warning", `${t("chat.streamRecovery.interruptedPrefix")}${message}`, "stream-interrupted", { meta: eventMeta })
       }
       setAgentRunState((current) => settleAgentRunStateForSessionRunEvent(current, type, payload))
       finishSessionRun("interrupted")
@@ -1942,6 +1997,28 @@ const ChatView: Component<ChatViewProps> = (props) => {
 
   const copyToolOutput = async (part: ToolActivityItem) => {
     await writeClipboard(copyTextForToolOutput(part))
+  }
+
+  const loadRawAuditEvents = (refs: RawEventRef[]) => {
+    const key = rawAuditEventKey(refs)
+    const query = rawAuditAgentRunQuery(refs)
+    if (!key || !query) return
+    setRawAuditEvents((current) => ({
+      ...current,
+      [key]: {
+        ...current[key],
+        refs,
+        loading: true,
+        error: "",
+      },
+    }))
+    vscode.postMessage({
+      type: "agentRun.events",
+      payload: {
+        ...query,
+        requestId: key,
+      },
+    })
   }
 
   const copyCurrentTranscript = async () => {
@@ -2375,7 +2452,11 @@ const ChatView: Component<ChatViewProps> = (props) => {
     if (!sessionRunId) return
     setIsWorking(true)
     setSessionRunStatus("running")
-    setWorkingText(action === "retry" ? "正在重新请求" : "正在继续生成")
+    setWorkingText(
+      action === "retry"
+        ? t("chat.streamRecovery.retrying")
+        : t("chat.streamRecovery.continueGenerating"),
+    )
     setStreamRecoveryMessage("")
     trace.patchStats({ runStatus: "running" })
     startTimer()
@@ -2688,7 +2769,11 @@ const ChatView: Component<ChatViewProps> = (props) => {
         }
         setIsWorking(true)
         setSessionRunStatus("running")
-        setWorkingText(String(payload.status || "") === "reconnecting" ? "正在重连" : "正在继续处理")
+        setWorkingText(
+          String(payload.status || "") === "reconnecting"
+            ? t("chat.streamRecovery.reconnecting")
+            : t("chat.streamRecovery.continuing"),
+        )
         trace.patchStats({ runStatus: "running" })
         if (!timer) startTimer()
       }
@@ -2717,12 +2802,12 @@ const ChatView: Component<ChatViewProps> = (props) => {
         if (sessionId) setActiveRunSessionId(sessionId)
         setIsWorking(true)
         setSessionRunStatus("running")
-        setWorkingText("正在重连")
+        setWorkingText(t("chat.streamRecovery.reconnecting"))
         trace.patchStats({ runStatus: "running" })
         if (!timer) startTimer()
       }
       if (msg.type === "sessionRun.reconnected") {
-        setWorkingText("正在继续处理")
+        setWorkingText(t("chat.streamRecovery.continuing"))
         setIsWorking(true)
         setSessionRunStatus("running")
         trace.patchStats({ runStatus: "running" })
@@ -2739,6 +2824,36 @@ const ChatView: Component<ChatViewProps> = (props) => {
           if (event && typeof event === "object") {
             handleLiveStreamEvent(event as Record<string, unknown>)
           }
+        }
+      }
+      if (msg.type === "agentRun.events" && typeof msg.payload === "object" && msg.payload) {
+        const payload = objectValue(msg.payload)
+        const requestId = stringValue(msg.requestId) || stringValue(payload.requestId) || stringValue(payload.request_id)
+        if (requestId && rawAuditEvents()[requestId]) {
+          const events = Array.isArray(payload.events) ? payload.events as Record<string, unknown>[] : []
+          const refs = rawAuditEvents()[requestId]?.refs || []
+          setRawAuditEvents((current) => ({
+            ...current,
+            [requestId]: {
+              ...current[requestId],
+              loading: false,
+              error: "",
+              events: filterRawAuditEvents(events, refs),
+            },
+          }))
+        }
+      }
+      if (msg.type === "agentRun.error") {
+        const requestId = stringValue(msg.requestId) || stringValue(msg.request_id)
+        if (requestId && rawAuditEvents()[requestId]) {
+          setRawAuditEvents((current) => ({
+            ...current,
+            [requestId]: {
+              ...current[requestId],
+              loading: false,
+              error: typeof msg.message === "string" ? msg.message : "AgentRun events request failed",
+            },
+          }))
         }
       }
       if (msg.type === "taskflow.focusChatInteraction") {
@@ -2917,6 +3032,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
           onCopyToolCommand={copyToolCommand}
           onCopyToolOutput={copyToolOutput}
           onForkPart={forkFromPart}
+          onLoadRawAuditEvents={loadRawAuditEvents}
+          rawAuditEvents={rawAuditEvents()}
         />
       </main>
 
@@ -2981,13 +3098,17 @@ const ChatView: Component<ChatViewProps> = (props) => {
           <div class="stream-recovery-banner" role="status">
             <span class="codicon codicon-debug-restart" aria-hidden="true" />
             <div class="stream-recovery-banner__body">
-              <strong>输出可继续</strong>
-              <span>{streamRecoveryMessage() || "模型输出流已中断，可以从当前内容继续生成。"}</span>
+              <strong>{t("chat.streamRecovery.title")}</strong>
+              <span>{streamRecoveryMessage() || t("chat.streamRecovery.banner")}</span>
             </div>
             <div class="stream-recovery-banner__actions">
-              <button type="button" onClick={() => recoverInterruptedChat("continue")}>继续生成</button>
-              <button type="button" onClick={() => recoverInterruptedChat("retry")}>重新请求</button>
-              <button type="button" onClick={dismissInterruptedChat}>结束本轮</button>
+              <button type="button" onClick={() => recoverInterruptedChat("continue")}>
+                {t("chat.streamRecovery.action.continue")}
+              </button>
+              <button type="button" onClick={() => recoverInterruptedChat("retry")}>
+                {t("chat.streamRecovery.action.retry")}
+              </button>
+              <button type="button" onClick={dismissInterruptedChat}>{t("chat.streamRecovery.action.dismiss")}</button>
             </div>
           </div>
         </Show>

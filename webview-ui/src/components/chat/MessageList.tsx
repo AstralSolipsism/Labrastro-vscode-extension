@@ -6,7 +6,8 @@ import { WorkingIndicator } from "./WorkingIndicator"
 import { IconButton } from "../common/IconButton"
 import { useVirtualMessageList, type UseVirtualMessageListResult, type VirtualTurnItem } from "./useVirtualMessageList"
 import type { MockTurn, MockSession, MockMessage } from "./mock-data"
-import type { ToolActivityItem, TranscriptItem } from "./transcript-model"
+import type { RawEventRef, ToolActivityItem, TranscriptItem } from "./transcript-model"
+import type { RawAuditEventSnapshot } from "../../chat/raw-audit"
 import type { SessionListState } from "../../context/trace"
 
 const LAYOUT_TOGGLE_SELECTOR = [
@@ -40,6 +41,8 @@ interface MessageListProps {
   onCopyToolCommand?: (part: ToolActivityItem) => Promise<void> | void
   onCopyToolOutput?: (part: ToolActivityItem) => Promise<void> | void
   onForkPart?: (part: TranscriptItem) => void
+  onLoadRawAuditEvents?: (refs: RawEventRef[]) => void
+  rawAuditEvents?: Record<string, RawAuditEventSnapshot>
 }
 
 export const MessageList: Component<MessageListProps> = (props) => {
@@ -99,6 +102,8 @@ export const MessageList: Component<MessageListProps> = (props) => {
                     onCopyToolCommand={props.onCopyToolCommand}
                     onCopyToolOutput={props.onCopyToolOutput}
                     onForkPart={props.onForkPart}
+                    onLoadRawAuditEvents={props.onLoadRawAuditEvents}
+                    rawAuditEvents={props.rawAuditEvents}
                     defaultReasoningOpen={props.defaultReasoningOpen}
                     runningProcessLabel={props.workingText}
                   />
@@ -160,6 +165,8 @@ const VirtualMessageRow: Component<VirtualMessageRowProps> = (props) => {
         onCopyToolCommand={props.onCopyToolCommand}
         onCopyToolOutput={props.onCopyToolOutput}
         onForkPart={props.onForkPart}
+        onLoadRawAuditEvents={props.onLoadRawAuditEvents}
+        rawAuditEvents={props.rawAuditEvents}
         defaultReasoningOpen={props.defaultReasoningOpen}
         runningProcessLabel={props.runningProcessLabel}
       />

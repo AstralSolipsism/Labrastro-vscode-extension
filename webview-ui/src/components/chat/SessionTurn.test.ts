@@ -58,6 +58,9 @@ describe("SessionTurn source order", () => {
     expect(source).toContain("const ProcessSummaryPart")
     expect(source).toContain("const ReasoningPanelPart")
     expect(source).toContain("const FinalAnswerPart")
+    expect(source).toContain("const CapabilityPackageDraftPart")
+    expect(source).toContain("const RawAuditRefs")
+    expect(source).toContain("rawAuditRefsForPart")
     expect(source).toContain('class="process-group-card"')
     expect(source).toContain('class="process-summary-card"')
     expect(source).toContain("buildTranscriptPresentation(message().parts, message()")
@@ -74,6 +77,7 @@ describe("SessionTurn source order", () => {
     expect(source).toContain("panel={(item() as Extract<TranscriptPresentationItem, { type: \"reasoning_panel\" }>).panel}")
     expect(source).toContain("parts={(item() as Extract<TranscriptPresentationItem, { type: \"final_answer\" }>).parts}")
     expect(source).toContain("part={(item() as Extract<TranscriptPresentationItem, { type: \"timeline_part\" }>).part}")
+    expect(source).toContain('props.part.type === "capability_package_draft"')
     expect(source).toContain("<ProcessTimeline")
     expect(source).not.toContain('item().type === "timeline_reasoning"')
     expect(source).not.toContain("TimelineReasoningPart")
@@ -149,7 +153,52 @@ describe("SessionTurn source order", () => {
     expect(source).toContain("initialCardOpenState(props.panel.id, props.defaultReasoningOpen === true)")
     expect(source).toContain("initialCardOpenState(props.part.id, false)")
     expect(source).toContain('<MarkdownBlock text={detailsText()} class="reasoning-card__markdown" />')
-    expect(source).toContain('<MarkdownBlock text={detailsText()} class="reasoning-card__markdown" />')
+    expect(source).toContain("const isStreaming = () => props.panel.state === \"running\"")
+    expect(source).toContain("streaming={isStreaming()}")
+    expect(source).not.toContain('<MarkdownBlock text={detailsText()} class="reasoning-card__markdown" />\n        </div>')
+  })
+
+  it("keeps raw AgentRun event references visible through unified card details", () => {
+    expect(source).toContain('t("tool.section.rawAudit")')
+    expect(source).toContain('t("tool.rawAudit.load")')
+    expect(source).toContain("formatJson({ raw_event_refs: refs() })")
+    expect(source).toContain("details()?.events")
+    expect(source).toContain("props.onLoadRawAuditEvents?.(refs())")
+    expect(source).toContain("rawAuditRefsForPart(props.part).length > 0")
+
+    const toolPartStart = source.indexOf("const ToolPart")
+    const toolSectionStart = source.indexOf("const ToolSection", toolPartStart)
+    const toolPartSource = source.slice(toolPartStart, toolSectionStart)
+    expect(toolPartSource).toContain("<RawAuditRefs")
+    expect(toolPartSource).toContain("onLoadRawAuditEvents={props.onLoadRawAuditEvents}")
+
+    const shellPartStart = source.indexOf("const ShellToolPart")
+    const tracePartStart = source.indexOf("const TracePart", shellPartStart)
+    const shellPartSource = source.slice(shellPartStart, tracePartStart)
+    expect(shellPartSource).toContain("<RawAuditRefs")
+    expect(shellPartSource).toContain("rawAuditEvents={props.rawAuditEvents}")
+
+    const contextStart = source.indexOf("const ContextEventPart")
+    const draftStart = source.indexOf("const CapabilityPackageDraftPart", contextStart)
+    const contextSource = source.slice(contextStart, draftStart)
+    expect(contextSource).toContain("<RawAuditRefs")
+
+    const memoryStart = source.indexOf("const MemoryContextPart", draftStart)
+    const draftSource = source.slice(draftStart, memoryStart)
+    expect(draftSource).toContain("<RawAuditRefs")
+  })
+
+  it("treats a running reasoning panel as streaming markdown", () => {
+    const reasoningPanelStart = source.indexOf("const ReasoningPanelPart")
+    const noticePartStart = source.indexOf("const NoticePart")
+    const reasoningPanelSource = source.slice(reasoningPanelStart, noticePartStart)
+
+    expect(reasoningPanelSource).toContain("const isStreaming = () => props.panel.state === \"running\"")
+    expect(reasoningPanelSource).toContain("<MarkdownBlock")
+    expect(reasoningPanelSource).toContain("text={detailsText()}")
+    expect(reasoningPanelSource).toContain('class="reasoning-card__markdown"')
+    expect(reasoningPanelSource).toContain("streaming={isStreaming()}")
+    expect(reasoningPanelSource).not.toContain('<MarkdownBlock text={detailsText()} class="reasoning-card__markdown" />')
   })
 
   it("keeps wording focused on thinking and processing", () => {

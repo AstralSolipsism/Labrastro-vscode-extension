@@ -149,6 +149,7 @@ function estimatePartHeight(part: TranscriptItem, width: number, metrics: TurnHe
       return 34 + estimateCodeHeight(part.content || "", width, metrics, 88, 220)
     case "view":
     case "context_event":
+    case "capability_package_draft":
     case "memory_context":
     case "ui_event":
       return estimateStructuredCardHeight(part, width, metrics)

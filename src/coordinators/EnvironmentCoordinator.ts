@@ -86,9 +86,19 @@ export class EnvironmentCoordinator {
         return true
       case "agentRun.events":
         try {
-          post({ type: "agentRun.events", payload: await this.options.client.agentRunEvents(objectValue(message.payload)) })
+          const payload = objectValue(message.payload)
+          post({
+            type: "agentRun.events",
+            requestId: stringValue(payload.requestId) || stringValue(payload.request_id),
+            payload: await this.options.client.agentRunEvents(payload),
+          })
         } catch (error) {
-          post({ type: "agentRun.error", message: errorMessage(error) })
+          const payload = objectValue(message.payload)
+          post({
+            type: "agentRun.error",
+            requestId: stringValue(payload.requestId) || stringValue(payload.request_id),
+            message: errorMessage(error),
+          })
         }
         return true
       case "agentRun.cancel":

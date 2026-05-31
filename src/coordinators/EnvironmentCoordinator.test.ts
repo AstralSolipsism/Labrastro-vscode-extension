@@ -60,6 +60,28 @@ describe("EnvironmentCoordinator", () => {
     expect(post).toHaveBeenCalledWith({ type: "agentRun.submitted", payload: { agent_run: { prompt: "hello", normalized: true } } })
   })
 
+  it("echoes AgentRun event request ids so ChatView can match raw audit responses", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    options.client.agentRunEvents.mockResolvedValue({ ok: true, events: [{ seq: 1 }] })
+
+    await subject.handleMessage({
+      type: "agentRun.events",
+      payload: { agent_run_id: "run-1", after_seq: 0, requestId: "audit-1" },
+    }, post)
+
+    expect(options.client.agentRunEvents).toHaveBeenCalledWith({
+      agent_run_id: "run-1",
+      after_seq: 0,
+      requestId: "audit-1",
+    })
+    expect(post).toHaveBeenCalledWith({
+      type: "agentRun.events",
+      requestId: "audit-1",
+      payload: { ok: true, events: [{ seq: 1 }] },
+    })
+  })
+
   it("records environment requirements through the split admin endpoint", async () => {
     const { options, coordinator: subject } = coordinator(false)
     const post = vi.fn()

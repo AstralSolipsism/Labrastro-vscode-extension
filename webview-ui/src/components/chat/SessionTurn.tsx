@@ -3,7 +3,9 @@ import { t } from "../../i18n"
 import type { MockTurn, MockMessage } from "./mock-data"
 import type {
   AssistantTextItem,
+  CapabilityPackageDraftItem,
   NoticeItem,
+  RawEventRef,
   ReasoningItem,
   ThinkingItem,
   ToolActivityItem,
@@ -23,6 +25,7 @@ import { IconButton } from "../common/IconButton"
 import { MarkdownBlock } from "../common/MarkdownBlock"
 import { ApprovalDetailsBody, approvalFromPayload } from "./ApprovalDetailsDialog"
 import { canEditForkMessage, canForkMessage, canForkPart } from "../../chat/conversationInteractions"
+import { rawAuditEventKey, type RawAuditEventSnapshot } from "../../chat/raw-audit"
 import {
   extractShellCommand,
   isShellToolName,
@@ -187,6 +190,8 @@ interface SessionTurnProps {
   onCopyToolCommand?: (part: ToolActivityItem) => Promise<void> | void
   onCopyToolOutput?: (part: ToolActivityItem) => Promise<void> | void
   onForkPart?: (part: TranscriptItem) => void
+  onLoadRawAuditEvents?: (refs: RawEventRef[]) => void
+  rawAuditEvents?: Record<string, RawAuditEventSnapshot>
   defaultReasoningOpen?: boolean
   runningProcessLabel?: string
 }
@@ -215,6 +220,8 @@ interface PartProps {
   onCopyToolCommand?: (part: ToolActivityItem) => Promise<void> | void
   onCopyToolOutput?: (part: ToolActivityItem) => Promise<void> | void
   onForkPart?: (part: TranscriptItem) => void
+  onLoadRawAuditEvents?: (refs: RawEventRef[]) => void
+  rawAuditEvents?: Record<string, RawAuditEventSnapshot>
   defaultReasoningOpen?: boolean
 }
 
@@ -254,7 +261,8 @@ const ToolPart: Component<ItemProps<ToolActivityItem>> = (props) => {
   const hasInput = () => Boolean(props.part.input && Object.keys(props.part.input).length > 0)
   const hasOutput = () => Boolean(props.part.output)
   const hasMetadata = () => Boolean(props.part.resultMeta && Object.keys(props.part.resultMeta).length > 0)
-  const hasDetails = () => hasInput() || hasOutput() || Boolean(props.part.approvalId) || hasMetadata()
+  const hasRawAudit = () => rawAuditRefsForPart(props.part).length > 0
+  const hasDetails = () => hasInput() || hasOutput() || Boolean(props.part.approvalId) || hasMetadata() || hasRawAudit()
 
   return (
     <div
@@ -356,6 +364,11 @@ const ToolPart: Component<ItemProps<ToolActivityItem>> = (props) => {
                 <pre class="tool-card__code">{formatJson(props.part.resultMeta)}</pre>
               </ToolSection>
             </Show>
+            <RawAuditRefs
+              part={props.part}
+              rawAuditEvents={props.rawAuditEvents}
+              onLoadRawAuditEvents={props.onLoadRawAuditEvents}
+            />
           </div>
         </Show>
         <div class="tool-card__footer">
@@ -393,6 +406,42 @@ const ToolSection: Component<{ title: string; children: import("solid-js").JSX.E
     {props.children}
   </section>
 )
+
+const RawAuditRefs: Component<{
+  part: TranscriptItem
+  rawAuditEvents?: Record<string, RawAuditEventSnapshot>
+  onLoadRawAuditEvents?: (refs: RawEventRef[]) => void
+}> = (props) => {
+  const refs = () => rawAuditRefsForPart(props.part)
+  const key = () => rawAuditEventKey(refs())
+  const details = () => props.rawAuditEvents?.[key()]
+  return (
+    <Show when={refs().length > 0}>
+      <ToolSection title={t("tool.section.rawAudit")}>
+        <Show when={props.onLoadRawAuditEvents}>
+          <button
+            type="button"
+            class="shell-card__details-toggle"
+            onClick={(event) => {
+              event.stopPropagation()
+              props.onLoadRawAuditEvents?.(refs())
+            }}
+          >
+            <span class="codicon codicon-list-tree" aria-hidden="true" />
+            <span>{details()?.loading ? t("tool.rawAudit.loading") : t("tool.rawAudit.load")}</span>
+          </button>
+        </Show>
+        <pre class="tool-card__code">{formatJson({ raw_event_refs: refs() })}</pre>
+        <Show when={details()?.error}>
+          <div class="shell-card__truncation-note">{details()?.error}</div>
+        </Show>
+        <Show when={details()?.events?.length}>
+          <pre class="tool-card__code">{formatJson({ events: details()?.events })}</pre>
+        </Show>
+      </ToolSection>
+    </Show>
+  )
+}
 
 const ToolOutput: Component<{ part: ToolActivityItem; preview?: boolean }> = (props) => (
   <Switch fallback={<pre classList={{ "tool-card__output": true, "tool-card__preview-block": props.preview === true }}>{props.part.output}</pre>}>
@@ -480,7 +529,8 @@ const ShellToolPart: Component<ItemProps<ToolActivityItem>> = (props) => {
       Object.keys(detailInput()).length > 0 ||
       props.part.approvalId ||
       props.part.resultMeta && Object.keys(props.part.resultMeta).length > 0 ||
-      shouldShowShellFinalOutput(props.part.output, props.part.finalOutput),
+      shouldShowShellFinalOutput(props.part.output, props.part.finalOutput) ||
+      rawAuditRefsForPart(props.part).length > 0,
     )
 
   let outputRef: HTMLDivElement | undefined
@@ -624,6 +674,11 @@ const ShellToolPart: Component<ItemProps<ToolActivityItem>> = (props) => {
                 <pre class="tool-card__code">{formatJson(props.part.resultMeta)}</pre>
               </ToolSection>
             </Show>
+            <RawAuditRefs
+              part={props.part}
+              rawAuditEvents={props.rawAuditEvents}
+              onLoadRawAuditEvents={props.onLoadRawAuditEvents}
+            />
             <Show when={props.part.outputTruncated}>
               <div class="shell-card__truncation-note">{t("tool.shell.truncated")}</div>
             </Show>
@@ -809,6 +864,7 @@ const ReasoningPanelPart: Component<ReasoningPanelPartProps> = (props) => {
   })
   const title = () => props.panel.state === "running" ? t("process.group.reasoning.running") : t("process.group.reasoning")
   const detailsText = () => props.panel.raw || props.panel.summary || ""
+  const isStreaming = () => props.panel.state === "running"
 
   return (
     <div
@@ -843,7 +899,11 @@ const ReasoningPanelPart: Component<ReasoningPanelPartProps> = (props) => {
       </button>
       <Show when={open()}>
         <div class="reasoning-card__content" ref={contentRef}>
-          <MarkdownBlock text={detailsText()} class="reasoning-card__markdown" />
+          <MarkdownBlock
+            text={detailsText()}
+            class="reasoning-card__markdown"
+            streaming={isStreaming()}
+          />
         </div>
       </Show>
     </div>
@@ -922,6 +982,11 @@ const ViewPart: Component<ItemProps<Extract<TranscriptItem, { type: "view" }>>> 
             <MarkdownBlock text={summary()} class="structured-card__markdown" />
           </Show>
           <pre class="structured-card__json">{formatJson(props.part.payload || {})}</pre>
+          <RawAuditRefs
+            part={props.part}
+            rawAuditEvents={props.rawAuditEvents}
+            onLoadRawAuditEvents={props.onLoadRawAuditEvents}
+          />
         </div>
       </Show>
     </div>
@@ -961,6 +1026,78 @@ const ContextEventPart: Component<ItemProps<Extract<TranscriptItem, { type: "con
             <MarkdownBlock text={summary()} class="structured-card__markdown" />
           </Show>
           <pre class="structured-card__json">{formatJson(props.part.payload || {})}</pre>
+          <RawAuditRefs
+            part={props.part}
+            rawAuditEvents={props.rawAuditEvents}
+            onLoadRawAuditEvents={props.onLoadRawAuditEvents}
+          />
+        </div>
+      </Show>
+    </div>
+  )
+}
+
+const CapabilityPackageDraftPart: Component<ItemProps<CapabilityPackageDraftItem>> = (props) => {
+  const [open, setOpen] = createSignal(initialCardOpenState(props.part.id, true))
+  createEffect(() => {
+    CARD_OPEN_STATE.set(props.part.id, open())
+  })
+  const draft = () => props.part.draft || {}
+  const components = () => capabilityDraftComponents(draft())
+  const validationOk = () => props.part.validation?.ok !== false
+  const meta = () => [
+    props.part.packageId || String(draft().id || ""),
+    components().length ? `${components().length} ${t("chat.capabilityPackage.components")}` : "",
+    validationOk() ? "" : t("chat.capabilityPackage.validationFailed"),
+  ].filter(Boolean).join(" · ")
+  return (
+    <div
+      class="view-card capability-package-draft-card"
+      classList={{ "view-card--warning": !validationOk() }}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <button
+        type="button"
+        class="view-card__header"
+        onClick={(event) => {
+          event.stopPropagation()
+          setOpen((value) => {
+            const next = !value
+            CARD_OPEN_STATE.set(props.part.id, next)
+            return next
+          })
+        }}
+      >
+        <span class="codicon codicon-package" aria-hidden="true" />
+        <span class="view-card__body">
+          <span class="view-card__title">{props.part.title || t("chat.capabilityPackage.draft")}</span>
+          <span class="view-card__meta">{meta()}</span>
+        </span>
+        <span class={`codicon codicon-chevron-${open() ? "down" : "right"}`} aria-hidden="true" />
+      </button>
+      <Show when={open()}>
+        <div class="view-card__content">
+          <div class="structured-card__markdown">
+            <div>{String(draft().description || "")}</div>
+            <Show when={components().length}>
+              <ul>
+                <For each={components()}>
+                  {(component) => (
+                    <li>
+                      <strong>{String(component.name || component.id || "component")}</strong>
+                      <span> · {String(component.kind || component.type || "component")}</span>
+                    </li>
+                  )}
+                </For>
+              </ul>
+            </Show>
+          </div>
+          <pre class="structured-card__json">{formatJson(props.part.payload || props.part.draft || {})}</pre>
+          <RawAuditRefs
+            part={props.part}
+            rawAuditEvents={props.rawAuditEvents}
+            onLoadRawAuditEvents={props.onLoadRawAuditEvents}
+          />
         </div>
       </Show>
     </div>
@@ -1037,6 +1174,11 @@ const MemoryContextPart: Component<ItemProps<Extract<TranscriptItem, { type: "me
             <div class="memory-context-card__prompt-title">{t("memoryContext.renderedContext")}</div>
             <pre class="structured-card__json">{renderedContext()}</pre>
           </Show>
+          <RawAuditRefs
+            part={props.part}
+            rawAuditEvents={props.rawAuditEvents}
+            onLoadRawAuditEvents={props.onLoadRawAuditEvents}
+          />
         </div>
       </Show>
     </div>
@@ -1105,6 +1247,11 @@ const UiEventPart: Component<ItemProps<Extract<TranscriptItem, { type: "ui_event
             <MarkdownBlock text={summary()} class="structured-card__markdown" />
           </Show>
           <pre class="structured-card__json">{formatJson(props.part.payload || {})}</pre>
+          <RawAuditRefs
+            part={props.part}
+            rawAuditEvents={props.rawAuditEvents}
+            onLoadRawAuditEvents={props.onLoadRawAuditEvents}
+          />
         </div>
       </Show>
     </div>
@@ -1217,6 +1364,8 @@ const TimelineProcessGroupPart: Component<TimelineProcessGroupPartProps> = (prop
                 onCopyToolCommand={props.onCopyToolCommand}
                 onCopyToolOutput={props.onCopyToolOutput}
                 onForkPart={props.onForkPart}
+                onLoadRawAuditEvents={props.onLoadRawAuditEvents}
+                rawAuditEvents={props.rawAuditEvents}
                 defaultReasoningOpen={props.defaultReasoningOpen}
               />
             )}
@@ -1278,6 +1427,8 @@ const ProcessSummaryPart: Component<ProcessSummaryPartProps> = (props) => {
             onCopyToolCommand={props.onCopyToolCommand}
             onCopyToolOutput={props.onCopyToolOutput}
             onForkPart={props.onForkPart}
+            onLoadRawAuditEvents={props.onLoadRawAuditEvents}
+            rawAuditEvents={props.rawAuditEvents}
             defaultReasoningOpen={props.defaultReasoningOpen}
           />
         </div>
@@ -1345,6 +1496,8 @@ const TranscriptItemView: Component<PartProps> = (props) => {
                 onCopyToolCommand={props.onCopyToolCommand}
                 onCopyToolOutput={props.onCopyToolOutput}
                 onForkPart={props.onForkPart}
+                onLoadRawAuditEvents={props.onLoadRawAuditEvents}
+                rawAuditEvents={props.rawAuditEvents}
                 defaultReasoningOpen={props.defaultReasoningOpen}
               />
             )}
@@ -1388,6 +1541,9 @@ const TranscriptItemView: Component<PartProps> = (props) => {
       </Match>
       <Match when={props.part.type === "context_event"}>
         <ContextEventPart {...props} part={props.part as Extract<TranscriptItem, { type: "context_event" }>} />
+      </Match>
+      <Match when={props.part.type === "capability_package_draft"}>
+        <CapabilityPackageDraftPart {...props} part={props.part as CapabilityPackageDraftItem} />
       </Match>
       <Match when={props.part.type === "memory_context"}>
         <MemoryContextPart {...props} part={props.part as Extract<TranscriptItem, { type: "memory_context" }>} />
@@ -1477,6 +1633,8 @@ export const SessionTurn: Component<SessionTurnProps> = (props) => {
                           onCopyToolCommand={props.onCopyToolCommand}
                           onCopyToolOutput={props.onCopyToolOutput}
                           onForkPart={props.onForkPart}
+                          onLoadRawAuditEvents={props.onLoadRawAuditEvents}
+                          rawAuditEvents={props.rawAuditEvents}
                           defaultReasoningOpen={props.defaultReasoningOpen}
                         />
                       </Match>
@@ -1494,6 +1652,8 @@ export const SessionTurn: Component<SessionTurnProps> = (props) => {
                           onCopyToolCommand={props.onCopyToolCommand}
                           onCopyToolOutput={props.onCopyToolOutput}
                           onForkPart={props.onForkPart}
+                          onLoadRawAuditEvents={props.onLoadRawAuditEvents}
+                          rawAuditEvents={props.rawAuditEvents}
                           defaultReasoningOpen={props.defaultReasoningOpen}
                         />
                       </Match>
@@ -1517,6 +1677,8 @@ export const SessionTurn: Component<SessionTurnProps> = (props) => {
                           onCopyToolCommand={props.onCopyToolCommand}
                           onCopyToolOutput={props.onCopyToolOutput}
                           onForkPart={props.onForkPart}
+                          onLoadRawAuditEvents={props.onLoadRawAuditEvents}
+                          rawAuditEvents={props.rawAuditEvents}
                           defaultReasoningOpen={props.defaultReasoningOpen}
                         />
                       </Match>
@@ -1573,6 +1735,19 @@ function parseJsonOrRaw(value: string): unknown {
   }
 }
 
+function capabilityDraftComponents(draft: Record<string, unknown>): Record<string, unknown>[] {
+  const direct = Array.isArray(draft.components) ? draft.components : []
+  const contributions = recordPayload(draft.contributions)
+  const sections = ["skills", "mcp_servers", "builtin_tools", "prompt_fragments", "credential_refs", "environment_requirements"]
+  const fromContributions = sections.flatMap((section) => {
+    const value = contributions[section]
+    return Array.isArray(value) ? value : []
+  })
+  return [...direct, ...fromContributions]
+    .map(recordPayload)
+    .filter((item) => Object.keys(item).length > 0)
+}
+
 function markdownSummary(payload: Record<string, unknown>): string {
   const markdown = stringPayload(payload.markdown)
   if (markdown) return markdown
@@ -1593,6 +1768,44 @@ function arrayRecordPayload(value: unknown): Record<string, unknown>[] {
   return value
     .map(recordPayload)
     .filter((item) => Object.keys(item).length > 0)
+}
+
+function rawAuditRefsForPart(part: TranscriptItem): RawEventRef[] {
+  const refs: RawEventRef[] = []
+  refs.push(...normalizeRawEventRefs(part.rawEventRefs))
+  if ("payload" in part) {
+    const payload = recordPayload(part.payload)
+    refs.push(...normalizeRawEventRefs(payload.raw_event_refs ?? payload.rawEventRefs))
+  }
+  if (part.type === "tool") {
+    const meta = recordPayload(part.resultMeta)
+    refs.push(...normalizeRawEventRefs(meta.raw_event_refs ?? meta.rawEventRefs))
+  }
+  return dedupeRawEventRefs(refs)
+}
+
+function normalizeRawEventRefs(value: unknown): RawEventRef[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map(recordPayload)
+    .filter((item) => Object.keys(item).length > 0) as RawEventRef[]
+}
+
+function dedupeRawEventRefs(refs: RawEventRef[]): RawEventRef[] {
+  const deduped: RawEventRef[] = []
+  const seen = new Set<string>()
+  for (const ref of refs) {
+    const key = [
+      String(ref.agent_run_id || ""),
+      String(ref.seq ?? ""),
+      String(ref.type || ""),
+      String(ref.id || ""),
+    ].join(":")
+    if (seen.has(key)) continue
+    seen.add(key)
+    deduped.push(ref)
+  }
+  return deduped
 }
 
 function stringPayload(value: unknown): string {
