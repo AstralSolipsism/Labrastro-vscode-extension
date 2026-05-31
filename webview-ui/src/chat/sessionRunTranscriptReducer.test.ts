@@ -136,6 +136,28 @@ describe("sessionRunTranscriptReducer", () => {
     expect(first.bundle.turns[0].assistantMessages[0].parts).toHaveLength(1)
   })
 
+  it("preserves output notice level for source fetch warnings", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "package repo" }, 1)
+    current = reduce(
+      current,
+      "output",
+      {
+        content: "资料抓取问题：The read operation timed out",
+        format: "plain",
+        level: "warning",
+      },
+      2,
+    )
+
+    expect(current.turns[0].assistantMessages[0].parts[0]).toMatchObject({
+      type: "notice",
+      level: "warning",
+      text: "资料抓取问题：The read operation timed out",
+      format: "plain",
+    })
+  })
+
   it("finalizes a contiguous streamed assistant text block in place", () => {
     let current = bundle()
     current = reduce(current, "session_run_start", { prompt: "hi" }, 1)

@@ -261,7 +261,7 @@ function applySessionRunTranscriptEventToBundle(
     if (format === "terminal") {
       appendTerminal(next, String(payload.content || ""), labels.terminalOutput, meta, context)
     } else {
-      appendNotice("info", String(payload.content || ""), "output", {
+      appendNotice(noticeLevelValue(payload.level), String(payload.content || ""), "output", {
         format: format === "markdown" ? "markdown" : "plain",
       })
     }
@@ -1230,6 +1230,11 @@ function stripAnsi(value: string): string {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value ? value : undefined
+}
+
+function noticeLevelValue(value: unknown): NoticeLevel {
+  const level = typeof value === "string" ? value.trim().toLowerCase() : ""
+  return level === "warning" || level === "error" ? level : "info"
 }
 
 function numberValue(value: unknown): number | undefined {
