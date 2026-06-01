@@ -3,14 +3,22 @@ import { t } from "../../i18n"
 import type { MockTurn, MockMessage } from "./mock-data"
 import type {
   AssistantTextItem,
-  CapabilityPackageDraftItem,
   NoticeItem,
   RawEventRef,
   ReasoningItem,
   ThinkingItem,
   ToolActivityItem,
   TranscriptItem,
+  WorkflowArtifactItem,
+  WorkflowDecisionItem,
+  WorkflowResultItem,
+  WorkflowStepItem,
 } from "./transcript-model"
+import {
+  groupCapabilityPackageComponents,
+  runtimeFootprintLabel,
+  type CapabilityComponentView,
+} from "../../settings/capabilityPackageView"
 import {
   TOOL_STATUS_TO_TRACE_STATUS,
   getToolExecutionStatusLabel,
@@ -1037,18 +1045,99 @@ const ContextEventPart: Component<ItemProps<Extract<TranscriptItem, { type: "con
   )
 }
 
-const CapabilityPackageDraftPart: Component<ItemProps<CapabilityPackageDraftItem>> = (props) => {
-  const [open, setOpen] = createSignal(initialCardOpenState(props.part.id, true))
+const WorkflowStepPart: Component<ItemProps<WorkflowStepItem>> = (props) => {
+  const [open, setOpen] = createSignal(initialCardOpenState(props.part.id, false))
   createEffect(() => {
     CARD_OPEN_STATE.set(props.part.id, open())
   })
-  const draft = () => props.part.draft || {}
-  const components = () => capabilityDraftComponents(draft())
-  const validationOk = () => props.part.validation?.ok !== false
   const meta = () => [
-    props.part.packageId || String(draft().id || ""),
+    workflowStageLabel(props.part.stage),
+    workflowStatusLabel(props.part.status),
+  ].filter(Boolean).join(" · ")
+  const hasDetails = () => Boolean(
+    props.part.summary ||
+    Object.keys(props.part.details || {}).length ||
+    rawAuditRefsForPart(props.part).length,
+  )
+  return (
+    <div
+      class="context-event-card"
+      classList={{ "view-card--warning": props.part.status === "warning" || props.part.status === "error" }}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <button
+        type="button"
+        class="context-event-card__header"
+        onClick={(event) => {
+          event.stopPropagation()
+          setOpen((value) => {
+            const next = !value
+            CARD_OPEN_STATE.set(props.part.id, next)
+            return next
+          })
+        }}
+      >
+        <span class="codicon codicon-list-tree" aria-hidden="true" />
+        <span class="context-event-card__body">
+          <span class="context-event-card__title">{props.part.title || workflowStageLabel(props.part.stage)}</span>
+          <span class="context-event-card__meta">{meta()}</span>
+        </span>
+        <span class={`codicon codicon-chevron-${open() ? "down" : "right"}`} aria-hidden="true" />
+      </button>
+      <Show when={open() && hasDetails()}>
+        <div class="context-event-card__content">
+          <Show when={props.part.summary}>
+            <MarkdownBlock text={props.part.summary || ""} class="structured-card__markdown" />
+          </Show>
+          <Show when={Object.keys(props.part.details || {}).length}>
+            <pre class="structured-card__json">{formatJson(props.part.details || {})}</pre>
+          </Show>
+          <RawAuditRefs
+            part={props.part}
+            rawAuditEvents={props.rawAuditEvents}
+            onLoadRawAuditEvents={props.onLoadRawAuditEvents}
+          />
+        </div>
+      </Show>
+    </div>
+  )
+}
+
+const WorkflowArtifactPart: Component<ItemProps<WorkflowArtifactItem>> = (props) => (
+  <Switch fallback={<WorkflowGenericPrimaryPart {...props} part={props.part} icon="package" />}>
+    <Match when={props.part.artifactType === "capability_package_draft"}>
+      <CapabilityPackageDraftReviewPart {...props} part={props.part} />
+    </Match>
+  </Switch>
+)
+
+const CapabilityPackageDraftReviewPart: Component<ItemProps<WorkflowArtifactItem>> = (props) => {
+  const [open, setOpen] = createSignal(initialCardOpenState(props.part.id, true))
+  const [detailsOpen, setDetailsOpen] = createSignal(initialCardDetailsOpenState(`${props.part.id}:details`, false))
+  createEffect(() => {
+    CARD_OPEN_STATE.set(props.part.id, open())
+  })
+  createEffect(() => {
+    CARD_DETAILS_OPEN_STATE.set(`${props.part.id}:details`, detailsOpen())
+  })
+  const artifact = () => props.part.artifact || {}
+  const packageId = () => stringPayload(artifact().package_id) || stringPayload(artifact().id)
+  const components = () => arrayRecordPayload(artifact().components)
+  const groups = () => groupCapabilityPackageComponents(components())
+  const capabilities = () => reviewItems(artifact().capabilities, groups().capabilities)
+  const dependencies = () => reviewItems(artifact().dependencies, groups().dependencies)
+  const installPlan = () => stringArrayPayload(artifact().install_plan)
+  const usage = () => stringArrayPayload(artifact().usage)
+  const evidence = () => arrayRecordPayload(artifact().evidence)
+  const credentials = () => stringArrayPayload(artifact().credentials)
+  const risks = () => stringArrayPayload(artifact().risks)
+  const validation = () => recordPayload(artifact().validation)
+  const validationOk = () => validation().ok !== false
+  const meta = () => [
+    packageId(),
     components().length ? `${components().length} ${t("chat.capabilityPackage.components")}` : "",
     validationOk() ? "" : t("chat.capabilityPackage.validationFailed"),
+    runtimeFootprintLabel(artifact().runtime_footprint),
   ].filter(Boolean).join(" · ")
   return (
     <div
@@ -1070,7 +1159,7 @@ const CapabilityPackageDraftPart: Component<ItemProps<CapabilityPackageDraftItem
       >
         <span class="codicon codicon-package" aria-hidden="true" />
         <span class="view-card__body">
-          <span class="view-card__title">{props.part.title || t("chat.capabilityPackage.draft")}</span>
+          <span class="view-card__title">{props.part.title || stringPayload(artifact().name) || t("chat.capabilityPackage.draft")}</span>
           <span class="view-card__meta">{meta()}</span>
         </span>
         <span class={`codicon codicon-chevron-${open() ? "down" : "right"}`} aria-hidden="true" />
@@ -1078,21 +1167,54 @@ const CapabilityPackageDraftPart: Component<ItemProps<CapabilityPackageDraftItem
       <Show when={open()}>
         <div class="view-card__content">
           <div class="structured-card__markdown">
-            <div>{String(draft().description || "")}</div>
-            <Show when={components().length}>
-              <ul>
-                <For each={components()}>
-                  {(component) => (
-                    <li>
-                      <strong>{String(component.name || component.id || "component")}</strong>
-                      <span> · {String(component.kind || component.type || "component")}</span>
-                    </li>
-                  )}
-                </For>
-              </ul>
+            <Show when={artifact().description}>
+              <p>{String(artifact().description)}</p>
+            </Show>
+            <CapabilityReviewSection title={t("chat.capabilityPackage.capabilities")} empty={t("chat.capabilityPackage.none")}>
+              <CapabilityReviewList items={capabilities()} />
+            </CapabilityReviewSection>
+            <CapabilityReviewSection title={t("chat.capabilityPackage.dependencies")} empty={t("chat.capabilityPackage.none")}>
+              <CapabilityReviewList items={dependencies()} />
+            </CapabilityReviewSection>
+            <CapabilityReviewSection title={t("chat.capabilityPackage.runtime")} empty={runtimeFootprintLabel(artifact().runtime_footprint)}>
+              <p>{runtimeFootprintLabel(artifact().runtime_footprint)}</p>
+              <Show when={stringPayload(recordPayload(artifact().runtime_footprint).user_message)}>
+                <p>{stringPayload(recordPayload(artifact().runtime_footprint).user_message)}</p>
+              </Show>
+            </CapabilityReviewSection>
+            <CapabilityTextList title={t("chat.capabilityPackage.installPlan")} items={installPlan()} />
+            <CapabilityTextList title={t("chat.capabilityPackage.usage")} items={usage()} />
+            <CapabilityEvidenceList items={evidence()} />
+            <CapabilityTextList title={t("chat.capabilityPackage.credentials")} items={credentials()} />
+            <CapabilityTextList title={t("chat.capabilityPackage.risks")} items={risks()} />
+            <Show when={Object.keys(validation()).length && !validationOk()}>
+              <CapabilityReviewSection title={t("chat.capabilityPackage.validation")} empty="">
+                <pre class="structured-card__json">{formatJson(validation())}</pre>
+              </CapabilityReviewSection>
             </Show>
           </div>
-          <pre class="structured-card__json">{formatJson(props.part.payload || props.part.draft || {})}</pre>
+          <button
+            type="button"
+            class="shell-card__details-toggle"
+            onClick={(event) => {
+              event.stopPropagation()
+              setDetailsOpen((value) => {
+                const next = !value
+                CARD_DETAILS_OPEN_STATE.set(`${props.part.id}:details`, next)
+                return next
+              })
+            }}
+          >
+            <span class={`codicon codicon-chevron-${detailsOpen() ? "down" : "right"}`} aria-hidden="true" />
+            <span>{t("tool.section.details")}</span>
+          </button>
+          <Show when={detailsOpen()}>
+            <div class="tool-card__details">
+              <ToolSection title={t("tool.section.metadata")}>
+                <pre class="structured-card__json">{formatJson(props.part.payload || props.part.artifact || {})}</pre>
+              </ToolSection>
+            </div>
+          </Show>
           <RawAuditRefs
             part={props.part}
             rawAuditEvents={props.rawAuditEvents}
@@ -1103,6 +1225,230 @@ const CapabilityPackageDraftPart: Component<ItemProps<CapabilityPackageDraftItem
     </div>
   )
 }
+
+const WorkflowDecisionPart: Component<ItemProps<WorkflowDecisionItem>> = (props) => (
+  <Switch fallback={<WorkflowGenericPrimaryPart {...props} part={props.part} icon="shield" />}>
+    <Match when={props.part.decisionType === "capability_package_install"}>
+      <CapabilityPackageInstallDecisionPart {...props} part={props.part} />
+    </Match>
+  </Switch>
+)
+
+const CapabilityPackageInstallDecisionPart: Component<ItemProps<WorkflowDecisionItem>> = (props) => {
+  const [open, setOpen] = createSignal(initialCardOpenState(props.part.id, true))
+  const [detailsOpen, setDetailsOpen] = createSignal(initialCardDetailsOpenState(`${props.part.id}:details`, false))
+  createEffect(() => {
+    CARD_OPEN_STATE.set(props.part.id, open())
+  })
+  createEffect(() => {
+    CARD_DETAILS_OPEN_STATE.set(`${props.part.id}:details`, detailsOpen())
+  })
+  const review = () => props.part.review || {}
+  const packageId = () => stringPayload(review().package_id) || stringPayload(review().id)
+  const meta = () => [
+    packageId(),
+    workflowStatusLabel(props.part.status),
+    runtimeFootprintLabel(review().runtime_footprint),
+  ].filter(Boolean).join(" · ")
+  return (
+    <div
+      class="view-card capability-package-draft-card"
+      classList={{ "view-card--warning": props.part.status === "denied" || props.part.status === "error" }}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <button
+        type="button"
+        class="view-card__header"
+        onClick={(event) => {
+          event.stopPropagation()
+          setOpen((value) => {
+            const next = !value
+            CARD_OPEN_STATE.set(props.part.id, next)
+            return next
+          })
+        }}
+      >
+        <span class="codicon codicon-shield" aria-hidden="true" />
+        <span class="view-card__body">
+          <span class="view-card__title">{props.part.title || t("chat.capabilityPackage.installDecision")}</span>
+          <span class="view-card__meta">{meta()}</span>
+        </span>
+        <span class={`codicon codicon-chevron-${open() ? "down" : "right"}`} aria-hidden="true" />
+      </button>
+      <Show when={open()}>
+        <div class="view-card__content">
+          <div class="structured-card__markdown">
+            <Show when={props.part.summary}>
+              <p>{props.part.summary}</p>
+            </Show>
+            <CapabilityTextList title={t("chat.capabilityPackage.installPlan")} items={stringArrayPayload(review().install_plan)} />
+            <CapabilityTextList title={t("chat.capabilityPackage.risks")} items={stringArrayPayload(review().risks)} />
+            <CapabilityTextList title={t("chat.capabilityPackage.credentials")} items={stringArrayPayload(review().credentials)} />
+            <CapabilityReviewSection title={t("chat.capabilityPackage.runtime")} empty={runtimeFootprintLabel(review().runtime_footprint)}>
+              <p>{runtimeFootprintLabel(review().runtime_footprint)}</p>
+            </CapabilityReviewSection>
+          </div>
+          <button
+            type="button"
+            class="shell-card__details-toggle"
+            onClick={(event) => {
+              event.stopPropagation()
+              setDetailsOpen((value) => {
+                const next = !value
+                CARD_DETAILS_OPEN_STATE.set(`${props.part.id}:details`, next)
+                return next
+              })
+            }}
+          >
+            <span class={`codicon codicon-chevron-${detailsOpen() ? "down" : "right"}`} aria-hidden="true" />
+            <span>{t("tool.section.details")}</span>
+          </button>
+          <Show when={detailsOpen()}>
+            <div class="tool-card__details">
+              <ToolSection title={t("tool.section.approval")}>
+                <pre class="structured-card__json">{formatJson(props.part.payload || props.part.review || {})}</pre>
+              </ToolSection>
+            </div>
+          </Show>
+          <RawAuditRefs
+            part={props.part}
+            rawAuditEvents={props.rawAuditEvents}
+            onLoadRawAuditEvents={props.onLoadRawAuditEvents}
+          />
+        </div>
+      </Show>
+    </div>
+  )
+}
+
+const WorkflowResultPart: Component<ItemProps<WorkflowResultItem>> = (props) => (
+  <WorkflowGenericPrimaryPart {...props} part={props.part} icon={props.part.status === "error" ? "warning" : "check"} />
+)
+
+const WorkflowGenericPrimaryPart: Component<ItemProps<WorkflowArtifactItem | WorkflowDecisionItem | WorkflowResultItem> & { icon: string }> = (props) => {
+  const [open, setOpen] = createSignal(initialCardOpenState(props.part.id, true))
+  const [detailsOpen, setDetailsOpen] = createSignal(initialCardDetailsOpenState(`${props.part.id}:details`, false))
+  createEffect(() => {
+    CARD_OPEN_STATE.set(props.part.id, open())
+  })
+  createEffect(() => {
+    CARD_DETAILS_OPEN_STATE.set(`${props.part.id}:details`, detailsOpen())
+  })
+  const payload = () => props.part.payload || {}
+  const status = () => "status" in props.part ? String(props.part.status || "") : ""
+  return (
+    <div class="view-card" onClick={(event) => event.stopPropagation()}>
+      <button
+        type="button"
+        class="view-card__header"
+        onClick={(event) => {
+          event.stopPropagation()
+          setOpen((value) => {
+            const next = !value
+            CARD_OPEN_STATE.set(props.part.id, next)
+            return next
+          })
+        }}
+      >
+        <span class={`codicon codicon-${props.icon}`} aria-hidden="true" />
+        <span class="view-card__body">
+          <span class="view-card__title">{props.part.title || props.part.workflow}</span>
+          <span class="view-card__meta">{status()}</span>
+        </span>
+        <span class={`codicon codicon-chevron-${open() ? "down" : "right"}`} aria-hidden="true" />
+      </button>
+      <Show when={open()}>
+        <div class="view-card__content">
+          <Show when={props.part.summary}>
+            <MarkdownBlock text={props.part.summary || ""} class="structured-card__markdown" />
+          </Show>
+          <button
+            type="button"
+            class="shell-card__details-toggle"
+            onClick={(event) => {
+              event.stopPropagation()
+              setDetailsOpen((value) => {
+                const next = !value
+                CARD_DETAILS_OPEN_STATE.set(`${props.part.id}:details`, next)
+                return next
+              })
+            }}
+          >
+            <span class={`codicon codicon-chevron-${detailsOpen() ? "down" : "right"}`} aria-hidden="true" />
+            <span>{t("tool.section.details")}</span>
+          </button>
+          <Show when={detailsOpen()}>
+            <div class="tool-card__details">
+              <ToolSection title={t("tool.section.metadata")}>
+                <pre class="structured-card__json">{formatJson(payload())}</pre>
+              </ToolSection>
+            </div>
+          </Show>
+          <RawAuditRefs
+            part={props.part}
+            rawAuditEvents={props.rawAuditEvents}
+            onLoadRawAuditEvents={props.onLoadRawAuditEvents}
+          />
+        </div>
+      </Show>
+    </div>
+  )
+}
+
+const CapabilityReviewSection: Component<{ title: string; empty: string; children: JSX.Element }> = (props) => (
+  <section>
+    <strong>{props.title}</strong>
+    <Show when={props.children} fallback={<p>{props.empty}</p>}>
+      {props.children}
+    </Show>
+  </section>
+)
+
+const CapabilityReviewList: Component<{ items: CapabilityComponentView[] }> = (props) => (
+  <Show when={props.items.length} fallback={<p>{t("chat.capabilityPackage.none")}</p>}>
+    <ul>
+      <For each={props.items}>
+        {(component) => (
+          <li>
+            <strong>{component.displayName || component.name || component.id}</strong>
+            <span> · {component.summary || component.label}</span>
+          </li>
+        )}
+      </For>
+    </ul>
+  </Show>
+)
+
+const CapabilityTextList: Component<{ title: string; items: string[] }> = (props) => (
+  <Show when={props.items.length}>
+    <CapabilityReviewSection title={props.title} empty="">
+      <ul>
+        <For each={props.items}>
+          {(item) => <li>{item}</li>}
+        </For>
+      </ul>
+    </CapabilityReviewSection>
+  </Show>
+)
+
+const CapabilityEvidenceList: Component<{ items: Record<string, unknown>[] }> = (props) => (
+  <Show when={props.items.length}>
+    <CapabilityReviewSection title={t("chat.capabilityPackage.evidence")} empty="">
+      <ul>
+        <For each={props.items}>
+          {(item) => (
+            <li>
+              <strong>{stringPayload(item.title) || stringPayload(item.source) || t("chat.capabilityPackage.evidence")}</strong>
+              <Show when={stringPayload(item.excerpt) || stringPayload(item.summary)}>
+                <span> · {stringPayload(item.excerpt) || stringPayload(item.summary)}</span>
+              </Show>
+            </li>
+          )}
+        </For>
+      </ul>
+    </CapabilityReviewSection>
+  </Show>
+)
 
 const MemoryContextPart: Component<ItemProps<Extract<TranscriptItem, { type: "memory_context" }>>> = (props) => {
   const [open, setOpen] = createSignal(initialCardOpenState(props.part.id, false))
@@ -1542,8 +1888,17 @@ const TranscriptItemView: Component<PartProps> = (props) => {
       <Match when={props.part.type === "context_event"}>
         <ContextEventPart {...props} part={props.part as Extract<TranscriptItem, { type: "context_event" }>} />
       </Match>
-      <Match when={props.part.type === "capability_package_draft"}>
-        <CapabilityPackageDraftPart {...props} part={props.part as CapabilityPackageDraftItem} />
+      <Match when={props.part.type === "workflow_step"}>
+        <WorkflowStepPart {...props} part={props.part as WorkflowStepItem} />
+      </Match>
+      <Match when={props.part.type === "workflow_artifact"}>
+        <WorkflowArtifactPart {...props} part={props.part as WorkflowArtifactItem} />
+      </Match>
+      <Match when={props.part.type === "workflow_decision"}>
+        <WorkflowDecisionPart {...props} part={props.part as WorkflowDecisionItem} />
+      </Match>
+      <Match when={props.part.type === "workflow_result"}>
+        <WorkflowResultPart {...props} part={props.part as WorkflowResultItem} />
       </Match>
       <Match when={props.part.type === "memory_context"}>
         <MemoryContextPart {...props} part={props.part as Extract<TranscriptItem, { type: "memory_context" }>} />
@@ -1668,6 +2023,20 @@ export const SessionTurn: Component<SessionTurnProps> = (props) => {
                           parts={(item() as Extract<TranscriptPresentationItem, { type: "final_answer" }>).parts}
                         />
                       </Match>
+                      <Match when={item().type === "primary_part"}>
+                        <TranscriptItemView
+                          part={(item() as Extract<TranscriptPresentationItem, { type: "primary_part" }>).part}
+                          selectedTraceNodeId={props.selectedTraceNodeId}
+                          onSelectSession={props.onSelectSession}
+                          onTraceNodeSelect={props.onTraceNodeSelect}
+                          onCopyToolCommand={props.onCopyToolCommand}
+                          onCopyToolOutput={props.onCopyToolOutput}
+                          onForkPart={props.onForkPart}
+                          onLoadRawAuditEvents={props.onLoadRawAuditEvents}
+                          rawAuditEvents={props.rawAuditEvents}
+                          defaultReasoningOpen={props.defaultReasoningOpen}
+                        />
+                      </Match>
                       <Match when={item().type === "timeline_part"}>
                         <TranscriptItemView
                           part={(item() as Extract<TranscriptPresentationItem, { type: "timeline_part" }>).part}
@@ -1735,19 +2104,6 @@ function parseJsonOrRaw(value: string): unknown {
   }
 }
 
-function capabilityDraftComponents(draft: Record<string, unknown>): Record<string, unknown>[] {
-  const direct = Array.isArray(draft.components) ? draft.components : []
-  const contributions = recordPayload(draft.contributions)
-  const sections = ["skills", "mcp_servers", "builtin_tools", "prompt_fragments", "credential_refs", "environment_requirements"]
-  const fromContributions = sections.flatMap((section) => {
-    const value = contributions[section]
-    return Array.isArray(value) ? value : []
-  })
-  return [...direct, ...fromContributions]
-    .map(recordPayload)
-    .filter((item) => Object.keys(item).length > 0)
-}
-
 function markdownSummary(payload: Record<string, unknown>): string {
   const markdown = stringPayload(payload.markdown)
   if (markdown) return markdown
@@ -1768,6 +2124,59 @@ function arrayRecordPayload(value: unknown): Record<string, unknown>[] {
   return value
     .map(recordPayload)
     .filter((item) => Object.keys(item).length > 0)
+}
+
+function stringArrayPayload(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.map((item) => String(item || "").trim()).filter(Boolean)
+}
+
+function reviewItems(value: unknown, fallback: CapabilityComponentView[]): CapabilityComponentView[] {
+  const records = arrayRecordPayload(value)
+  if (!records.length) return fallback
+  return records.map((item, index) => ({
+    id: stringPayload(item.id) || stringPayload(item.name) || `item-${index}`,
+    kind: stringPayload(item.kind) || stringPayload(item.type) || "capability",
+    role: "capability",
+    name: stringPayload(item.name) || stringPayload(item.id) || `item-${index}`,
+    displayName: stringPayload(item.display_name) || stringPayload(item.displayName) || stringPayload(item.name) || stringPayload(item.id) || `item-${index}`,
+    label: stringPayload(item.label) || stringPayload(item.kind) || stringPayload(item.type) || "capability",
+    summary: stringPayload(item.summary) || stringPayload(item.description),
+    packageIds: [],
+    pathHint: "",
+    sourcePath: "",
+    runtimeFootprint: {
+      runsOn: "agent_only",
+      installRequiredOn: [],
+      configRequiredOn: [],
+      userMessage: "",
+    },
+    raw: item,
+  }))
+}
+
+function workflowStageLabel(stage?: string): string {
+  const labels: Record<string, string> = {
+    prepare: t("workflow.stage.prepare"),
+    read_source: t("workflow.stage.readSource"),
+    extract_evidence: t("workflow.stage.extractEvidence"),
+    compose_draft: t("workflow.stage.composeDraft"),
+    await_approval: t("workflow.stage.awaitApproval"),
+    install: t("workflow.stage.install"),
+    done: t("workflow.stage.done"),
+  }
+  const key = String(stage || "").trim()
+  return labels[key] || key || t("workflow.stage.step")
+}
+
+function workflowStatusLabel(status?: string): string {
+  const value = String(status || "").trim()
+  if (value === "running" || value === "pending") return t("process.state.running")
+  if (value === "error" || value === "denied") return t("process.state.error")
+  if (value === "warning") return t("process.state.warning")
+  if (value === "cancelled") return t("process.state.cancelled")
+  if (value === "approved") return t("tool.approval.approved")
+  return t("process.state.completed")
 }
 
 function rawAuditRefsForPart(part: TranscriptItem): RawEventRef[] {
