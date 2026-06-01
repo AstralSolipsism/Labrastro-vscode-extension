@@ -122,9 +122,9 @@ describe("SessionTurn source order", () => {
       presentationSource.indexOf("function timelineItemStableId"),
     )
 
-    expect(groupSource).toContain("initialCardOpenState(props.group.id, false)")
+    expect(groupSource).toContain("initialCardOpenState(props.group.id, defaultProcessGroupOpen(props.group))")
     expect(groupSource).toContain("CARD_OPEN_STATE.set(props.group.id, open())")
-    expect(summarySource).toContain("initialCardOpenState(props.summary.id, false)")
+    expect(summarySource).toContain("initialCardOpenState(props.summary.id, defaultProcessSummaryOpen(props.summary))")
     expect(summarySource).toContain("CARD_OPEN_STATE.set(props.summary.id, open())")
     expect(summaryBuilderSource).toContain("id: `process-summary:${message?.id || \"message\"}:${firstId}`")
     expect(summaryBuilderSource).not.toContain("lastId")
@@ -208,7 +208,7 @@ describe("SessionTurn source order", () => {
   })
 
   it("keeps wording focused on thinking and processing", () => {
-    expect(source).toContain('t("process.handledCount"')
+    expect(source).toContain("processMetaLabel")
     expect(source).toContain('t("process.current"')
     expect(source).not.toContain("过程审计")
     expect(source).not.toContain("当前进展")
@@ -233,6 +233,24 @@ describe("SessionTurn source order", () => {
     expect(reasoningPanelSource).not.toContain("codicon-loading")
     expect(processGroupSource).not.toContain("codicon-modifier-spin")
     expect(processGroupSource).not.toContain('"loading"')
+  })
+
+  it("opens running workflow process cards and keeps raw workflow step details folded", () => {
+    expect(source).toContain("function defaultProcessGroupOpen")
+    expect(source).toContain("function defaultProcessSummaryOpen")
+    expect(source).toContain('group.isWorkflow === true || group.state === "running" || group.state === "error"')
+    expect(source).toContain('summary.isWorkflow === true || summary.state === "running" || summary.state === "error"')
+    expect(source).toContain("initialCardOpenState(props.part.id, false)")
+  })
+
+  it("shows workflow usage metrics inside the process area", () => {
+    expect(source).toContain("export type WorkflowUsageSnapshot")
+    expect(source).toContain("function workflowUsageMetricLabels")
+    expect(source).toContain('t("process.metrics.waiting")')
+    expect(source).toContain('t("process.metrics.tokens"')
+    expect(source).toContain('t("task.contextUsed"')
+    expect(source).toContain('class="process-summary-card__metrics"')
+    expect(source).toContain("usageSnapshot={props.usageSnapshot}")
   })
 
   it("renders memory context parts through a dedicated collapsible card", () => {

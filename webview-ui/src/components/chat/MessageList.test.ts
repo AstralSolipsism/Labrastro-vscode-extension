@@ -15,6 +15,11 @@ describe("MessageList working indicator", () => {
     expect(source).toContain("runningProcessLabel={props.runningProcessLabel}")
   })
 
+  it("passes usage snapshot into SessionTurn for workflow process metrics", () => {
+    expect(source).toContain("usageSnapshot?: WorkflowUsageSnapshot")
+    expect(source).toContain("usageSnapshot={props.usageSnapshot}")
+  })
+
   it("marks card layout toggles before virtualization handles height growth", () => {
     expect(source).toContain("const LAYOUT_TOGGLE_SELECTOR")
     expect(source).toContain(".process-summary-card__header")
