@@ -554,40 +554,38 @@ describe("sessionRunTranscriptReducer", () => {
     })
   })
 
-  it("stores capability package drafts as structured transcript cards", () => {
+  it("stores capability package drafts as workflow artifacts", () => {
     let current = bundle()
     current = reduce(current, "session_run_start", { prompt: "package" }, 1)
-    current = reduce(current, "capability_package_draft", {
-      package_id: "review",
+    current = reduce(current, "workflow_artifact", {
+      workflow: "capability_package_ingest",
+      artifact_type: "capability_package_draft",
       title: "能力包草案 review 已生成",
-      draft: {
-        id: "review",
+      artifact: {
+        package_id: "review",
         description: "Review package",
-        contributions: {
-          skills: [
-            {
-              id: "skill:code-review",
-              kind: "skill",
-              name: "code-review",
-              has_skill_content: true,
-              skill_content_chars: 120,
-            },
-          ],
-        },
+        components: [{
+          id: "skill:code-review",
+          kind: "skill",
+          name: "code-review",
+          has_skill_content: true,
+          skill_content_chars: 120,
+        }],
+        validation: { ok: true },
       },
-      validation: { ok: true },
       raw_event_refs: [{ agent_run_id: "agent-run-1", seq: 20, type: "result" }],
     }, 2)
 
     const parts = current.turns[0].assistantMessages[0].parts
     expect(parts[0]).toMatchObject({
-      type: "capability_package_draft",
-      packageId: "review",
+      type: "workflow_artifact",
+      lane: "primary",
+      workflow: "capability_package_ingest",
+      artifactType: "capability_package_draft",
       title: "能力包草案 review 已生成",
-      draft: {
-        id: "review",
+      artifact: {
+        package_id: "review",
       },
-      validation: { ok: true },
       rawEventRefs: [{ agent_run_id: "agent-run-1", seq: 20, type: "result" }],
     })
     expect(JSON.stringify(parts[0])).not.toContain('"skill_content":')

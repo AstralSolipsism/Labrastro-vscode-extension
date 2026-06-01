@@ -7,6 +7,8 @@ import type {
   ThinkingItem,
   ToolActivityItem,
   TranscriptItem,
+  WorkflowDecisionAction,
+  WorkflowItemStatus,
 } from "../components/chat/transcript-model"
 import {
   approvalDecisionAfterResolution,
@@ -38,7 +40,6 @@ export interface SessionRunTranscriptLabels {
   providerStreamInterrupted: string
   streamInterruptedCanContinue: string
   capabilityPackageSessionFailed: string
-  capabilityPackageDraft: string
 }
 
 export interface SessionRunTranscriptContext {
@@ -72,7 +73,10 @@ export const SESSION_RUN_TRANSCRIPT_EVENT_TYPES = new Set([
   "output",
   "view",
   "context_event",
-  "capability_package_draft",
+  "workflow_step",
+  "workflow_artifact",
+  "workflow_decision",
+  "workflow_result",
   "memory_context",
   "remote_event",
   "mcp_event",
@@ -118,7 +122,6 @@ const DEFAULT_LABELS: SessionRunTranscriptLabels = {
   providerStreamInterrupted: "模型输出流中断，正在尝试恢复。",
   streamInterruptedCanContinue: "模型输出流中断，可继续生成。",
   capabilityPackageSessionFailed: "能力包流程执行失败。",
-  capabilityPackageDraft: "能力包草案",
 }
 
 const REASONING_STREAM_KEY = "reasoning-stream"
@@ -288,8 +291,17 @@ function applySessionRunTranscriptEventToBundle(
       appendContextEvent(next, payload, meta, context, labels, now)
     }
     markChanged()
-  } else if (type === "capability_package_draft") {
-    appendCapabilityPackageDraft(next, payload, meta, context, labels, now)
+  } else if (type === "workflow_step") {
+    appendWorkflowStep(next, payload, meta, context, now)
+    markChanged()
+  } else if (type === "workflow_artifact") {
+    appendWorkflowArtifact(next, payload, meta, context, now)
+    markChanged()
+  } else if (type === "workflow_decision") {
+    appendWorkflowDecision(next, payload, meta, context, now)
+    markChanged()
+  } else if (type === "workflow_result") {
+    appendWorkflowResult(next, payload, meta, context, now)
     markChanged()
   } else if (type === "memory_context") {
     appendMemoryContext(next, payload, meta, context, labels, now)
@@ -766,26 +778,116 @@ function appendContextEvent(
   }, context)
 }
 
-function appendCapabilityPackageDraft(
+function appendWorkflowStep(
   bundle: MockSessionBundle,
   payload: Record<string, unknown>,
   meta: EventRenderMeta,
   context: SessionRunTranscriptContext,
-  labels: SessionRunTranscriptLabels,
   now: number,
 ): void {
   updateAssistantItems(bundle, (parts) => {
     const nextParts = closeTrailingInlineStream(parts)
-    const draft = objectValue(payload.draft)
     return [
       ...nextParts,
       withEventMeta({
-        id: stablePartId("capability-draft", meta, now, nextParts.length),
-        type: "capability_package_draft",
-        title: String(payload.title || payload.message || labels.capabilityPackageDraft),
-        packageId: stringValue(payload.package_id) || stringValue(draft.id),
-        draft,
-        validation: objectValue(payload.validation),
+        id: stablePartId("workflow-step", meta, now, nextParts.length),
+        type: "workflow_step",
+        lane: "process",
+        workflow: stringValue(payload.workflow) || "workflow",
+        stage: stringValue(payload.stage) || stringValue(payload.phase) || "step",
+        status: workflowItemStatus(payload.status, "running"),
+        title: stringValue(payload.title) || stringValue(payload.message),
+        summary: stringValue(payload.summary),
+        details: objectValue(payload.details),
+        payload,
+        rawEventRefs: rawEventRefsFromPayload(payload),
+      }, meta),
+    ]
+  }, context)
+}
+
+function appendWorkflowArtifact(
+  bundle: MockSessionBundle,
+  payload: Record<string, unknown>,
+  meta: EventRenderMeta,
+  context: SessionRunTranscriptContext,
+  now: number,
+): void {
+  updateAssistantItems(bundle, (parts) => {
+    const nextParts = closeTrailingInlineStream(parts)
+    return [
+      ...nextParts,
+      withEventMeta({
+        id: stablePartId("workflow-artifact", meta, now, nextParts.length),
+        type: "workflow_artifact",
+        lane: "primary",
+        workflow: stringValue(payload.workflow) || "workflow",
+        artifactType: stringValue(payload.artifact_type) || stringValue(payload.artifactType) || "artifact",
+        title: stringValue(payload.title) || stringValue(payload.message),
+        summary: stringValue(payload.summary),
+        artifact: objectValue(payload.artifact),
+        payload,
+        rawEventRefs: rawEventRefsFromPayload(payload),
+      }, meta),
+    ]
+  }, context)
+}
+
+function appendWorkflowDecision(
+  bundle: MockSessionBundle,
+  payload: Record<string, unknown>,
+  meta: EventRenderMeta,
+  context: SessionRunTranscriptContext,
+  now: number,
+): void {
+  const decision = context.approvalDecision
+  updateAssistantItems(bundle, (parts) => {
+    const nextParts = closeTrailingInlineStream(parts)
+    return [
+      ...nextParts,
+      withEventMeta({
+        id: stablePartId("workflow-decision", meta, now, nextParts.length),
+        type: "workflow_decision",
+        lane: "primary",
+        workflow: stringValue(payload.workflow) || "workflow",
+        decisionType: stringValue(payload.decision_type) || stringValue(payload.decisionType) || "decision",
+        status: decision === "allow" ? "approved" : decision === "deny" ? "denied" : workflowDecisionStatus(payload.status),
+        title: stringValue(payload.title) || stringValue(payload.intent) || stringValue(payload.message),
+        summary: stringValue(payload.summary) || stringValue(payload.content),
+        review: objectValue(payload.review),
+        actions: workflowDecisionActions(payload.actions),
+        approvalId: stringValue(payload.approval_id),
+        toolCallId: stringValue(payload.tool_call_id),
+        decision: decision === "allow" ? "auto_approved" : decision === "deny" ? "auto_denied" : undefined,
+        resultReason: context.approvalReason,
+        payload,
+        rawEventRefs: rawEventRefsFromPayload(payload),
+      }, meta),
+    ]
+  }, context)
+}
+
+function appendWorkflowResult(
+  bundle: MockSessionBundle,
+  payload: Record<string, unknown>,
+  meta: EventRenderMeta,
+  context: SessionRunTranscriptContext,
+  now: number,
+): void {
+  updateAssistantItems(bundle, (parts) => {
+    const nextParts = closeTrailingInlineStream(parts)
+    return [
+      ...nextParts,
+      withEventMeta({
+        id: stablePartId("workflow-result", meta, now, nextParts.length),
+        type: "workflow_result",
+        lane: "primary",
+        workflow: stringValue(payload.workflow) || "workflow",
+        resultType: stringValue(payload.result_type) || stringValue(payload.resultType),
+        status: workflowItemStatus(payload.status, "done"),
+        title: stringValue(payload.title) || stringValue(payload.message),
+        summary: stringValue(payload.summary),
+        result: objectValue(payload.result),
         payload,
         rawEventRefs: rawEventRefsFromPayload(payload),
       }, meta),
@@ -1060,16 +1162,34 @@ function appendApprovalResolved(
   const reason = stringValue(payload.reason)
   updateAssistantItems(bundle, (parts) =>
     parts.map((part) => {
-      if (part.type !== "tool") return part
-      if (toolCallId && part.toolCallId !== toolCallId) return part
-      if (!toolCallId && part.approvalId !== approvalId) return part
-      return withEventMeta({
-        ...part,
-        approvalDecision: approvalDecisionAfterResolution(part.approvalDecision, decision),
-        approvalResultReason: reason || part.approvalResultReason,
-        status: approvalStatusAfterResolution(decision, part.status),
-        rawEventRefs: mergeRawEventRefs(part.rawEventRefs, rawEventRefsFromPayload(payload)),
-      }, meta)
+      if (part.type === "tool") {
+        if (toolCallId && part.toolCallId !== toolCallId) return part
+        if (!toolCallId && part.approvalId !== approvalId) return part
+        return withEventMeta({
+          ...part,
+          approvalDecision: approvalDecisionAfterResolution(part.approvalDecision, decision),
+          approvalResultReason: reason || part.approvalResultReason,
+          status: approvalStatusAfterResolution(decision, part.status),
+          rawEventRefs: mergeRawEventRefs(part.rawEventRefs, rawEventRefsFromPayload(payload)),
+        }, meta)
+      }
+      if (part.type === "workflow_decision") {
+        if (toolCallId && part.toolCallId !== toolCallId) return part
+        if (!toolCallId && part.approvalId !== approvalId) return part
+        const nextStatus = decision === "allow_once"
+          ? "approved"
+          : decision === "deny_once"
+            ? "denied"
+            : part.status
+        return withEventMeta({
+          ...part,
+          status: nextStatus,
+          decision: approvalDecisionAfterResolution(part.decision, decision),
+          resultReason: reason || part.resultReason,
+          rawEventRefs: mergeRawEventRefs(part.rawEventRefs, rawEventRefsFromPayload(payload)),
+        }, meta)
+      }
+      return part
     }),
   context)
 }
@@ -1169,6 +1289,13 @@ function normalizeTranscriptItemForRunEnd(
       traceNodeStatus,
     }
   }
+  if (item.type === "workflow_step" && item.status === "running") {
+    return {
+      ...item,
+      status: traceNodeStatus === "error" ? "error" : "done",
+      traceNodeStatus,
+    }
+  }
   return {
     ...item,
     traceNodeStatus,
@@ -1186,14 +1313,25 @@ function settlePendingApprovalTools(
     assistantMessages: turn.assistantMessages.map((message) => ({
       ...message,
       parts: message.parts.map((part) => {
-        if (part.type !== "tool") return part
-        if (part.status !== "awaiting_approval" || !part.approvalId || part.approvalDecision) return part
-        return withEventMeta({
-          ...part,
-          status,
-          approvalDecision: "deny_once",
-          approvalResultReason: reason,
-        }, meta)
+        if (part.type === "tool") {
+          if (part.status !== "awaiting_approval" || !part.approvalId || part.approvalDecision) return part
+          return withEventMeta({
+            ...part,
+            status,
+            approvalDecision: "deny_once",
+            approvalResultReason: reason,
+          }, meta)
+        }
+        if (part.type === "workflow_decision") {
+          if (part.status !== "pending" || !part.approvalId || part.decision) return part
+          return withEventMeta({
+            ...part,
+            status: "denied",
+            decision: "deny_once",
+            resultReason: reason,
+          }, meta)
+        }
+        return part
       }),
     })),
   }))
@@ -1330,6 +1468,42 @@ function stringValue(value: unknown): string | undefined {
 function noticeLevelValue(value: unknown): NoticeLevel {
   const level = typeof value === "string" ? value.trim().toLowerCase() : ""
   return level === "warning" || level === "error" ? level : "info"
+}
+
+function workflowItemStatus(value: unknown, fallback: WorkflowItemStatus): WorkflowItemStatus {
+  const status = typeof value === "string" ? value.trim().toLowerCase() : ""
+  if (status === "running" || status === "done" || status === "warning" || status === "error" || status === "cancelled") {
+    return status
+  }
+  if (status === "completed" || status === "success" || status === "approved") return "done"
+  if (status === "failed" || status === "blocked" || status === "denied") return "error"
+  return fallback
+}
+
+function workflowDecisionStatus(value: unknown): "pending" | "approved" | "denied" | WorkflowItemStatus {
+  const status = typeof value === "string" ? value.trim().toLowerCase() : ""
+  if (status === "pending" || status === "approved" || status === "denied") return status
+  return workflowItemStatus(value, "running") === "running" ? "pending" : workflowItemStatus(value, "running")
+}
+
+function workflowDecisionActions(value: unknown): WorkflowDecisionAction[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const actions: WorkflowDecisionAction[] = []
+  for (const raw of value) {
+    const item = objectValue(raw)
+    const id = stringValue(item.id) || stringValue(item.decision)
+    const label = stringValue(item.label) || stringValue(item.title)
+    if (!id || !label) continue
+    const tone = workflowDecisionActionTone(item.tone)
+    actions.push(tone ? { id, label, tone } : { id, label })
+  }
+  return actions.length ? actions : undefined
+}
+
+function workflowDecisionActionTone(value: unknown): WorkflowDecisionAction["tone"] {
+  const tone = typeof value === "string" ? value.trim().toLowerCase() : ""
+  if (tone === "primary" || tone === "danger" || tone === "secondary") return tone
+  return undefined
 }
 
 function numberValue(value: unknown): number | undefined {
