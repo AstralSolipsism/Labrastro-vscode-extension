@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest"
 import {
   agentRunStateFromDelegatedCompletion,
   agentRunStateFromRuntimeStatus,
-  remotePeerStateFromReady,
+  runPeerStateFromReady,
   settleAgentRunStateForSessionRunEvent,
 } from "./runtimeState"
 
 describe("runtime state helpers", () => {
-  it("maps remote peer ready payloads into connected state", () => {
-    const state = remotePeerStateFromReady({
+  it("maps run peer ready payloads into connected state", () => {
+    const state = runPeerStateFromReady({
       peer_id: "peer-1",
       session_id: "session-1",
       fingerprint: "fp-1",

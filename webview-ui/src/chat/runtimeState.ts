@@ -1,7 +1,7 @@
-export type RemotePeerStatus = "idle" | "connecting" | "connected" | "error"
+export type RunPeerStatus = "idle" | "connecting" | "connected" | "error"
 
-export interface RemotePeerState {
-  status: RemotePeerStatus
+export interface RunPeerState {
+  status: RunPeerStatus
   peerId?: string
   sessionId?: string
   fingerprint?: string
@@ -24,7 +24,7 @@ export interface AgentRunState {
   updatedAt?: number
 }
 
-export function initialRemotePeerState(): RemotePeerState {
+export function initialRunPeerState(): RunPeerState {
   return { status: "idle" }
 }
 
@@ -32,10 +32,10 @@ export function initialAgentRunState(): AgentRunState {
   return { phase: "idle" }
 }
 
-export function remotePeerStateFromReady(
+export function runPeerStateFromReady(
   payload: Readonly<Record<string, unknown>>,
   now = Date.now(),
-): RemotePeerState {
+): RunPeerState {
   return {
     status: "connected",
     peerId: stringValue(payload.peer_id),
@@ -50,7 +50,7 @@ export function remotePeerStateFromReady(
   }
 }
 
-export function remotePeerStateFromError(message: string, now = Date.now()): RemotePeerState {
+export function runPeerStateFromError(message: string, now = Date.now()): RunPeerState {
   return {
     status: "error",
     errorMessage: message,

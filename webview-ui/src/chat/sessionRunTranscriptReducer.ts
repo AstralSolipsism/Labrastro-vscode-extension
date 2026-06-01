@@ -316,6 +316,7 @@ function applySessionRunTranscriptEventToBundle(
     })
     finalizeRunTranscriptItems(next, "interrupted", context)
     patchRunStatus(next, "interrupted")
+    next.session = { ...next.session, state: "active" }
     markChanged()
   } else if (type === "tool_call_delta") {
     appendToolCallDelta(next, payload, meta, context)
@@ -698,7 +699,7 @@ function appendTerminal(
   context: SessionRunTranscriptContext,
 ): void {
   const clean = stripAnsi(content).trim()
-  if (!clean || isRemotePeerReadyTui(clean)) return
+  if (!clean || isRunPeerReadyTui(clean)) return
   updateAssistantItems(bundle, (parts) => {
     const nextParts = closeTrailingInlineStream(parts)
     return [
@@ -1161,10 +1162,10 @@ function normalizeTranscriptItemForRunEnd(
       traceNodeStatus,
     }
   }
-  if (item.type === "tool" && ["running", "pending", "preparing", "awaiting_approval"].includes(item.status || "")) {
+  if (item.type === "tool" && ["running", "pending", "preparing", "awaiting_approval", "approved"].includes(item.status || "")) {
     return {
       ...item,
-      status: traceNodeStatus === "cancelled" ? "cancelled" : item.status,
+      status: traceNodeStatus === "error" ? "error" : "cancelled",
       traceNodeStatus,
     }
   }
@@ -1302,7 +1303,7 @@ function sessionEventMessage(
   return defaultMessage
 }
 
-function isRemotePeerReadyTui(content: string): boolean {
+function isRunPeerReadyTui(content: string): boolean {
   const normalized = content.replace(/\r\n/g, "\n")
   const titleMatch = normalized.match(/╭[─\s]*([A-Z_ ]+?)[─\s]*╮/)
   return titleMatch?.[1].trim() === "REMOTE PEER READY"

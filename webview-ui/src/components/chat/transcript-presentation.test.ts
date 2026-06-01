@@ -134,6 +134,21 @@ describe("transcript presentation", () => {
     })
   })
 
+  it("does not show a loaded completed session reasoning panel as running", () => {
+    const parts: TranscriptItem[] = [
+      { id: "thinking-1", type: "thinking", title: "正在思考", active: false, raw: "plan", traceNodeStatus: "success" },
+      { id: "text-1", type: "assistant_text", markdown: "完成", format: "markdown", streamKey: "assistant-message", streaming: false, traceNodeStatus: "success" },
+    ]
+
+    const presentation = buildTranscriptPresentation(parts, assistant(parts, "success"))
+
+    expect(reasoningPanel(presentation)).toMatchObject({
+      state: "completed",
+      raw: "plan",
+    })
+    expect(presentation.map((item) => item.type)).toContain("final_answer")
+  })
+
   it("does not expose timeline_reasoning as a presentation item", () => {
     const parts: TranscriptItem[] = [
       { id: "thinking-1", type: "thinking", title: "正在思考", active: true, raw: "plan" },

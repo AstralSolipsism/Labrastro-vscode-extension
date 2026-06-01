@@ -288,10 +288,10 @@ describe("ChatView context events", () => {
     expect(source).toContain("if (!hasMeaningfulPayload(viewPayload)) return")
   })
 
-  it("routes remote peer readiness into the run status bar instead of transcript cards", () => {
+  it("routes run peer readiness into the run status bar instead of transcript cards", () => {
     const branchIndex = source.indexOf('} else if (type === "remote_peer_ready") {')
 
-    expect(source).toContain("setRemotePeerState(remotePeerStateFromReady(payload))")
+    expect(source).toContain("setRunPeerState(runPeerStateFromReady(payload))")
     expect(source).toContain("<RunStatusBar")
     expect(source).not.toContain("appendRemoteStatusPart")
     expect(source).not.toContain('type: "remote_status"')
@@ -299,9 +299,9 @@ describe("ChatView context events", () => {
   })
 
   it("keeps REMOTE PEER READY TUI out of chat transcript and out of status state", () => {
-    expect(source).toContain("function isRemotePeerReadyTui")
+    expect(source).toContain("function isRunPeerReadyTui")
     expect(source).toContain('=== "REMOTE PEER READY"')
-    expect(source).toContain("if (isRemotePeerReadyTui(clean)) return")
+    expect(source).toContain("if (isRunPeerReadyTui(clean)) return")
     expect(source).not.toContain("parseTerminalTuiCards")
   })
 

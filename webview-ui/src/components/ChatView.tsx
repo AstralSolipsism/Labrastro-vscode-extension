@@ -60,9 +60,9 @@ import { resolveRuntimeStatusUiAction } from "../chat/runtimeStatus"
 import {
   agentRunStateFromDelegatedCompletion,
   initialAgentRunState,
-  initialRemotePeerState,
-  remotePeerStateFromError,
-  remotePeerStateFromReady,
+  initialRunPeerState,
+  runPeerStateFromError,
+  runPeerStateFromReady,
   settleAgentRunStateForSessionRunEvent,
 } from "../chat/runtimeState"
 import {
@@ -245,7 +245,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const renderedEventKeys = new Set<string>()
   const pendingLiveEventKeys = new Set<string>()
   const [activeTranscriptItems, setActiveTranscriptItems] = createSignal<TranscriptItem[]>([])
-  const [remotePeerState, setRemotePeerState] = createSignal(initialRemotePeerState())
+  const [runPeerState, setRunPeerState] = createSignal(initialRunPeerState())
   const [agentRunState, setAgentRunState] = createSignal(initialAgentRunState())
 
   const hasMessages = () => trace.turns().length > 0
@@ -866,7 +866,10 @@ const ChatView: Component<ChatViewProps> = (props) => {
         traceNodeStatus,
       }
     }
-    if (item.type === "tool" && item.status === "preparing") {
+    if (
+      item.type === "tool" &&
+      ["running", "pending", "preparing", "awaiting_approval", "approved"].includes(item.status || "")
+    ) {
       return {
         ...item,
         status: traceNodeStatus === "error" ? "error" : "cancelled",
@@ -1115,7 +1118,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const appendTerminalPart = (content: string, title = "终端输出", meta?: EventRenderMeta) => {
     const clean = stripAnsi(content).trim()
     if (!clean) return
-    if (isRemotePeerReadyTui(clean)) return
+    if (isRunPeerReadyTui(clean)) return
     updateAssistantItems((parts) => [
       ...parts,
       withEventMeta({
@@ -1593,7 +1596,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         remoteSessionIdForMutation(currentSessionId)
       ) {
         appendNotice("error", `会话绑定异常：远端返回 ${remoteSessionId}，当前会话是 ${currentSessionId}`, "error", { meta: eventMeta })
-        setRemotePeerState(remotePeerStateFromError("session binding mismatch"))
+        setRunPeerState(runPeerStateFromError("session binding mismatch"))
         setIsWorking(false)
         setActiveRunSessionId("")
         setPendingApprovals([])
@@ -1607,7 +1610,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         mode: stringValue(payload.mode) || trace.stats().mode,
         runStatus: sessionRunStatus(),
       })
-      setRemotePeerState(remotePeerStateFromReady(payload))
+      setRunPeerState(runPeerStateFromReady(payload))
     } else if (type === "reasoning_message") {
       if (!canonicalTranscriptEvent) {
         finalizeReasoningMessage(payload, "reasoning-message", {
@@ -2204,7 +2207,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     setActiveSessionRunId(undefined)
     setSessionRunStatus("running")
     setAgentRunState(initialAgentRunState())
-    setRemotePeerState(remoteSessionId ? { status: "connecting", updatedAt: Date.now() } : initialRemotePeerState())
+    setRunPeerState(remoteSessionId ? { status: "connecting", updatedAt: Date.now() } : initialRunPeerState())
     setStreamRecoveryMessage("")
     resetSessionRunTerminalState()
     clearActiveStreamDraft()
@@ -3009,7 +3012,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         onTraceNodeClick={focusTraceNode}
       />
       <RunStatusBar
-        remotePeer={remotePeerState()}
+        runPeer={runPeerState()}
         agentRun={agentRunState()}
       />
 
@@ -3569,7 +3572,7 @@ function uiEventTitle(type: string): string {
   return labels[type] || "运行事件"
 }
 
-function isRemotePeerReadyTui(content: string): boolean {
+function isRunPeerReadyTui(content: string): boolean {
   const normalized = content.replace(/\r\n/g, "\n")
   const titleMatch = normalized.match(/╭[─\s]*([A-Z_ ]+?)[─\s]*╮/)
   return titleMatch?.[1].trim() === "REMOTE PEER READY"

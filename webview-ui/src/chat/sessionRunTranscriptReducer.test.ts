@@ -471,6 +471,30 @@ describe("sessionRunTranscriptReducer", () => {
     })
   })
 
+  it("settles active thinking and streams when run end includes a final response", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
+    current = reduce(current, "reasoning_delta", { content: "plan" }, 2)
+    current = reduce(current, "assistant_delta", { content: "draft" }, 3)
+    current = reduce(current, "session_run_end", { response: "done", response_rendered: false }, 4)
+
+    const parts = current.turns[0].assistantMessages[0].parts
+    expect(parts[0]).toMatchObject({
+      type: "thinking",
+      active: false,
+      traceNodeStatus: "success",
+    })
+    expect(parts[1]).toMatchObject({
+      type: "assistant_text",
+      markdown: "done",
+      streaming: false,
+      streamKey: "assistant-message",
+      traceNodeStatus: "success",
+    })
+    expect(current.stats.runStatus).toBe("done")
+    expect(current.session.state).toBe("success")
+  })
+
   it("renders provider stream interruption as a replayable warning notice", () => {
     let current = bundle()
     current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
@@ -620,5 +644,73 @@ describe("sessionRunTranscriptReducer", () => {
       level: "error",
       text: "错误：again failed",
     })
+  })
+
+  it("settles active thinking, assistant streams, and running tools when the run fails", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
+    current = reduce(current, "reasoning_delta", { content: "plan" }, 2)
+    current = reduce(current, "assistant_delta", { content: "draft" }, 3)
+    current = reduce(current, "tool_call_start", {
+      tool_call_id: "tool-1",
+      tool_name: "shell",
+      tool_args: { command: "npm test" },
+    }, 4)
+    current = reduce(current, "session_run_failed", { message: "boom" }, 5)
+
+    const parts = current.turns[0].assistantMessages[0].parts
+    expect(parts[0]).toMatchObject({
+      type: "thinking",
+      active: false,
+      traceNodeStatus: "error",
+    })
+    expect(parts[1]).toMatchObject({
+      type: "assistant_text",
+      streaming: false,
+      streamKey: "assistant-message",
+      traceNodeStatus: "error",
+    })
+    expect(parts[2]).toMatchObject({
+      type: "tool",
+      status: "error",
+      traceNodeStatus: "error",
+    })
+    expect(current.stats.runStatus).toBe("error")
+    expect(current.session.state).toBe("error")
+  })
+
+  it("settles active thinking, assistant streams, and running tools when the run is interrupted", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
+    current = reduce(current, "reasoning_delta", { content: "plan" }, 2)
+    current = reduce(current, "assistant_delta", { content: "draft" }, 3)
+    current = reduce(current, "tool_call_start", {
+      tool_call_id: "tool-1",
+      tool_name: "shell",
+      tool_args: { command: "npm test" },
+    }, 4)
+    current = reduce(current, "session_run_interrupted", {
+      message_key: "provider_stream.interrupted_can_continue",
+    }, 5)
+
+    const parts = current.turns[0].assistantMessages[0].parts
+    expect(parts[0]).toMatchObject({
+      type: "thinking",
+      active: false,
+      traceNodeStatus: "success",
+    })
+    expect(parts[1]).toMatchObject({
+      type: "assistant_text",
+      streaming: false,
+      streamKey: "assistant-message",
+      traceNodeStatus: "success",
+    })
+    expect(parts[2]).toMatchObject({
+      type: "tool",
+      status: "cancelled",
+      traceNodeStatus: "success",
+    })
+    expect(current.stats.runStatus).toBe("interrupted")
+    expect(current.session.state).toBe("active")
   })
 })

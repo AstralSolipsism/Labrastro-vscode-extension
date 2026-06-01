@@ -1,28 +1,28 @@
 import { Component, Show } from "solid-js"
 import { t } from "../../i18n"
-import type { AgentRunState, RemotePeerState } from "../../chat/runtimeState"
+import type { AgentRunState, RunPeerState } from "../../chat/runtimeState"
 
 interface RunStatusBarProps {
-  remotePeer: RemotePeerState
+  runPeer: RunPeerState
   agentRun: AgentRunState
 }
 
 export const RunStatusBar: Component<RunStatusBarProps> = (props) => {
-  const hasRemoteStatus = () => props.remotePeer.status !== "idle"
+  const hasRunPeerStatus = () => props.runPeer.status !== "idle"
   const hasAgentRunStatus = () => props.agentRun.phase !== "idle"
-  const visible = () => hasRemoteStatus() || hasAgentRunStatus()
+  const visible = () => hasRunPeerStatus() || hasAgentRunStatus()
 
   return (
     <Show when={visible()}>
       <section class="run-status-bar" aria-label={t("runtimeStatus.label")}>
-        <Show when={hasRemoteStatus()}>
+        <Show when={hasRunPeerStatus()}>
           <div
-            class={`run-status-chip run-status-chip--${remoteTone(props.remotePeer.status)}`}
-            title={remoteTitle(props.remotePeer)}
+            class={`run-status-chip run-status-chip--${runPeerTone(props.runPeer.status)}`}
+            title={runPeerTitle(props.runPeer)}
           >
             <span class="run-status-chip__dot" aria-hidden="true" />
             <span class="codicon codicon-remote-explorer" aria-hidden="true" />
-            <span class="run-status-chip__text">{remoteLabel(props.remotePeer)}</span>
+            <span class="run-status-chip__text">{runPeerLabel(props.runPeer)}</span>
           </div>
         </Show>
         <Show when={hasAgentRunStatus()}>
@@ -44,14 +44,14 @@ export const RunStatusBar: Component<RunStatusBarProps> = (props) => {
   )
 }
 
-function remoteLabel(state: RemotePeerState): string {
+function runPeerLabel(state: RunPeerState): string {
   const base = state.status === "connected"
-    ? t("runtimeStatus.remote.connected")
+    ? t("runtimeStatus.runPeer.connected")
     : state.status === "connecting"
-      ? t("runtimeStatus.remote.connecting")
+      ? t("runtimeStatus.runPeer.connecting")
       : state.status === "error"
-        ? t("runtimeStatus.remote.error")
-        : t("runtimeStatus.remote.idle")
+        ? t("runtimeStatus.runPeer.error")
+        : t("runtimeStatus.runPeer.idle")
   return [base, state.status === "connected" ? state.model : undefined].filter(Boolean).join(" · ")
 }
 
@@ -68,9 +68,9 @@ function agentLabel(state: AgentRunState): string {
   return `${t("runtimeStatus.agentRun.label")} · ${phase}`
 }
 
-function remoteTitle(state: RemotePeerState): string {
+function runPeerTitle(state: RunPeerState): string {
   return [
-    remoteLabel(state),
+    runPeerLabel(state),
     state.mode ? `${t("runtimeStatus.detail.mode")}: ${state.mode}` : "",
     state.sessionId ? `${t("runtimeStatus.detail.session")}: ${state.sessionId}` : "",
     state.peerId ? `${t("runtimeStatus.detail.peer")}: ${state.peerId}` : "",
@@ -90,7 +90,7 @@ function agentTitle(state: AgentRunState): string {
   ].filter(Boolean).join("\n")
 }
 
-function remoteTone(status: RemotePeerState["status"]): "muted" | "success" | "warning" | "error" {
+function runPeerTone(status: RunPeerState["status"]): "muted" | "success" | "warning" | "error" {
   if (status === "connected") return "success"
   if (status === "connecting") return "warning"
   if (status === "error") return "error"
