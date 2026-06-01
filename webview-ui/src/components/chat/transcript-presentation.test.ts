@@ -111,6 +111,253 @@ describe("transcript presentation", () => {
     expect(presentation.find((item) => item.type === "final_answer")).toBeUndefined()
   })
 
+  it("keeps capability workflow summaries running while a workflow step is active", () => {
+    const parts: TranscriptItem[] = [
+      {
+        id: "step-1",
+        type: "workflow_step",
+        lane: "process",
+        workflow: "capability_package_ingest",
+        stage: "read_source",
+        status: "running",
+        title: "获取 GitHub 内容",
+      },
+      {
+        id: "artifact-1",
+        type: "workflow_artifact",
+        lane: "primary",
+        workflow: "capability_package_ingest",
+        artifactType: "capability_package_draft",
+        artifact: { package_id: "gsap" },
+      },
+    ]
+
+    const summary = processSummary(buildTranscriptPresentation(parts, assistant(parts, "active")))
+
+    expect(summary).toMatchObject({
+      state: "running",
+      isWorkflow: true,
+      workflow: "capability_package_ingest",
+      currentLabel: "获取 GitHub 内容",
+      count: 1,
+    })
+  })
+
+  it("settles paired workflow tool steps when the matching done event arrives", () => {
+    const parts: TranscriptItem[] = [
+      {
+        id: "step-1",
+        type: "workflow_step",
+        lane: "process",
+        workflow: "capability_package_ingest",
+        stage: "read_source",
+        status: "running",
+        title: "获取 GitHub 内容",
+        details: { tool_call_id: "read-core" },
+      },
+      {
+        id: "step-2",
+        type: "workflow_step",
+        lane: "process",
+        workflow: "capability_package_ingest",
+        stage: "read_source",
+        status: "done",
+        title: "GitHub 内容已读取",
+        details: { tool_call_id: "read-core" },
+      },
+      {
+        id: "artifact-1",
+        type: "workflow_artifact",
+        lane: "primary",
+        workflow: "capability_package_ingest",
+        artifactType: "capability_package_draft",
+        artifact: { package_id: "gsap" },
+      },
+    ]
+
+    const summary = processSummary(buildTranscriptPresentation(parts, assistant(parts, "success")))
+
+    expect(summary).toMatchObject({
+      state: "completed",
+      isWorkflow: true,
+      count: 2,
+      failureCount: 0,
+    })
+    expect(summary?.items[0]).toMatchObject({
+      type: "timeline_process_group",
+      group: {
+        state: "completed",
+        isWorkflow: true,
+      },
+    })
+  })
+
+  it("keeps only the unresolved workflow tool step running after paired steps settle", () => {
+    const parts: TranscriptItem[] = [
+      {
+        id: "step-1",
+        type: "workflow_step",
+        lane: "process",
+        workflow: "capability_package_ingest",
+        stage: "read_source",
+        status: "running",
+        title: "读取 SKILL.md",
+        details: { tool_call_id: "read-core" },
+      },
+      {
+        id: "step-2",
+        type: "workflow_step",
+        lane: "process",
+        workflow: "capability_package_ingest",
+        stage: "read_source",
+        status: "done",
+        title: "SKILL.md 已读取",
+        details: { tool_call_id: "read-core" },
+      },
+      {
+        id: "step-3",
+        type: "workflow_step",
+        lane: "process",
+        workflow: "capability_package_ingest",
+        stage: "extract_evidence",
+        status: "running",
+        title: "提取证据",
+        details: { tool_call_id: "grep-evidence" },
+      },
+    ]
+
+    const group = groups(buildTranscriptPresentation(parts, assistant(parts, "success")))[0]
+
+    expect(group).toMatchObject({
+      state: "running",
+      currentLabel: "提取证据",
+      isWorkflow: true,
+      count: 3,
+    })
+  })
+
+  it("uses workflow_result errors as terminal workflow summary failures", () => {
+    const parts: TranscriptItem[] = [
+      {
+        id: "step-1",
+        type: "workflow_step",
+        lane: "process",
+        workflow: "capability_package_ingest",
+        stage: "read_source",
+        status: "running",
+        title: "获取 GitHub 内容",
+        details: { tool_call_id: "read-core" },
+      },
+      {
+        id: "result-1",
+        type: "workflow_result",
+        lane: "primary",
+        workflow: "capability_package_ingest",
+        resultType: "command_evidence_missing",
+        status: "error",
+        title: "能力包依赖命令缺少来源证据",
+        result: { messages: ["envreq:executable:npx command lacks evidence: npx --version"] },
+      },
+    ]
+
+    const summary = processSummary(buildTranscriptPresentation(parts, assistant(parts, "error")))
+
+    expect(summary).toMatchObject({
+      state: "error",
+      failureCount: 1,
+      currentLabel: "能力包依赖命令缺少来源证据",
+      isWorkflow: true,
+    })
+  })
+
+  it("uses the live working label when an active workflow has no running step", () => {
+    const parts: TranscriptItem[] = [
+      {
+        id: "step-1",
+        type: "workflow_step",
+        lane: "process",
+        workflow: "capability_package_ingest",
+        stage: "prepare",
+        status: "done",
+        title: "准备生成",
+      },
+      {
+        id: "artifact-1",
+        type: "workflow_artifact",
+        lane: "primary",
+        workflow: "capability_package_ingest",
+        artifactType: "capability_package_draft",
+        artifact: { package_id: "gsap" },
+      },
+    ]
+
+    const summary = processSummary(buildTranscriptPresentation(parts, assistant(parts, "active"), {
+      runningProcessLabel: "正在获取 GitHub 内容",
+    }))
+
+    expect(summary).toMatchObject({
+      state: "running",
+      currentLabel: "正在获取 GitHub 内容",
+      isWorkflow: true,
+    })
+  })
+
+  it("uses the live working label for top-level workflow groups before primary output exists", () => {
+    const parts: TranscriptItem[] = [
+      {
+        id: "step-1",
+        type: "workflow_step",
+        lane: "process",
+        workflow: "capability_package_ingest",
+        stage: "prepare",
+        status: "done",
+        title: "准备生成",
+      },
+    ]
+
+    const group = groups(buildTranscriptPresentation(parts, assistant(parts, "active"), {
+      runningProcessLabel: "正在获取 GitHub 内容",
+    }))[0]
+
+    expect(group).toMatchObject({
+      state: "running",
+      label: "能力包流程",
+      currentLabel: "正在获取 GitHub 内容",
+      isWorkflow: true,
+    })
+  })
+
+  it("marks capability workflow summaries as error when a workflow step fails", () => {
+    const parts: TranscriptItem[] = [
+      {
+        id: "step-1",
+        type: "workflow_step",
+        lane: "process",
+        workflow: "capability_package_ingest",
+        stage: "compose_draft",
+        status: "error",
+        title: "草案校验失败",
+      },
+      {
+        id: "artifact-1",
+        type: "workflow_artifact",
+        lane: "primary",
+        workflow: "capability_package_ingest",
+        artifactType: "capability_package_draft",
+        artifact: { package_id: "gsap" },
+      },
+    ]
+
+    const summary = processSummary(buildTranscriptPresentation(parts, assistant(parts, "error")))
+
+    expect(summary).toMatchObject({
+      state: "error",
+      failureCount: 1,
+      currentLabel: "草案校验失败",
+      isWorkflow: true,
+    })
+  })
+
   it("keeps process_summary id stable while process events append before final answer", () => {
     const firstParts: TranscriptItem[] = [
       { id: "tool-1", type: "tool", tool: "read_file", status: "returned", input: { path: "src/index.ts" } },
