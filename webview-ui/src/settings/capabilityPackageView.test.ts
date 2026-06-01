@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest"
 import {
+  aggregateRuntimeFootprint,
+  capabilityInstallPreviewFromMcpJson,
   capabilityViewsFromSources,
   capabilityComponentSummary,
   groupCapabilityPackageComponents,
+  runtimeFootprintBadgeTone,
+  runtimeFootprintLabel,
 } from "./capabilityPackageView"
 
 describe("capability package component view", () => {
@@ -10,6 +14,8 @@ describe("capability package component view", () => {
     "skill:code-review": {
       kind: "skill",
       name: "code-review",
+      display_name: "Code review",
+      summary: "Review repository changes before merging.",
       package_ids: ["repo-review"],
       config: {
         path_hint: "/skills/code-review",
@@ -21,6 +27,12 @@ describe("capability package component view", () => {
       config: {
         command: "github-mcp-server",
       },
+      runtime_footprint: {
+        runs_on: "server",
+        install_required_on: ["server"],
+        config_required_on: ["server"],
+        user_message: "服务端运行，无需本机安装",
+      },
     },
     "envreq:sdk:dotnet": {
       kind: "environment_requirement",
@@ -28,6 +40,7 @@ describe("capability package component view", () => {
       config: {
         kind: "sdk",
         requirements: { version: ">=8" },
+        placement: "peer",
       },
     },
     "credential:GITHUB_TOKEN": {
@@ -59,12 +72,67 @@ describe("capability package component view", () => {
     expect(groups.capabilities[0]).toMatchObject({
       kind: "skill",
       name: "code-review",
+      displayName: "Code review",
       packageIds: ["repo-review"],
       pathHint: "/skills/code-review",
       skillStatus: "enabled",
-      summary: "Skill · code-review · installed path=/skills/code-review",
+      summary: "Review repository changes before merging.",
+      runtimeFootprint: {
+        runsOn: "agent_only",
+        installRequiredOn: [],
+        configRequiredOn: [],
+        userMessage: "仅 Agent 指令能力，无需外部进程",
+      },
     })
     expect(groups.dependencies[0].summary).toBe("SDK · dotnet · version >=8")
+    expect(groups.capabilities[1].runtimeFootprint.userMessage).toBe("服务端运行，无需本机安装")
+    expect(groups.dependencies[0].runtimeFootprint.userMessage).toBe("需要在本机安装/配置")
+  })
+
+  it("labels runtime footprint for user-facing display", () => {
+    expect(runtimeFootprintLabel({
+      runs_on: "server",
+      install_required_on: ["server"],
+      config_required_on: ["server"],
+    })).toBe("服务端运行，无需本机安装")
+    expect(runtimeFootprintLabel({
+      runs_on: "local_peer",
+      install_required_on: ["local_peer"],
+      config_required_on: ["local_peer"],
+    })).toBe("需要在本机安装/配置")
+    expect(runtimeFootprintBadgeTone({
+      runs_on: "local_peer",
+      install_required_on: ["local_peer"],
+      config_required_on: ["local_peer"],
+    })).toBe("warning")
+    expect(aggregateRuntimeFootprint([
+      { runs_on: "server", install_required_on: ["server"], config_required_on: ["server"] },
+      { runs_on: "local_peer", install_required_on: ["local_peer"], config_required_on: ["local_peer"] },
+    ])).toMatchObject({
+      runsOn: "both",
+      userMessage: "服务端和本地端都需要配置",
+    })
+  })
+
+  it("previews standard MCP JSON install snippets", () => {
+    const preview = capabilityInstallPreviewFromMcpJson(`{
+      "mcpServers": {
+        "edgeone-pages-mcp-server": {
+          "command": "npx",
+          "args": ["edgeone-pages-mcp"],
+          "env": {"EDGEONE_TOKEN": "${"${EDGEONE_TOKEN}"}"}
+        }
+      }
+    }`)
+
+    expect(preview.ok).toBe(true)
+    expect(preview.servers[0]).toMatchObject({
+      name: "edgeone-pages-mcp-server",
+      command: "npx",
+      args: ["edgeone-pages-mcp"],
+      envKeys: ["EDGEONE_TOKEN"],
+    })
+    expect(preview.servers[0].runtimeFootprint.userMessage).toBe("服务端运行，无需本机安装")
   })
 
   it("describes skill disabled state from global and per-skill settings", () => {
@@ -91,7 +159,12 @@ describe("capability package component view", () => {
     expect(capabilityComponentSummary({
       kind: "mcp_server",
       name: "github",
-    })).toBe("MCP Server · github")
+    })).toBe("MCP Server · Github")
+    expect(capabilityComponentSummary({
+      kind: "skill",
+      name: "code-review",
+      path_hint: "/skills/code-review/SKILL.md",
+    })).toBe("Skill · Code Review")
     expect(capabilityComponentSummary({
       kind: "environment_requirement",
       name: "gh",
@@ -123,6 +196,12 @@ describe("capability package component view", () => {
         enabled: true,
         status: "available",
         command: "github-mcp",
+        runtime_footprint: {
+          runs_on: "server",
+          install_required_on: ["server"],
+          config_required_on: ["server"],
+          user_message: "服务端运行，无需本机安装",
+        },
         environment_requirement_refs: ["envreq:executable:gh"],
         package_ids: ["github-tools"],
       }],
@@ -130,6 +209,8 @@ describe("capability package component view", () => {
         id: "skill:code-review",
         kind: "skill",
         name: "code-review",
+        display_name: "Code review",
+        summary: "Review repository changes before merging.",
         enabled: true,
         path_hint: "/srv/skills/packages/repo-review/code-review/SKILL.md",
         source_path: "skills/code-review/SKILL.md",
@@ -151,6 +232,13 @@ describe("capability package component view", () => {
       "mcp_server:github",
       "skill:code-review",
     ])
+    expect(capabilities[1]).toMatchObject({
+      displayName: "Code review",
+      summary: "Review repository changes before merging.",
+      runtimeFootprint: {
+        userMessage: "仅 Agent 指令能力，无需外部进程",
+      },
+    })
     expect(capabilities[0]).toMatchObject({
       sourcePackageIds: ["github-tools"],
       dependencyIds: ["envreq:executable:gh"],
@@ -165,6 +253,37 @@ describe("capability package component view", () => {
         sourcePath: "skills/code-review/SKILL.md",
         disabled: true,
         globalEnabled: true,
+      },
+    })
+  })
+
+  it("aggregates Skill runtime footprint from referenced environment requirements", () => {
+    const capabilities = capabilityViewsFromSources({
+      skillRecords: [{
+        id: "skill:code-review",
+        kind: "skill",
+        name: "code-review",
+        display_name: "Code review",
+        environment_requirement_refs: ["envreq:executable:gh"],
+      }],
+      componentIndex: {
+        "envreq:executable:gh": {
+          id: "envreq:executable:gh",
+          kind: "environment_requirement",
+          name: "gh",
+          config: {
+            placement: "peer",
+            command: "gh",
+          },
+        },
+      },
+    })
+
+    expect(capabilities[0]).toMatchObject({
+      dependencyIds: ["envreq:executable:gh"],
+      runtimeFootprint: {
+        runsOn: "local_peer",
+        userMessage: "需要在本机安装/配置",
       },
     })
   })

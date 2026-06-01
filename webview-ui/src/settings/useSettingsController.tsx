@@ -77,7 +77,12 @@ import {
   type ApprovalDecision,
   type ApprovalDetails,
 } from "../components/chat/ApprovalDetailsDialog"
-import { capabilityViewsFromSources, groupCapabilityPackageComponents } from "./capabilityPackageView"
+import {
+  capabilityViewsFromSources,
+  groupCapabilityPackageComponents,
+  normalizeRuntimeFootprint,
+  type RuntimeRunsOn,
+} from "./capabilityPackageView"
 
 type ProviderType = "openai_chat" | "anthropic_messages" | "openai_responses"
 type ProviderCompat = "generic" | "deepseek" | "kimi" | "glm" | "qwen" | "zenmux"
@@ -312,6 +317,9 @@ interface CapabilityRecord {
   entryType: CapabilityKind
   resourceKind: CapabilityResourceKind
   name: string
+  display_name?: string
+  summary?: string
+  runtime_footprint?: Record<string, unknown>
   enabled?: boolean
   command?: string
   tags?: string[]
@@ -359,6 +367,9 @@ interface CapabilityDashboardItem {
   resourceKind: CapabilityResourceKind
   rawKind: string
   name: string
+  display_name: string
+  summary: string
+  runtime_footprint: Record<string, unknown>
   alias: string
   source: string
   repo_url: string
@@ -423,6 +434,7 @@ interface CapabilityPackageView {
   evidence: Array<Record<string, string>>
   credentials: string[]
   riskLevel: string
+  runtimeFootprint: ReturnType<typeof normalizeRuntimeFootprint>
 }
 
 interface CapabilityPackageIngestState {
@@ -443,6 +455,11 @@ interface CapabilityEditorState {
   entryType: CapabilityKind
   resourceKind: CapabilityResourceKind
   name: string
+  displayName: string
+  summary: string
+  skillContent: string
+  mcpConfigText: string
+  runtimeRunsOn: RuntimeRunsOn
   enabled: boolean
   command: string
   tagsText: string
@@ -967,6 +984,41 @@ function mapText(value: unknown): string {
     .join("\n")
 }
 
+function runtimeRunsOnForKind(kind: CapabilityKind): RuntimeRunsOn {
+  if (kind === "skill") return "agent_only"
+  if (kind === "mcp") return "server"
+  return "local_peer"
+}
+
+function runtimeRunsOnFromRecord(record: CapabilityRecord): RuntimeRunsOn {
+  const normalized = normalizeRuntimeFootprint(
+    record.runtime_footprint,
+    record.kind === "skill"
+      ? "agent_only"
+      : record.kind === "mcp"
+        ? placementRunsOn(record.placement, "server")
+        : placementRunsOn(record.placement, "local_peer"),
+  )
+  return normalized.runsOn
+}
+
+function placementRunsOn(value: unknown, fallback: RuntimeRunsOn): RuntimeRunsOn {
+  const text = stringValue(value).trim()
+  if (text === "server") return "server"
+  if (text === "peer") return "local_peer"
+  if (text === "both") return "both"
+  return fallback
+}
+
+function runtimeFootprintPayload(runsOn: RuntimeRunsOn): Record<string, unknown> {
+  const footprint = normalizeRuntimeFootprint({}, runsOn)
+  return {
+    runs_on: footprint.runsOn,
+    install_required_on: footprint.installRequiredOn,
+    config_required_on: footprint.configRequiredOn,
+  }
+}
+
 function parseMapText(value: string): Record<string, string> {
   const result: Record<string, string> = {}
   for (const line of value.split(/\r?\n/)) {
@@ -1077,6 +1129,11 @@ function emptyCapabilityEditor(kind: CapabilityKind): CapabilityEditorState {
         ? "skill"
         : "mcp_server",
     name: "",
+    displayName: "",
+    summary: "",
+    skillContent: "",
+    mcpConfigText: "",
+    runtimeRunsOn: runtimeRunsOnForKind(kind),
     enabled: true,
     command: "",
 
@@ -1125,6 +1182,9 @@ function capabilityEditorFromRecord(record: CapabilityRecord): CapabilityEditorS
           : normalizeRequirementKind(record.kind)
     ),
     name: record.name,
+    displayName: stringValue(record.display_name),
+    summary: stringValue(record.summary),
+    runtimeRunsOn: runtimeRunsOnFromRecord(record),
     enabled: boolValue(record.enabled, true),
     command: stringValue(record.command),
     tagsText: stringListText(record.tags),
@@ -1162,6 +1222,9 @@ function capabilityPayloadFromEditor(editor: CapabilityEditorState): Record<stri
   const payload: Record<string, unknown> = {
     id: editor.id.trim() || undefined,
     name: editor.name.trim(),
+    display_name: editor.displayName.trim(),
+    summary: editor.summary.trim(),
+    runtime_footprint: runtimeFootprintPayload(editor.runtimeRunsOn),
     enabled: editor.enabled,
     check: editor.check.trim(),
     install: editor.install.trim(),
@@ -1188,16 +1251,22 @@ function capabilityPayloadFromEditor(editor: CapabilityEditorState): Record<stri
     payload.requirements = parseMapText(editor.requirementsText)
     payload.tags = parseStringList(editor.tagsText)
   } else if (editor.kind === "mcp") {
-    payload.command = editor.command.trim()
-    payload.args = parseStringList(editor.argsText)
-    payload.env = parseMapText(editor.envText)
-    payload.cwd = editor.cwd.trim() || undefined
-    payload.placement = editor.placement || "peer"
-    payload.distribution = editor.distribution || "command"
-    payload.environment_requirement_refs = parseStringList(editor.requirementRefsText)
+    const mcpConfigText = editor.mcpConfigText.trim()
+    if (mcpConfigText) {
+      payload.mcp_config = mcpConfigText
+    } else {
+      payload.command = editor.command.trim()
+      payload.args = parseStringList(editor.argsText)
+      payload.env = parseMapText(editor.envText)
+      payload.cwd = editor.cwd.trim() || undefined
+      payload.distribution = editor.distribution || "command"
+      payload.environment_requirement_refs = parseStringList(editor.requirementRefsText)
+    }
   } else if (editor.kind === "skill") {
-    payload.path_hint = editor.pathHint.trim()
-    payload.source_path = editor.sourcePath.trim()
+    const skillContent = editor.skillContent.trim()
+    if (skillContent) payload.skill_content = editor.skillContent.replace(/\r\n/g, "\n")
+    if (editor.pathHint.trim()) payload.path_hint = editor.pathHint.trim()
+    if (editor.sourcePath.trim()) payload.source_path = editor.sourcePath.trim()
   }
   return payload
 }
@@ -1368,6 +1437,7 @@ function capabilityPackageValue(id: string, value: unknown): CapabilityPackageVi
     evidence: normalizeEvidence(item.evidence),
     credentials: stringArray(item.credentials),
     riskLevel: stringValue(item.risk_level),
+    runtimeFootprint: normalizeRuntimeFootprint(item.runtime_footprint),
   }
 }
 
@@ -1522,6 +1592,9 @@ function capabilityRecordToDashboardItem(record: CapabilityRecord): CapabilityDa
     resourceKind,
     rawKind: stringValue(record.raw_kind || resourceKind),
     name: record.name,
+    display_name: stringValue(record.display_name),
+    summary: stringValue(record.summary || record.description),
+    runtime_footprint: normalizeRuntimeFootprint(record.runtime_footprint, runtimeRunsOnFromRecord(record)) as unknown as Record<string, unknown>,
     alias: stringValue(record.command || record.path_hint || record.source_path || record.name),
     source: stringValue(record.source),
     repo_url: stringValue(record.repo_url),
@@ -1580,6 +1653,9 @@ function normalizeCapabilityDashboardItems(
     }
     byId.set(summary.id, {
       ...existing,
+      display_name: summary.display_name || existing.display_name,
+      summary: summary.summary || existing.summary,
+      runtime_footprint: Object.keys(summary.runtime_footprint).length ? summary.runtime_footprint : existing.runtime_footprint,
       status: summary.status,
       status_detail: summary.status_detail,
       enabled: summary.enabled,
@@ -1629,6 +1705,16 @@ function dashboardSummaryItem(item: Record<string, unknown>): CapabilityDashboar
     resourceKind,
     rawKind: entryType === "mcp" ? "mcp_server" : entryType === "skill" ? "skill" : rawRequirementKind,
     name,
+    display_name: stringValue(item.display_name),
+    summary: stringValue(item.summary || item.description),
+    runtime_footprint: normalizeRuntimeFootprint(
+      item.runtime_footprint,
+      entryType === "skill"
+        ? "agent_only"
+        : entryType === "mcp"
+          ? placementRunsOn(item.placement || item.scope, "server")
+          : placementRunsOn(item.placement || item.scope, "local_peer"),
+    ) as unknown as Record<string, unknown>,
     alias: stringValue(item.alias || item.command || item.path_hint || item.source_path || item.name),
     source: stringValue(item.source),
     repo_url: stringValue(item.repo_url),
@@ -1715,6 +1801,9 @@ function dashboardItemToRecord(item: CapabilityDashboardItem): CapabilityRecord 
     entryType: item.entryType,
     resourceKind: item.resourceKind,
     name: item.name,
+    display_name: item.display_name,
+    summary: item.summary,
+    runtime_footprint: item.runtime_footprint,
     enabled: item.enabled,
     command: item.command,
     placement: item.placement,
@@ -2252,7 +2341,7 @@ export function createSettingsController(props: SettingsViewProps) {
     }
     return message
   })
-  const connectionStatus = createMemo(() => stringValue(server.connectionState().status, "login-required"))
+  const connectionStatus = createMemo(() => stringValue(server.connectionState().status, "checking"))
   const connectionMessage = createMemo(() => stringValue(server.connectionState().message))
   const connectionNotice = createMemo(() => resolveConnectionNotice({
     status: connectionStatus(),
@@ -2884,10 +2973,68 @@ export function createSettingsController(props: SettingsViewProps) {
 
   onCleanup(stopAgentRunPolling)
 
+  const settleServerSettingsSuccess = () => {
+    settleRefreshSuccess("serverSettings")
+    const pending = pendingServerSettingsSaveKey()
+    if (pending) {
+      markOperationSuccess(pending)
+      setPendingServerSettingsSaveKey(undefined)
+      if (pending === "agentConfigSave") {
+        setAgentConfigSavePending(false)
+        setAgentConfigDirty(false)
+        setAgentConfigSaved(true)
+        setAgentConfigError("")
+      }
+    }
+  }
+
+  const settleServerSettingsError = (message: string) => {
+    const pending = pendingServerSettingsSaveKey()
+    if (pending) {
+      markOperationError(pending, message)
+      setPendingServerSettingsSaveKey(undefined)
+      if (pending === "agentConfigSave") {
+        setAgentConfigSavePending(false)
+        setAgentConfigSaved(false)
+        setAgentConfigError(message)
+      }
+    } else {
+      settleRefreshError("serverSettings", message)
+    }
+  }
+
+  const settleRemoteStateSlice = (key: string, slice: Record<string, unknown>) => {
+    const status = stringValue(slice.status)
+    const message = stringValue(slice.error, "Settings request failed")
+    if (status !== "ready" && status !== "stale" && status !== "error") return
+    const failed = status === "error" || (status === "stale" && Boolean(slice.error))
+
+    const settle = (operation: SettingsOperationKey) => {
+      if (failed) settleRefreshError(operation, message)
+      else settleRefreshSuccess(operation)
+    }
+
+    if (key === "providers") settle("providers")
+    if (key === "modelProfiles") settle("modelProfiles")
+    if (key === "chatConfig") settle("chatConfig")
+    if (key === "github") settle("github")
+    if (key === "modelCapabilities") settle("modelCapabilities")
+    if (key === "capabilities") settle("capabilities")
+    if (key === "environmentManifest" || key === "environmentSnapshot") settle("environmentManifest")
+    if (key === "serverSettings") {
+      if (failed) settleServerSettingsError(message)
+      else settleServerSettingsSuccess()
+    }
+  }
+
   onMount(() => {
     const unsubscribe = vscode.onMessage((msg) => {
       const rawMessage = msg as unknown as Record<string, unknown>
       const message = typeof rawMessage.message === "string" ? rawMessage.message : "Settings request failed"
+      if (msg.type === "remoteState.patch" && typeof msg.payload === "object" && msg.payload) {
+        const payload = objectValue(msg.payload)
+        settleRemoteStateSlice(stringValue(payload.key), objectValue(payload.slice))
+      }
       if (msg.type === "admin.error") {
         settlePendingProviderActionError(message)
         failPendingProviderModelReads(message)
@@ -2901,32 +3048,10 @@ export function createSettingsController(props: SettingsViewProps) {
       if (msg.type === "github.state") settleRefreshSuccess("github")
       if (msg.type === "github.error") settleRefreshError("github", message)
       if (msg.type === "serverSettings.state") {
-        settleRefreshSuccess("serverSettings")
-        const pending = pendingServerSettingsSaveKey()
-        if (pending) {
-          markOperationSuccess(pending)
-          setPendingServerSettingsSaveKey(undefined)
-          if (pending === "agentConfigSave") {
-            setAgentConfigSavePending(false)
-            setAgentConfigDirty(false)
-            setAgentConfigSaved(true)
-            setAgentConfigError("")
-          }
-        }
+        settleServerSettingsSuccess()
       }
       if (msg.type === "serverSettings.error") {
-        const pending = pendingServerSettingsSaveKey()
-        if (pending) {
-          markOperationError(pending, message)
-          setPendingServerSettingsSaveKey(undefined)
-          if (pending === "agentConfigSave") {
-            setAgentConfigSavePending(false)
-            setAgentConfigSaved(false)
-            setAgentConfigError(message)
-          }
-        } else {
-          settleRefreshError("serverSettings", message)
-        }
+        settleServerSettingsError(message)
       }
       if (msg.type === "autoApproval.state") settleRefreshSuccess("autoApproval")
       if (msg.type === "reasoningDisplay.state") settleRefreshSuccess("reasoningDisplay")

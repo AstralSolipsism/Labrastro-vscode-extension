@@ -270,6 +270,8 @@ describe("settings controller capability model", () => {
             "skill:code-review": {
               kind: "skill",
               name: "code-review",
+              display_name: "Code review",
+              summary: "Review repository changes before merging.",
               package_ids: ["repo-review"],
               config: { path_hint: "/skills/code-review" },
             },
@@ -299,8 +301,68 @@ describe("settings controller capability model", () => {
     expect(groups.capabilities.map((item) => item.id)).toEqual(["skill:code-review", "mcp:github"])
     expect(groups.dependencies.map((item) => item.id)).toEqual(["envreq:sdk:dotnet"])
     expect(groups.capabilities[0]).toMatchObject({
-      summary: "Skill · code-review · installed path=/skills/code-review",
+      displayName: "Code review",
+      summary: "Review repository changes before merging.",
       skillStatus: "disabled",
+    })
+  })
+
+  it("builds pasted Skill install payload without requiring server paths", () => {
+    withController(makeServer(), (controller) => {
+      const editor = {
+        ...controller.emptyCapabilityEditor("skill"),
+        name: "",
+        displayName: "Code review",
+        summary: "Review repository changes before merging.",
+        skillContent: "---\nname: code-review\ndescription: Review code changes.\n---\n\nReview code changes.\n",
+      } as any
+
+      const payload = controller.capabilityPayloadFromEditor(editor)
+
+      expect(payload).toMatchObject({
+        display_name: "Code review",
+        summary: "Review repository changes before merging.",
+        skill_content: editor.skillContent,
+      })
+      expect(payload).not.toHaveProperty("path_hint")
+      expect(payload).not.toHaveProperty("source_path")
+    })
+  })
+
+  it("builds pasted MCP JSON install payload without requiring split command fields", () => {
+    withController(makeServer(), (controller) => {
+      const mcpConfigText = JSON.stringify({
+        mcpServers: {
+          "edgeone-pages-mcp-server": {
+            command: "npx",
+            args: ["edgeone-pages-mcp"],
+          },
+        },
+      }, null, 2)
+      const editor = {
+        ...controller.emptyCapabilityEditor("mcp"),
+        name: "",
+        displayName: "EdgeOne Pages",
+        summary: "Deploy pages through EdgeOne.",
+        mcpConfigText,
+        runtimeRunsOn: "local_peer",
+      } as any
+
+      const payload = controller.capabilityPayloadFromEditor(editor)
+
+      expect(payload).toMatchObject({
+        display_name: "EdgeOne Pages",
+        summary: "Deploy pages through EdgeOne.",
+        mcp_config: mcpConfigText,
+        runtime_footprint: {
+          runs_on: "local_peer",
+          install_required_on: ["local_peer"],
+          config_required_on: ["local_peer"],
+        },
+      })
+      expect(payload).not.toHaveProperty("command")
+      expect(payload).not.toHaveProperty("args")
+      expect(payload).not.toHaveProperty("env")
     })
   })
 
@@ -315,6 +377,12 @@ describe("settings controller capability model", () => {
             id: "mcp:github",
             name: "github",
             command: "github-mcp",
+            runtime_footprint: {
+              runs_on: "server",
+              install_required_on: ["server"],
+              config_required_on: ["server"],
+              user_message: "服务端运行，无需本机安装",
+            },
             environment_requirement_refs: ["envreq:executable:gh"],
             package_ids: ["github-tools"],
           },
@@ -330,6 +398,8 @@ describe("settings controller capability model", () => {
             "skill:code-review": {
               kind: "skill",
               name: "code-review",
+              display_name: "Code review",
+              summary: "Review repository changes before merging.",
               config: { path_hint: "/skills/code-review" },
             },
           },
@@ -346,6 +416,11 @@ describe("settings controller capability model", () => {
       disabled: true,
       pathHint: "/skills/code-review",
     })
+    expect(controller.capabilityViews()[1]).toMatchObject({
+      displayName: "Code review",
+      summary: "Review repository changes before merging.",
+    })
+    expect(controller.capabilityViews()[0].runtimeFootprint.userMessage).toBe("服务端运行，无需本机安装")
   })
 
   it("launches capability package generation through a chat session", () => {
