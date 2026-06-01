@@ -30,6 +30,8 @@ export interface ProcessGroup {
   count: number
   failureCount: number
   currentLabel?: string
+  workflow?: string
+  isWorkflow?: boolean
   items: TranscriptItem[]
 }
 
@@ -44,6 +46,9 @@ export interface ProcessSummary {
   state: ProcessState
   count: number
   failureCount: number
+  currentLabel?: string
+  workflow?: string
+  isWorkflow?: boolean
   items: ProcessTimelineItem[]
 }
 
@@ -117,14 +122,20 @@ export const RUN_TOOLS = new Set([
 export function buildTranscriptPresentation(
   parts: TranscriptItem[],
   message?: Pick<MockMessage, "id" | "traceNodeStatus">,
-  _options: TranscriptPresentationOptions = {},
+  options: TranscriptPresentationOptions = {},
 ): TranscriptPresentationItem[] {
   const reasoningPanel = buildReasoningPanel(parts, message)
   const explicitPrimaryParts = parts.filter(isPrimaryLanePart)
 
   if (explicitPrimaryParts.length) {
-    const timeline = buildTimelineItems(parts.filter((part) => !isPrimaryLanePart(part) && part.type !== "assistant_text"), message)
-    const summary = buildProcessSummary(timeline, message)
+    const workflowTerminals = workflowTerminalStates(parts)
+    const timeline = buildTimelineItems(
+      parts.filter((part) => !isPrimaryLanePart(part) && part.type !== "assistant_text"),
+      message,
+      options,
+      workflowTerminals,
+    )
+    const summary = buildProcessSummary(timeline, message, options, workflowTerminals)
     const output: TranscriptPresentationItem[] = []
     if (summary) output.push({ type: "process_summary", summary })
     if (reasoningPanel) output.push({ type: "reasoning_panel", panel: reasoningPanel })
@@ -135,14 +146,15 @@ export function buildTranscriptPresentation(
   const finalAnswerStart = resolveFinalAnswerStartIndex(parts, message)
 
   if (finalAnswerStart >= 0) {
-    const timeline = buildTimelineItems(parts.slice(0, finalAnswerStart), message)
+    const workflowTerminals = workflowTerminalStates(parts)
+    const timeline = buildTimelineItems(parts.slice(0, finalAnswerStart), message, options, workflowTerminals)
     const finalParts = parts
       .slice(finalAnswerStart)
       .filter((part): part is AssistantTextItem => part.type === "assistant_text")
     const lateNotices = parts
       .slice(finalAnswerStart)
       .filter((part): part is NoticeItem => part.type === "notice")
-    const summary = buildProcessSummary(timeline, message)
+    const summary = buildProcessSummary(timeline, message, options, workflowTerminals)
     const prefixNotices = summary
       ? []
       : timeline.filter((item): item is Extract<ProcessTimelineItem, { type: "timeline_notice" }> =>
@@ -157,7 +169,7 @@ export function buildTranscriptPresentation(
     return output
   }
 
-  const output: TranscriptPresentationItem[] = [...buildTimelineItems(parts, message)]
+  const output: TranscriptPresentationItem[] = [...buildTimelineItems(parts, message, options)]
   if (reasoningPanel) output.push({ type: "reasoning_panel", panel: reasoningPanel })
   return output
 }
@@ -198,6 +210,8 @@ function buildReasoningPanel(
 function buildTimelineItems(
   parts: TranscriptItem[],
   message?: Pick<MockMessage, "id" | "traceNodeStatus">,
+  options: TranscriptPresentationOptions = {},
+  workflowTerminals = workflowTerminalStates(parts),
 ): ProcessTimelineItem[] {
   const items: ProcessTimelineItem[] = []
   let currentProcess: { key: string; info: ProcessGroupInfo; items: TranscriptItem[] } | undefined
@@ -208,6 +222,13 @@ function buildTimelineItems(
       return
     }
     const first = currentProcess.items[0]
+    const workflowState = currentProcess.info.isWorkflow
+      ? workflowProcessState(currentProcess.items, message, options, workflowTerminals.get(currentProcess.info.workflow || ""))
+      : undefined
+    const state = workflowState?.state || processItemsState(currentProcess.items)
+    const currentLabel = workflowState?.currentLabel ||
+      processItemCurrentLabel(currentProcess.items[currentProcess.items.length - 1])
+    const failureCount = workflowState ? workflowState.failureCount : processFailureCount(currentProcess.items)
     items.push({
       type: "timeline_process_group",
       group: {
@@ -215,10 +236,12 @@ function buildTimelineItems(
         groupKey: currentProcess.key,
         kind: currentProcess.info.kind,
         label: currentProcess.info.label,
-        state: processItemsState(currentProcess.items),
+        state,
         count: currentProcess.items.length,
-        failureCount: processFailureCount(currentProcess.items),
-        currentLabel: processItemCurrentLabel(currentProcess.items[currentProcess.items.length - 1]),
+        failureCount,
+        currentLabel,
+        workflow: currentProcess.info.workflow,
+        isWorkflow: currentProcess.info.isWorkflow,
         items: currentProcess.items,
       },
     })
@@ -259,7 +282,9 @@ function buildTimelineItems(
 
 function buildProcessSummary(
   items: ProcessTimelineItem[],
-  message?: Pick<MockMessage, "id">,
+  message?: Pick<MockMessage, "id" | "traceNodeStatus">,
+  options: TranscriptPresentationOptions = {},
+  workflowTerminals = new Map<string, WorkflowTerminalState>(),
 ): ProcessSummary | undefined {
   if (!items.length) return undefined
   const processItems = items.flatMap((item) =>
@@ -270,14 +295,189 @@ function buildProcessSummary(
   const first = summaryItems[0]
   const firstId = timelineItemStableId(first)
   const failureCount = processFailureCount(processItems)
+  const workflowGroup = items.find((item): item is Extract<ProcessTimelineItem, { type: "timeline_process_group" }> =>
+    item.type === "timeline_process_group" && Boolean(item.group.workflow)
+  )
+  const isWorkflow = items.some((item) => item.type === "timeline_process_group" && item.group.isWorkflow)
+  const workflow = workflowGroup?.group.workflow
+  const rawState = processItems.length ? processItemsState(processItems) : "completed"
+  const workflowState = isWorkflow
+    ? workflowProcessState(processItems, message, options, workflowTerminals.get(workflow || ""))
+    : undefined
+  const state = workflowState?.state || rawState
+  const currentLabel = workflowState?.currentLabel ||
+    processSummaryCurrentLabel(items, state, options.runningProcessLabel)
+  const effectiveFailureCount = workflowState ? workflowState.failureCount : failureCount
 
   return {
     id: `process-summary:${message?.id || "message"}:${firstId}`,
-    state: failureCount > 0 ? "error" : "completed",
+    state: effectiveFailureCount > 0 ? "error" : state,
     count: processItems.length,
-    failureCount,
+    failureCount: effectiveFailureCount,
+    currentLabel,
+    workflow,
+    isWorkflow,
     items,
   }
+}
+
+function processSummaryCurrentLabel(
+  items: ProcessTimelineItem[],
+  state: ProcessState,
+  runningProcessLabel?: string,
+): string | undefined {
+  const groups = items
+    .filter((item): item is Extract<ProcessTimelineItem, { type: "timeline_process_group" }> => item.type === "timeline_process_group")
+    .map((item) => item.group)
+  const runningLabel = findLast(groups, (group) =>
+    group.items.some(isRunningProcessItem) && Boolean(group.currentLabel)
+  )?.currentLabel
+  if (runningLabel) return runningLabel
+  if (state === "running" && runningProcessLabel?.trim()) return runningProcessLabel.trim()
+  return findLast(groups, (group) => Boolean(group.currentLabel))?.currentLabel
+}
+
+function findLast<T>(items: T[], predicate: (item: T) => boolean): T | undefined {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (predicate(items[index])) return items[index]
+  }
+  return undefined
+}
+
+interface WorkflowProcessState {
+  state: ProcessState
+  currentLabel?: string
+  failureCount: number
+}
+
+interface WorkflowTerminalState {
+  state: "done" | "error" | "cancelled"
+  label?: string
+}
+
+function workflowProcessState(
+  items: TranscriptItem[],
+  message?: Pick<MockMessage, "traceNodeStatus">,
+  options: TranscriptPresentationOptions = {},
+  terminal?: WorkflowTerminalState,
+): WorkflowProcessState {
+  const latestSteps = workflowLatestSteps(items)
+  const latestItem = latestSteps[latestSteps.length - 1] || items[items.length - 1]
+  const failureCount = latestSteps.reduce((count, item) => count + (workflowStepState(item) === "error" ? 1 : 0), 0) +
+    (terminal?.state === "error" ? 1 : 0)
+  const latestRunning = findLast(latestSteps, (item) => workflowStepState(item) === "running")
+  const latestLabel = latestItem ? processItemCurrentLabel(latestItem) : undefined
+  const active = message?.traceNodeStatus === "active" || message?.traceNodeStatus === "streaming"
+
+  if (failureCount > 0) {
+    return {
+      state: "error",
+      currentLabel: terminal?.state === "error" && terminal.label ? terminal.label : latestLabel,
+      failureCount,
+    }
+  }
+  if (latestRunning) {
+    return {
+      state: terminal && !active ? "completed" : "running",
+      currentLabel: terminal && !active ? terminal.label || latestLabel : processItemCurrentLabel(latestRunning),
+      failureCount,
+    }
+  }
+  if (active) {
+    return {
+      state: "running",
+      currentLabel: options.runningProcessLabel?.trim() || latestLabel,
+      failureCount,
+    }
+  }
+  return {
+    state: "completed",
+    currentLabel: terminal?.label || latestLabel,
+    failureCount,
+  }
+}
+
+function workflowLatestSteps(items: TranscriptItem[]): TranscriptItem[] {
+  const keyed = new Map<string, TranscriptItem>()
+  const unkeyed: TranscriptItem[] = []
+  for (const item of items) {
+    if (item.type !== "workflow_step") {
+      unkeyed.push(item)
+      continue
+    }
+    const key = workflowStepLifecycleKey(item)
+    if (!key) {
+      unkeyed.push(item)
+      continue
+    }
+    keyed.set(key, item)
+  }
+  const latestKeyed = Array.from(keyed.values())
+  const all = [...unkeyed, ...latestKeyed]
+  all.sort((left, right) => items.indexOf(left) - items.indexOf(right))
+  return all
+}
+
+function workflowStepLifecycleKey(item: TranscriptItem): string {
+  if (item.type !== "workflow_step") return ""
+  const details = item.details || {}
+  const payload = item.payload || {}
+  return stringFromRecord(details, "tool_call_id") ||
+    stringFromRecord(details, "toolCallId") ||
+    stringFromRecord(payload, "tool_call_id") ||
+    stringFromRecord(payload, "toolCallId")
+}
+
+function workflowStepState(item: TranscriptItem): ProcessState {
+  if (isErrorProcessItem(item)) return "error"
+  if (item.type === "workflow_step" && item.status === "running") return "running"
+  if (item.type === "workflow_decision" && item.status === "pending") return "running"
+  return "completed"
+}
+
+function workflowTerminalStates(items: TranscriptItem[]): Map<string, WorkflowTerminalState> {
+  const terminals = new Map<string, WorkflowTerminalState>()
+  for (const item of items) {
+    const terminal = workflowTerminalState(item)
+    if (!terminal) continue
+    terminals.set(terminal.workflow, terminal)
+  }
+  return terminals
+}
+
+function workflowTerminalState(item: TranscriptItem): (WorkflowTerminalState & { workflow: string }) | undefined {
+  if (item.type === "workflow_result") {
+    return {
+      workflow: item.workflow || "",
+      state: item.status === "error" ? "error" : item.status === "cancelled" ? "cancelled" : "done",
+      label: item.title || item.summary,
+    }
+  }
+  if (item.type === "workflow_artifact") {
+    return {
+      workflow: item.workflow || "",
+      state: "done",
+      label: item.title || item.summary,
+    }
+  }
+  if (item.type === "workflow_step" && item.status !== "running" && isTerminalWorkflowStep(item)) {
+    return {
+      workflow: item.workflow || "",
+      state: item.status === "error" ? "error" : item.status === "cancelled" ? "cancelled" : "done",
+      label: item.title || item.summary,
+    }
+  }
+  return undefined
+}
+
+function isTerminalWorkflowStep(item: Extract<TranscriptItem, { type: "workflow_step" }>): boolean {
+  const phase = stringFromRecord(item.details || {}, "phase") || stringFromRecord(item.payload || {}, "phase")
+  return item.stage === "done" || /^agent_run_(completed|failed|cancelled)$/.test(phase)
+}
+
+function stringFromRecord(record: Record<string, unknown>, key: string): string {
+  const value = record[key]
+  return typeof value === "string" ? value.trim() : ""
 }
 
 function timelineItemStableId(item: ProcessTimelineItem): string {
@@ -338,6 +538,8 @@ interface ProcessGroupInfo {
   key: string
   kind: ProcessGroupKind
   label: string
+  workflow?: string
+  isWorkflow?: boolean
 }
 
 function processGroupInfoForPart(part: TranscriptItem): ProcessGroupInfo {
@@ -355,11 +557,12 @@ function processGroupInfoForPart(part: TranscriptItem): ProcessGroupInfo {
   ) {
     if (part.type === "workflow_step") {
       const workflow = (part.workflow || "").trim()
-      const stage = (part.stage || "").trim()
       return {
         key: `workflow:${workflow || "workflow"}`,
         kind: "context",
-        label: stage ? `${t("process.group.context")} · ${workflowStageLabel(stage)}` : t("process.group.context"),
+        label: workflowGroupLabel(workflow),
+        workflow,
+        isWorkflow: true,
       }
     }
     return { key: "context", kind: "context", label: t("process.group.context") }
@@ -588,4 +791,10 @@ function workflowStageLabel(stage?: string): string {
   }
   const key = (stage || "").trim()
   return labels[key] || key || t("process.group.context")
+}
+
+function workflowGroupLabel(workflow?: string): string {
+  const key = (workflow || "").trim()
+  if (key === "capability_package_ingest") return t("workflow.capabilityPackageIngest")
+  return key || t("workflow.generic")
 }
