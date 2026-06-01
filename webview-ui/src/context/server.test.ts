@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest"
 import {
+  connectionStateFromRemoteSlice,
+  remoteStateSliceData,
+  remoteStateSliceError,
   shouldClearAdminForConnectionState,
   shouldClearAdminForError,
   shouldSetAdminStateErrorForError,
@@ -7,11 +10,61 @@ import {
 } from "./server-state"
 
 describe("server context state guards", () => {
-  it("clears admin data whenever the current connection is not authenticated", () => {
+  it("reads remote state slice data without treating loading slices as empty data", () => {
+    expect(remoteStateSliceData({ status: "loading", inFlight: true })).toBeUndefined()
+    expect(remoteStateSliceData({ status: "revalidating", data: { providers: [{ id: "Zenmux" }] }, inFlight: true })).toEqual({
+      providers: [{ id: "Zenmux" }],
+    })
+    expect(remoteStateSliceError({ status: "stale", data: { providers: [] }, error: "fetch failed" })).toBe("fetch failed")
+  })
+
+  it("maps stale connection slices without presenting the last ready state as current", () => {
+    expect(connectionStateFromRemoteSlice({
+      status: "stale",
+      data: {
+        status: "ready",
+        authenticated: true,
+        hostUrl: "http://127.0.0.1:8765",
+        role: "superadmin",
+      },
+      error: "fetch failed",
+    })).toEqual({
+      status: "stale",
+      authenticated: true,
+      hostUrl: "http://127.0.0.1:8765",
+      role: "superadmin",
+      lastKnownStatus: "ready",
+      message: "fetch failed",
+    })
+  })
+
+  it("keeps revalidating connection data usable without clearing admin state", () => {
+    expect(connectionStateFromRemoteSlice({
+      status: "revalidating",
+      data: {
+        status: "ready",
+        authenticated: true,
+        hostUrl: "http://127.0.0.1:8765",
+      },
+      inFlight: true,
+    })).toEqual({
+      status: "ready",
+      authenticated: true,
+      hostUrl: "http://127.0.0.1:8765",
+    })
+    expect(shouldClearAdminForConnectionState({
+      status: "ready",
+      authenticated: true,
+      hostUrl: "http://127.0.0.1:8765",
+    })).toBe(false)
+  })
+
+  it("clears admin data only for explicit unauthenticated connection states", () => {
     expect(shouldClearAdminForConnectionState({ status: "ready", authenticated: true })).toBe(false)
     expect(shouldClearAdminForConnectionState({ status: "ready", authenticated: false })).toBe(true)
     expect(shouldClearAdminForConnectionState({ status: "login-required" })).toBe(true)
-    expect(shouldClearAdminForConnectionState({ status: "checking" })).toBe(true)
+    expect(shouldClearAdminForConnectionState({ status: "checking" })).toBe(false)
+    expect(shouldClearAdminForConnectionState({ status: "revalidating" })).toBe(false)
   })
 
   it("clears stale admin data for auth errors and admin-state refresh failures", () => {

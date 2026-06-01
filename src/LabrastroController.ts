@@ -15,6 +15,7 @@ import { SessionRunCoordinator, type ActiveSessionRun } from "./coordinators/Ses
 import { EnvironmentCoordinator } from "./coordinators/EnvironmentCoordinator"
 import { SessionCoordinator } from "./coordinators/SessionCoordinator"
 import { normalizeChatLocale, resolveChatLocalePreference } from "./chatLocale"
+import { RemoteStateStore, type RemoteStateKey, type RemoteStateSlice } from "./RemoteStateStore"
 
 type EnvironmentRunMode = "check" | "configure"
 type EnvironmentEntryKind = "environment_requirement" | "mcp"
@@ -120,6 +121,7 @@ export class LabrastroController implements vscode.Disposable {
   private readonly sessionCoordinator: SessionCoordinator
   private backendFeatures: BackendFeatures | null | undefined
   private readonly webviewBus = new WebviewBus()
+  private readonly remoteState = new RemoteStateStore()
   private disposed = false
   private workspaceFileIndex: WorkspaceFileIndex | undefined
   private workspaceFileIndexPromise: Promise<WorkspaceFileIndex> | undefined
@@ -132,12 +134,18 @@ export class LabrastroController implements vscode.Disposable {
       client: this.client,
       context: this.context,
       connectionErrorState: this.connectionErrorState.bind(this),
+      setConnectionState: this.setConnectionState.bind(this),
       postConnectionState: this.postConnectionState.bind(this),
       postConnectionStateIfAuthRequired: this.postConnectionStateIfAuthRequired.bind(this),
       postProvidersState: this.postProvidersState.bind(this),
       postModelProfilesState: this.postModelProfilesState.bind(this),
       postChatConfigState: this.postChatConfigState.bind(this),
       postGithubState: this.postGithubState.bind(this),
+      postServerSettingsState: this.postServerSettingsState.bind(this),
+      updateServerSettingsState: this.updateServerSettingsState.bind(this),
+      postModelCapabilitiesState: this.postModelCapabilitiesState.bind(this),
+      refreshModelCapabilitiesState: this.refreshModelCapabilitiesState.bind(this),
+      listModelCapabilitiesState: this.listModelCapabilitiesState.bind(this),
       refreshBackendFeatures: this.refreshBackendFeatures.bind(this),
       refreshCapabilityState: this.refreshCapabilityState.bind(this),
       refreshEnvironmentManifest: this.refreshEnvironmentManifest.bind(this),
@@ -267,19 +275,19 @@ export class LabrastroController implements vscode.Disposable {
     const includeSession = target !== "settings" && options.initializeSession !== false
     const includeAdminState = target !== "agentManager"
     const includeSessionRunResume = target === "sidebar" || !target
+    this.remoteState.setReady("environmentSnapshot", this.environmentSnapshot as unknown as Record<string, unknown>)
     post({
       type: "ready",
       extensionVersion: contextVersion(this.context),
       workspaceDirectory: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
       platform: process.platform,
     })
+    post({ type: "remoteState.snapshot", payload: this.remoteState.snapshot() })
     if (includeAdminState) {
       post({ type: "autoApproval.state", payload: this.adminCoordinator.getAutoApprovalState() })
       post({ type: "reasoningDisplay.state", payload: this.adminCoordinator.getReasoningDisplayState() })
       post({ type: "chat.sendDuringRunMode.state", payload: this.adminCoordinator.getSendDuringRunModeState() })
       post({ type: "peerDiagnosticsLogging.state", payload: this.client.peerDiagnosticsLoggingState() })
-      post({ type: "connection.state", payload: this.client.startupConnectionState() })
-      post({ type: "environment.snapshot", payload: this.environmentSnapshot })
       post({ type: "executorType.state", payload: this.getExecutorType() })
       post({ type: "locale.state", locale: this.context.workspaceState.get<string>("labrastro.locale") || vscode.env.language })
     }
@@ -310,6 +318,7 @@ export class LabrastroController implements vscode.Disposable {
     void this.refreshInitialStateInBackground(post, startedAt, {
       includeAdminState,
       includeSession,
+      settingsOnly: target === "settings",
     })
   }
 
@@ -373,7 +382,7 @@ export class LabrastroController implements vscode.Disposable {
   private async refreshInitialStateInBackground(
     post: PostMessage,
     startedAt: number,
-    options: { includeAdminState: boolean; includeSession: boolean }
+    options: { includeAdminState: boolean; includeSession: boolean; settingsOnly: boolean }
   ): Promise<void> {
     const run = async (name: string, operation: () => Promise<void>) => {
       const stepStartedAt = Date.now()
@@ -402,16 +411,46 @@ export class LabrastroController implements vscode.Disposable {
 
     const tasks: Promise<void>[] = []
     if (options.includeAdminState) {
-      tasks.push(
-        run("connection-state", () => this.postConnectionState(post)),
-        run("providers-state", () => this.postProvidersState(post)),
-        run("model-profiles-state", () => this.postModelProfilesState(post)),
-        run("chat-config-state", () => this.postChatConfigState(post)),
-        run("github-state", () => this.postGithubState(post)),
-        run("backend-features", () => this.refreshBackendFeatures(post))
-      )
+      tasks.push(run("connection-state", () => this.refreshRemoteSliceIfNeeded(
+        post,
+        "connection",
+        () => this.postConnectionState(post)
+      )))
+      if (!options.settingsOnly) {
+        tasks.push(
+          run("providers-state", () => this.refreshRemoteSliceIfNeeded(
+            post,
+            "providers",
+            () => this.postProvidersState(post)
+          )),
+          run("model-profiles-state", () => this.refreshRemoteSliceIfNeeded(
+            post,
+            "modelProfiles",
+            () => this.postModelProfilesState(post)
+          )),
+          run("chat-config-state", () => this.refreshRemoteSliceIfNeeded(
+            post,
+            "chatConfig",
+            () => this.postChatConfigState(post)
+          )),
+          run("github-state", () => this.refreshRemoteSliceIfNeeded(
+            post,
+            "github",
+            () => this.postGithubState(post)
+          )),
+          run("backend-features", () => this.refreshRemoteSliceIfNeeded(
+            post,
+            "backendFeatures",
+            () => this.refreshBackendFeatures(post)
+          ))
+        )
+      }
     } else if (options.includeSession) {
-      tasks.push(run("backend-features", () => this.refreshBackendFeatures(post)))
+      tasks.push(run("backend-features", () => this.refreshRemoteSliceIfNeeded(
+        post,
+        "backendFeatures",
+        () => this.refreshBackendFeatures(post)
+      )))
     }
     if (options.includeSession) {
       tasks.push(run("session-initialize", () => this.sessionCoordinator.initializeSessionState(post)))
@@ -419,12 +458,6 @@ export class LabrastroController implements vscode.Disposable {
 
     await Promise.allSettled(tasks)
 
-    if (options.includeAdminState && this.capabilityState) {
-      post({ type: "capability.state", payload: this.capabilityState })
-    }
-    if (options.includeAdminState && this.environmentManifest) {
-      post({ type: "environment.manifest", payload: this.environmentManifest })
-    }
   }
 
   async handleMessage(
@@ -444,6 +477,17 @@ export class LabrastroController implements vscode.Disposable {
     if (await this.sessionCoordinator.handleMessage(message, post)) return true
     if (await this.sessionRunCoordinator.handleMessage(message, post)) return true
     return false
+  }
+
+  private async refreshRemoteSliceIfNeeded(
+    post: PostMessage,
+    key: RemoteStateKey,
+    refresh: () => Promise<void>
+  ): Promise<void> {
+    const slice = this.remoteState.slice(key)
+    if (slice.inFlight) return
+    if (slice.status !== "idle" && slice.status !== "stale" && slice.status !== "error") return
+    await refresh()
   }
 
   private async searchWorkspaceFiles(message: WebviewToHostMessage, post: PostMessage): Promise<void> {
@@ -566,22 +610,20 @@ export class LabrastroController implements vscode.Disposable {
   }
 
   async postConnectionState(post: PostMessage): Promise<void> {
-    this.postWebviewMessage(post, await this.connectionStateMessage())
+    await this.postBroadcastRemoteState(post, "connection", async () => ({
+      ...(await this.client.connectionState()),
+    }))
+  }
+
+  private setConnectionState(post: PostMessage, state: ConnectionState): void {
+    const slice = this.remoteState.setReady("connection", { ...state })
+    this.emitRemoteStatePatch(post, "connection", slice)
   }
 
   private async broadcastConnectionState(): Promise<void> {
-    this.broadcastWebviewMessage(await this.connectionStateMessage())
-  }
-
-  private async connectionStateMessage(): Promise<Record<string, unknown>> {
-    try {
-      return { type: "connection.state", payload: await this.client.connectionState() }
-    } catch (error) {
-      return {
-        type: "connection.state",
-        payload: { status: "error", message: errorMessage(error) },
-      }
-    }
+    await this.postBroadcastRemoteState(undefined, "connection", async () => ({
+      ...(await this.client.connectionState()),
+    }))
   }
 
   async postAdminState(post: PostMessage): Promise<void> {
@@ -604,8 +646,7 @@ export class LabrastroController implements vscode.Disposable {
   async postProvidersState(post: PostMessage): Promise<void> {
     await this.postBroadcastRemoteState(
       post,
-      "providers.state",
-      "providers.error",
+      "providers",
       () => this.client.providersList()
     )
   }
@@ -613,8 +654,7 @@ export class LabrastroController implements vscode.Disposable {
   async postModelProfilesState(post: PostMessage): Promise<void> {
     await this.postBroadcastRemoteState(
       post,
-      "modelProfiles.state",
-      "modelProfiles.error",
+      "modelProfiles",
       () => this.client.modelProfilesList()
     )
   }
@@ -622,8 +662,7 @@ export class LabrastroController implements vscode.Disposable {
   async postChatConfigState(post: PostMessage): Promise<void> {
     await this.postBroadcastRemoteState(
       post,
-      "chatConfig.state",
-      "chatConfig.error",
+      "chatConfig",
       () => this.client.chatConfigRead()
     )
   }
@@ -631,41 +670,112 @@ export class LabrastroController implements vscode.Disposable {
   async postGithubState(post: PostMessage): Promise<void> {
     await this.postBroadcastRemoteState(
       post,
-      "github.state",
-      "github.error",
+      "github",
       () => this.client.githubStatus()
     )
   }
 
-  private async postBroadcastRemoteState(
+  async postServerSettingsState(post: PostMessage): Promise<Record<string, unknown> | undefined> {
+    return this.postBroadcastRemoteState(
+      post,
+      "serverSettings",
+      () => this.client.serverSettingsRead()
+    )
+  }
+
+  async updateServerSettingsState(
     post: PostMessage,
-    stateType: string,
-    errorType: string,
+    payload: Record<string, unknown>
+  ): Promise<Record<string, unknown> | undefined> {
+    return this.postBroadcastRemoteState(
+      post,
+      "serverSettings",
+      () => this.client.serverSettingsUpdate(payload)
+    )
+  }
+
+  async postModelCapabilitiesState(post: PostMessage): Promise<Record<string, unknown> | undefined> {
+    return this.postBroadcastRemoteState(
+      post,
+      "modelCapabilities",
+      () => this.client.modelCapabilitiesStatus()
+    )
+  }
+
+  async refreshModelCapabilitiesState(post: PostMessage): Promise<Record<string, unknown> | undefined> {
+    return this.postBroadcastRemoteState(
+      post,
+      "modelCapabilities",
+      () => this.client.modelCapabilitiesRefresh()
+    )
+  }
+
+  async listModelCapabilitiesState(
+    post: PostMessage,
+    payload: Record<string, unknown>
+  ): Promise<Record<string, unknown> | undefined> {
+    return this.postBroadcastRemoteState(
+      post,
+      "modelCapabilities",
+      () => this.client.modelCapabilitiesList(payload)
+    )
+  }
+
+  private async postBroadcastRemoteState(
+    post: PostMessage | undefined,
+    key: RemoteStateKey,
     fetchState: () => Promise<Record<string, unknown>>
-  ): Promise<void> {
+  ): Promise<Record<string, unknown> | undefined> {
+    const beforeVersion = this.remoteState.slice(key).version
+    const request = this.remoteState.refresh(key, fetchState)
+    const startedSlice = this.remoteState.slice(key)
+    if (startedSlice.version !== beforeVersion) {
+      this.emitRemoteStatePatch(post, key, startedSlice)
+    }
     try {
-      const payload = { type: stateType, payload: await fetchState() }
-      if (this.webviewBus.size > 0) {
-        this.broadcastWebviewMessage(payload)
-        if (!this.webviewBus.targetOf(post)) {
-          this.postWebviewMessage(post, payload)
-        }
-        return
-      }
-      this.postWebviewMessage(post, payload)
+      const payload = await request
+      this.emitRemoteStatePatch(post, key, this.remoteState.slice(key))
+      return payload
     } catch (error) {
-      post({ type: errorType, message: errorMessage(error) })
-      await this.postConnectionStateIfAuthRequired(error, post)
+      this.emitRemoteStatePatch(post, key, this.remoteState.slice(key))
+      if (post) await this.postConnectionStateIfAuthRequired(error, post)
+      return undefined
+    }
+  }
+
+  private emitRemoteStatePatch(
+    post: PostMessage | undefined,
+    key: RemoteStateKey,
+    slice: RemoteStateSlice
+  ): void {
+    const payload = {
+      type: "remoteState.patch",
+      payload: { key, slice },
+    }
+    if (this.webviewBus.size > 0) {
+      this.broadcastWebviewMessage(payload)
+      if (post && !this.webviewBus.targetOf(post)) {
+        this.postWebviewMessage(post, payload)
+      }
+      return
+    }
+    if (post) {
+      this.postWebviewMessage(post, payload)
     }
   }
 
   private async refreshBackendFeatures(post?: PostMessage): Promise<void> {
     try {
       this.backendFeatures = await this.client.features()
-      post?.({ type: "backend.features", payload: this.backendFeatures })
+      this.emitRemoteStatePatch(
+        post,
+        "backendFeatures",
+        this.remoteState.setReady("backendFeatures", this.backendFeatures as unknown as Record<string, unknown>)
+      )
       await this.sessionCoordinator.postSessionSyncStatus(post)
-    } catch {
+    } catch (error) {
       this.backendFeatures = null
+      this.emitRemoteStatePatch(post, "backendFeatures", this.remoteState.setError("backendFeatures", error))
     }
   }
 
@@ -769,9 +879,13 @@ export class LabrastroController implements vscode.Disposable {
         agent_tools: Array.isArray(behaviorPayload.agent_tools) ? behaviorPayload.agent_tools : [],
         behavior_catalog_error: typeof behaviorPayload.error === "string" ? behaviorPayload.error : "",
       }
-      post({ type: "capability.state", payload: this.capabilityState })
+      this.emitRemoteStatePatch(
+        post,
+        "capabilities",
+        this.remoteState.setReady("capabilities", this.capabilityState)
+      )
     } catch (error) {
-      post({ type: "capability.error", message: errorMessage(error) })
+      this.emitRemoteStatePatch(post, "capabilities", this.remoteState.setError("capabilities", error))
     }
   }
 
@@ -796,8 +910,16 @@ export class LabrastroController implements vscode.Disposable {
         entries,
         ...history,
       }
-      post({ type: "environment.manifest", payload })
-      post({ type: "environment.snapshot", payload: this.environmentSnapshot })
+      this.emitRemoteStatePatch(
+        post,
+        "environmentManifest",
+        this.remoteState.setReady("environmentManifest", payload)
+      )
+      this.emitRemoteStatePatch(
+        post,
+        "environmentSnapshot",
+        this.remoteState.setReady("environmentSnapshot", this.environmentSnapshot as unknown as Record<string, unknown>)
+      )
     } catch (error) {
       this.environmentSnapshot = {
         ...this.environmentSnapshot,
@@ -806,9 +928,22 @@ export class LabrastroController implements vscode.Disposable {
         summary: "环境清单加载失败",
         error: errorMessage(error),
       }
-      post({ type: "environment.snapshot", payload: this.environmentSnapshot })
+      this.emitRemoteStatePatch(
+        post,
+        "environmentSnapshot",
+        this.remoteState.setReady("environmentSnapshot", this.environmentSnapshot as unknown as Record<string, unknown>)
+      )
+      this.emitRemoteStatePatch(post, "environmentManifest", this.remoteState.setError("environmentManifest", error))
       post({ type: "environment.run.error", message: errorMessage(error) })
     }
+  }
+
+  private emitEnvironmentSnapshot(post: PostMessage | undefined): void {
+    this.emitRemoteStatePatch(
+      post,
+      "environmentSnapshot",
+      this.remoteState.setReady("environmentSnapshot", this.environmentSnapshot as unknown as Record<string, unknown>)
+    )
   }
 
   private async ensureEnvironmentManifest(post: PostMessage): Promise<Record<string, unknown>> {
@@ -852,7 +987,7 @@ export class LabrastroController implements vscode.Disposable {
             stringValue(manifest.loadedAt) || this.environmentSnapshot.lastManifestAt,
           ...history,
         }
-        post({ type: "environment.snapshot", payload: this.environmentSnapshot })
+        this.emitEnvironmentSnapshot(post)
         post({
           type: "environment.run.error",
           message: "当前服务器没有配置任何环境条目。",
@@ -899,7 +1034,7 @@ export class LabrastroController implements vscode.Disposable {
         ...history,
       }
       post({ type: "environment.run.started", payload: { mode, taskId, agentId: selectedAgentId } })
-      post({ type: "environment.snapshot", payload: this.environmentSnapshot })
+      this.emitEnvironmentSnapshot(post)
       await this.pollEnvironmentRuntimeRun(taskId, post)
     } catch (error) {
       if (
@@ -925,7 +1060,7 @@ export class LabrastroController implements vscode.Disposable {
         lastRunStatus: "error",
       }
       this.activeEnvironmentRun = undefined
-      post({ type: "environment.snapshot", payload: this.environmentSnapshot })
+      this.emitEnvironmentSnapshot(post)
       post({ type: "environment.run.error", message: errorMessage(error) })
     }
   }
@@ -951,7 +1086,7 @@ export class LabrastroController implements vscode.Disposable {
           }
           this.applyEnvironmentEvent(normalized, post)
         }
-        post({ type: "environment.snapshot", payload: this.environmentSnapshot })
+        this.emitEnvironmentSnapshot(post)
       }
       if (!this.activeEnvironmentRun || this.environmentSnapshot.status !== "running") {
         break
@@ -963,7 +1098,7 @@ export class LabrastroController implements vscode.Disposable {
   private async cancelEnvironmentRun(post: PostMessage): Promise<void> {
     const run = this.activeEnvironmentRun
     if (!run) {
-      post({ type: "environment.snapshot", payload: this.environmentSnapshot })
+      this.emitEnvironmentSnapshot(post)
       return
     }
     run.cancelled = true
@@ -980,7 +1115,7 @@ export class LabrastroController implements vscode.Disposable {
       lastRunStatus: "canceled",
     }
     this.activeEnvironmentRun = undefined
-    post({ type: "environment.snapshot", payload: this.environmentSnapshot })
+      this.emitEnvironmentSnapshot(post)
     post({ type: "environment.run.completed", payload: this.environmentSnapshot })
     try {
       if (run.taskId) {
@@ -1175,7 +1310,7 @@ export class LabrastroController implements vscode.Disposable {
           : undefined,
     }
     this.activeEnvironmentRun = undefined
-    post({ type: "environment.snapshot", payload: this.environmentSnapshot })
+    this.emitEnvironmentSnapshot(post)
     post({ type: "environment.run.completed", payload: this.environmentSnapshot })
   }
 
@@ -1247,7 +1382,7 @@ export class LabrastroController implements vscode.Disposable {
       lastRunStatus: cancelled ? "canceled" : "completed",
     }
     this.activeEnvironmentRun = undefined
-    post({ type: "environment.snapshot", payload: this.environmentSnapshot })
+    this.emitEnvironmentSnapshot(post)
   }
 
   private async refreshEnvironmentSessionList(post: PostMessage): Promise<void> {

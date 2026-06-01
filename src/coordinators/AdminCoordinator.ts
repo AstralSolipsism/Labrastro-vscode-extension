@@ -40,12 +40,24 @@ export interface AdminCoordinatorOptions {
   client: LabrastroRemoteClient
   context: vscode.ExtensionContext
   connectionErrorState: (message: string, options?: { hostUrlSaveRequested?: string }) => ConnectionState
+  setConnectionState: (post: PostMessage, state: ConnectionState) => void
   postConnectionState: (post: PostMessage) => Promise<void>
   postConnectionStateIfAuthRequired: (error: unknown, post: PostMessage) => Promise<void>
   postProvidersState: (post: PostMessage) => Promise<void>
   postModelProfilesState: (post: PostMessage) => Promise<void>
   postChatConfigState: (post: PostMessage) => Promise<void>
   postGithubState: (post: PostMessage) => Promise<void>
+  postServerSettingsState: (post: PostMessage) => Promise<Record<string, unknown> | undefined>
+  updateServerSettingsState: (
+    post: PostMessage,
+    payload: Record<string, unknown>
+  ) => Promise<Record<string, unknown> | undefined>
+  postModelCapabilitiesState: (post: PostMessage) => Promise<Record<string, unknown> | undefined>
+  refreshModelCapabilitiesState: (post: PostMessage) => Promise<Record<string, unknown> | undefined>
+  listModelCapabilitiesState: (
+    post: PostMessage,
+    payload: Record<string, unknown>
+  ) => Promise<Record<string, unknown> | undefined>
   refreshBackendFeatures: (post?: PostMessage) => Promise<void>
   refreshCapabilityState: (post: PostMessage) => Promise<void>
   refreshEnvironmentManifest: (post: PostMessage) => Promise<void>
@@ -98,9 +110,9 @@ export class AdminCoordinator {
             password: stringValue(message.password) || "",
           })
           post({ type: "connection.result", payload: state })
-          post({ type: "connection.state", payload: state })
+          this.options.setConnectionState(post, state)
           await this.refreshModularAdminState(post)
-          await this.postModelCapabilitiesStatus(post)
+          await this.options.postModelCapabilitiesState(post)
           await this.options.refreshBackendFeatures(post)
           await this.options.refreshCapabilityState(post)
           await this.options.refreshEnvironmentManifest(post)
@@ -112,19 +124,19 @@ export class AdminCoordinator {
             hostUrlSaveRequested: stringValue(message.hostUrl) || undefined,
           })
           post({ type: "connection.result", payload: state })
-          post({ type: "connection.state", payload: state })
+          this.options.setConnectionState(post, state)
         }
         return true
       case "connection.logout": {
         const state = await this.options.client.logout()
         post({ type: "connection.result", payload: state })
-        post({ type: "connection.state", payload: state })
+        this.options.setConnectionState(post, state)
         return true
       }
       case "connection.host.save": {
         const state = await this.options.client.saveHostUrl(stringValue(message.hostUrl) || "")
         post({ type: "connection.result", payload: state })
-        post({ type: "connection.state", payload: state })
+        this.options.setConnectionState(post, state)
         return true
       }
       case "auth.password.change":
@@ -269,23 +281,15 @@ export class AdminCoordinator {
         await this.options.postGithubState(post)
         return true
       case "serverSettings.read":
-        try {
-          post({ type: "serverSettings.state", payload: await this.options.client.serverSettingsRead() })
-        } catch (error) {
-          post({ type: "serverSettings.error", message: errorMessage(error) })
-          await this.refreshConnectionOnAuthBoundary(error, post)
-        }
+        await this.options.postServerSettingsState(post)
         return true
       case "serverSettings.update":
-        try {
-          const payload = await this.options.client.serverSettingsUpdate(objectValue(message.payload))
-          post({ type: "serverSettings.state", payload })
+        {
+          const payload = await this.options.updateServerSettingsState(post, objectValue(message.payload))
+          if (!payload) return true
           post({ type: "admin.actionResult", payload })
           await this.options.postChatConfigState(post)
           await this.options.postGithubState(post)
-        } catch (error) {
-          post({ type: "serverSettings.error", message: errorMessage(error) })
-          await this.refreshConnectionOnAuthBoundary(error, post)
         }
         return true
       case "diagnostics.toolDiagnostics.stats":
@@ -300,24 +304,18 @@ export class AdminCoordinator {
         }
         return true
       case "modelCapabilities.status":
-        await this.postModelCapabilitiesStatus(post)
+        await this.options.postModelCapabilitiesState(post)
         return true
       case "modelCapabilities.list":
-        try {
-          post({ type: "modelCapabilities.state", payload: await this.options.client.modelCapabilitiesList(objectValue(message.payload)) })
-        } catch (error) {
-          post({ type: "modelCapabilities.error", message: errorMessage(error) })
-          await this.refreshConnectionOnAuthBoundary(error, post)
-        }
+        await this.options.listModelCapabilitiesState(post, objectValue(message.payload))
         return true
       case "modelCapabilities.refresh":
         try {
-          const payload = await this.options.client.modelCapabilitiesRefresh()
-          post({ type: "modelCapabilities.state", payload })
+          const payload = await this.options.refreshModelCapabilitiesState(post)
+          if (!payload) return true
           post({ type: "admin.actionResult", payload })
           await this.refreshModelConfigState(post)
         } catch (error) {
-          post({ type: "modelCapabilities.error", message: errorMessage(error) })
           await this.refreshConnectionOnAuthBoundary(error, post)
         }
         return true
@@ -332,7 +330,7 @@ export class AdminCoordinator {
             type: "capabilityPackage.actionResult",
             payload: await this.options.client.capabilityPackageDelete(objectValue(message.payload)),
           })
-          await this.postServerSettingsState(post)
+          await this.options.postServerSettingsState(post)
           await this.options.refreshCapabilityState(post)
           await this.options.refreshEnvironmentManifest(post)
         } catch (error) {
@@ -346,7 +344,7 @@ export class AdminCoordinator {
             type: "capabilityPackage.actionResult",
             payload: await this.options.client.capabilityPackageEnable(objectValue(message.payload)),
           })
-          await this.postServerSettingsState(post)
+          await this.options.postServerSettingsState(post)
           await this.options.refreshCapabilityState(post)
           await this.options.refreshEnvironmentManifest(post)
         } catch (error) {
@@ -456,24 +454,6 @@ export class AdminCoordinator {
   private async refreshModelConfigState(post: PostMessage): Promise<void> {
     await this.options.postModelProfilesState(post)
     await this.options.postChatConfigState(post)
-  }
-
-  private async postServerSettingsState(post: PostMessage): Promise<void> {
-    try {
-      post({ type: "serverSettings.state", payload: await this.options.client.serverSettingsRead() })
-    } catch (error) {
-      post({ type: "serverSettings.error", message: errorMessage(error) })
-      await this.refreshConnectionOnAuthBoundary(error, post)
-    }
-  }
-
-  private async postModelCapabilitiesStatus(post: PostMessage): Promise<void> {
-    try {
-      post({ type: "modelCapabilities.state", payload: await this.options.client.modelCapabilitiesStatus() })
-    } catch (error) {
-      post({ type: "modelCapabilities.error", message: errorMessage(error) })
-      await this.refreshConnectionOnAuthBoundary(error, post)
-    }
   }
 
   private async refreshConnectionOnAuthBoundary(error: unknown, post: PostMessage): Promise<void> {

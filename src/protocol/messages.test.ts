@@ -18,6 +18,8 @@ describe("protocol message guards", () => {
     expect(isHostToWebviewMessage({ type: "peerDiagnosticsLogging.state", payload: { enabled: true } })).toBe(true)
     expect(isHostToWebviewMessage({ type: "chat.sendDuringRunMode.state", payload: { mode: "guide" } })).toBe(true)
     expect(isHostToWebviewMessage({ type: "workspace.files", query: "src", files: ["src/index.ts"] })).toBe(true)
+    expect(isHostToWebviewMessage({ type: "remoteState.snapshot", payload: { version: 1, slices: {} } })).toBe(true)
+    expect(isHostToWebviewMessage({ type: "remoteState.patch", payload: { key: "connection", slice: { status: "ready" } } })).toBe(true)
     expect(isWebviewToHostMessage({ type: "chat.send", text: "hi" })).toBe(true)
     expect(isWebviewToHostMessage({ type: "chat.command.dispatch", text: "/help" })).toBe(true)
     expect(isWebviewToHostMessage({ type: "sessionRun.followup", sessionRunId: "run-1", text: "guide" })).toBe(true)

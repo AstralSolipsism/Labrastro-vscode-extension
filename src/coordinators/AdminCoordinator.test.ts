@@ -88,12 +88,27 @@ function coordinator() {
       },
     },
     connectionErrorState: vi.fn(),
+    setConnectionState: vi.fn(),
     postConnectionState: vi.fn(),
     postConnectionStateIfAuthRequired: vi.fn(),
     postProvidersState: vi.fn(),
     postModelProfilesState: vi.fn(),
     postChatConfigState: vi.fn(),
     postGithubState: vi.fn(),
+    postServerSettingsState: vi.fn(),
+    updateServerSettingsState: vi.fn(async () => ({ ok: true, settings: {} })),
+    postModelCapabilitiesState: vi.fn(async () => ({
+      ok: true,
+      model_capabilities: { enabled: true, model_count: 2 },
+    })),
+    refreshModelCapabilitiesState: vi.fn(async () => ({
+      ok: true,
+      model_capabilities: { enabled: true, model_count: 2 },
+    })),
+    listModelCapabilitiesState: vi.fn(async () => ({
+      ok: true,
+      model_capabilities: { enabled: true, models: [] },
+    })),
     refreshBackendFeatures: vi.fn(),
     refreshCapabilityState: vi.fn(),
     refreshEnvironmentManifest: vi.fn(),
@@ -375,10 +390,13 @@ describe("AdminCoordinator", () => {
     await expect(subject.handleMessage({ type: "modelCapabilities.status" }, post)).resolves.toBe(true)
     await expect(subject.handleMessage({ type: "modelCapabilities.refresh" }, post)).resolves.toBe(true)
 
-    expect(options.client.modelCapabilitiesStatus).toHaveBeenCalled()
-    expect(options.client.modelCapabilitiesRefresh).toHaveBeenCalled()
+    expect(options.postModelCapabilitiesState).toHaveBeenCalledWith(post)
+    expect(options.refreshModelCapabilitiesState).toHaveBeenCalledWith(post)
+    expect(options.client.modelCapabilitiesStatus).not.toHaveBeenCalled()
+    expect(options.client.modelCapabilitiesRefresh).not.toHaveBeenCalled()
+    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "modelCapabilities.state" }))
     expect(post).toHaveBeenCalledWith({
-      type: "modelCapabilities.state",
+      type: "admin.actionResult",
       payload: {
         ok: true,
         model_capabilities: { enabled: true, model_count: 2 },
@@ -392,15 +410,41 @@ describe("AdminCoordinator", () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
     const error = new RemoteError(401, "unauthorized", "401 unauthorized", {})
-    options.client.modelCapabilitiesRefresh.mockRejectedValue(error)
+    options.refreshModelCapabilitiesState.mockRejectedValue(error)
 
     await expect(subject.handleMessage({ type: "modelCapabilities.refresh" }, post)).resolves.toBe(true)
 
-    expect(post).toHaveBeenCalledWith({
-      type: "modelCapabilities.error",
-      message: "401 unauthorized",
-    })
     expect(options.postConnectionStateIfAuthRequired).toHaveBeenCalledWith(error, post)
+  })
+
+  it("routes server settings read through the remote state store", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+
+    await expect(subject.handleMessage({ type: "serverSettings.read" }, post)).resolves.toBe(true)
+
+    expect(options.postServerSettingsState).toHaveBeenCalledWith(post)
+    expect(options.client.serverSettingsRead).not.toHaveBeenCalled()
+    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "serverSettings.state" }))
+  })
+
+  it("routes server settings updates through the remote state store", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    const payload = { settings: { runtime_profiles: {} } }
+    options.updateServerSettingsState.mockResolvedValue({ ok: true, settings: payload.settings })
+
+    await expect(subject.handleMessage({ type: "serverSettings.update", payload }, post)).resolves.toBe(true)
+
+    expect(options.updateServerSettingsState).toHaveBeenCalledWith(post, payload)
+    expect(options.client.serverSettingsUpdate).not.toHaveBeenCalled()
+    expect(post).toHaveBeenCalledWith({
+      type: "admin.actionResult",
+      payload: { ok: true, settings: payload.settings },
+    })
+    expect(options.postChatConfigState).toHaveBeenCalledWith(post)
+    expect(options.postGithubState).toHaveBeenCalledWith(post)
+    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "serverSettings.state" }))
   })
 
   it("refreshes modular admin state after successful login", async () => {
@@ -419,7 +463,8 @@ describe("AdminCoordinator", () => {
       password: "secret",
     }, post)).resolves.toBe(true)
 
-    expect(options.client.modelCapabilitiesStatus).toHaveBeenCalled()
+    expect(options.postModelCapabilitiesState).toHaveBeenCalledWith(post)
+    expect(options.client.modelCapabilitiesStatus).not.toHaveBeenCalled()
     expect(options.postProvidersState).toHaveBeenCalledWith(post)
     expect(options.postModelProfilesState).toHaveBeenCalledWith(post)
     expect(options.postChatConfigState).toHaveBeenCalledWith(post)
@@ -427,13 +472,20 @@ describe("AdminCoordinator", () => {
     expect(options.refreshBackendFeatures).toHaveBeenCalledWith(post)
     expect(options.refreshCapabilityState).toHaveBeenCalledWith(post)
     expect(options.refreshEnvironmentManifest).toHaveBeenCalledWith(post)
-    expect(post).toHaveBeenCalledWith({
-      type: "modelCapabilities.state",
+    expect(options.setConnectionState).toHaveBeenCalledWith(post, {
+      status: "ready",
+      authenticated: true,
+      hostUrl: "https://dogcode.outlune.com",
+    })
+    expect(post).not.toHaveBeenCalledWith({
+      type: "connection.state",
       payload: {
-        ok: true,
-        model_capabilities: { enabled: true, model_count: 2 },
+        status: "ready",
+        authenticated: true,
+        hostUrl: "https://dogcode.outlune.com",
       },
     })
+    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "modelCapabilities.state" }))
   })
 
   it("keeps capability and environment state untouched after failed login", async () => {
@@ -457,6 +509,11 @@ describe("AdminCoordinator", () => {
     expect(options.refreshEnvironmentManifest).not.toHaveBeenCalled()
     expect(options.refreshBackendFeatures).not.toHaveBeenCalled()
     expect(options.client.modelCapabilitiesStatus).not.toHaveBeenCalled()
+    expect(options.setConnectionState).toHaveBeenCalledWith(post, {
+      status: "error",
+      authenticated: false,
+      message: "登录失败：bad credentials",
+    })
   })
 
   it("applies selected model capability recommendation and refreshes model modules", async () => {

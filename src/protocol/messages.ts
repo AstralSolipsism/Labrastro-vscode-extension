@@ -66,6 +66,8 @@ export type HostToWebviewMessageType =
   | "providers.error"
   | "providers.state"
   | "reasoningDisplay.state"
+  | "remoteState.patch"
+  | "remoteState.snapshot"
   | "agentRun.cancelled"
   | "agentRun.error"
   | "agentRun.events"
@@ -273,6 +275,8 @@ const HOST_TO_WEBVIEW_TYPES = new Set<HostToWebviewMessageType>([
   "providers.error",
   "providers.state",
   "reasoningDisplay.state",
+  "remoteState.patch",
+  "remoteState.snapshot",
   "agentRun.cancelled",
   "agentRun.error",
   "agentRun.events",

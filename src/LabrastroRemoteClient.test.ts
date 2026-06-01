@@ -1108,6 +1108,35 @@ describe("LabrastroRemoteClient runtime admin API", () => {
     expect(deleted).toContain(LEGACY_AUTH_SESSION_KEY)
   })
 
+  it("keeps host-scoped auth session when token refresh fails due to network", async () => {
+    vscodeMock.labrastroValue = DEFAULT_TEST_HOST_URL
+    const authSession = JSON.stringify({
+      hostUrl: DEFAULT_TEST_HOST_URL,
+      username: "admin",
+      role: "superadmin",
+      deviceId: "dev-1",
+      refreshToken: "refresh-token-1",
+    })
+    const deleted: string[] = []
+    const context = {
+      secrets: {
+        get: vi.fn(async (key: string) => key === DEFAULT_AUTH_SESSION_KEY ? authSession : undefined),
+        store: vi.fn(async () => undefined),
+        delete: vi.fn(async (key: string) => {
+          deleted.push(key)
+        }),
+      },
+    }
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw new TypeError("fetch failed")
+    }))
+    const client = new LabrastroRemoteClient(context as never)
+
+    await expect(client.adminStatus()).rejects.toThrow("fetch failed")
+    expect(deleted).not.toContain(DEFAULT_AUTH_SESSION_KEY)
+    expect(deleted).not.toContain(LEGACY_AUTH_SESSION_KEY)
+  })
+
   it("reports missing stored auth session as login expired for authenticated calls", async () => {
     vscodeMock.labrastroValue = DEFAULT_TEST_HOST_URL
     const context = {

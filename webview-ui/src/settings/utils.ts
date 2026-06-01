@@ -346,7 +346,12 @@ export function providerListEmptyMessageForState(input: {
   loading?: boolean
   adminError?: unknown
 }): string {
-  if (input.connectionStatus === "checking") return "正在检查登录状态。"
+  if (
+    input.connectionStatus === "checking" ||
+    input.connectionStatus === "idle" ||
+    input.connectionStatus === "loading" ||
+    input.connectionStatus === "revalidating"
+  ) return "正在检查登录状态。"
   if (input.authenticated !== true) return "未登录，无法加载服务商。"
   if (input.adminUsable !== true) return "当前账号没有管理服务商的权限。"
   if (input.loading === true) return "正在加载服务商..."

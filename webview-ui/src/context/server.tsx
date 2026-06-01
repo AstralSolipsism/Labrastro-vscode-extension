@@ -13,6 +13,9 @@
 import { createContext, useContext, createSignal, onMount, onCleanup, ParentComponent } from "solid-js"
 import { useVSCode, type ExtensionMessage } from "./vscode"
 import {
+  connectionStateFromRemoteSlice,
+  remoteStateSliceData,
+  remoteStateSliceError,
   shouldClearAdminForConnectionState,
   shouldClearAdminForError,
   shouldSetAdminStateErrorForError,
@@ -167,6 +170,112 @@ export const ServerProvider: ParentComponent = (props) => {
     engine: "labrastro",
   })
 
+  const clearAdminData = () => {
+    setAdminState({})
+    setAdminStateUpdatedAt(undefined)
+    setProvidersState(undefined)
+    setProvidersUpdatedAt(undefined)
+    setModelProfilesState(undefined)
+    setModelProfilesUpdatedAt(undefined)
+    setChatConfigState(undefined)
+    setGithubState(undefined)
+    setServerSettingsState(undefined)
+    setModelCapabilitiesState(undefined)
+    setCapabilityState(undefined)
+    setEnvironmentManifest(undefined)
+    setAdminStateError(undefined)
+    setModelListError(undefined)
+    setProvidersError(undefined)
+    setModelProfilesError(undefined)
+    setChatConfigError(undefined)
+    setGithubError(undefined)
+    setServerSettingsError(undefined)
+    setModelCapabilitiesError(undefined)
+    setCapabilityError(undefined)
+  }
+
+  const applyRemoteStateSlice = (key: string, rawSlice: unknown) => {
+    const slice = objectValue(rawSlice)
+    const data = remoteStateSliceData(slice)
+    const error = remoteStateSliceError(slice)
+    const updatedAt = typeof slice.updatedAt === "number"
+      ? new Date(slice.updatedAt).toLocaleString()
+      : undefined
+
+    if (key === "connection") {
+      const connection = connectionStateFromRemoteSlice(slice)
+      if (connection) {
+        setConnectionState(connection)
+        if (shouldClearAdminForConnectionState(connection)) clearAdminData()
+      } else if (error) {
+        setConnectionState((current) => ({
+          ...current,
+          status: "error",
+          message: error,
+        }))
+      }
+      return
+    }
+    if (key === "providers") {
+      if (data) {
+        setProvidersState(data)
+        setProvidersUpdatedAt(updatedAt || new Date().toLocaleString())
+      }
+      setProvidersError(error)
+      return
+    }
+    if (key === "modelProfiles") {
+      if (data) {
+        setModelProfilesState(data)
+        setModelProfilesUpdatedAt(updatedAt || new Date().toLocaleString())
+      }
+      setModelProfilesError(error)
+      return
+    }
+    if (key === "chatConfig") {
+      if (data) setChatConfigState(data)
+      setChatConfigError(error)
+      return
+    }
+    if (key === "github") {
+      if (data) setGithubState(data)
+      setGithubError(error)
+      return
+    }
+    if (key === "serverSettings") {
+      if (data) setServerSettingsState(data)
+      setServerSettingsError(error)
+      return
+    }
+    if (key === "backendFeatures") {
+      if (data) setBackendFeatures(data)
+      return
+    }
+    if (key === "modelCapabilities") {
+      if (data) setModelCapabilitiesState(data)
+      setModelCapabilitiesError(error)
+      return
+    }
+    if (key === "capabilities") {
+      if (data) setCapabilityState(data)
+      setCapabilityError(error)
+      return
+    }
+    if (key === "environmentManifest") {
+      if (data) setEnvironmentManifest(data)
+      setEnvironmentError(error)
+      return
+    }
+    if (key === "environmentSnapshot") {
+      if (data) {
+        setEnvironmentSnapshot(data)
+        setEnvironmentError(typeof data.error === "string" ? data.error : error)
+      } else if (error) {
+        setEnvironmentError(error)
+      }
+    }
+  }
+
   onMount(() => {
     const unsubscribe = vscode.onMessage((msg: ExtensionMessage) => {
       // 监听 Extension Host 的 ready 信号
@@ -180,48 +289,26 @@ export const ServerProvider: ParentComponent = (props) => {
         })
         console.log("[labrastro] 已连接到 Extension Host", msg)
       }
+      if (msg.type === "remoteState.snapshot" && typeof msg.payload === "object" && msg.payload) {
+        const slices = objectValue(objectValue(msg.payload).slices)
+        for (const [key, slice] of Object.entries(slices)) {
+          applyRemoteStateSlice(key, slice)
+        }
+      }
+      if (msg.type === "remoteState.patch" && typeof msg.payload === "object" && msg.payload) {
+        const payload = objectValue(msg.payload)
+        applyRemoteStateSlice(stringValue(payload.key), payload.slice)
+      }
       if (msg.type === "connection.state" && typeof msg.payload === "object" && msg.payload) {
         const payload = msg.payload as Record<string, unknown>
         setConnectionState(payload)
         if (shouldClearAdminForConnectionState(payload)) {
-          setAdminState({})
-          setAdminStateUpdatedAt(undefined)
-          setProvidersState(undefined)
-          setProvidersUpdatedAt(undefined)
-          setModelProfilesState(undefined)
-          setModelProfilesUpdatedAt(undefined)
-          setChatConfigState(undefined)
-          setGithubState(undefined)
-          setModelCapabilitiesState(undefined)
-          setAdminStateError(undefined)
-          setModelListError(undefined)
-          setProvidersError(undefined)
-          setModelProfilesError(undefined)
-          setChatConfigError(undefined)
-          setGithubError(undefined)
+          clearAdminData()
         }
       }
       if (msg.type === "connection.result" && typeof msg.payload === "object" && msg.payload) {
         const payload = msg.payload as Record<string, unknown>
         setConnectionSaveResult(payload)
-        setConnectionState(payload)
-        if (shouldClearAdminForConnectionState(payload)) {
-          setAdminState({})
-          setAdminStateUpdatedAt(undefined)
-          setProvidersState(undefined)
-          setProvidersUpdatedAt(undefined)
-          setModelProfilesState(undefined)
-          setModelProfilesUpdatedAt(undefined)
-          setChatConfigState(undefined)
-          setGithubState(undefined)
-          setModelCapabilitiesState(undefined)
-          setAdminStateError(undefined)
-          setModelListError(undefined)
-          setProvidersError(undefined)
-          setModelProfilesError(undefined)
-          setChatConfigError(undefined)
-          setGithubError(undefined)
-        }
       }
       if (msg.type === "admin.state" && typeof msg.payload === "object" && msg.payload) {
         setAdminState(msg.payload as Record<string, unknown>)
@@ -241,15 +328,7 @@ export const ServerProvider: ParentComponent = (props) => {
         }
         setActionResult(undefined)
         if (shouldClearAdminForError(msg)) {
-          setAdminState({})
-          setAdminStateUpdatedAt(undefined)
-          setProvidersState(undefined)
-          setProvidersUpdatedAt(undefined)
-          setModelProfilesState(undefined)
-          setModelProfilesUpdatedAt(undefined)
-          setChatConfigState(undefined)
-          setGithubState(undefined)
-          setModelCapabilitiesState(undefined)
+          clearAdminData()
         }
       }
       if (msg.type === "providers.state" && typeof msg.payload === "object" && msg.payload) {

@@ -1126,11 +1126,11 @@ export class LabrastroRemoteClient {
       }
       return this.accessToken
     } catch (error) {
-      await this.clearAuthSession()
       if (
         isRemoteError(error, "invalid_refresh_token", 401) ||
         isRemoteError(error, "unauthorized", 401)
       ) {
+        await this.clearAuthSession()
         throw new RemoteError(401, "unauthorized", "登录已失效，请重新登录。", error.body)
       }
       throw error

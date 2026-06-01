@@ -328,6 +328,8 @@ describe("settings utils", () => {
 
   it("explains why provider records are not currently available", () => {
     expect(providerListEmptyMessageForState({ connectionStatus: "checking" })).toBe("正在检查登录状态。")
+    expect(providerListEmptyMessageForState({ connectionStatus: "idle" })).toBe("正在检查登录状态。")
+    expect(providerListEmptyMessageForState({ connectionStatus: "revalidating" })).toBe("正在检查登录状态。")
     expect(providerListEmptyMessageForState({ connectionStatus: "ready", authenticated: false })).toBe("未登录，无法加载服务商。")
     expect(providerListEmptyMessageForState({ connectionStatus: "ready", authenticated: true, adminUsable: false })).toBe("当前账号没有管理服务商的权限。")
     expect(providerListEmptyMessageForState({ connectionStatus: "ready", authenticated: true, adminUsable: true, loading: true })).toBe("正在加载服务商...")

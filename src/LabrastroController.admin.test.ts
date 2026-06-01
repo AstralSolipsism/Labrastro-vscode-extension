@@ -17,6 +17,11 @@ vi.mock("vscode", () => ({
     registerTextDocumentContentProvider: vscodeMock.registerTextDocumentContentProvider,
     createFileSystemWatcher: vscodeMock.createFileSystemWatcher,
     workspaceFolders: [],
+    getConfiguration: () => ({
+      inspect: () => undefined,
+      get: (_key: string, fallback: unknown) => fallback,
+      update: vi.fn(async () => undefined),
+    }),
   },
   window: {},
   commands: {
@@ -37,6 +42,7 @@ vi.mock("vscode", () => ({
 
 import { LabrastroController } from "./LabrastroController"
 import { RemoteError } from "./remote-errors"
+import type { RemoteStateStore } from "./RemoteStateStore"
 
 function context(): vscode.ExtensionContext {
   return {
@@ -46,10 +52,145 @@ function context(): vscode.ExtensionContext {
       update: vi.fn(),
     },
     globalStorageUri: { fsPath: "" },
+    extension: { packageJSON: { version: "0.1.0" } },
   } as unknown as vscode.ExtensionContext
 }
 
+function clientSpies(controller: LabrastroController) {
+  const client = (controller as unknown as { client: Record<string, unknown> }).client
+  const spies = {
+    connectionState: vi.fn(async () => ({
+      status: "ready",
+      authenticated: true,
+      hostUrl: "http://127.0.0.1:8765",
+      role: "superadmin",
+    })),
+    providersList: vi.fn(async () => ({ ok: true, providers: [] })),
+    modelProfilesList: vi.fn(async () => ({ ok: true, model_profiles: [] })),
+    chatConfigRead: vi.fn(async () => ({ ok: true, model_profiles: [] })),
+    githubStatus: vi.fn(async () => ({ ok: true, enabled: false })),
+    features: vi.fn(async () => ({ ok: true, features: {} })),
+  }
+  Object.assign(client, spies)
+  return spies
+}
+
+function remoteState(controller: LabrastroController): RemoteStateStore {
+  return (controller as unknown as { remoteState: RemoteStateStore }).remoteState
+}
+
 describe("LabrastroController admin state errors", () => {
+  it("sends the remote state snapshot during initial state without a false logged-out placeholder", async () => {
+    const controller = new LabrastroController(context())
+    const post = vi.fn()
+    controller.registerWebviewPost(post, "settings")
+
+    await controller.postInitialState(post, { initializeSession: false })
+
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: "ready",
+    }))
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: "remoteState.snapshot",
+      payload: expect.objectContaining({
+        slices: expect.objectContaining({
+          connection: expect.objectContaining({
+            status: "idle",
+            inFlight: false,
+          }),
+        }),
+      }),
+    }))
+    expect(post).not.toHaveBeenCalledWith({
+      type: "connection.state",
+      payload: expect.objectContaining({
+        authenticated: false,
+        status: "checking",
+      }),
+    })
+  })
+
+  it("does not refresh ready admin slices when a settings webview opens", async () => {
+    const controller = new LabrastroController(context())
+    const spies = clientSpies(controller)
+    remoteState(controller).setReady("connection", {
+      status: "ready",
+      authenticated: true,
+      hostUrl: "http://127.0.0.1:8765",
+      role: "superadmin",
+    })
+    const post = vi.fn()
+    controller.registerWebviewPost(post, "settings")
+
+    await controller.postInitialState(post, { initializeSession: false })
+    await Promise.resolve()
+
+    expect(spies.connectionState).not.toHaveBeenCalled()
+    expect(spies.providersList).not.toHaveBeenCalled()
+    expect(spies.modelProfilesList).not.toHaveBeenCalled()
+    expect(spies.chatConfigRead).not.toHaveBeenCalled()
+    expect(spies.githubStatus).not.toHaveBeenCalled()
+    expect(spies.features).not.toHaveBeenCalled()
+  })
+
+  it("refreshes only the connection slice for an idle settings webview", async () => {
+    const controller = new LabrastroController(context())
+    const spies = clientSpies(controller)
+    const post = vi.fn()
+    controller.registerWebviewPost(post, "settings")
+
+    await controller.postInitialState(post, { initializeSession: false })
+    await Promise.resolve()
+
+    expect(spies.connectionState).toHaveBeenCalledTimes(1)
+    expect(spies.providersList).not.toHaveBeenCalled()
+    expect(spies.modelProfilesList).not.toHaveBeenCalled()
+    expect(spies.chatConfigRead).not.toHaveBeenCalled()
+    expect(spies.githubStatus).not.toHaveBeenCalled()
+    expect(spies.features).not.toHaveBeenCalled()
+  })
+
+  it("broadcasts connection state through the remote state store", async () => {
+    const controller = new LabrastroController(context())
+    const payload = {
+      status: "ready",
+      authenticated: true,
+      hostUrl: "http://127.0.0.1:8765",
+    }
+    const connectionState = vi.fn(async () => payload)
+    ;(controller as unknown as { client: { connectionState: typeof connectionState } }).client = { connectionState }
+    const sidebarPost = vi.fn()
+    const settingsPost = vi.fn()
+    controller.registerWebviewPost(sidebarPost, "sidebar")
+    controller.registerWebviewPost(settingsPost, "settings")
+
+    await controller.postConnectionState(settingsPost)
+
+    expect(settingsPost).toHaveBeenCalledWith(expect.objectContaining({
+      type: "remoteState.patch",
+      payload: expect.objectContaining({
+        key: "connection",
+        slice: expect.objectContaining({
+          status: "ready",
+          data: payload,
+          inFlight: false,
+        }),
+      }),
+    }))
+    expect(sidebarPost).toHaveBeenCalledWith(expect.objectContaining({
+      type: "remoteState.patch",
+      payload: expect.objectContaining({
+        key: "connection",
+        slice: expect.objectContaining({
+          status: "ready",
+          data: payload,
+          inFlight: false,
+        }),
+      }),
+    }))
+    expect(settingsPost).not.toHaveBeenCalledWith({ type: "connection.state", payload })
+  })
+
   it("emits adminState-scoped admin errors when admin state loading fails", async () => {
     const controller = new LabrastroController(context())
     const adminStatus = vi.fn(async () => {
@@ -94,7 +235,7 @@ describe("LabrastroController admin state errors", () => {
     expect(sidebarPost).toHaveBeenCalledWith({ type: "admin.state", payload })
   })
 
-  it("broadcasts providers state to all registered webviews", async () => {
+  it("broadcasts providers remote state to all registered webviews", async () => {
     const controller = new LabrastroController(context())
     const payload = {
       ok: true,
@@ -109,8 +250,50 @@ describe("LabrastroController admin state errors", () => {
 
     await controller.postProvidersState(settingsPost)
 
-    expect(settingsPost).toHaveBeenCalledWith({ type: "providers.state", payload })
-    expect(sidebarPost).toHaveBeenCalledWith({ type: "providers.state", payload })
+    expect(settingsPost).toHaveBeenCalledWith(expect.objectContaining({
+      type: "remoteState.patch",
+      payload: expect.objectContaining({
+        key: "providers",
+        slice: expect.objectContaining({
+          status: "ready",
+          data: payload,
+          inFlight: false,
+        }),
+      }),
+    }))
+    expect(sidebarPost).toHaveBeenCalledWith(expect.objectContaining({
+      type: "remoteState.patch",
+      payload: expect.objectContaining({
+        key: "providers",
+        slice: expect.objectContaining({
+          status: "ready",
+          data: payload,
+          inFlight: false,
+        }),
+      }),
+    }))
+    expect(settingsPost).not.toHaveBeenCalledWith({ type: "providers.state", payload })
+    expect(sidebarPost).not.toHaveBeenCalledWith({ type: "providers.state", payload })
+  })
+
+  it("deduplicates concurrent provider refreshes through the remote state store", async () => {
+    const controller = new LabrastroController(context())
+    let resolveProviders: ((payload: Record<string, unknown>) => void) | undefined
+    const providersList = vi.fn(() => new Promise<Record<string, unknown>>((resolve) => {
+      resolveProviders = resolve
+    }))
+    ;(controller as unknown as { client: { providersList: typeof providersList } }).client = { providersList }
+    const sidebarPost = vi.fn()
+    const settingsPost = vi.fn()
+    controller.registerWebviewPost(sidebarPost, "sidebar")
+    controller.registerWebviewPost(settingsPost, "settings")
+
+    const first = controller.postProvidersState(settingsPost)
+    const second = controller.postProvidersState(sidebarPost)
+    resolveProviders?.({ ok: true, providers: [] })
+    await Promise.all([first, second])
+
+    expect(providersList).toHaveBeenCalledTimes(1)
   })
 
   it("resolves the startup chat model from chat config instead of full admin status", async () => {

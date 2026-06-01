@@ -1,5 +1,34 @@
+export function remoteStateSliceData(slice: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (!("data" in slice)) return undefined
+  const data = slice.data
+  return data && typeof data === "object" ? data as Record<string, unknown> : undefined
+}
+
+export function remoteStateSliceError(slice: Record<string, unknown>): string | undefined {
+  return typeof slice.error === "string" ? slice.error : undefined
+}
+
+export function connectionStateFromRemoteSlice(slice: Record<string, unknown>): Record<string, unknown> | undefined {
+  const data = remoteStateSliceData(slice)
+  const error = remoteStateSliceError(slice)
+  if (!data) {
+    return error ? { status: "error", message: error } : undefined
+  }
+  if (slice.status === "stale" && error) {
+    const lastKnownStatus = typeof data.status === "string" ? data.status : undefined
+    return {
+      ...data,
+      status: "stale",
+      ...(lastKnownStatus ? { lastKnownStatus } : {}),
+      message: error,
+    }
+  }
+  return data
+}
+
 export function shouldClearAdminForConnectionState(payload: Record<string, unknown>): boolean {
-  return payload.authenticated !== true
+  if (payload.authenticated === false) return true
+  return payload.status === "login-required"
 }
 
 export function shouldClearAdminForError(message: Record<string, unknown>): boolean {
