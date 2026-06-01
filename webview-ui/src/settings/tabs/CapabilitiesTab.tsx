@@ -39,10 +39,16 @@ import {
 import { agentToolPermissionLabel, agentToolPermissionTitle } from "../capabilityCatalogLabels"
 import { CAPABILITY_SECTIONS, type CapabilitySection } from "../capabilitySections"
 import {
+  aggregateRuntimeFootprint,
+  capabilityInstallPreviewFromMcpJson,
   groupCapabilityPackageComponents,
+  runtimeFootprintBadgeTone,
+  runtimeFootprintLabel,
   type CapabilityComponentGroups,
   type CapabilityComponentView,
   type CapabilityView,
+  type RuntimeFootprintView,
+  type RuntimeRunsOn,
 } from "../capabilityPackageView"
 import type { SettingsController } from "../useSettingsController"
 
@@ -88,6 +94,7 @@ interface CapabilityPackageView {
   effectiveCapabilities: string[]
   credentials: string[]
   riskLevel: string
+  runtimeFootprint: RuntimeFootprintView
 }
 
 type BehaviorCatalogSection = "commands" | "mentions" | "uiActions" | "agentTools"
@@ -251,6 +258,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
           effectiveCapabilities: stringArrayValue(item.effective_capabilities),
           credentials: stringArrayValue(item.credentials),
           riskLevel: stringValue(item.risk_level),
+          runtimeFootprint: aggregateRuntimeFootprint([objectValue(item.runtime_footprint)]),
         }
       })
       .sort((a, b) => a.id.localeCompare(b.id))
@@ -274,6 +282,15 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
       other: groups.other.length,
       total: groups.capabilities.length + groups.dependencies.length + groups.other.length,
     }
+  }
+  const packageRuntimeFootprint = (pkg: CapabilityPackageView) => {
+    const groups = packageComponentGroups(pkg)
+    const componentFootprints = [
+      ...groups.capabilities,
+      ...groups.dependencies,
+      ...groups.other,
+    ].map((item) => item.runtimeFootprint)
+    return componentFootprints.length ? aggregateRuntimeFootprint(componentFootprints) : pkg.runtimeFootprint
   }
   const packageDependencyIds = (pkg: CapabilityPackageView) =>
     packageComponentGroups(pkg).dependencies.map((item) => item.id).filter(Boolean)
@@ -301,6 +318,21 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
     if (status === "disabled" || status === "global_disabled" || status === "stopped") return "muted"
     return undefined
   }
+  const runtimeRunsOnOptions = (kind: CapabilityKind): Array<{ value: RuntimeRunsOn; label: string }> => {
+    if (kind === "skill") return [{ value: "agent_only", label: "仅 Agent 指令能力，无需外部进程" }]
+    if (kind === "mcp") {
+      return [
+        { value: "server", label: "服务端运行，无需本机安装" },
+        { value: "local_peer", label: "需要在本机安装/配置" },
+        { value: "both", label: "服务端和本地端都需要配置" },
+      ]
+    }
+    return [
+      { value: "local_peer", label: "需要在本机安装/配置" },
+      { value: "server", label: "服务端运行，无需本机安装" },
+      { value: "both", label: "服务端和本地端都需要配置" },
+    ]
+  }
   const dependencyStatusBucket = (status: string) => {
     if (status === "available" || status === "configured") return "ready"
     if (status === "missing") return "missing"
@@ -316,6 +348,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
         if (!query) return true
         return [
           item.name,
+          item.displayName,
           item.label,
           item.description,
           item.summary,
@@ -376,7 +409,15 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
     .filter((item) => stringValue(item.kind) === "skill")
     .map((item) => stringValue(item.name || item.id))
     .filter(Boolean))
-  const skillChoiceOptions = () => registeredSkillNames().map((id: string) => ({ id, label: id, kind: "Skill" }))
+  const skillChoiceOptions = () => registeredSkillNames().map((id: string) => {
+    const view = (capabilityViews() as CapabilityView[]).find((item) => item.kind === "skill" && (item.name === id || item.id === id))
+    return {
+      id,
+      label: view?.displayName || id,
+      kind: "Skill",
+      description: view?.summary && view.summary !== view.displayName ? view.summary : id,
+    }
+  })
   const environmentAgentAvailable = () => environmentAgentCandidates().length > 0
   const canRunEnvironmentItem = (item: { kind: string }) => item.kind === "environment_requirement"
   const environmentActionTitle = (item: { kind: string }, title: string) =>
@@ -607,8 +648,6 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
   }
   const skillComponentDetail = (component: CapabilityComponentView) => [
     component.packageIds.length ? `来源能力包：${component.packageIds.join("、")}` : "",
-    component.pathHint ? `path=${component.pathHint}` : "",
-    component.sourcePath ? `source=${component.sourcePath}` : "",
     component.kind === "skill" ? `状态：${skillStatusLabel(component.skillStatus)}` : "",
   ].filter(Boolean).join(" · ")
   const componentConfig = (component: CapabilityComponentView) => objectValue(component.raw.config)
@@ -631,6 +670,8 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
     const installPrompt = componentTextField(component, "install_prompt")
     const verifyPrompt = componentTextField(component, "verify_prompt")
     return [
+      component.pathHint ? `安装路径：${component.pathHint}` : "",
+      component.sourcePath ? `来源路径：${component.sourcePath}` : "",
       installPrompt ? `安装：${installPrompt}` : "",
       verifyPrompt ? `验证：${verifyPrompt}` : "",
       componentDocs(component).length ? `文档：${componentDocs(component).join("、")}` : "",
@@ -643,20 +684,27 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
         {(component) => (
           <SettingsListCard>
             <SettingsListCardMain>
-              <strong>{component.summary}</strong>
+              <strong>{component.displayName}</strong>
+              <Show when={component.summary && component.summary !== component.displayName}>
+                <small>{component.summary}</small>
+              </Show>
+              <small>运行责任：{runtimeFootprintLabel(component.runtimeFootprint)}</small>
               <Show when={skillComponentDetail(component)}>
                 <small>{skillComponentDetail(component)}</small>
               </Show>
               <Show when={skillSupportDetails(component).length}>
-                <ul class="capability-text-list">
-                  <For each={skillSupportDetails(component)}>
-                    {(detail) => <li>{detail}</li>}
-                  </For>
-                </ul>
+                <details class="settings-details settings-details--embedded">
+                  <summary>技术详情</summary>
+                  <ul class="capability-text-list">
+                    <For each={skillSupportDetails(component)}>
+                      {(detail) => <li>{detail}</li>}
+                    </For>
+                  </ul>
+                </details>
               </Show>
             </SettingsListCardMain>
             <StatusBadge tone={component.skillStatus === "disabled" || component.skillStatus === "global_disabled" ? "muted" : undefined}>
-              {component.kind === "skill" ? skillStatusLabel(component.skillStatus) : component.label}
+              {component.kind === "skill" ? skillStatusLabel(component.skillStatus) : runtimeFootprintLabel(component.runtimeFootprint)}
             </StatusBadge>
           </SettingsListCard>
         )}
@@ -690,6 +738,130 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
     if (!dependency) return dependencyId
     return `${resourceKindLabel(displayResourceKind(dependency))} · ${dependency.name}`
   }
+  const capabilityConfig = (capability: CapabilityView) => objectValue(capability.raw.config)
+  const capabilityField = (capability: CapabilityView, field: string) =>
+    capability.raw[field] ?? capabilityConfig(capability)[field]
+  const capabilityStringListField = (capability: CapabilityView, field: string) =>
+    stringArrayValue(capabilityField(capability, field))
+  const capabilitySourceText = (capability: CapabilityView) =>
+    capability.sourcePackageIds.length ? capability.sourcePackageIds.join("、") : "未关联能力包"
+  const capabilityRiskText = (capability: CapabilityView) =>
+    stringValue(capabilityField(capability, "risk_level")) || "未记录"
+  const capabilityCredentialItems = (capability: CapabilityView) =>
+    capabilityStringListField(capability, "credentials")
+  const capabilityDocs = (capability: CapabilityView) => {
+    const docs = capability.kind === "skill" ? capability.skill?.docs : capabilityField(capability, "docs")
+    return Array.isArray(docs)
+      ? docs.map(objectValue).map((doc) => stringValue(doc.title || doc.url)).filter(Boolean)
+      : []
+  }
+  const capabilityEvidence = (capability: CapabilityView) => {
+    const evidence = capability.kind === "skill" ? capability.skill?.evidence : capabilityField(capability, "evidence")
+    return Array.isArray(evidence) ? evidence.map(objectValue) : []
+  }
+  const capabilityPrompt = (capability: CapabilityView, field: "install_prompt" | "verify_prompt") =>
+    capability.kind === "skill"
+      ? field === "install_prompt"
+        ? capability.skill?.installPrompt || ""
+        : capability.skill?.verifyPrompt || ""
+      : stringValue(capabilityField(capability, field))
+  const renderCapabilityTechnicalDetails = (capability: CapabilityView) => (
+    <details class="settings-details settings-details--embedded">
+      <summary>技术详情</summary>
+      <SettingsBoundedList>
+        <Show when={capability.kind === "mcp_server" && capability.mcp}>
+          <SettingsDetailSection>
+            <span>原始命令</span>
+            <code class="environment-command">{capability.mcp?.command || capability.mcp?.url || "未记录"}</code>
+            <small>
+              {[
+                capability.mcp?.transport ? `transport=${capability.mcp.transport}` : "",
+                capability.mcp?.cwd ? `cwd=${capability.mcp.cwd}` : "",
+                capability.mcp?.args.length ? `args=${capability.mcp.args.join(" ")}` : "",
+                Object.keys(capability.mcp?.env || {}).length ? `env=${Object.keys(capability.mcp?.env || {}).join(",")}` : "",
+              ].filter(Boolean).join(" · ") || "未记录连接细节"}
+            </small>
+          </SettingsDetailSection>
+          <SettingsDetailSection>
+            <span>能力依赖引用 environment_requirement_refs</span>
+            <small>{capability.mcp?.environmentRequirementRefs.length ? capability.mcp.environmentRequirementRefs.join("、") : "未记录"}</small>
+          </SettingsDetailSection>
+        </Show>
+        <Show when={capability.kind === "skill" && capability.skill}>
+          <SettingsDetailSection>
+            <span>安装路径</span>
+            <small>{capability.skill?.pathHint || "未记录"}</small>
+          </SettingsDetailSection>
+          <Show when={capability.skill?.sourcePath}>
+            <SettingsDetailSection>
+              <span>来源路径</span>
+              <small>{capability.skill?.sourcePath}</small>
+            </SettingsDetailSection>
+          </Show>
+        </Show>
+        <Show when={capabilityPrompt(capability, "install_prompt")}>
+          <SettingsDetailSection>
+            <span>安装指导 prompt</span>
+            <small>{capabilityPrompt(capability, "install_prompt")}</small>
+          </SettingsDetailSection>
+        </Show>
+        <Show when={capabilityPrompt(capability, "verify_prompt")}>
+          <SettingsDetailSection>
+            <span>验证指导 prompt</span>
+            <small>{capabilityPrompt(capability, "verify_prompt")}</small>
+          </SettingsDetailSection>
+        </Show>
+        <Show when={capabilityDocs(capability).length}>
+          <SettingsDetailSection>
+            <span>文档</span>
+            <div class="capability-link-list">
+              <For each={capabilityDocs(capability)}>
+                {(doc) => <small>{doc}</small>}
+              </For>
+            </div>
+          </SettingsDetailSection>
+        </Show>
+        <Show when={capabilityEvidence(capability).length}>
+          <SettingsDetailSection>
+            <span>证据</span>
+            <div class="capability-evidence-list">
+              <For each={capabilityEvidence(capability).slice(0, 4)}>
+                {(evidence) => (
+                  <div>
+                    <strong>{stringValue(evidence.title || evidence.field || "evidence")}</strong>
+                    <small>{stringValue(evidence.excerpt || evidence.url || evidence.title)}</small>
+                  </div>
+                )}
+              </For>
+            </div>
+          </SettingsDetailSection>
+        </Show>
+      </SettingsBoundedList>
+    </details>
+  )
+  const renderCapabilityActions = (capability: CapabilityView) => (
+    <Show
+      when={!isPackageManagedCapability(capability)}
+      fallback={(
+        <SettingsDetailSection>
+          <span>管理方式</span>
+          <small>{PACKAGE_MANAGED_RESOURCE_MESSAGE}</small>
+        </SettingsDetailSection>
+      )}
+    >
+      <SettingsDetailActions>
+        <button class="btn btn-secondary" type="button" onClick={() => openEditCapability(dashboardItemToRecord(capability.raw as any))}>
+          {capability.kind === "mcp_server" ? "编辑连接" : "编辑"}
+        </button>
+        <button class="btn btn-secondary" type="button" onClick={() => enableCapability(dashboardItemToRecord(capability.raw as any), !capability.enabled)}>
+          {capability.enabled ? "停用" : "启用"}
+        </button>
+        <button class="btn btn-danger" type="button" onClick={() => deleteCapability(dashboardItemToRecord(capability.raw as any))}>
+          删除
+        </button>
+      </SettingsDetailActions>
+    </Show>
+  )
   const renderCapabilityCards = (items: CapabilityView[]) => (
     <SettingsBoundedList>
       <For each={items}>
@@ -699,16 +871,18 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
             onClick={() => setSelectedCapabilityResourceId(capability.id)}
           >
             <SettingsListCardMain>
-              <strong>{capability.summary}</strong>
+              <strong>{capability.displayName}</strong>
               <small>
                 {[
+                  capability.summary,
+                  `运行责任：${runtimeFootprintLabel(capability.runtimeFootprint)}`,
                   capability.sourcePackageIds.length ? `来源能力包：${capability.sourcePackageIds.join("、")}` : "未关联能力包",
                   capability.dependencyIds.length ? `能力依赖：${capability.dependencyIds.map(dependencySummaryText).join("、")}` : "",
                 ].filter(Boolean).join(" · ")}
               </small>
             </SettingsListCardMain>
-            <StatusBadge tone={capabilityStatusTone(capability.status)}>
-              {capabilityStatusLabel(capability.status)}
+            <StatusBadge tone={runtimeFootprintBadgeTone(capability.runtimeFootprint)}>
+              {runtimeFootprintLabel(capability.runtimeFootprint)}
             </StatusBadge>
           </SettingsListButton>
         )}
@@ -720,16 +894,24 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
       <SettingsDetailHeader>
         <div>
           <StatusBadge>{capability.label}</StatusBadge>
-          <h3>{capability.name}</h3>
-          <p>{capability.description || capability.summary}</p>
+          <h3>{capability.displayName}</h3>
+          <p>{capability.summary || capability.description || "未记录能力摘要。"}</p>
         </div>
         <StatusBadge tone={capabilityStatusTone(capability.status)}>
           {capabilityStatusLabel(capability.status)}
         </StatusBadge>
       </SettingsDetailHeader>
       <SettingsDetailSection>
-        <span>来源能力包</span>
-        <small>{capability.sourcePackageIds.length ? capability.sourcePackageIds.join("、") : "未关联能力包"}</small>
+        <span>能做什么</span>
+        <small>{capability.description || capability.summary || "未记录能力说明。"}</small>
+      </SettingsDetailSection>
+      <SettingsDetailSection>
+        <span>来源</span>
+        <small>{capabilitySourceText(capability)}</small>
+      </SettingsDetailSection>
+      <SettingsDetailSection>
+        <span>运行责任</span>
+        <small>{runtimeFootprintLabel(capability.runtimeFootprint)}</small>
       </SettingsDetailSection>
       <SettingsDetailSection>
         <span>关联能力依赖</span>
@@ -741,120 +923,25 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
           </ul>
         </Show>
       </SettingsDetailSection>
-      <Show when={capability.kind === "mcp_server" && capability.mcp}>
-        <SettingsDetailSection>
-          <span>MCP 连接</span>
-          <code class="environment-command">
-            {capability.mcp?.command || capability.mcp?.url || "未记录"}
-          </code>
-          <small>
-            {[
-              capability.mcp?.transport ? `transport=${capability.mcp.transport}` : "",
-              capability.mcp?.cwd ? `cwd=${capability.mcp.cwd}` : "",
-              capability.mcp?.args.length ? `args=${capability.mcp.args.join(" ")}` : "",
-              Object.keys(capability.mcp?.env || {}).length ? `env=${Object.keys(capability.mcp?.env || {}).join(",")}` : "",
-            ].filter(Boolean).join(" · ") || "未记录连接细节"}
-          </small>
-        </SettingsDetailSection>
-        <SettingsDetailSection>
-          <span>能力依赖引用 environment_requirement_refs</span>
-          <small>{capability.mcp?.environmentRequirementRefs.length ? capability.mcp.environmentRequirementRefs.join("、") : "未记录"}</small>
-        </SettingsDetailSection>
-        <Show
-          when={!isPackageManagedCapability(capability)}
-          fallback={(
-            <SettingsDetailSection>
-              <span>管理方式</span>
-              <small>{PACKAGE_MANAGED_RESOURCE_MESSAGE}</small>
-            </SettingsDetailSection>
-          )}
-        >
-          <SettingsDetailActions>
-            <button class="btn btn-secondary" onClick={() => openEditCapability(dashboardItemToRecord(capability.raw as any))}>编辑连接</button>
-            <button class="btn btn-secondary" onClick={() => enableCapability(dashboardItemToRecord(capability.raw as any), !capability.enabled)}>
-              {capability.enabled ? "停用" : "启用"}
-            </button>
-            <button class="btn btn-danger" onClick={() => deleteCapability(dashboardItemToRecord(capability.raw as any))}>删除</button>
-          </SettingsDetailActions>
-        </Show>
-      </Show>
-      <Show when={capability.kind === "skill" && capability.skill}>
-        <SettingsDetailSection>
-          <span>安装路径</span>
-          <small>{capability.skill?.pathHint || "未记录"}</small>
-        </SettingsDetailSection>
-        <Show when={capability.skill?.sourcePath}>
-          <SettingsDetailSection>
-            <span>来源路径</span>
-            <small>{capability.skill?.sourcePath}</small>
-          </SettingsDetailSection>
-        </Show>
-        <SettingsDetailSection>
-          <span>Skill 状态</span>
-          <small>
-            {capability.skill?.globalEnabled ? "全局启用" : "全局关闭"}
-            {capability.skill?.disabled ? " · 当前 Skill 已禁用" : " · 当前 Skill 启用"}
-          </small>
-        </SettingsDetailSection>
-        <Show when={capability.skill?.installPrompt}>
-          <SettingsDetailSection>
-            <span>安装指导 prompt</span>
-            <small>{capability.skill?.installPrompt}</small>
-          </SettingsDetailSection>
-        </Show>
-        <Show when={capability.skill?.verifyPrompt}>
-          <SettingsDetailSection>
-            <span>验证指导 prompt</span>
-            <small>{capability.skill?.verifyPrompt}</small>
-          </SettingsDetailSection>
-        </Show>
-        <Show when={capability.skill?.docs.length}>
-          <SettingsDetailSection>
-            <span>文档</span>
-            <div class="capability-link-list">
-              <For each={capability.skill?.docs || []}>
-                {(doc) => <small>{stringValue(doc.title || doc.url)}</small>}
-              </For>
-            </div>
-          </SettingsDetailSection>
-        </Show>
-        <Show when={capability.skill?.evidence.length}>
-          <SettingsDetailSection>
-            <span>证据</span>
-            <div class="capability-evidence-list">
-              <For each={(capability.skill?.evidence || []).slice(0, 4)}>
-                {(evidence) => (
-                  <div>
-                    <strong>{stringValue(evidence.title || evidence.field || "evidence")}</strong>
-                    <small>{stringValue(evidence.excerpt || evidence.url || evidence.title)}</small>
-                  </div>
-                )}
-              </For>
-            </div>
-          </SettingsDetailSection>
-        </Show>
-        <Show
-          when={!isPackageManagedCapability(capability)}
-          fallback={(
-            <SettingsDetailSection>
-              <span>管理方式</span>
-              <small>{PACKAGE_MANAGED_RESOURCE_MESSAGE}</small>
-            </SettingsDetailSection>
-          )}
-        >
-          <SettingsDetailActions>
-            <button class="btn btn-secondary" type="button" onClick={() => openEditCapability(dashboardItemToRecord(capability.raw as any))}>
-              编辑
-            </button>
-            <button class="btn btn-secondary" type="button" onClick={() => enableCapability(dashboardItemToRecord(capability.raw as any), !capability.enabled)}>
-              {capability.enabled ? "停用" : "启用"}
-            </button>
-            <button class="btn btn-danger" type="button" onClick={() => deleteCapability(dashboardItemToRecord(capability.raw as any))}>
-              删除
-            </button>
-          </SettingsDetailActions>
-        </Show>
-      </Show>
+      <SettingsDetailSection>
+        <span>状态</span>
+        <small>
+          {capability.kind === "skill" && capability.skill
+            ? `${capability.skill.globalEnabled ? "全局启用" : "全局关闭"} · ${capability.skill.disabled ? "当前 Skill 已禁用" : "当前 Skill 启用"}`
+            : capabilityStatusLabel(capability.status)}
+        </small>
+      </SettingsDetailSection>
+      <SettingsDetailSection>
+        <span>凭据 / 风险</span>
+        <small>
+          {[
+            capabilityCredentialItems(capability).length ? `凭据：${capabilityCredentialItems(capability).join("、")}` : "未声明凭据",
+            `风险：${capabilityRiskText(capability)}`,
+          ].join(" · ")}
+        </small>
+      </SettingsDetailSection>
+      {renderCapabilityTechnicalDetails(capability)}
+      {renderCapabilityActions(capability)}
     </>
   )
 
@@ -878,7 +965,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
     const editor = capabilityEditor()
     if (!editor) return
     const payload = capabilityPayloadFromEditor(editor)
-    if (!stringValue(payload.name).trim()) return
+    if (!stringValue(payload.name).trim() && !stringValue(payload.skill_content).trim() && !stringValue(payload.mcp_config).trim()) return
     recordCapabilityRequest(editor.kind, payload)
     setCapabilityEditor(undefined)
   }
@@ -897,6 +984,21 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
     if (!globalThis.confirm(`删除 ${record.name}？此操作会从服务器${scope}移除该条目。`)) return
     const target = record.kind === "environment_requirement" ? stringValue(record.id, record.name) : record.name
     deleteCapabilityRecord(record.kind, target)
+  }
+
+  const renderMcpConfigPreview = (editor: CapabilityEditorState) => {
+    const preview = capabilityInstallPreviewFromMcpJson(editor.mcpConfigText)
+    return (
+      <div class={preview.ok ? "settings-success" : "settings-error"}>
+        <Show when={preview.ok} fallback={<span>{preview.error}</span>}>
+          <span>
+            {preview.servers.map((server) =>
+              `${server.name}: ${server.command}${server.args.length ? ` ${server.args.join(" ")}` : ""} · ${runtimeFootprintLabel({ runs_on: editor.runtimeRunsOn })}`
+            ).join("；")}
+          </span>
+        </Show>
+      </div>
+    )
   }
 
   const renderCapabilityEditor = () => {
@@ -923,8 +1025,13 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
           </div>
           <div class="capability-editor__grid">
             <label class="field-label">
-              <span>{t("capability.editor.name")}</span>
-              <input value={editor.name} disabled={editor.mode === "edit"} onInput={(event) => patchCapabilityEditor({ name: event.currentTarget.value })} />
+              <span>{editor.kind === "skill" ? "内部名称" : t("capability.editor.name")}</span>
+              <input
+                value={editor.name}
+                disabled={editor.mode === "edit"}
+                placeholder={editor.kind === "skill" ? "可留空，由 SKILL.md 解析" : ""}
+                onInput={(event) => patchCapabilityEditor({ name: event.currentTarget.value })}
+              />
             </label>
             <label class="field-label">
               <span>{t("capability.filterStatus")}</span>
@@ -933,38 +1040,25 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
                 <option value="false">{t("provider.disable")}</option>
               </select>
             </label>
-            <Show when={editor.kind === "environment_requirement"}>
-              <label class="field-label">
-                <span>资源类型</span>
-                <select value={editor.resourceKind} onChange={(event) => patchCapabilityEditor({ resourceKind: event.currentTarget.value })}>
-                  <option value="executable">executable</option>
-                  <option value="runtime">runtime</option>
-                  <option value="sdk">sdk</option>
-                  <option value="service">service</option>
-                  <option value="env_var">env_var</option>
-                  <option value="credential">credential</option>
-                  <option value="path">path</option>
-                  <option value="project_file">project_file</option>
-                  <option value="container">container</option>
-                </select>
-              </label>
-            </Show>
-
             <label class="field-label">
-              <span>来源</span>
-              <input value={editor.source} onInput={(event) => patchCapabilityEditor({ source: event.currentTarget.value })} />
+              <span>显示名称</span>
+              <input value={editor.displayName} onInput={(event) => patchCapabilityEditor({ displayName: event.currentTarget.value })} />
             </label>
             <label class="field-label">
-              <span>版本</span>
-              <input value={editor.version} onInput={(event) => patchCapabilityEditor({ version: event.currentTarget.value })} />
+              <span>能力摘要</span>
+              <input value={editor.summary} onInput={(event) => patchCapabilityEditor({ summary: event.currentTarget.value })} />
             </label>
             <label class="field-label">
-              <span>仓库地址</span>
-              <input value={editor.repoUrl} onInput={(event) => patchCapabilityEditor({ repoUrl: event.currentTarget.value })} />
-            </label>
-            <label class="field-label">
-              <span>风险等级</span>
-              <input value={editor.riskLevel} placeholder="low / medium / high" onInput={(event) => patchCapabilityEditor({ riskLevel: event.currentTarget.value })} />
+              <span>运行责任</span>
+              <select
+                value={editor.runtimeRunsOn}
+                disabled={editor.kind === "skill"}
+                onChange={(event) => patchCapabilityEditor({ runtimeRunsOn: event.currentTarget.value })}
+              >
+                <For each={runtimeRunsOnOptions(editor.kind)}>
+                  {(option) => <option value={option.value}>{option.label}</option>}
+                </For>
+              </select>
             </label>
           </div>
           <label class="field-label">
@@ -972,142 +1066,209 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
             <input value={editor.description} onInput={(event) => patchCapabilityEditor({ description: event.currentTarget.value })} />
           </label>
 
-          <Show when={editor.kind !== "skill"}>
+          <Show when={editor.kind === "environment_requirement"}>
             <label class="field-label">
-              <span>{editor.kind === "mcp" ? "启动命令" : "命令"}</span>
+              <span>命令</span>
               <input value={editor.command} onInput={(event) => patchCapabilityEditor({ command: event.currentTarget.value })} />
             </label>
           </Show>
 
-          <Show when={editor.kind === "skill"}>
-            <div class="capability-editor__grid">
-              <label class="field-label">
-                <span>安装路径</span>
-                <input value={editor.pathHint} onInput={(event) => patchCapabilityEditor({ pathHint: event.currentTarget.value })} />
-              </label>
-              <label class="field-label">
-                <span>来源路径</span>
-                <input value={editor.sourcePath} onInput={(event) => patchCapabilityEditor({ sourcePath: event.currentTarget.value })} />
-              </label>
-            </div>
-          </Show>
-
-          <Show when={editor.kind === "environment_requirement"}>
-            <div class="capability-editor__grid">
-              <label class="field-label">
-                <span>部署属性</span>
-                <select value={editor.placement} onChange={(event) => patchCapabilityEditor({ placement: event.currentTarget.value })}>
-                  <option value="peer">peer</option>
-                  <option value="server">server</option>
-                  <option value="both">both</option>
-                </select>
-              </label>
-              <label class="field-label">
-                <span>运行时</span>
-                <input value={editor.runtime} onInput={(event) => patchCapabilityEditor({ runtime: event.currentTarget.value })} />
-              </label>
-              <label class="field-label">
-                <span>语言</span>
-                <input value={editor.language} onInput={(event) => patchCapabilityEditor({ language: event.currentTarget.value })} />
-              </label>
-              <label class="field-label">
-                <span>路径</span>
-                <input value={editor.path} onInput={(event) => patchCapabilityEditor({ path: event.currentTarget.value })} />
-              </label>
-            </div>
-            <label class="field-label">
-              <span>能力/依赖标签</span>
-              <textarea rows={3} value={editor.tagsText} placeholder="每行一个标签，例如 code-search" onInput={(event) => patchCapabilityEditor({ tagsText: event.currentTarget.value })} />
-            </label>
-          </Show>
-
           <Show when={editor.kind === "mcp"}>
-            <div class="capability-editor__grid">
-              <label class="field-label">
-                <span>安装位置</span>
-                <select value={editor.placement} onChange={(event) => patchCapabilityEditor({ placement: event.currentTarget.value })}>
-                  <option value="peer">peer</option>
-                  <option value="both">both</option>
-                  <option value="server">server</option>
-                </select>
-              </label>
-              <label class="field-label">
-                <span>分发方式</span>
-                <select value={editor.distribution} onChange={(event) => patchCapabilityEditor({ distribution: event.currentTarget.value })}>
-                  <option value="command">command</option>
-                  <option value="artifact">artifact</option>
-                </select>
-              </label>
-              <label class="field-label">
-                <span>工作目录</span>
-                <input value={editor.cwd} onInput={(event) => patchCapabilityEditor({ cwd: event.currentTarget.value })} />
-              </label>
-            </div>
             <label class="field-label">
-              <span>参数</span>
-              <textarea rows={3} value={editor.argsText} placeholder="每行一个参数" onInput={(event) => patchCapabilityEditor({ argsText: event.currentTarget.value })} />
+              <span>粘贴 MCP 配置</span>
+              <textarea
+                rows={10}
+                value={editor.mcpConfigText}
+                placeholder={'{\n  "mcpServers": {\n    "edgeone-pages-mcp-server": {\n      "command": "npx",\n      "args": ["edgeone-pages-mcp"]\n    }\n  }\n}'}
+                onInput={(event) => patchCapabilityEditor({ mcpConfigText: event.currentTarget.value })}
+              />
             </label>
+            <Show when={editor.mcpConfigText.trim()}>
+              {renderMcpConfigPreview(editor)}
+            </Show>
+          </Show>
+
+          <Show when={editor.kind === "skill"}>
             <label class="field-label">
-              <span>环境变量</span>
-              <textarea rows={3} value={editor.envText} placeholder="KEY=value，每行一个" onInput={(event) => patchCapabilityEditor({ envText: event.currentTarget.value })} />
-            </label>
-            <label class="field-label">
-              <span>环境要求引用</span>
-              <textarea rows={3} value={editor.requirementRefsText} placeholder="envreq:runtime:node，每行一个" onInput={(event) => patchCapabilityEditor({ requirementRefsText: event.currentTarget.value })} />
+              <span>粘贴 SKILL.md</span>
+              <textarea
+                rows={10}
+                value={editor.skillContent}
+                placeholder={"---\nname: code-review\ndescription: Review code changes.\n---\n\n这里粘贴完整 SKILL.md 内容"}
+                onInput={(event) => patchCapabilityEditor({ skillContent: event.currentTarget.value })}
+              />
             </label>
           </Show>
 
-          <div class="capability-editor__grid">
-            <label class="field-label">
-              <span>检查命令</span>
-              <textarea rows={3} value={editor.check} onInput={(event) => patchCapabilityEditor({ check: event.currentTarget.value })} />
-            </label>
-            <label class="field-label">
-              <span>安装命令</span>
-              <textarea rows={3} value={editor.install} onInput={(event) => patchCapabilityEditor({ install: event.currentTarget.value })} />
-            </label>
-            <Show when={editor.kind === "environment_requirement"}>
+          <details class="settings-details settings-details--embedded">
+            <summary>高级配置</summary>
+            <div class="capability-editor__grid">
               <label class="field-label">
-                <span>配置命令</span>
-                <textarea rows={3} value={editor.configure} onInput={(event) => patchCapabilityEditor({ configure: event.currentTarget.value })} />
+                <span>来源</span>
+                <input value={editor.source} onInput={(event) => patchCapabilityEditor({ source: event.currentTarget.value })} />
+              </label>
+              <label class="field-label">
+                <span>版本</span>
+                <input value={editor.version} onInput={(event) => patchCapabilityEditor({ version: event.currentTarget.value })} />
+              </label>
+              <label class="field-label">
+                <span>仓库地址</span>
+                <input value={editor.repoUrl} onInput={(event) => patchCapabilityEditor({ repoUrl: event.currentTarget.value })} />
+              </label>
+              <label class="field-label">
+                <span>风险等级</span>
+                <input value={editor.riskLevel} placeholder="low / medium / high" onInput={(event) => patchCapabilityEditor({ riskLevel: event.currentTarget.value })} />
+              </label>
+            </div>
+
+            <Show when={editor.kind === "environment_requirement"}>
+              <div class="capability-editor__grid">
+                <label class="field-label">
+                  <span>资源类型</span>
+                  <select value={editor.resourceKind} onChange={(event) => patchCapabilityEditor({ resourceKind: event.currentTarget.value })}>
+                    <option value="executable">executable</option>
+                    <option value="runtime">runtime</option>
+                    <option value="sdk">sdk</option>
+                    <option value="service">service</option>
+                    <option value="env_var">env_var</option>
+                    <option value="credential">credential</option>
+                    <option value="path">path</option>
+                    <option value="project_file">project_file</option>
+                    <option value="container">container</option>
+                  </select>
+                </label>
+                <label class="field-label">
+                  <span>部署属性</span>
+                  <select value={editor.placement} onChange={(event) => patchCapabilityEditor({ placement: event.currentTarget.value })}>
+                    <option value="peer">peer</option>
+                    <option value="server">server</option>
+                    <option value="both">both</option>
+                  </select>
+                </label>
+                <label class="field-label">
+                  <span>运行时</span>
+                  <input value={editor.runtime} onInput={(event) => patchCapabilityEditor({ runtime: event.currentTarget.value })} />
+                </label>
+                <label class="field-label">
+                  <span>语言</span>
+                  <input value={editor.language} onInput={(event) => patchCapabilityEditor({ language: event.currentTarget.value })} />
+                </label>
+                <label class="field-label">
+                  <span>路径</span>
+                  <input value={editor.path} onInput={(event) => patchCapabilityEditor({ path: event.currentTarget.value })} />
+                </label>
+              </div>
+              <label class="field-label">
+                <span>能力/依赖标签</span>
+                <textarea rows={3} value={editor.tagsText} placeholder="每行一个标签，例如 code-search" onInput={(event) => patchCapabilityEditor({ tagsText: event.currentTarget.value })} />
               </label>
             </Show>
-          </div>
-          <label class="field-label">
-            <span>文档链接</span>
-            <textarea rows={3} value={editor.docsText} placeholder="标题 | URL，每行一个" onInput={(event) => patchCapabilityEditor({ docsText: event.currentTarget.value })} />
-          </label>
-          <label class="field-label">
-            <span>LLM 提取依据</span>
-            <textarea rows={3} value={editor.evidenceText} placeholder="field | title | url | excerpt，每行一条" onInput={(event) => patchCapabilityEditor({ evidenceText: event.currentTarget.value })} />
-          </label>
-          <div class="capability-editor__grid">
-            <Show when={editor.kind === "environment_requirement"}>
+
+            <Show when={editor.kind === "skill"}>
+              <div class="capability-editor__grid">
+                <label class="field-label">
+                  <span>安装路径</span>
+                  <input value={editor.pathHint} onInput={(event) => patchCapabilityEditor({ pathHint: event.currentTarget.value })} />
+                </label>
+                <label class="field-label">
+                  <span>来源路径</span>
+                  <input value={editor.sourcePath} onInput={(event) => patchCapabilityEditor({ sourcePath: event.currentTarget.value })} />
+                </label>
+              </div>
+            </Show>
+
+            <Show when={editor.kind === "mcp"}>
               <label class="field-label">
-                <span>运行要求</span>
-                <textarea rows={3} value={editor.requirementsText} placeholder="KEY=value，每行一个" onInput={(event) => patchCapabilityEditor({ requirementsText: event.currentTarget.value })} />
+                <span>启动命令</span>
+                <input value={editor.command} onInput={(event) => patchCapabilityEditor({ command: event.currentTarget.value })} />
+              </label>
+              <label class="field-label">
+                <span>参数</span>
+                <textarea rows={3} value={editor.argsText} placeholder="每行一个参数" onInput={(event) => patchCapabilityEditor({ argsText: event.currentTarget.value })} />
+              </label>
+              <label class="field-label">
+                <span>环境变量</span>
+                <textarea rows={3} value={editor.envText} placeholder="KEY=value，每行一个" onInput={(event) => patchCapabilityEditor({ envText: event.currentTarget.value })} />
+              </label>
+              <div class="capability-editor__grid">
+                <label class="field-label">
+                  <span>安装位置</span>
+                  <select value={editor.placement} onChange={(event) => patchCapabilityEditor({ placement: event.currentTarget.value })}>
+                    <option value="peer">peer</option>
+                    <option value="both">both</option>
+                    <option value="server">server</option>
+                  </select>
+                </label>
+                <label class="field-label">
+                  <span>分发方式</span>
+                  <select value={editor.distribution} onChange={(event) => patchCapabilityEditor({ distribution: event.currentTarget.value })}>
+                    <option value="command">command</option>
+                    <option value="artifact">artifact</option>
+                  </select>
+                </label>
+                <label class="field-label">
+                  <span>工作目录</span>
+                  <input value={editor.cwd} onInput={(event) => patchCapabilityEditor({ cwd: event.currentTarget.value })} />
+                </label>
+              </div>
+              <label class="field-label">
+                <span>环境要求引用</span>
+                <textarea rows={3} value={editor.requirementRefsText} placeholder="envreq:runtime:node，每行一个" onInput={(event) => patchCapabilityEditor({ requirementRefsText: event.currentTarget.value })} />
               </label>
             </Show>
+
+            <div class="capability-editor__grid">
+              <label class="field-label">
+                <span>检查命令</span>
+                <textarea rows={3} value={editor.check} onInput={(event) => patchCapabilityEditor({ check: event.currentTarget.value })} />
+              </label>
+              <label class="field-label">
+                <span>安装命令</span>
+                <textarea rows={3} value={editor.install} onInput={(event) => patchCapabilityEditor({ install: event.currentTarget.value })} />
+              </label>
+              <Show when={editor.kind === "environment_requirement"}>
+                <label class="field-label">
+                  <span>配置命令</span>
+                  <textarea rows={3} value={editor.configure} onInput={(event) => patchCapabilityEditor({ configure: event.currentTarget.value })} />
+                </label>
+              </Show>
+            </div>
             <label class="field-label">
-              <span>凭据需求</span>
-              <textarea rows={3} value={editor.credentialsText} placeholder="每行一个凭据名，例如 GITHUB_TOKEN" onInput={(event) => patchCapabilityEditor({ credentialsText: event.currentTarget.value })} />
+              <span>文档链接</span>
+              <textarea rows={3} value={editor.docsText} placeholder="标题 | URL，每行一个" onInput={(event) => patchCapabilityEditor({ docsText: event.currentTarget.value })} />
             </label>
-          </div>
-          <label class="field-label">
-            <span>安装指导 prompt</span>
-            <textarea rows={4} value={editor.installPrompt} onInput={(event) => patchCapabilityEditor({ installPrompt: event.currentTarget.value })} />
-          </label>
-          <label class="field-label">
-            <span>验证指导 prompt</span>
-            <textarea rows={4} value={editor.verifyPrompt} onInput={(event) => patchCapabilityEditor({ verifyPrompt: event.currentTarget.value })} />
-          </label>
-          <label class="field-label">
-            <span>注意事项</span>
-            <textarea rows={3} value={editor.notesText} placeholder="每行一条，例如不要自动安装 Node" onInput={(event) => patchCapabilityEditor({ notesText: event.currentTarget.value })} />
-          </label>
+            <label class="field-label">
+              <span>LLM 提取依据</span>
+              <textarea rows={3} value={editor.evidenceText} placeholder="field | title | url | excerpt，每行一条" onInput={(event) => patchCapabilityEditor({ evidenceText: event.currentTarget.value })} />
+            </label>
+            <div class="capability-editor__grid">
+              <Show when={editor.kind === "environment_requirement"}>
+                <label class="field-label">
+                  <span>运行要求</span>
+                  <textarea rows={3} value={editor.requirementsText} placeholder="KEY=value，每行一个" onInput={(event) => patchCapabilityEditor({ requirementsText: event.currentTarget.value })} />
+                </label>
+              </Show>
+              <label class="field-label">
+                <span>凭据需求</span>
+                <textarea rows={3} value={editor.credentialsText} placeholder="每行一个凭据名，例如 GITHUB_TOKEN" onInput={(event) => patchCapabilityEditor({ credentialsText: event.currentTarget.value })} />
+              </label>
+            </div>
+            <label class="field-label">
+              <span>安装指导 prompt</span>
+              <textarea rows={4} value={editor.installPrompt} onInput={(event) => patchCapabilityEditor({ installPrompt: event.currentTarget.value })} />
+            </label>
+            <label class="field-label">
+              <span>验证指导 prompt</span>
+              <textarea rows={4} value={editor.verifyPrompt} onInput={(event) => patchCapabilityEditor({ verifyPrompt: event.currentTarget.value })} />
+            </label>
+            <label class="field-label">
+              <span>注意事项</span>
+              <textarea rows={3} value={editor.notesText} placeholder="每行一条，例如不要自动安装 Node" onInput={(event) => patchCapabilityEditor({ notesText: event.currentTarget.value })} />
+            </label>
+          </details>
           <div class="capability-editor__footer">
             <button class="btn btn-secondary" onClick={() => setCapabilityEditor(undefined)}>{t("executor.picker.cancel")}</button>
-            <button class="btn btn-primary" onClick={saveCapability} disabled={!editor.name.trim()}>
+            <button class="btn btn-primary" onClick={saveCapability} disabled={!editor.name.trim() && !(editor.kind === "skill" && editor.skillContent.trim()) && !(editor.kind === "mcp" && editor.mcpConfigText.trim())}>
               保存
             </button>
           </div>
@@ -1632,6 +1793,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
                     <For each={installedCapabilityPackages()}>
                       {(pkg) => {
                         const counts = packageComponentCounts(pkg)
+                        const footprint = packageRuntimeFootprint(pkg)
                         return (
                           <SettingsListButton
                             selected={selectedCapabilityPackage()?.id === pkg.id}
@@ -1644,10 +1806,11 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
                                 <span>{counts.capabilities} 能力</span>
                                 <span>{counts.dependencies} 依赖</span>
                                 <Show when={counts.other}><span>{counts.other} 其他</span></Show>
+                                <span>{runtimeFootprintLabel(footprint)}</span>
                                 <Show when={!pkg.enabled}><span>Agent 不可用</span></Show>
                               </SettingsListCardMeta>
                             </SettingsListCardMain>
-                            <StatusBadge tone={pkg.enabled ? "success" : "muted"}>{pkg.enabled ? "enabled" : "disabled"}</StatusBadge>
+                            <StatusBadge tone={runtimeFootprintBadgeTone(footprint)}>{runtimeFootprintLabel(footprint)}</StatusBadge>
                           </SettingsListButton>
                         )
                       }}
@@ -1660,6 +1823,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
                   <Show when={selectedCapabilityPackage()} fallback={<div class="capability-empty">选择一个能力包查看详情。</div>}>
                     {(pkg) => {
                       const counts = packageComponentCounts(pkg())
+                      const footprint = packageRuntimeFootprint(pkg())
                       return (
                         <>
                           <SettingsDetailHeader>
@@ -1691,6 +1855,11 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
                               <span>组件摘要</span>
                               <strong>{counts.total} 个组件</strong>
                               <small>{counts.capabilities} 能力 · {counts.dependencies} 依赖 · {counts.other} 其他</small>
+                            </SettingsDetailBlock>
+                            <SettingsDetailBlock>
+                              <span>运行责任</span>
+                              <strong>{runtimeFootprintLabel(footprint)}</strong>
+                              <small>{footprint.installRequiredOn.length ? `安装/配置：${footprint.installRequiredOn.join("、")}` : "无需外部进程"}</small>
                             </SettingsDetailBlock>
                             <SettingsDetailBlock>
                               <span>状态</span>
