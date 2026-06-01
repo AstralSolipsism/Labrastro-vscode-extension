@@ -3025,6 +3025,15 @@ const ChatView: Component<ChatViewProps> = (props) => {
           defaultReasoningOpen={server.reasoningDisplayState().defaultOpen === true}
           workingText={workingText()}
           workingElapsed={workingElapsed()}
+          usageSnapshot={{
+            tokensIn: trace.stats().tokensIn,
+            tokensOut: trace.stats().tokensOut,
+            cacheReads: trace.stats().cacheReads,
+            cacheWrites: trace.stats().cacheWrites,
+            contextTokens: trace.stats().contextTokens,
+            contextWindow: trace.stats().contextWindow,
+            maxOutputTokens: trace.stats().maxOutputTokens,
+          }}
           selectedTraceNodeId={trace.selectedTraceNodeId()}
           onSelectSession={selectSession}
           onTraceNodeSelect={focusTraceNode}

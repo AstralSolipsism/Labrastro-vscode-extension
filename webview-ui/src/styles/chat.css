@@ -1539,6 +1539,24 @@
   padding-left: 8px;
 }
 
+.process-summary-card__metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  padding: 2px 0 4px;
+}
+
+.process-summary-card__metric {
+  min-width: 0;
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--ez-link) 22%, var(--ez-border));
+  border-radius: 4px;
+  color: var(--ez-muted);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
 .process-audit-timeline {
   display: flex;
   flex-direction: column;

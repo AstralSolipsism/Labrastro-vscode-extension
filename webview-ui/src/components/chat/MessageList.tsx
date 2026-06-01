@@ -1,6 +1,6 @@
 import { Component, Index, Show, createEffect, type Accessor } from "solid-js"
 import { t } from "../../i18n"
-import { SessionTurn } from "./SessionTurn"
+import { SessionTurn, type WorkflowUsageSnapshot } from "./SessionTurn"
 import { WelcomeState } from "./WelcomeState"
 import { WorkingIndicator } from "./WorkingIndicator"
 import { IconButton } from "../common/IconButton"
@@ -32,6 +32,7 @@ interface MessageListProps {
   defaultReasoningOpen?: boolean
   workingText?: string
   workingElapsed?: string
+  usageSnapshot?: WorkflowUsageSnapshot
   selectedTraceNodeId?: string | null
   onSelectSession?: (id: string) => void
   onTraceNodeSelect?: (nodeId: string) => void
@@ -106,6 +107,7 @@ export const MessageList: Component<MessageListProps> = (props) => {
                     rawAuditEvents={props.rawAuditEvents}
                     defaultReasoningOpen={props.defaultReasoningOpen}
                     runningProcessLabel={props.workingText}
+                    usageSnapshot={props.usageSnapshot}
                   />
                 )}
               </Index>
@@ -169,6 +171,7 @@ const VirtualMessageRow: Component<VirtualMessageRowProps> = (props) => {
         rawAuditEvents={props.rawAuditEvents}
         defaultReasoningOpen={props.defaultReasoningOpen}
         runningProcessLabel={props.runningProcessLabel}
+        usageSnapshot={props.usageSnapshot}
       />
     </div>
   )

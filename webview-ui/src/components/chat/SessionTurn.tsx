@@ -1,6 +1,6 @@
 import { Component, For, Index, Match, Show, Switch, createEffect, createMemo, createSignal, type Accessor, type JSX, type Setter } from "solid-js"
 import { t } from "../../i18n"
-import type { MockTurn, MockMessage } from "./mock-data"
+import type { MockTaskStats, MockTurn, MockMessage } from "./mock-data"
 import type {
   AssistantTextItem,
   NoticeItem,
@@ -187,6 +187,81 @@ function processFailureLabel(count: number): string {
   return t("process.failedCount", { n: String(count) })
 }
 
+function formatLargeNumber(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}m`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return String(n)
+}
+
+function defaultProcessGroupOpen(group: ProcessGroup): boolean {
+  return group.isWorkflow === true || group.state === "running" || group.state === "error"
+}
+
+function defaultProcessSummaryOpen(summary: ProcessSummary): boolean {
+  return summary.isWorkflow === true || summary.state === "running" || summary.state === "error"
+}
+
+function processMetaLabel(
+  state: ProcessState,
+  count: number,
+  failureCount: number,
+  currentLabel?: string,
+): string {
+  if (state === "running") {
+    return [
+      processStateLabel(state),
+      currentLabel ? t("process.current", { value: currentLabel }) : "",
+      processCountLabel(count),
+    ].filter(Boolean).join(" · ")
+  }
+  if (state === "error") {
+    return [
+      processStateLabel(state),
+      currentLabel ? t("process.current", { value: currentLabel }) : "",
+      failureCount ? processFailureLabel(failureCount) : "",
+      processCountLabel(count),
+    ].filter(Boolean).join(" · ")
+  }
+  return [
+    failureCount ? processFailureLabel(failureCount) : "",
+    processCountLabel(count),
+  ].filter(Boolean).join(" · ")
+}
+
+export type WorkflowUsageSnapshot = Pick<
+  MockTaskStats,
+  "tokensIn" | "tokensOut" | "cacheReads" | "cacheWrites" | "contextTokens" | "contextWindow" | "maxOutputTokens"
+>
+
+function workflowUsageMetricLabels(
+  usage: WorkflowUsageSnapshot | undefined,
+  state: ProcessState,
+): string[] {
+  const labels: string[] = []
+  if (usage?.contextWindow && usage.contextWindow > 0) {
+    labels.push(t("task.contextUsed", {
+      used: formatLargeNumber(Math.max(0, usage.contextTokens || 0)),
+      total: formatLargeNumber(usage.contextWindow),
+    }))
+  }
+  if (usage && (usage.tokensIn > 0 || usage.tokensOut > 0)) {
+    labels.push(t("process.metrics.tokens", {
+      input: formatLargeNumber(Math.max(0, usage.tokensIn || 0)),
+      output: formatLargeNumber(Math.max(0, usage.tokensOut || 0)),
+    }))
+  }
+  const cacheReads = typeof usage?.cacheReads === "number" ? Math.max(0, usage.cacheReads) : null
+  const cacheWrites = typeof usage?.cacheWrites === "number" ? Math.max(0, usage.cacheWrites) : null
+  if ((cacheReads !== null && cacheReads > 0) || (cacheWrites !== null && cacheWrites > 0)) {
+    labels.push(t("task.cacheHitSlash", {
+      hit: formatLargeNumber(cacheReads || 0),
+      write: formatLargeNumber(cacheWrites || 0),
+    }))
+  }
+  if (!labels.length && state === "running") labels.push(t("process.metrics.waiting"))
+  return labels
+}
+
 interface SessionTurnProps {
   turn: MockTurn
   selectedTraceNodeId?: string | null
@@ -202,6 +277,7 @@ interface SessionTurnProps {
   rawAuditEvents?: Record<string, RawAuditEventSnapshot>
   defaultReasoningOpen?: boolean
   runningProcessLabel?: string
+  usageSnapshot?: WorkflowUsageSnapshot
 }
 
 interface MessageMarkerProps {
@@ -1634,6 +1710,8 @@ const FinalAnswerPart: Component<FinalAnswerPartProps> = (props) => (
 
 interface TimelineProcessGroupPartProps extends Omit<PartProps, "part"> {
   group: ProcessGroup
+  usageSnapshot?: WorkflowUsageSnapshot
+  showUsageMetrics?: boolean
 }
 
 const PROCESS_GROUP_ICONS: Record<ProcessGroup["kind"], string> = {
@@ -1647,24 +1725,16 @@ const PROCESS_GROUP_ICONS: Record<ProcessGroup["kind"], string> = {
 }
 
 const TimelineProcessGroupPart: Component<TimelineProcessGroupPartProps> = (props) => {
-  const [open, setOpen] = createSignal(initialCardOpenState(props.group.id, false))
+  const [open, setOpen] = createSignal(initialCardOpenState(props.group.id, defaultProcessGroupOpen(props.group)))
   createEffect(() => {
     CARD_OPEN_STATE.set(props.group.id, open())
   })
   const icon = () => PROCESS_GROUP_ICONS[props.group.kind] || "list-tree"
-  const meta = () => {
-    if (props.group.state === "running") {
-      return [
-        t("process.handledCount", { n: String(props.group.count) }),
-        props.group.currentLabel ? t("process.current", { value: props.group.currentLabel }) : "",
-      ].filter(Boolean).join(" · ")
-    }
-    return [
-      props.group.state === "error" ? processStateLabel(props.group.state) : "",
-      props.group.failureCount ? processFailureLabel(props.group.failureCount) : "",
-      processCountLabel(props.group.count),
-    ].filter(Boolean).join(" · ")
-  }
+  const meta = () => processMetaLabel(props.group.state, props.group.count, props.group.failureCount, props.group.currentLabel)
+  const usageMetrics = () =>
+    props.group.isWorkflow && props.showUsageMetrics !== false
+      ? workflowUsageMetricLabels(props.usageSnapshot, props.group.state)
+      : []
 
   return (
     <div
@@ -1700,6 +1770,13 @@ const TimelineProcessGroupPart: Component<TimelineProcessGroupPartProps> = (prop
       </button>
       <Show when={open()}>
         <div class="process-group-card__content">
+          <Show when={usageMetrics().length > 0}>
+            <div class="process-summary-card__metrics">
+              <For each={usageMetrics()}>
+                {(label) => <span class="process-summary-card__metric">{label}</span>}
+              </For>
+            </div>
+          </Show>
           <For each={props.group.items}>
             {(item) => (
               <TranscriptItemView
@@ -1724,24 +1801,28 @@ const TimelineProcessGroupPart: Component<TimelineProcessGroupPartProps> = (prop
 
 interface ProcessSummaryPartProps extends Omit<PartProps, "part"> {
   summary: ProcessSummary
+  usageSnapshot?: WorkflowUsageSnapshot
 }
 
 const ProcessSummaryPart: Component<ProcessSummaryPartProps> = (props) => {
-  const [open, setOpen] = createSignal(initialCardOpenState(props.summary.id, false))
+  const [open, setOpen] = createSignal(initialCardOpenState(props.summary.id, defaultProcessSummaryOpen(props.summary)))
   createEffect(() => {
     CARD_OPEN_STATE.set(props.summary.id, open())
   })
   const icon = () => props.summary.state === "error" ? "warning" : "list-tree"
-  const meta = () => [
-    props.summary.state === "error" ? processStateLabel(props.summary.state) : "",
-    props.summary.failureCount ? processFailureLabel(props.summary.failureCount) : "",
-    processCountLabel(props.summary.count),
-  ].filter(Boolean).join(" · ")
+  const meta = () => processMetaLabel(props.summary.state, props.summary.count, props.summary.failureCount, props.summary.currentLabel)
+  const usageMetrics = () =>
+    props.summary.isWorkflow
+      ? workflowUsageMetricLabels(props.usageSnapshot, props.summary.state)
+      : []
 
   return (
     <div
       class="process-summary-card"
-      classList={{ "process-summary-card--error": props.summary.state === "error" }}
+      classList={{
+        "process-summary-card--running": props.summary.state === "running",
+        "process-summary-card--error": props.summary.state === "error",
+      }}
       onClick={(event) => event.stopPropagation()}
     >
       <button
@@ -1756,15 +1837,26 @@ const ProcessSummaryPart: Component<ProcessSummaryPartProps> = (props) => {
           })
         }}
       >
-        <span class={`codicon codicon-${icon()}`} aria-hidden="true" />
+        {props.summary.state === "running" ? (
+          <RoseFourLoader class="process-card__loader" />
+        ) : (
+          <span class={`codicon codicon-${icon()}`} aria-hidden="true" />
+        )}
         <span class="process-card__body">
-          <span class="process-card__title">{t("process.summary")}</span>
+          <span class="process-card__title">{props.summary.isWorkflow ? workflowGroupLabel(props.summary.workflow) : t("process.summary")}</span>
           <span class="process-card__meta">{meta()}</span>
         </span>
         <span class={`codicon codicon-chevron-${open() ? "down" : "right"}`} aria-hidden="true" />
       </button>
       <Show when={open()}>
         <div class="process-summary-card__content">
+          <Show when={usageMetrics().length > 0}>
+            <div class="process-summary-card__metrics">
+              <For each={usageMetrics()}>
+                {(label) => <span class="process-summary-card__metric">{label}</span>}
+              </For>
+            </div>
+          </Show>
           <ProcessTimeline
             items={props.summary.items}
             selectedTraceNodeId={props.selectedTraceNodeId}
@@ -1776,6 +1868,8 @@ const ProcessSummaryPart: Component<ProcessSummaryPartProps> = (props) => {
             onLoadRawAuditEvents={props.onLoadRawAuditEvents}
             rawAuditEvents={props.rawAuditEvents}
             defaultReasoningOpen={props.defaultReasoningOpen}
+            usageSnapshot={props.usageSnapshot}
+            showGroupUsageMetrics={false}
           />
         </div>
       </Show>
@@ -1785,6 +1879,8 @@ const ProcessSummaryPart: Component<ProcessSummaryPartProps> = (props) => {
 
 interface ProcessTimelineProps extends Omit<PartProps, "part"> {
   items: ProcessTimelineItem[]
+  usageSnapshot?: WorkflowUsageSnapshot
+  showGroupUsageMetrics?: boolean
 }
 
 const ProcessTimeline: Component<ProcessTimelineProps> = (props) => (
@@ -1803,7 +1899,11 @@ const ProcessTimeline: Component<ProcessTimelineProps> = (props) => (
             onCopyToolCommand={props.onCopyToolCommand}
             onCopyToolOutput={props.onCopyToolOutput}
             onForkPart={props.onForkPart}
+            onLoadRawAuditEvents={props.onLoadRawAuditEvents}
+            rawAuditEvents={props.rawAuditEvents}
             defaultReasoningOpen={props.defaultReasoningOpen}
+            usageSnapshot={props.usageSnapshot}
+            showUsageMetrics={props.showGroupUsageMetrics}
           />
         </Match>
         <Match when={item().type === "timeline_notice"}>
@@ -1818,6 +1918,8 @@ const ProcessTimeline: Component<ProcessTimelineProps> = (props) => (
             onCopyToolCommand={props.onCopyToolCommand}
             onCopyToolOutput={props.onCopyToolOutput}
             onForkPart={props.onForkPart}
+            onLoadRawAuditEvents={props.onLoadRawAuditEvents}
+            rawAuditEvents={props.rawAuditEvents}
             defaultReasoningOpen={props.defaultReasoningOpen}
           />
         </Match>
@@ -1991,6 +2093,7 @@ export const SessionTurn: Component<SessionTurnProps> = (props) => {
                           onLoadRawAuditEvents={props.onLoadRawAuditEvents}
                           rawAuditEvents={props.rawAuditEvents}
                           defaultReasoningOpen={props.defaultReasoningOpen}
+                          usageSnapshot={props.usageSnapshot}
                         />
                       </Match>
                       <Match when={item().type === "timeline_notice"}>
@@ -2010,6 +2113,7 @@ export const SessionTurn: Component<SessionTurnProps> = (props) => {
                           onLoadRawAuditEvents={props.onLoadRawAuditEvents}
                           rawAuditEvents={props.rawAuditEvents}
                           defaultReasoningOpen={props.defaultReasoningOpen}
+                          usageSnapshot={props.usageSnapshot}
                         />
                       </Match>
                       <Match when={item().type === "reasoning_panel"}>
@@ -2167,6 +2271,12 @@ function workflowStageLabel(stage?: string): string {
   }
   const key = String(stage || "").trim()
   return labels[key] || key || t("workflow.stage.step")
+}
+
+function workflowGroupLabel(workflow?: string): string {
+  const key = String(workflow || "").trim()
+  if (key === "capability_package_ingest") return t("workflow.capabilityPackageIngest")
+  return key || t("workflow.generic")
 }
 
 function workflowStatusLabel(status?: string): string {

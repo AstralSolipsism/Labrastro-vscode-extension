@@ -350,6 +350,9 @@ function presentationDigestSource(item: TranscriptPresentationItem): Record<stri
       state: item.summary.state,
       count: item.summary.count,
       failures: item.summary.failureCount,
+      current: item.summary.currentLabel,
+      workflow: item.summary.workflow,
+      isWorkflow: item.summary.isWorkflow,
       items: item.summary.items.map(processTimelineItemDigestSource),
     }
   }
@@ -416,6 +419,8 @@ function processGroupDigestSource(group: ProcessGroup): Record<string, unknown> 
     count: group.count,
     failures: group.failureCount,
     current: group.currentLabel,
+    workflow: group.workflow,
+    isWorkflow: group.isWorkflow,
     items: group.items.map(processPartDigestSource),
   }
 }
