@@ -122,6 +122,7 @@ function estimatePresentationItemHeight(item: TranscriptPresentationItem, width:
   if (item.type === "timeline_process_group") return 38
   if (item.type === "process_summary") return 38
   if (item.type === "reasoning_panel") return 38
+  if (item.type === "primary_part") return estimatePartHeight(item.part, width, metrics)
   if (item.type === "final_answer") {
     const heights = item.parts.map((part) => estimateTextPartHeight(part, width, metrics))
     return heights.reduce((sum, height) => sum + height, 0) + Math.max(0, heights.length - 1) * metrics.partGap
@@ -149,7 +150,10 @@ function estimatePartHeight(part: TranscriptItem, width: number, metrics: TurnHe
       return 34 + estimateCodeHeight(part.content || "", width, metrics, 88, 220)
     case "view":
     case "context_event":
-    case "capability_package_draft":
+    case "workflow_step":
+    case "workflow_artifact":
+    case "workflow_decision":
+    case "workflow_result":
     case "memory_context":
     case "ui_event":
       return estimateStructuredCardHeight(part, width, metrics)

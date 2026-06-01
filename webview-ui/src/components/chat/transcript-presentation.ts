@@ -52,6 +52,7 @@ export type TranscriptPresentationItem =
   | { type: "process_summary"; summary: ProcessSummary }
   | { type: "reasoning_panel"; panel: ReasoningPanel }
   | { type: "final_answer"; parts: AssistantTextItem[] }
+  | { type: "primary_part"; part: TranscriptItem }
 
 export interface TranscriptPresentationOptions {
   runningProcessLabel?: string
@@ -77,6 +78,7 @@ export function transcriptPresentationItemKey(item: TranscriptPresentationItem, 
   if (item.type === "process_summary") return item.summary.id
   if (item.type === "reasoning_panel") return item.panel.id
   if (item.type === "final_answer") return `final_answer:${item.parts[0]?.id || index}`
+  if (item.type === "primary_part") return `primary_part:${item.part.id}`
   return `presentation:${index}`
 }
 
@@ -118,6 +120,18 @@ export function buildTranscriptPresentation(
   _options: TranscriptPresentationOptions = {},
 ): TranscriptPresentationItem[] {
   const reasoningPanel = buildReasoningPanel(parts, message)
+  const explicitPrimaryParts = parts.filter(isPrimaryLanePart)
+
+  if (explicitPrimaryParts.length) {
+    const timeline = buildTimelineItems(parts.filter((part) => !isPrimaryLanePart(part) && part.type !== "assistant_text"), message)
+    const summary = buildProcessSummary(timeline, message)
+    const output: TranscriptPresentationItem[] = []
+    if (summary) output.push({ type: "process_summary", summary })
+    if (reasoningPanel) output.push({ type: "reasoning_panel", panel: reasoningPanel })
+    output.push(...explicitPrimaryParts.map((part) => ({ type: "primary_part" as const, part })))
+    return output
+  }
+
   const finalAnswerStart = resolveFinalAnswerStartIndex(parts, message)
 
   if (finalAnswerStart >= 0) {
@@ -334,10 +348,20 @@ function processGroupInfoForPart(part: TranscriptItem): ProcessGroupInfo {
   }
   if (
     part.type === "context_event" ||
+    part.type === "workflow_step" ||
     part.type === "memory_context" ||
     part.type === "ui_event" ||
     part.type === "view"
   ) {
+    if (part.type === "workflow_step") {
+      const workflow = (part.workflow || "").trim()
+      const stage = (part.stage || "").trim()
+      return {
+        key: `workflow:${workflow || "workflow"}`,
+        kind: "context",
+        label: stage ? `${t("process.group.context")} · ${workflowStageLabel(stage)}` : t("process.group.context"),
+      }
+    }
     return { key: "context", kind: "context", label: t("process.group.context") }
   }
   return { key: `other:${part.type}`, kind: "other", label: t("process.group.other") }
@@ -377,6 +401,7 @@ function isProcessItem(part: TranscriptItem): boolean {
     part.type === "terminal" ||
     part.type === "view" ||
     part.type === "context_event" ||
+    part.type === "workflow_step" ||
     part.type === "memory_context" ||
     part.type === "ui_event" ||
     part.type === "parallel_tools" ||
@@ -417,6 +442,7 @@ function processItemCurrentLabel(item: TranscriptItem): string {
     return [getToolActionLabel(item.tool), processItemTarget(item)].filter(Boolean).join(" ")
   }
   if (item.type === "terminal") return item.title || t("process.group.run")
+  if (item.type === "workflow_step") return item.title || workflowStageLabel(item.stage)
   if (item.type === "session") return item.title || item.sessionId || t("process.group.context")
   if ("title" in item && item.title) return item.title
   if (item.type === "notice") return item.text
@@ -491,6 +517,8 @@ export function isMessageRunning(
   return parts.some((part) => {
     if (part.type === "assistant_text") return part.streaming === true
     if (part.type === "thinking") return part.active === true
+    if (part.type === "workflow_step") return part.status === "running"
+    if (part.type === "workflow_decision") return part.status === "pending"
     if (part.type !== "tool") return false
     return isRunningTool(part)
   })
@@ -520,6 +548,8 @@ function isParallelItem(part: TranscriptItem): part is Extract<TranscriptItem, {
 function isRunningProcessItem(part: TranscriptItem): boolean {
   if (isParallelItem(part)) return processItemsState(part.items || []) === "running"
   if (part.type === "thinking") return part.active === true
+  if (part.type === "workflow_step") return part.status === "running"
+  if (part.type === "workflow_decision") return part.status === "pending"
   if (part.type === "tool") return isRunningTool(part)
   if (part.traceNodeStatus === "active" || part.traceNodeStatus === "streaming") return true
   if (part.type === "session") return part.state === "active" || part.state === "streaming"
@@ -532,6 +562,30 @@ function isErrorProcessItem(part: TranscriptItem): boolean {
   if (part.type === "tool") return part.status === "error" || part.status === "protocol_error"
   if (part.type === "notice") return part.level === "error"
   if (part.type === "session") return part.state === "error"
+  if (part.type === "workflow_step" || part.type === "workflow_result") return part.status === "error"
+  if (part.type === "workflow_decision") return part.status === "denied" || part.status === "error"
   if (part.type === "view" || part.type === "ui_event") return part.level === "error"
   return false
+}
+
+function isPrimaryLanePart(part: TranscriptItem): boolean {
+  return (
+    part.type === "workflow_artifact" ||
+    part.type === "workflow_decision" ||
+    part.type === "workflow_result"
+  )
+}
+
+function workflowStageLabel(stage?: string): string {
+  const labels: Record<string, string> = {
+    prepare: "准备",
+    read_source: "读取来源",
+    extract_evidence: "提取证据",
+    compose_draft: "生成草案",
+    await_approval: "等待确认",
+    install: "安装",
+    done: "完成",
+  }
+  const key = (stage || "").trim()
+  return labels[key] || key || t("process.group.context")
 }

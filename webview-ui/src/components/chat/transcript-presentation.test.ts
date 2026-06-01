@@ -85,6 +85,32 @@ describe("transcript presentation", () => {
     expect(presentation[2]).toMatchObject({ type: "final_answer", parts: [{ id: "text-1" }] })
   })
 
+  it("projects workflow artifacts through the primary lane with process summary", () => {
+    const parts: TranscriptItem[] = [
+      { id: "step-1", type: "workflow_step", lane: "process", workflow: "capability_package_ingest", stage: "prepare", status: "done", title: "准备生成" },
+      { id: "text-1", type: "assistant_text", markdown: "{\"id\":\"review\"}", format: "markdown", streamKey: "assistant-message" },
+      {
+        id: "artifact-1",
+        type: "workflow_artifact",
+        lane: "primary",
+        workflow: "capability_package_ingest",
+        artifactType: "capability_package_draft",
+        title: "能力包草案 review 已生成",
+        artifact: { package_id: "review" },
+      },
+    ]
+
+    const presentation = buildTranscriptPresentation(parts, assistant(parts, "success"))
+
+    expect(presentation.map((item) => item.type)).toEqual([
+      "process_summary",
+      "primary_part",
+    ])
+    expect(processSummary(presentation)).toMatchObject({ count: 1, state: "completed" })
+    expect(presentation[1]).toMatchObject({ type: "primary_part", part: { id: "artifact-1" } })
+    expect(presentation.find((item) => item.type === "final_answer")).toBeUndefined()
+  })
+
   it("keeps process_summary id stable while process events append before final answer", () => {
     const firstParts: TranscriptItem[] = [
       { id: "tool-1", type: "tool", tool: "read_file", status: "returned", input: { path: "src/index.ts" } },
