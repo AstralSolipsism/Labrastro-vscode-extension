@@ -119,12 +119,64 @@ export interface ContextEventItem extends TranscriptMeta {
   payload?: Record<string, unknown>
 }
 
-export interface CapabilityPackageDraftItem extends TranscriptMeta {
-  type: "capability_package_draft"
+export type TranscriptLane = "primary" | "process" | "reasoning" | "diagnostic"
+export type WorkflowItemStatus = "running" | "done" | "warning" | "error" | "cancelled"
+
+export interface WorkflowStepItem extends TranscriptMeta {
+  type: "workflow_step"
+  lane: "process"
+  workflow: string
+  stage: string
+  status: WorkflowItemStatus
   title?: string
-  packageId?: string
-  draft?: Record<string, unknown>
-  validation?: Record<string, unknown>
+  summary?: string
+  details?: Record<string, unknown>
+  payload?: Record<string, unknown>
+}
+
+export interface WorkflowArtifactItem extends TranscriptMeta {
+  type: "workflow_artifact"
+  lane: "primary"
+  workflow: string
+  artifactType: string
+  title?: string
+  summary?: string
+  artifact: Record<string, unknown>
+  payload?: Record<string, unknown>
+}
+
+export interface WorkflowDecisionAction {
+  id: string
+  label: string
+  tone?: "primary" | "danger" | "secondary"
+}
+
+export interface WorkflowDecisionItem extends TranscriptMeta {
+  type: "workflow_decision"
+  lane: "primary"
+  workflow: string
+  decisionType: string
+  status: WorkflowItemStatus | "pending" | "approved" | "denied"
+  title?: string
+  summary?: string
+  review: Record<string, unknown>
+  actions?: WorkflowDecisionAction[]
+  approvalId?: string
+  toolCallId?: string
+  decision?: string
+  resultReason?: string
+  payload?: Record<string, unknown>
+}
+
+export interface WorkflowResultItem extends TranscriptMeta {
+  type: "workflow_result"
+  lane: "primary"
+  workflow: string
+  resultType?: string
+  status: WorkflowItemStatus
+  title?: string
+  summary?: string
+  result?: Record<string, unknown>
   payload?: Record<string, unknown>
 }
 
@@ -161,7 +213,10 @@ export type TranscriptItem =
   | TerminalItem
   | ViewItem
   | ContextEventItem
-  | CapabilityPackageDraftItem
+  | WorkflowStepItem
+  | WorkflowArtifactItem
+  | WorkflowDecisionItem
+  | WorkflowResultItem
   | MemoryContextItem
   | UiEventItem
   | ParallelTranscriptItem
