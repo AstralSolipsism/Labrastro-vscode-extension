@@ -694,7 +694,6 @@ const ChatView: Component<ChatViewProps> = (props) => {
     providerStreamInterrupted: t("chat.streamRecovery.interruptedRecovering"),
     streamInterruptedCanContinue: t("chat.streamRecovery.interruptedCanContinue"),
     capabilityPackageSessionFailed: t("chat.capabilityPackage.sessionFailed"),
-    capabilityPackageDraft: t("chat.capabilityPackage.draft"),
   })
 
   const sessionNoticeMessage = (
@@ -1540,7 +1539,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       return
     }
     flushLiveTranscriptEvents()
-    const pendingApprovalForEvent = type === "approval_request"
+    const pendingApprovalForEvent = (type === "approval_request" || (type === "workflow_decision" && stringValue(payload.approval_id)))
       ? {
           ...approvalFromPayload(payload),
           sessionRunId: activeSessionRunId() || String(event.session_run_id || ""),
@@ -1800,7 +1799,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         if (toolCallId) patch.toolCallId = toolCallId
         upsertToolPart(toolName, patch, toolCallId, { matchReturn: true, meta: eventMeta })
       }
-    } else if (type === "approval_request") {
+    } else if ((type === "approval_request" || type === "workflow_decision") && pendingApprovalForEvent) {
       const next = pendingApprovalForEvent!
       const autoDecision = autoDecisionForEvent || evaluateApprovalDecision(next)
       if (!canonicalTranscriptEvent) {
