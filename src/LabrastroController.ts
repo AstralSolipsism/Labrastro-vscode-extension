@@ -108,7 +108,7 @@ interface WorkspaceFileIndex {
 const SESSION_RUN_EVENTS_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 15_000]
 const SESSION_RUN_EVENTS_RECOVERY_DEADLINE_MS = 5 * 60 * 1000
 const CHAT_WEBVIEW_TARGETS: readonly WebviewTarget[] = ["sidebar"]
-const SESSION_WEBVIEW_TARGETS: readonly WebviewTarget[] = ["sidebar", "agentManager"]
+const SESSION_WEBVIEW_TARGETS: readonly WebviewTarget[] = ["sidebar", "settings", "agentManager"]
 const WORKSPACE_FILE_EXCLUDE_GLOB = "{**/node_modules/**,**/.git/**,**/dist/**,**/out/**,**/build/**,**/.next/**,**/target/**}"
 type AdminErrorScope = "adminState" | "adminAction" | "peerDiagnostics"
 
@@ -274,7 +274,7 @@ export class LabrastroController implements vscode.Disposable {
     const target = this.webviewBus.targetOf(post)
     const includeSession = target !== "settings" && options.initializeSession !== false
     const includeAdminState = target !== "agentManager"
-    const includeSessionRunResume = target === "sidebar" || !target
+    const includeSessionRunResume = target === "sidebar" || target === "settings" || target === "agentManager" || !target
     this.remoteState.setReady("environmentSnapshot", this.environmentSnapshot as unknown as Record<string, unknown>)
     post({
       type: "ready",
@@ -340,10 +340,6 @@ export class LabrastroController implements vscode.Disposable {
         stringValue(payload.session_id)
       const statusValue = stringValue(status.status) || stringValue(payload.status) || "running"
       const runtimeState = objectValue(status.runtime_state || status.runtimeState)
-      if (isTerminalSessionRunStatus(statusValue) && approvals.length === 0) {
-        this.sessionRunCoordinator.clearActiveRun()
-        return undefined
-      }
       this.sessionRunCoordinator.patchActiveRun({
         sessionId,
         lastStreamAt: new Date().toISOString(),
@@ -467,6 +463,20 @@ export class LabrastroController implements vscode.Disposable {
     if (message.type === "workspace.files.search") {
       await this.searchWorkspaceFiles(message, post)
       return true
+    }
+    if (message.type === "chat.send") {
+      const payload = capabilityPackageIngestPayloadFromChatText(textValue(message.text))
+      if (payload) {
+        await this.startCapabilityPackageIngestSession({
+          type: "capabilityPackage.ingest.session.start",
+          payload: {
+            ...payload,
+            ...(stringValue(message.sessionId) ? { session_id: stringValue(message.sessionId) } : {}),
+            ...(stringValue(message.locale) ? { locale: stringValue(message.locale) } : {}),
+          },
+        } as WebviewToHostMessage, post)
+        return true
+      }
     }
     if (message.type === "capabilityPackage.ingest.session.start") {
       await this.startCapabilityPackageIngestSession(message, post)
@@ -602,7 +612,7 @@ export class LabrastroController implements vscode.Disposable {
 
   private emitChatMessage(payload: Record<string, unknown>, fallbackPost?: PostMessage): void {
     const type = typeof payload.type === "string" ? payload.type : ""
-    if (type.startsWith("session.") || type === "traceSnapshot" || type === "traceFocusNode") {
+    if (type.startsWith("session.") || type.startsWith("sessionRun.") || type === "traceSnapshot" || type === "traceFocusNode") {
       this.emitSessionMessage(payload, fallbackPost)
       return
     }
@@ -1878,18 +1888,72 @@ function objectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {}
 }
 
-function isTerminalSessionRunStatus(status: string | undefined): boolean {
-  if (!status) return false
-  return [
-    "cancelled",
-    "canceled",
-    "complete",
-    "completed",
-    "done",
-    "error",
-    "failed",
-    "finished",
-  ].includes(status.toLowerCase())
+export function capabilityPackageIngestPayloadFromChatText(text: string): { source: Record<string, unknown> } | undefined {
+  const trimmed = text.trim()
+  if (!trimmed || trimmed.startsWith("/")) return undefined
+  const lower = trimmed.toLowerCase()
+  if (isStandaloneMcpServersConfig(trimmed)) {
+    return {
+      source: {
+        type: "project_notes",
+        notes: trimmed,
+      },
+    }
+  }
+  const hasStrongInstallIntent = /(安装|配置|接入|启用|install|setup|configure|enable)/i.test(trimmed)
+  const hasWeakAddIntent = /(添加|add)/i.test(trimmed)
+  if (!hasStrongInstallIntent && !hasWeakAddIntent) return undefined
+  const hasMcpConfig = lower.includes("mcpservers") || lower.includes('"mcpservers"')
+  if (hasMcpConfig) {
+    return {
+      source: {
+        type: "project_notes",
+        notes: trimmed,
+      },
+    }
+  }
+  const url = firstCapabilitySourceUrl(trimmed)
+  if (!url) return undefined
+  const textWithoutUrls = trimmed.replace(/https?:\/\/[^\s"'<>，。！？)）\]]+/gi, " ")
+  if (!hasStrongInstallIntent && !/(skill|mcp|能力|能力包|插件|工具|tool|capability|package|server|服务器|仓库|repo|repository)/i.test(textWithoutUrls)) {
+    return undefined
+  }
+  return {
+    source: {
+      type: isGitHubUrl(url) ? "github_repo" : "docs_url",
+      url,
+      notes: trimmed,
+    },
+  }
+}
+
+function isStandaloneMcpServersConfig(text: string): boolean {
+  const jsonText = text.startsWith("```") ? text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim() : text
+  if (!jsonText.startsWith("{")) return false
+  try {
+    const parsed = JSON.parse(jsonText) as Record<string, unknown>
+    const mcpServers = objectValue(parsed.mcpServers)
+    return Object.values(mcpServers).some((server) => {
+      const item = objectValue(server)
+      return Boolean(stringValue(item.command) || stringValue(item.url))
+    })
+  } catch {
+    return false
+  }
+}
+
+function firstCapabilitySourceUrl(text: string): string | undefined {
+  const match = text.match(/https?:\/\/[^\s"'<>，。！？)）\]]+/i)
+  if (!match) return undefined
+  return match[0].replace(/[.,;:!?]+$/, "")
+}
+
+function isGitHubUrl(url: string): boolean {
+  try {
+    return new URL(url).hostname.toLowerCase() === "github.com"
+  } catch {
+    return false
+  }
 }
 
 function workspaceFoldersKey(): string {

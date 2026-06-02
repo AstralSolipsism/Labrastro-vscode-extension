@@ -40,8 +40,9 @@ vi.mock("vscode", () => ({
   },
 }))
 
-import { LabrastroController } from "./LabrastroController"
+import { LabrastroController, capabilityPackageIngestPayloadFromChatText } from "./LabrastroController"
 import { RemoteError } from "./remote-errors"
+import type { WebviewToHostMessage } from "./protocol/messages"
 import type { RemoteStateStore } from "./RemoteStateStore"
 
 function context(): vscode.ExtensionContext {
@@ -383,6 +384,233 @@ describe("LabrastroController admin state errors", () => {
 })
 
 describe("LabrastroController session run start", () => {
+  it("detects capability package install intent from chat text", () => {
+    expect(capabilityPackageIngestPayloadFromChatText("请安装这个 skill https://github.com/acme/tool")).toEqual({
+      source: {
+        type: "github_repo",
+        url: "https://github.com/acme/tool",
+        notes: "请安装这个 skill https://github.com/acme/tool",
+      },
+    })
+    expect(capabilityPackageIngestPayloadFromChatText("安装这个 https://github.com/acme/tool")).toEqual({
+      source: {
+        type: "github_repo",
+        url: "https://github.com/acme/tool",
+        notes: "安装这个 https://github.com/acme/tool",
+      },
+    })
+    expect(capabilityPackageIngestPayloadFromChatText('安装这个 MCP {"mcpServers":{"edgeone":{"command":"npx","args":["edgeone-pages-mcp"]}}}')).toEqual({
+      source: {
+        type: "project_notes",
+        notes: '安装这个 MCP {"mcpServers":{"edgeone":{"command":"npx","args":["edgeone-pages-mcp"]}}}',
+      },
+    })
+    expect(capabilityPackageIngestPayloadFromChatText('{"mcpServers":{"edgeone":{"command":"npx","args":["edgeone-pages-mcp"]}}}')).toEqual({
+      source: {
+        type: "project_notes",
+        notes: '{"mcpServers":{"edgeone":{"command":"npx","args":["edgeone-pages-mcp"]}}}',
+      },
+    })
+    expect(capabilityPackageIngestPayloadFromChatText("帮我看看 https://github.com/acme/tool 这个仓库")).toBeUndefined()
+    expect(capabilityPackageIngestPayloadFromChatText("帮我把这个链接添加到 README https://github.com/acme/tool")).toBeUndefined()
+  })
+
+  it("routes chat install intent into the capability package session entry", async () => {
+    const controller = new LabrastroController(context())
+    const startCapabilityPackageIngestSession = vi.fn(async () => undefined)
+    const sessionRunHandleMessage = vi.fn(async () => true)
+    ;(controller as unknown as {
+      startCapabilityPackageIngestSession: typeof startCapabilityPackageIngestSession
+    }).startCapabilityPackageIngestSession = startCapabilityPackageIngestSession
+    ;(controller as unknown as {
+      sessionRunCoordinator: { handleMessage: typeof sessionRunHandleMessage }
+    }).sessionRunCoordinator = { handleMessage: sessionRunHandleMessage }
+    const post = vi.fn()
+
+    await expect(controller.handleMessage({
+      type: "chat.send",
+      text: "请安装这个 skill https://github.com/acme/tool",
+      sessionId: "session-chat",
+      locale: "zh-CN",
+    } as WebviewToHostMessage, post)).resolves.toBe(true)
+
+    expect(startCapabilityPackageIngestSession).toHaveBeenCalledWith(expect.objectContaining({
+      type: "capabilityPackage.ingest.session.start",
+      payload: {
+        source: {
+          type: "github_repo",
+          url: "https://github.com/acme/tool",
+          notes: "请安装这个 skill https://github.com/acme/tool",
+        },
+        session_id: "session-chat",
+        locale: "zh-CN",
+      },
+    }), post)
+    expect(sessionRunHandleMessage).not.toHaveBeenCalled()
+  })
+
+  it("sends active capability package session run resume to settings initial state", async () => {
+    const controller = new LabrastroController(context())
+    const post = vi.fn()
+    controller.registerWebviewPost(post, "settings")
+    const sessionRunStatus = vi.fn(async () => ({
+      status: "running",
+      session_id: "session-cap",
+      runtime_state: {
+        workflow: "capability_package_ingest",
+        agent_id: "capability_packager",
+      },
+      approvals: [
+        {
+          approval_id: "approval-cap",
+          decision_type: "capability_package_install",
+          tool_name: "install_capability_package",
+          review: { package_id: "pkg-cap" },
+          state: "requested",
+        },
+      ],
+    }))
+    const ensureSessionRunEventStream = vi.fn()
+    ;((controller as unknown as { client: Record<string, unknown> }).client).sessionRunStatus = sessionRunStatus
+    ;(controller as unknown as {
+      sessionRunCoordinator: {
+        setActiveRun: (run: Record<string, unknown>) => void
+      }
+    }).sessionRunCoordinator.setActiveRun({
+      sessionRunId: "run-cap",
+      sessionId: "session-cap",
+      cursor: 0,
+      status: "running",
+      startedAt: "2026-06-02T00:00:00.000Z",
+      reconnectAttempts: 0,
+    })
+    ;(controller as unknown as {
+      ensureSessionRunEventStream: typeof ensureSessionRunEventStream
+    }).ensureSessionRunEventStream = ensureSessionRunEventStream
+
+    await controller.postInitialState(post, { initializeSession: false })
+
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: "sessionRun.resume",
+      payload: expect.objectContaining({
+        sessionRunId: "run-cap",
+        sessionId: "session-cap",
+        runtimeState: {
+          workflow: "capability_package_ingest",
+          agent_id: "capability_packager",
+        },
+        approvals: [
+          expect.objectContaining({
+            approval_id: "approval-cap",
+            decision_type: "capability_package_install",
+          }),
+        ],
+      }),
+    }))
+    expect(ensureSessionRunEventStream).toHaveBeenCalledWith("run-cap", "session-cap", post)
+  })
+
+  it("keeps terminal active runs resumable until final events are consumed", async () => {
+    const controller = new LabrastroController(context())
+    const sessionRunStatus = vi.fn(async () => ({
+      status: "done",
+      session_id: "session-cap",
+      runtime_state: {
+        workflow: "capability_package_ingest",
+        agent_id: "capability_packager",
+      },
+      approvals: [],
+    }))
+    ;((controller as unknown as { client: Record<string, unknown> }).client).sessionRunStatus = sessionRunStatus
+    ;(controller as unknown as {
+      sessionRunCoordinator: {
+        setActiveRun: (run: Record<string, unknown>) => void
+        activeRun: unknown
+      }
+    }).sessionRunCoordinator.setActiveRun({
+      sessionRunId: "run-cap",
+      sessionId: "session-cap",
+      cursor: 4,
+      status: "running",
+      startedAt: "2026-06-02T00:00:00.000Z",
+      reconnectAttempts: 0,
+    })
+
+    const payload = await (controller as unknown as {
+      activeRunPayloadWithServerStatus: (payload: Record<string, unknown>) => Promise<Record<string, unknown> | undefined>
+    }).activeRunPayloadWithServerStatus({
+      sessionRunId: "run-cap",
+      sessionId: "session-cap",
+      cursor: 4,
+      status: "running",
+    })
+
+    expect(payload).toMatchObject({
+      sessionRunId: "run-cap",
+      sessionId: "session-cap",
+      cursor: 4,
+      status: "done",
+      runtimeState: {
+        workflow: "capability_package_ingest",
+        agent_id: "capability_packager",
+      },
+      approvals: [],
+    })
+    expect((controller as unknown as {
+      sessionRunCoordinator: { activeRun: unknown }
+    }).sessionRunCoordinator.activeRun).toBeDefined()
+  })
+
+  it("continues terminal capability package runs from settings initial state until final events arrive", async () => {
+    const controller = new LabrastroController(context())
+    const post = vi.fn()
+    controller.registerWebviewPost(post, "settings")
+    const sessionRunStatus = vi.fn(async () => ({
+      status: "failed",
+      session_id: "session-cap",
+      runtime_state: {
+        workflow: "capability_package_ingest",
+        agent_id: "capability_packager",
+      },
+      approvals: [],
+    }))
+    const ensureSessionRunEventStream = vi.fn()
+    ;((controller as unknown as { client: Record<string, unknown> }).client).sessionRunStatus = sessionRunStatus
+    ;(controller as unknown as {
+      sessionRunCoordinator: {
+        setActiveRun: (run: Record<string, unknown>) => void
+      }
+    }).sessionRunCoordinator.setActiveRun({
+      sessionRunId: "run-cap",
+      sessionId: "session-cap",
+      cursor: 6,
+      status: "running",
+      startedAt: "2026-06-02T00:00:00.000Z",
+      reconnectAttempts: 0,
+    })
+    ;(controller as unknown as {
+      ensureSessionRunEventStream: typeof ensureSessionRunEventStream
+    }).ensureSessionRunEventStream = ensureSessionRunEventStream
+
+    await controller.postInitialState(post, { initializeSession: false })
+
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: "sessionRun.resume",
+      payload: expect.objectContaining({
+        sessionRunId: "run-cap",
+        sessionId: "session-cap",
+        cursor: 6,
+        status: "failed",
+        runtimeState: {
+          workflow: "capability_package_ingest",
+          agent_id: "capability_packager",
+        },
+        approvals: [],
+      }),
+    }))
+    expect(ensureSessionRunEventStream).toHaveBeenCalledWith("run-cap", "session-cap", post)
+  })
+
   it("reports empty session run ids as start failures without persisting active run", async () => {
     const controller = new LabrastroController(context())
     const startSessionRun = vi.fn(async () => ({ session_run_id: "", session_id: "session-1" }))
@@ -490,6 +718,62 @@ describe("LabrastroController session run start", () => {
     expect(ensureSessionRunEventStream).toHaveBeenCalledWith("run-cap", "session-cap", post)
     expect(post).not.toHaveBeenCalledWith(expect.objectContaining({
       type: "capabilityPackage.error",
+    }))
+  })
+
+  it("routes capability package session run messages through the shared session targets", async () => {
+    const controller = new LabrastroController(context())
+    const settingsPost = vi.fn()
+    const sidebarPost = vi.fn()
+    controller.registerWebviewPost(settingsPost, "settings")
+    controller.registerWebviewPost(sidebarPost, "sidebar")
+
+    const capabilityPackageIngestSessionStart = vi.fn(async () => ({
+      session_run_id: "run-cap",
+      session_id: "session-cap",
+      runtime_state: {
+        workflow: "capability_package_ingest",
+        agent_id: "capability_packager",
+      },
+    }))
+    const prepareSessionRunSession = vi.fn(async () => ({ ok: true, sessionId: "session-cap" }))
+    const setActiveRun = vi.fn()
+    const ensureSessionRunEventStream = vi.fn()
+    ;(controller as unknown as {
+      client: { capabilityPackageIngestSessionStart: typeof capabilityPackageIngestSessionStart }
+    }).client = { capabilityPackageIngestSessionStart }
+    ;(controller as unknown as {
+      sessionCoordinator: { prepareSessionRunSession: typeof prepareSessionRunSession }
+    }).sessionCoordinator = { prepareSessionRunSession }
+    ;(controller as unknown as {
+      sessionRunCoordinator: { setActiveRun: typeof setActiveRun; clearActiveRun: () => void }
+    }).sessionRunCoordinator = { setActiveRun, clearActiveRun: vi.fn() }
+    ;(controller as unknown as {
+      ensureSessionRunEventStream: typeof ensureSessionRunEventStream
+    }).ensureSessionRunEventStream = ensureSessionRunEventStream
+
+    await (controller as unknown as {
+      startCapabilityPackageIngestSession: (
+        message: Record<string, unknown>,
+        post: (message: Record<string, unknown>) => void,
+      ) => Promise<void>
+    }).startCapabilityPackageIngestSession({
+      type: "capabilityPackage.ingest.session.start",
+      payload: { source: { type: "github_repo", url: "https://github.com/acme/tool" } },
+    }, settingsPost)
+
+    const sessionMessage = expect.objectContaining({
+      type: "sessionRun.session",
+      sessionRunId: "run-cap",
+      sessionId: "session-cap",
+    })
+    expect(settingsPost).toHaveBeenCalledWith(sessionMessage)
+    expect(sidebarPost).toHaveBeenCalledWith(sessionMessage)
+    expect(settingsPost).toHaveBeenCalledWith(expect.objectContaining({
+      type: "capabilityPackage.ingest.session.started",
+    }))
+    expect(sidebarPost).not.toHaveBeenCalledWith(expect.objectContaining({
+      type: "capabilityPackage.ingest.session.started",
     }))
   })
 })
