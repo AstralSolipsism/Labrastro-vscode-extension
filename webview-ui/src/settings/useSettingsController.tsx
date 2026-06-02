@@ -437,11 +437,15 @@ interface CapabilityPackageView {
   runtimeFootprint: ReturnType<typeof normalizeRuntimeFootprint>
 }
 
-interface CapabilityPackageIngestState {
+export interface CapabilityPackageIngestState {
   running: boolean
   agentRunId: string
   status: string
   error: string
+  sessionRunId?: string
+  sessionId?: string
+  approvalId?: string
+  packageId?: string
   validationMessages?: string[]
   draft?: Record<string, unknown>
   source?: Record<string, unknown>
@@ -2056,6 +2060,116 @@ function normalizeEnvironmentSnapshot(value: unknown): EnvironmentSnapshotState 
   }
 }
 
+export function reduceCapabilityPackageIngestSessionState(
+  current: CapabilityPackageIngestState,
+  msg: Record<string, unknown>,
+): CapabilityPackageIngestState {
+  const type = stringValue(msg.type)
+  if (type === "sessionRun.resume") {
+    const payload = objectValue(msg.payload)
+    const runtimeState = objectValue(payload.runtimeState || payload.runtime_state)
+    const workflow = stringValue(runtimeState.workflow || payload.workflow_mode || payload.workflowMode)
+    const agentId = stringValue(runtimeState.agent_id || runtimeState.agentId || payload.agent_id || payload.agentId)
+    if (workflow !== "capability_package_ingest" && agentId !== "capability_packager") return current
+    const sessionRunId = stringValue(payload.sessionRunId || payload.session_run_id || msg.sessionRunId || msg.session_run_id)
+    const sessionId = stringValue(payload.sessionId || payload.session_id || msg.sessionId || msg.session_id)
+    let next: CapabilityPackageIngestState = {
+      ...current,
+      running: false,
+      status: "session_running",
+      sessionRunId: sessionRunId || current.sessionRunId,
+      sessionId: sessionId || current.sessionId,
+      error: "",
+    }
+    const approvals = Array.isArray(payload.approvals) ? payload.approvals as Record<string, unknown>[] : []
+    for (const approval of approvals) {
+      if (stringValue(approval.state) && stringValue(approval.state) !== "requested") continue
+      if (stringValue(approval.decision_type || approval.decisionType) !== "capability_package_install") continue
+      const review = objectValue(approval.review)
+      next = {
+        ...next,
+        status: "awaiting_approval",
+        approvalId: stringValue(approval.approval_id || approval.approvalId) || next.approvalId,
+        packageId: stringValue(review.package_id || review.packageId || review.id) || next.packageId,
+      }
+      break
+    }
+    return next
+  }
+  if (type === "sessionRun.session") {
+    const runtimeState = objectValue(msg.runtimeState || msg.runtime_state)
+    const payload = objectValue(msg.payload)
+    const payloadRuntimeState = objectValue(payload.runtime_state || payload.runtimeState)
+    const workflow = stringValue(runtimeState.workflow || payloadRuntimeState.workflow || payload.workflow_mode || payload.workflowMode)
+    const agentId = stringValue(runtimeState.agent_id || runtimeState.agentId || payloadRuntimeState.agent_id || payloadRuntimeState.agentId || payload.agent_id || payload.agentId)
+    if (workflow !== "capability_package_ingest" && agentId !== "capability_packager") return current
+    const sessionRunId = stringValue(msg.sessionRunId || msg.session_run_id || payload.session_run_id || payload.sessionRunId)
+    const sessionId = stringValue(msg.sessionId || msg.session_id || payload.session_id || payload.sessionId)
+    return {
+      ...current,
+      running: false,
+      status: "session_running",
+      sessionRunId: sessionRunId || current.sessionRunId,
+      sessionId: sessionId || current.sessionId,
+      error: "",
+    }
+  }
+  if (type !== "sessionRun.events" && type !== "sessionRun.stream") return current
+  const sessionRunId = stringValue(msg.sessionRunId || msg.session_run_id)
+  const events = Array.isArray(msg.events) ? msg.events as Record<string, unknown>[] : []
+  let next = current
+  for (const event of events) {
+    const eventType = stringValue(event.type)
+    const payload = objectValue(event.payload)
+    if (eventType === "workflow_decision" && stringValue(payload.decision_type || payload.decisionType) === "capability_package_install") {
+      const approvalId = stringValue(payload.approval_id || payload.approvalId)
+      const review = objectValue(payload.review)
+      next = {
+        ...next,
+        running: false,
+        status: "awaiting_approval",
+        sessionRunId: sessionRunId || next.sessionRunId,
+        approvalId: approvalId || next.approvalId,
+        packageId: stringValue(review.package_id || review.packageId || review.id) || next.packageId,
+        error: "",
+      }
+    }
+    if (eventType === "workflow_result") {
+      const resultType = stringValue(payload.result_type || payload.resultType)
+      if (resultType !== "capability_package_install") continue
+      const status = stringValue(payload.status)
+      next = {
+        ...next,
+        running: false,
+        status: status === "done" || status === "completed" ? "completed" : status === "cancelled" ? "cancelled" : "failed",
+        sessionRunId: sessionRunId || next.sessionRunId,
+        error: status === "error" ? stringValue(payload.message || payload.summary || next.error) : "",
+      }
+    }
+  }
+  return next
+}
+
+export function shouldRefreshCapabilitiesAfterCapabilityPackageIngest(
+  current: CapabilityPackageIngestState,
+  next: CapabilityPackageIngestState,
+): boolean {
+  return current.status !== "completed" && next.status === "completed"
+}
+
+export function reduceCapabilityPackageIngestErrorState(
+  current: CapabilityPackageIngestState,
+  payload: { message?: string; validationMessages?: string[] },
+): CapabilityPackageIngestState {
+  return {
+    ...current,
+    running: false,
+    status: "failed",
+    validationMessages: payload.validationMessages || [],
+    error: payload.message || "Capability package request failed",
+  }
+}
+
 function summarizeEnvironmentEntries(entries: EnvironmentEntryState[]) {
   return entries.reduce(
     (summary, entry) => {
@@ -3027,10 +3141,23 @@ export function createSettingsController(props: SettingsViewProps) {
     }
   }
 
+  const applyCapabilityPackageSessionRunMessage = (msg: Record<string, unknown>) => {
+    let refreshInstalledCapabilities = false
+    setCapabilityPackageIngestState((current) => {
+      const next = reduceCapabilityPackageIngestSessionState(current, msg)
+      refreshInstalledCapabilities = shouldRefreshCapabilitiesAfterCapabilityPackageIngest(current, next)
+      return next
+    })
+    if (refreshInstalledCapabilities) {
+      refreshOperation("capabilities", { mode: "background" })
+    }
+  }
+
   onMount(() => {
     const unsubscribe = vscode.onMessage((msg) => {
       const rawMessage = msg as unknown as Record<string, unknown>
       const message = typeof rawMessage.message === "string" ? rawMessage.message : "Settings request failed"
+      applyCapabilityPackageSessionRunMessage(rawMessage)
       if (msg.type === "remoteState.patch" && typeof msg.payload === "object" && msg.payload) {
         const payload = objectValue(msg.payload)
         settleRemoteStateSlice(stringValue(payload.key), objectValue(payload.slice))
@@ -3149,11 +3276,9 @@ export function createSettingsController(props: SettingsViewProps) {
           ...stringArray(msg.messages),
           ...stringArray(payload.messages),
         ].filter((item, index, items) => items.indexOf(item) === index)
-        setCapabilityPackageIngestState((current) => ({
-          ...current,
-          running: false,
+        setCapabilityPackageIngestState((current) => reduceCapabilityPackageIngestErrorState(current, {
           validationMessages,
-          error: message || "Capability package request failed",
+          message,
         }))
       }
     })

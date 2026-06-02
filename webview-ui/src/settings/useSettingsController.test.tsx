@@ -31,7 +31,13 @@ vi.mock("../context/vscode", () => ({
   useVSCode: () => mocks.vscode,
 }))
 
-import { createSettingsController, profileToDraft } from "./useSettingsController"
+import {
+  createSettingsController,
+  profileToDraft,
+  reduceCapabilityPackageIngestErrorState,
+  reduceCapabilityPackageIngestSessionState,
+  shouldRefreshCapabilitiesAfterCapabilityPackageIngest,
+} from "./useSettingsController"
 import { setLocale } from "../i18n"
 
 const settingsControllerSource = readFileSync(join(__dirname, "useSettingsController.tsx"), "utf8")
@@ -445,6 +451,192 @@ describe("settings controller capability model", () => {
         },
       })
     })
+  })
+
+  it("marks capability package session start errors as failed", () => {
+    expect(reduceCapabilityPackageIngestErrorState({
+      running: true,
+      agentRunId: "",
+      status: "opening_session",
+      error: "",
+    }, {
+      message: "session start failed",
+      validationMessages: ["bad source"],
+    })).toMatchObject({
+      running: false,
+      status: "failed",
+      error: "session start failed",
+      validationMessages: ["bad source"],
+    })
+  })
+
+  it("projects capability package session run events into settings entry state", () => {
+    const initial = {
+      running: false,
+      agentRunId: "",
+      status: "idle",
+      error: "",
+    }
+    const running = reduceCapabilityPackageIngestSessionState(initial, {
+      type: "sessionRun.session",
+      sessionRunId: "run-cap",
+      sessionId: "session-cap",
+      runtimeState: {
+        workflow: "capability_package_ingest",
+        agent_id: "capability_packager",
+      },
+    })
+
+    expect(running).toMatchObject({
+      status: "session_running",
+      sessionRunId: "run-cap",
+      sessionId: "session-cap",
+    })
+
+    const awaitingApproval = reduceCapabilityPackageIngestSessionState(running, {
+      type: "sessionRun.events",
+      sessionRunId: "run-cap",
+      events: [
+        {
+          type: "workflow_decision",
+          payload: {
+            approval_id: "approval-cap",
+            decision_type: "capability_package_install",
+            tool_name: "install_capability_package",
+            review: { package_id: "pkg-cap" },
+          },
+        },
+      ],
+    })
+
+    expect(awaitingApproval).toMatchObject({
+      status: "awaiting_approval",
+      sessionRunId: "run-cap",
+      sessionId: "session-cap",
+      approvalId: "approval-cap",
+      packageId: "pkg-cap",
+    })
+
+    const completed = reduceCapabilityPackageIngestSessionState(awaitingApproval, {
+      type: "sessionRun.events",
+      sessionRunId: "run-cap",
+      events: [
+        {
+          type: "workflow_result",
+          payload: {
+            result_type: "capability_package_install",
+            status: "done",
+            message: "installed",
+          },
+        },
+      ],
+    })
+
+    expect(completed).toMatchObject({
+      status: "completed",
+      sessionRunId: "run-cap",
+      sessionId: "session-cap",
+      approvalId: "approval-cap",
+      packageId: "pkg-cap",
+      error: "",
+    })
+
+    const failed = reduceCapabilityPackageIngestSessionState(awaitingApproval, {
+      type: "sessionRun.events",
+      sessionRunId: "run-cap",
+      events: [
+        {
+          type: "workflow_result",
+          payload: {
+            result_type: "capability_package_install",
+            status: "error",
+            message: "install failed",
+          },
+        },
+      ],
+    })
+    expect(failed).toMatchObject({
+      status: "failed",
+      sessionRunId: "run-cap",
+      error: "install failed",
+    })
+
+    const cancelled = reduceCapabilityPackageIngestSessionState(awaitingApproval, {
+      type: "sessionRun.events",
+      sessionRunId: "run-cap",
+      events: [
+        {
+          type: "workflow_result",
+          payload: {
+            result_type: "capability_package_install",
+            status: "cancelled",
+          },
+        },
+      ],
+    })
+    expect(cancelled).toMatchObject({
+      status: "cancelled",
+      sessionRunId: "run-cap",
+      error: "",
+    })
+  })
+
+  it("restores awaiting approval state from session run resume payload", () => {
+    const next = reduceCapabilityPackageIngestSessionState({
+      running: false,
+      agentRunId: "",
+      status: "idle",
+      error: "",
+    }, {
+      type: "sessionRun.resume",
+      payload: {
+        sessionRunId: "run-cap",
+        sessionId: "session-cap",
+        runtimeState: {
+          workflow: "capability_package_ingest",
+          agent_id: "capability_packager",
+        },
+        approvals: [
+          {
+            approval_id: "approval-cap",
+            decision_type: "capability_package_install",
+            tool_name: "install_capability_package",
+            review: { package_id: "pkg-cap" },
+            state: "requested",
+          },
+        ],
+      },
+    })
+
+    expect(next).toMatchObject({
+      status: "awaiting_approval",
+      sessionRunId: "run-cap",
+      sessionId: "session-cap",
+      approvalId: "approval-cap",
+      packageId: "pkg-cap",
+      error: "",
+    })
+  })
+
+  it("marks capability refresh only when capability package install enters completed state", () => {
+    const awaitingApproval = {
+      running: false,
+      agentRunId: "",
+      status: "awaiting_approval",
+      error: "",
+      sessionRunId: "run-cap",
+    }
+    const completed = {
+      ...awaitingApproval,
+      status: "completed",
+    }
+
+    expect(shouldRefreshCapabilitiesAfterCapabilityPackageIngest(awaitingApproval, completed)).toBe(true)
+    expect(shouldRefreshCapabilitiesAfterCapabilityPackageIngest(completed, completed)).toBe(false)
+    expect(shouldRefreshCapabilitiesAfterCapabilityPackageIngest(awaitingApproval, {
+      ...awaitingApproval,
+      status: "failed",
+    })).toBe(false)
   })
 
   it("does not keep settings-owned capability package polling or draft approval paths", () => {
