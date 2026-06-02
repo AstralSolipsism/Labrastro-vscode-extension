@@ -113,6 +113,24 @@ interface TabProps { controller: SettingsController & Record<string, any> }
 const MCP_ENVIRONMENT_ACTION_TITLE = "MCP Server 通过环境要求引用间接检查"
 const PACKAGE_MANAGED_RESOURCE_MESSAGE = "该资源由能力包管理，请在能力包页启停或删除来源能力包。"
 
+function capabilityIngestStatusLabel(status: string): string {
+  if (status === "opening_session") return "正在打开对话"
+  if (status === "session_started" || status === "session_running") return "已进入对话处理"
+  if (status === "awaiting_approval") return "等待安装确认"
+  if (status === "completed") return "安装完成"
+  if (status === "cancelled") return "已取消"
+  if (status === "failed") return "安装失败"
+  return status
+}
+
+function capabilityIngestStatusTone(status: string): "success" | "warning" | "muted" | "error" | undefined {
+  if (status === "completed") return "success"
+  if (status === "failed") return "error"
+  if (status === "cancelled") return "muted"
+  if (status === "opening_session" || status === "session_started" || status === "session_running" || status === "awaiting_approval") return "warning"
+  return undefined
+}
+
 function stringArrayValue(value: unknown): string[] {
   return Array.isArray(value)
     ? value.map((item) => String(item).trim()).filter(Boolean)
@@ -1773,9 +1791,11 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
                   <textarea rows={5} value={capabilitySourceNotes()} onInput={(event) => setCapabilitySourceNotes(event.currentTarget.value)} placeholder="目标场景、预期命令、凭据边界" />
                 </label>
               </div>
-              <Show when={capabilityPackageIngestState().running}>
+              <Show when={capabilityPackageIngestState().status !== "idle"}>
                 <div class="capability-ingest-status">
-                  <StatusBadge tone="warning">opening session</StatusBadge>
+                  <StatusBadge tone={capabilityIngestStatusTone(capabilityPackageIngestState().status)}>
+                    {capabilityIngestStatusLabel(capabilityPackageIngestState().status)}
+                  </StatusBadge>
                 </div>
               </Show>
             </div>
