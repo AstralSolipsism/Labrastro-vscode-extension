@@ -32,6 +32,7 @@ vi.mock("../context/vscode", () => ({
 }))
 
 import {
+  agentToDraft,
   createSettingsController,
   profileToDraft,
   reduceCapabilityPackageIngestErrorState,
@@ -126,6 +127,38 @@ function runtimeProfileDraft(overrides: Record<string, unknown> = {}) {
     mcpServersText: "",
     ...overrides,
   }
+}
+
+function agentDraft(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "reviewer",
+    name: "",
+    description: "",
+    role: "worker",
+    chat_entrypoint: false,
+    visibility: "user",
+    delegable: true,
+    taskflow_eligible: true,
+    systemFlowOnlyText: "",
+    runtime_profile: "agent_remote",
+    modelKey: "",
+    dispatchProfileText: "",
+    dispatchExamplesText: "",
+    dispatchAvoidText: "",
+    systemAppend: "",
+    agentMd: "",
+    capabilityRefsText: "",
+    max_concurrent_tasks: 1,
+    credentialRefsText: "",
+    memoryEnabled: true,
+    memoryProvider: "",
+    memoryInject: true,
+    memoryCapture: true,
+    memoryTokenBudget: 0,
+    memoryExposeTools: false,
+    memoryPolicyRest: {},
+    ...overrides,
+  } as any
 }
 
 describe("settings controller capability model", () => {
@@ -646,6 +679,233 @@ describe("settings controller capability model", () => {
     expect(settingsControllerSource).not.toContain("acceptCapabilityPackageDraft")
   })
 
+  it("surfaces agent config first-load background resources", () => {
+    withController(makeServer({
+      connectionState: () => ({ status: "ready", authenticated: true, role: "superadmin" }),
+    }), (controller) => {
+      controller.refreshPage("agentConfig", { mode: "background" })
+
+      expect(controller.pageRefreshing("agentConfig")).toBe(true)
+      expect(controller.pageInitialLoading("agentConfig")).toBe(true)
+      expect(controller.pageRevalidating("agentConfig")).toBe(false)
+      expect(controller.pageLoadingItems("agentConfig")).toEqual([
+        "服务器设置",
+        "会话配置",
+        "模型配置",
+      ])
+      expect(controller.pageLoadingMessage("agentConfig")).toBe("正在加载服务器设置、会话配置、模型配置")
+    })
+  })
+
+  it("keeps agent config content visible while existing resources revalidate", () => {
+    withController(makeServer({
+      connectionState: () => ({ status: "ready", authenticated: true, role: "superadmin" }),
+      serverSettingsState: () => ({ settings: { agent_registry: { profiles: {}, agents: {} } } }),
+      chatConfigState: () => ({ default_model: "deepseek" }),
+      modelProfilesState: () => ({ model_profiles: [] }),
+    }), (controller) => {
+      controller.refreshPage("agentConfig", { mode: "background" })
+
+      expect(controller.pageRefreshing("agentConfig")).toBe(true)
+      expect(controller.pageInitialLoading("agentConfig")).toBe(false)
+      expect(controller.pageRevalidating("agentConfig")).toBe(true)
+    })
+  })
+
+  it("keeps agent config content visible when auxiliary resources have not loaded yet", () => {
+    withController(makeServer({
+      connectionState: () => ({ status: "ready", authenticated: true, role: "superadmin" }),
+      serverSettingsState: () => ({ settings: { agent_registry: { profiles: {}, agents: {} } } }),
+    }), (controller) => {
+      controller.refreshPage("agentConfig", { mode: "background" })
+
+      expect(controller.pageRefreshing("agentConfig")).toBe(true)
+      expect(controller.pageInitialLoading("agentConfig")).toBe(false)
+      expect(controller.pageRevalidating("agentConfig")).toBe(true)
+      expect(controller.pageLoadingItems("agentConfig")).toEqual([
+        "服务器设置",
+        "会话配置",
+        "模型配置",
+      ])
+    })
+  })
+
+  it("surfaces capability first-load background resources", () => {
+    withController(makeServer({
+      connectionState: () => ({ status: "ready", authenticated: true, role: "superadmin" }),
+    }), (controller) => {
+      controller.refreshPage("capabilities", { mode: "background" })
+
+      expect(controller.pageRefreshing("capabilities")).toBe(true)
+      expect(controller.pageInitialLoading("capabilities")).toBe(true)
+      expect(controller.pageRevalidating("capabilities")).toBe(false)
+      expect(controller.pageLoadingItems("capabilities")).toEqual([
+        "服务器设置",
+        "能力清单",
+        "环境清单",
+      ])
+      expect(controller.pageLoadingMessage("capabilities")).toBe("正在加载服务器设置、能力清单、环境清单")
+    })
+  })
+
+  it("keeps capability content visible when the environment manifest has not loaded yet", () => {
+    withController(makeServer({
+      connectionState: () => ({ status: "ready", authenticated: true, role: "superadmin" }),
+      serverSettingsState: () => ({ settings: { capability_packages: {} } }),
+      capabilityState: () => ({ dashboard_items: [], environment_requirements: [], mcp_servers: [], skills: [] }),
+    }), (controller) => {
+      controller.refreshPage("capabilities", { mode: "background" })
+
+      expect(controller.pageRefreshing("capabilities")).toBe(true)
+      expect(controller.pageInitialLoading("capabilities")).toBe(false)
+      expect(controller.pageRevalidating("capabilities")).toBe(true)
+      expect(controller.pageLoadingItems("capabilities")).toEqual([
+        "服务器设置",
+        "能力清单",
+        "环境清单",
+      ])
+    })
+  })
+
+  it("keeps capabilities in first-load state until capability state is available", () => {
+    withController(makeServer({
+      connectionState: () => ({ status: "ready", authenticated: true, role: "superadmin" }),
+      serverSettingsState: () => ({ settings: { capability_packages: {} } }),
+      environmentManifest: () => ({ entries: [] }),
+    }), (controller) => {
+      controller.refreshPage("capabilities", { mode: "background" })
+
+      expect(controller.pageRefreshing("capabilities")).toBe(true)
+      expect(controller.pageInitialLoading("capabilities")).toBe(true)
+      expect(controller.pageRevalidating("capabilities")).toBe(false)
+    })
+  })
+
+  it("keeps provider first-load feedback visible", () => {
+    withController(makeServer({
+      connectionState: () => ({ status: "ready", authenticated: true, role: "superadmin" }),
+    }), (controller) => {
+      controller.refreshPage("providers", { mode: "background" })
+
+      expect(controller.pageRefreshing("providers")).toBe(true)
+      expect(controller.pageInitialLoading("providers")).toBe(true)
+      expect(controller.pageLoadingMessage("providers")).toBe("正在加载服务商、模型配置")
+    })
+  })
+
+  it("exposes configured memory providers for per-agent selection", () => {
+    withController(makeServer({
+      serverSettingsState: () => ({
+        settings: {
+          memory: {
+            providers: {
+              agentmemory: { adapter: "agentmemory_rest" },
+              archived: { adapter: "file" },
+            },
+          },
+          memory_status: {
+            providers: [
+              { id: "agentmemory", adapter: "agentmemory_rest", status: "available", available: true },
+            ],
+          },
+        },
+      }),
+    }), (controller) => {
+      expect(controller.memoryProviderOptions()).toEqual([
+        { id: "agentmemory", adapter: "agentmemory_rest", status: "available", available: true },
+        { id: "archived", adapter: "", status: "configured", available: false },
+      ])
+    })
+  })
+
+  it("persists per-agent memory provider policy through agent config", () => {
+    const controller = withController(makeServer(), (controller) => controller)
+
+    controller.setProfileDrafts({
+      agent_remote: runtimeProfileDraft({ id: "agent_remote" }),
+    })
+    controller.setAgentDrafts({
+      reviewer: agentDraft({
+        id: "reviewer",
+        runtime_profile: "agent_remote",
+        memoryProvider: "agentmemory",
+        memoryInject: false,
+        memoryCapture: false,
+        memoryTokenBudget: 500,
+        memoryPolicyRest: {
+          read_providers: ["agentmemory", "archive"],
+          scope_mode: "shared",
+        },
+      }),
+    })
+
+    controller.saveAgentConfig()
+
+    expect(mocks.vscode.postMessage).toHaveBeenCalledWith({
+      type: "serverSettings.update",
+      payload: expect.objectContaining({
+        agent_registry: {
+          agents: {
+            reviewer: expect.objectContaining({
+              memory: {
+                primary_provider: "agentmemory",
+                inject: false,
+                capture: false,
+                token_budget: 500,
+                read_providers: ["agentmemory", "archive"],
+                scope_mode: "shared",
+              },
+            }),
+          },
+        },
+      }),
+    })
+  })
+
+  it("preserves backend-only agent memory policy fields while saving visible agent edits", () => {
+    const controller = withController(makeServer(), (controller) => controller)
+    const reviewer = agentToDraft("reviewer", {
+      name: "Reviewer",
+      runtime_profile: "agent_remote",
+      memory: {
+        primary_provider: "agentmemory",
+        read_providers: ["agentmemory", "archive"],
+        scope_mode: "shared",
+      },
+    })
+
+    expect(reviewer.memoryPolicyRest).toEqual({
+      read_providers: ["agentmemory", "archive"],
+      scope_mode: "shared",
+    })
+
+    controller.setProfileDrafts({
+      agent_remote: runtimeProfileDraft({ id: "agent_remote" }),
+    })
+    controller.setAgentDrafts({ reviewer })
+    controller.setSelectedAgentId("reviewer")
+    controller.updateAgentField("memoryCapture", false)
+    controller.saveAgentConfig()
+
+    expect(mocks.vscode.postMessage).toHaveBeenCalledWith({
+      type: "serverSettings.update",
+      payload: expect.objectContaining({
+        agent_registry: {
+          agents: {
+            reviewer: expect.objectContaining({
+              memory: {
+                primary_provider: "agentmemory",
+                capture: false,
+                read_providers: ["agentmemory", "archive"],
+                scope_mode: "shared",
+              },
+            }),
+          },
+        },
+      }),
+    })
+  })
+
   it("persists runtime profile worker identity and model request origin", () => {
     const controller = withController(makeServer(), (controller) => controller)
 
@@ -668,27 +928,10 @@ describe("settings controller capability model", () => {
       },
     })
     controller.setAgentDrafts({
-      reviewer: {
+      reviewer: agentDraft({
         id: "reviewer",
-        name: "",
-        description: "",
-        role: "worker",
-        chat_entrypoint: false,
-        visibility: "user",
-        delegable: true,
-        taskflow_eligible: true,
-        systemFlowOnlyText: "",
         runtime_profile: "agent_remote",
-        modelKey: "",
-        dispatchProfileText: "",
-        dispatchExamplesText: "",
-        dispatchAvoidText: "",
-        systemAppend: "",
-        agentMd: "",
-        capabilityRefsText: "",
-        max_concurrent_tasks: 1,
-        credentialRefsText: "",
-      },
+      }),
     })
 
     controller.saveAgentConfig()
@@ -750,15 +993,12 @@ describe("settings controller capability model", () => {
       }),
     })
     controller.setAgentDrafts({
-      capability_packager: {
+      capability_packager: agentDraft({
         id: "capability_packager",
         name: "Capability Packager",
-        description: "",
         role: "coordinator",
         chat_entrypoint: true,
         visibility: "system",
-        delegable: true,
-        taskflow_eligible: true,
         systemFlowOnlyText: "wrong_flow",
         runtime_profile: "wrong_profile",
         modelKey: "deepseek::deepseek-v4-pro",
@@ -766,11 +1006,11 @@ describe("settings controller capability model", () => {
         dispatchExamplesText: "changed example",
         dispatchAvoidText: "changed avoid",
         systemAppend: "changed prompt",
-        agentMd: "",
         capabilityRefsText: "wrong_capability",
-        max_concurrent_tasks: 1,
         credentialRefsText: "secret=wrong",
-      },
+        memoryProvider: "agentmemory",
+        memoryExposeTools: true,
+      }),
     })
 
     controller.saveAgentConfig()
@@ -794,6 +1034,10 @@ describe("settings controller capability model", () => {
                   temperature: 0.2,
                   thinking_enabled: true,
                 }),
+              },
+              memory: {
+                primary_provider: "agentmemory",
+                expose_tools: true,
               },
             }),
           },
@@ -946,27 +1190,10 @@ describe("settings controller capability model", () => {
       },
     })
     controller.setAgentDrafts({
-      reviewer: {
+      reviewer: agentDraft({
         id: "reviewer",
-        name: "",
-        description: "",
-        role: "worker",
-        chat_entrypoint: false,
-        visibility: "user",
-        delegable: true,
-        taskflow_eligible: true,
-        systemFlowOnlyText: "",
         runtime_profile: "",
-        modelKey: "",
-        dispatchProfileText: "",
-        dispatchExamplesText: "",
-        dispatchAvoidText: "",
-        systemAppend: "",
-        agentMd: "",
-        capabilityRefsText: "",
-        max_concurrent_tasks: 1,
-        credentialRefsText: "",
-      },
+      }),
     })
 
     expect(() => controller.validateAgentConfigDrafts()).toThrow(/必须选择 Runtime Profile/)
@@ -994,27 +1221,10 @@ describe("settings controller capability model", () => {
       },
     })
     controller.setAgentDrafts({
-      local_worker: {
+      local_worker: agentDraft({
         id: "local_worker",
-        name: "",
-        description: "",
-        role: "worker",
-        chat_entrypoint: false,
-        visibility: "user",
-        delegable: true,
-        taskflow_eligible: true,
-        systemFlowOnlyText: "",
         runtime_profile: "local_cli",
-        modelKey: "",
-        dispatchProfileText: "",
-        dispatchExamplesText: "",
-        dispatchAvoidText: "",
-        systemAppend: "",
-        agentMd: "",
-        capabilityRefsText: "",
-        max_concurrent_tasks: 1,
-        credentialRefsText: "",
-      },
+      }),
     })
 
     expect(() => controller.validateAgentConfigDrafts()).toThrow(/Taskflow.*服务端/)

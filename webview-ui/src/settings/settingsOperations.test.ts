@@ -14,6 +14,7 @@ import {
   settingsCapabilityIngestOperationIsBusy,
   settingsOperationIsBusy,
   settingsPageIsRefreshing,
+  settingsPageInitialOperationKeys,
   settingsPageOperationKeys,
   settingsProviderActionResultIsBusy,
   settingsProviderModelReadIsBusy,
@@ -41,6 +42,17 @@ describe("settings operations", () => {
       "providers",
       "modelProfiles",
     ])
+  })
+
+  it("keeps auxiliary resources out of initial page blocking keys", () => {
+    expect(settingsPageInitialOperationKeys("agentConfig")).toEqual(["serverSettings"])
+    expect(settingsPageInitialOperationKeys("capabilities")).toEqual(["serverSettings", "capabilities"])
+    expect(settingsPageInitialOperationKeys("memory")).toEqual(["serverSettings"])
+    expect(settingsPageInitialOperationKeys("providers")).toEqual(settingsPageOperationKeys("providers"))
+  })
+
+  it("maps memory refresh to server settings only", () => {
+    expect(settingsPageOperationKeys("memory")).toEqual(["serverSettings"])
   })
 
   it("maps agent config refresh to server settings and model profiles", () => {
@@ -127,7 +139,7 @@ describe("settings operations", () => {
     expect(settingsServerSettingsWriteIsBusy(states)).toBe(false)
   })
 
-  it("keeps background refreshes out of page loading while allowing foreground takeover", () => {
+  it("surfaces background refreshes in page loading while allowing foreground takeover", () => {
     let states = initialSettingsOperationStates()
     let background: SettingsBackgroundRefreshes = {}
 
@@ -135,17 +147,18 @@ describe("settings operations", () => {
 
     expect(settingsBackgroundRefreshIsBusy(background, "serverSettings")).toBe(true)
     expect(settingsPageIsRefreshing(states, "serverSettings")).toBe(false)
+    expect(settingsPageIsRefreshing(states, "serverSettings", background)).toBe(true)
     expect(settingsRefreshShouldSendRequest(states, background, "serverSettings", "foreground")).toBe(false)
     expect(settingsRefreshShouldMarkForeground(states, background, "serverSettings", "foreground")).toBe(true)
 
     states = markSettingsOperationStarted(states, "serverSettings", "loading", 100)
-    expect(settingsPageIsRefreshing(states, "serverSettings")).toBe(true)
+    expect(settingsPageIsRefreshing(states, "serverSettings", background)).toBe(true)
 
     background = markSettingsBackgroundRefreshFinished(background, "serverSettings")
     states = markSettingsOperationSuccess(states, "serverSettings", 200)
 
     expect(settingsBackgroundRefreshIsBusy(background, "serverSettings")).toBe(false)
-    expect(settingsPageIsRefreshing(states, "serverSettings")).toBe(false)
+    expect(settingsPageIsRefreshing(states, "serverSettings", background)).toBe(false)
   })
 
   it("prevents duplicate background refreshes and excludes provider model refresh", () => {
