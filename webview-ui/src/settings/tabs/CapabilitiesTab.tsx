@@ -22,6 +22,7 @@ import {
   SettingsListCardMain,
   SettingsListCardMeta,
   SettingsListCardSelect,
+  SettingsLoadingState,
   SettingsPage,
   SettingsPageHeader,
   SettingsPane,
@@ -240,6 +241,10 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
   } = props.controller
 
   const [section, setSection] = createSignal<CapabilitySection>("capabilities")
+  const capabilitiesInitialLoading = () => props.controller.pageInitialLoading("capabilities")
+  const capabilitiesRevalidating = () => props.controller.pageRevalidating("capabilities")
+  const capabilitiesLoadingMessage = () =>
+    props.controller.pageLoadingMessage("capabilities") || "正在加载服务器设置、能力清单、环境清单"
   const [capabilityKindFilter, setCapabilityKindFilter] = createSignal<CapabilityKindFilter>("all")
   const [selectedCapabilityResourceId, setSelectedCapabilityResourceId] = createSignal("")
   const [selectedCapabilityPackageId, setSelectedCapabilityPackageId] = createSignal("")
@@ -1324,9 +1329,15 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
         <Show when={capabilityActionFeedback()}>
           <div class="settings-success">{capabilityActionFeedback()}</div>
         </Show>
-        <Show when={!environmentAgentAvailable()}>
+        <Show when={capabilitiesRevalidating() && !capabilitiesInitialLoading()}>
+          <p class="settings-empty-note">{capabilitiesLoadingMessage()}</p>
+        </Show>
+        <Show when={!capabilitiesInitialLoading() && !environmentAgentAvailable()}>
           <div class="settings-empty-note">内建环境 Agent environment_configurator 不可用。请刷新服务器设置或检查后端配置。</div>
         </Show>
+
+        <Show when={capabilitiesInitialLoading()} fallback={
+          <>
 
         <SettingsSubTabs ariaLabel="能力/行为管理视图">
           <For each={CAPABILITY_SECTIONS}>
@@ -1943,6 +1954,13 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
             </Show>
           </div>
         </SettingsFlatSection>
+          </>
+        }>
+          <SettingsLoadingState
+            title="正在加载能力包与能力管理"
+            detail={capabilitiesLoadingMessage()}
+          />
+        </Show>
 
         <Show when={selectedEnvironmentApproval()}>
           {(approval) => (
