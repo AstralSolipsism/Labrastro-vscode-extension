@@ -73,6 +73,8 @@ export function approvalSummary(approval: ApprovalDetails): {
   icon: string
   category: AutoApprovalCategory
 } {
+  const capabilityPackage = capabilityPackageInstallSummary(approval)
+  if (capabilityPackage) return capabilityPackage
   const category = classifyApproval(approval)
   const filePath = approvalFilePath(approval)
   const mcpTarget =
@@ -137,6 +139,35 @@ export function approvalSummary(approval: ApprovalDetails): {
     secondary: approval.reason || "此工具调用需要批准。",
     icon: "tools",
     category,
+  }
+}
+
+function capabilityPackageInstallSummary(approval: ApprovalDetails): {
+  title: string
+  primary: string
+  secondary: string
+  icon: string
+  category: AutoApprovalCategory
+} | undefined {
+  const raw = objectValue(approval.rawPayload)
+  const review = objectValue(raw.review)
+  const decisionType = stringValue(raw.decision_type || raw.decisionType)
+  if (decisionType !== "capability_package_install" && approval.toolName !== "install_capability_package") {
+    return undefined
+  }
+  const packageLabel =
+    stringValue(review.display_name) ||
+    stringValue(review.displayName) ||
+    stringValue(review.name) ||
+    stringValue(review.package_id) ||
+    stringValue(review.packageId) ||
+    approval.toolName
+  return {
+    title: "安装能力包",
+    primary: packageLabel,
+    secondary: stringValue(review.summary) || approval.intent || approval.reason || "确认后会安装能力包及其组件。",
+    icon: "extensions",
+    category: "unknown",
   }
 }
 

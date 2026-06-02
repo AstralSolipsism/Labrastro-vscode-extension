@@ -149,7 +149,7 @@ export const ApprovalDetailsDialog: Component<ApprovalDetailsDialogProps> = (pro
             <span class={`codicon codicon-${summary().icon}`} aria-hidden="true" />
             <div>
               <h2>操作审批</h2>
-              <span>{props.approval.toolName}</span>
+              <span>{summary().primary}</span>
             </div>
           </div>
           <button class="approval-dialog__close" type="button" onClick={() => props.onClose()} aria-label="关闭">

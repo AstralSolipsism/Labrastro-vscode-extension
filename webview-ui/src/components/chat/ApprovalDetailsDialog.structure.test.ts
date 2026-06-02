@@ -38,4 +38,13 @@ describe("approval prompt structure", () => {
     expect(detailsSource).toContain("自动批准规则")
     expect(detailsSource).toContain("role=\"radiogroup\"")
   })
+
+  it("uses the approval summary label instead of raw tool name in the dialog header", () => {
+    const detailsStart = source.indexOf("export const ApprovalDetailsDialog")
+    const detailsBodyStart = source.indexOf("<ApprovalDetailsBody", detailsStart)
+    const headerSource = source.slice(detailsStart, detailsBodyStart)
+
+    expect(headerSource).toContain("{summary().primary}")
+    expect(headerSource).not.toContain("{props.approval.toolName}")
+  })
 })

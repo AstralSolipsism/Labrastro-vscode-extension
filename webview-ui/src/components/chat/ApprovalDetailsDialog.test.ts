@@ -63,4 +63,36 @@ describe("approval details helpers", () => {
     expect(summary.title).toBe("调用 MCP")
     expect(summary.primary).toBe("context7 · resolve-library-id")
   })
+
+  it("summarizes capability package install approvals as package installation", () => {
+    const details = approvalFromPayload({
+      approval_id: "approval-cap",
+      tool_name: "install_capability_package",
+      decision_type: "capability_package_install",
+      intent: "确认安装能力包 Review。",
+      review: {
+        package_id: "review",
+        display_name: "Review",
+        summary: "Review pull requests.",
+      },
+      sections: [
+        {
+          id: "package",
+          title: "能力包",
+          kind: "key_values",
+          content: { package_id: "review" },
+        },
+      ],
+    })
+
+    const summary = approvalSummary(details)
+
+    expect(summary.title).toBe("安装能力包")
+    expect(summary.primary).toBe("Review")
+    expect(summary.secondary).toBe("Review pull requests.")
+    expect(summary.icon).toBe("extensions")
+    expect(summary.category).toBe("unknown")
+    expect(summary.primary).not.toBe("install_capability_package")
+    expect(details.sections).toHaveLength(1)
+  })
 })
