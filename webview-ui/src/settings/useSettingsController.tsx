@@ -49,6 +49,7 @@ import {
   settingsOperationUsesProviderActionResult,
   settingsOperationIsBusy,
   settingsPageIsRefreshing,
+  settingsPageInitialOperationKeys,
   settingsPageOperationKeys,
   settingsProviderActionResultIsBusy,
   settingsProviderModelReadIsBusy,
@@ -108,6 +109,26 @@ const EXECUTOR_ENGINES: ExecutorEngineOption[] = [
   { id: "gemini",  label: "Gemini",  icon: "star-empty",   description: "Google Gemini CLI",     ready: false },
   { id: "astrbot", label: "AstrBot", icon: "rocket",       description: "AstrBot 多平台框架",     ready: false },
 ]
+
+const SETTINGS_RESOURCE_LABELS: Partial<Record<SettingsOperationKey, string>> = {
+  providers: "服务商",
+  modelProfiles: "模型配置",
+  chatConfig: "会话配置",
+  github: "GitHub 状态",
+  serverSettings: "服务器设置",
+  autoApproval: "自动审批",
+  reasoningDisplay: "推理展示设置",
+  chatSendDuringRunMode: "运行中发送策略",
+  peerDiagnosticsLogging: "诊断日志设置",
+  toolDiagnostics: "工具诊断",
+  modelCapabilities: "模型能力表",
+  capabilities: "能力清单",
+  environmentManifest: "环境清单",
+  accounts: "账号权限",
+  authUsers: "用户列表",
+  authDevices: "设备列表",
+  authAudit: "审计日志",
+}
 
 function executorLocationLabel(location: ExecutorLocation): string {
   return location === "local" ? "本地" : "远端"
@@ -538,6 +559,13 @@ interface AgentDefinitionDraft {
   capabilityRefsText: string
   max_concurrent_tasks: number
   credentialRefsText: string
+  memoryEnabled: boolean
+  memoryProvider: string
+  memoryInject: boolean
+  memoryCapture: boolean
+  memoryTokenBudget: number
+  memoryExposeTools: boolean
+  memoryPolicyRest: Record<string, unknown>
 }
 
 interface RuntimeOption {
@@ -628,7 +656,24 @@ function emptyAgentDraft(id = ""): AgentDefinitionDraft {
     capabilityRefsText: "",
     max_concurrent_tasks: 1,
     credentialRefsText: "",
+    memoryEnabled: true,
+    memoryProvider: "",
+    memoryInject: true,
+    memoryCapture: true,
+    memoryTokenBudget: 0,
+    memoryExposeTools: false,
+    memoryPolicyRest: {},
   }
+}
+
+const AGENT_MEMORY_POLICY_REST_KEYS = ["read_providers", "scope_mode"] as const
+
+function agentMemoryPolicyRest(memory: Record<string, unknown>): Record<string, unknown> {
+  const rest: Record<string, unknown> = {}
+  for (const key of AGENT_MEMORY_POLICY_REST_KEYS) {
+    if (memory[key] !== undefined) rest[key] = memory[key]
+  }
+  return rest
 }
 
 function inferredProfileModelRequestOrigin(profile: Record<string, unknown>): string {
@@ -700,10 +745,11 @@ export function profileToDraft(id: string, profile: Record<string, unknown>): Ru
 }
 
 /** 将后端 agent 对象转为编辑器 draft */
-function agentToDraft(id: string, agent: Record<string, unknown>): AgentDefinitionDraft {
+export function agentToDraft(id: string, agent: Record<string, unknown>): AgentDefinitionDraft {
   const prompt = objectValue(agent.prompt)
   const model = objectValue(agent.model)
   const dispatch = objectValue(agent.dispatch)
+  const memory = objectValue(agent.memory)
   const providerId = stringValue(model.provider || model.provider_id)
   const modelId = stringValue(model.model || model.model_id)
   const visibility = agentVisibilityValue(agent.visibility)
@@ -729,6 +775,13 @@ function agentToDraft(id: string, agent: Record<string, unknown>): AgentDefiniti
     capabilityRefsText: stringArray(agent.capability_refs).join(", "),
     max_concurrent_tasks: numberValue(agent.max_concurrent_tasks, 1),
     credentialRefsText: kvObjectToText(objectValue(agent.credential_refs)),
+    memoryEnabled: boolValue(memory.enabled, true),
+    memoryProvider: stringValue(memory.primary_provider),
+    memoryInject: boolValue(memory.inject, true),
+    memoryCapture: boolValue(memory.capture, true),
+    memoryTokenBudget: numberValue(memory.token_budget, 0),
+    memoryExposeTools: boolValue(memory.expose_tools, false),
+    memoryPolicyRest: agentMemoryPolicyRest(memory),
   }
 }
 
@@ -801,6 +854,17 @@ function agentModelPayload(
   return modelPayload
 }
 
+function agentMemoryPayload(draft: AgentDefinitionDraft): Record<string, unknown> | undefined {
+  const memory: Record<string, unknown> = { ...draft.memoryPolicyRest }
+  if (!draft.memoryEnabled) memory.enabled = false
+  if (draft.memoryProvider.trim()) memory.primary_provider = draft.memoryProvider.trim()
+  if (!draft.memoryInject) memory.inject = false
+  if (!draft.memoryCapture) memory.capture = false
+  if (draft.memoryTokenBudget > 0) memory.token_budget = Math.max(1, Math.floor(draft.memoryTokenBudget))
+  if (draft.memoryExposeTools) memory.expose_tools = true
+  return Object.keys(memory).length ? memory : undefined
+}
+
 function agentDraftToPayload(
   draft: AgentDefinitionDraft,
   modelParametersByKey: Record<string, Record<string, unknown>> = {},
@@ -836,6 +900,8 @@ function agentDraftToPayload(
   if (capabilityRefs.length) payload.capability_refs = capabilityRefs
   const credRefs = textToKvObject(draft.credentialRefsText)
   if (Object.keys(credRefs).length) payload.credential_refs = credRefs
+  const memory = agentMemoryPayload(draft)
+  if (memory) payload.memory = memory
   return payload
 }
 
@@ -852,6 +918,12 @@ function systemAgentDraftToPayload(
     payload.model = modelPayload
   } else {
     delete payload.model
+  }
+  const memory = agentMemoryPayload(draft)
+  if (memory) {
+    payload.memory = memory
+  } else {
+    delete payload.memory
   }
   return payload
 }
@@ -893,6 +965,7 @@ const compats: ProviderCompat[] = ["generic", "deepseek", "kimi", "glm", "qwen",
 const settingsTabDefs: Array<{ id: SettingsTab; labelKey: string; icon: string }> = [
   { id: "executors", labelKey: "settings.tab.executors", icon: "radio-tower" },
   { id: "providers", labelKey: "settings.tab.providers", icon: "server-process" },
+  { id: "memory", labelKey: "settings.tab.memory", icon: "database" },
   { id: "agentConfig", labelKey: "settings.tab.agentConfig", icon: "hubot" },
   { id: "capabilities", labelKey: "settings.tab.capabilities", icon: "tools" },
   { id: "conversation", labelKey: "settings.tab.conversation", icon: "comment-discussion" },
@@ -909,6 +982,8 @@ export function normalizeSettingsTab(value: unknown): SettingsTab | undefined {
   switch (value) {
     case "providers":
       return "providers"
+    case "memory":
+      return "memory"
     case "executors":
       return "executors"
     case "accounts":
@@ -2621,7 +2696,8 @@ export function createSettingsController(props: SettingsViewProps) {
     setFetchedModels(models)
     setModelFetchMessage(providerModelCacheMessage(models))
   }
-  const pageRefreshing = (tab: SettingsTab): boolean => settingsPageIsRefreshing(operationStates(), tab)
+  const resourceRefreshBusy = (key: SettingsOperationKey): boolean =>
+    operationBusy(key) || backgroundRefreshBusy(key)
   const authUsers = createMemo(() => {
     const items = server.authUsersState()?.users
     return Array.isArray(items) ? items as Record<string, unknown>[] : []
@@ -2652,6 +2728,59 @@ export function createSettingsController(props: SettingsViewProps) {
   })
   const environmentManifest = createMemo(() => server.environmentManifest())
   const environmentSnapshot = createMemo(() => normalizeEnvironmentSnapshot(server.environmentSnapshot()))
+  const resourceHasData = (key: SettingsOperationKey): boolean => {
+    switch (key) {
+      case "providers":
+        return Boolean(server.providersState())
+      case "modelProfiles":
+        return Boolean(server.modelProfilesState())
+      case "chatConfig":
+        return Boolean(server.chatConfigState())
+      case "github":
+        return Boolean(server.githubState())
+      case "serverSettings":
+        return Boolean(server.serverSettingsState())
+      case "modelCapabilities":
+        return Boolean(server.modelCapabilitiesState())
+      case "capabilities":
+        return Boolean(server.capabilityState())
+      case "environmentManifest": {
+        const snapshot = environmentSnapshot()
+        return Boolean(
+          environmentManifest() ||
+          snapshot.lastManifestAt ||
+          snapshot.entries.length > 0
+        )
+      }
+      case "accounts":
+        return Boolean(server.authUsersState() || server.authDevicesState() || server.authAuditState())
+      case "authUsers":
+        return Boolean(server.authUsersState())
+      case "authDevices":
+        return Boolean(server.authDevicesState())
+      case "authAudit":
+        return Boolean(server.authAuditState())
+      default:
+        return operationState(key).status === "success"
+    }
+  }
+  const resourceLoadingLabel = (key: SettingsOperationKey): string =>
+    SETTINGS_RESOURCE_LABELS[key] || key
+  const pageRefreshing = (tab: SettingsTab): boolean =>
+    settingsPageIsRefreshing(operationStates(), tab, backgroundRefreshes())
+  const pageLoadingItems = (tab: SettingsTab): string[] =>
+    settingsPageOperationKeys(tab)
+      .filter((key) => resourceRefreshBusy(key))
+      .map(resourceLoadingLabel)
+  const pageInitialLoading = (tab: SettingsTab): boolean =>
+    settingsPageInitialOperationKeys(tab).some((key) => resourceRefreshBusy(key) && !resourceHasData(key))
+  const pageRevalidating = (tab: SettingsTab): boolean =>
+    !pageInitialLoading(tab) && settingsPageOperationKeys(tab).some((key) => resourceRefreshBusy(key))
+  const pageLoadingMessage = (tab: SettingsTab): string => {
+    const items = pageLoadingItems(tab)
+    if (!items.length) return ""
+    return `正在加载${items.join("、")}`
+  }
   const environmentError = createMemo(() =>
     stringValue(server.environmentError()) || environmentSnapshot().error
   )
@@ -2759,6 +2888,8 @@ export function createSettingsController(props: SettingsViewProps) {
     const settings = objectValue(serverSettingsPayload().settings)
     return {
       ...objectValue(settings.run_limits),
+      memory: objectValue(settings.memory),
+      memory_status: objectValue(settings.memory_status),
       runtime_profiles: objectValue(settings.runtime_profiles),
       agents: objectValue(objectValue(settings.agent_registry).agents),
     }
@@ -2818,6 +2949,29 @@ export function createSettingsController(props: SettingsViewProps) {
     capabilityPackageViews().map((item) => item.id)
   )
   const agentRunsState = createMemo(() => objectValue(serverSettingsPayload().runtime))
+  const memorySettings = createMemo(() => objectValue(agentRunsSettings().memory))
+  const memoryStatus = createMemo(() => objectValue(agentRunsSettings().memory_status))
+  const memoryProviderOptions = createMemo(() => {
+    const providers = Array.isArray(memoryStatus().providers)
+      ? memoryStatus().providers as Record<string, unknown>[]
+      : []
+    const items = providers
+      .map((provider) => ({
+        id: stringValue(provider.id || provider.provider),
+        adapter: stringValue(provider.adapter),
+        status: stringValue(provider.status),
+        available: provider.available === true,
+      }))
+      .filter((provider) => provider.id)
+    const configuredIds = new Set(items.map((provider) => provider.id))
+    const rawProviders = objectValue(memorySettings().providers)
+    for (const providerId of Object.keys(rawProviders)) {
+      if (!configuredIds.has(providerId)) {
+        items.push({ id: providerId, adapter: "", status: "configured", available: false })
+      }
+    }
+    return items.sort((a, b) => a.id.localeCompare(b.id))
+  })
   const modelCapabilitiesStatus = createMemo(() => {
     const direct = objectValue(server.modelCapabilitiesState()?.model_capabilities)
     if (Object.keys(direct).length) return direct
@@ -4349,6 +4503,8 @@ export function createSettingsController(props: SettingsViewProps) {
     updateServerSettingsForOperation("conversationSave", payload)
   const saveSessionPolicySettings = (payload: Record<string, unknown>) =>
     updateServerSettingsForOperation("sessionPolicySave", payload)
+  const saveMemorySettings = (payload: Record<string, unknown>) =>
+    updateServerSettingsForOperation("memorySave", payload)
   const saveAutoApprovalServerSettings = (payload: Record<string, unknown>) =>
     updateServerSettingsForOperation("autoApprovalSave", payload)
   const saveIntegrationsSettings = (payload: Record<string, unknown>) =>
@@ -4398,6 +4554,10 @@ export function createSettingsController(props: SettingsViewProps) {
     operations,
     refreshPage,
     pageRefreshing,
+    pageInitialLoading,
+    pageRevalidating,
+    pageLoadingItems,
+    pageLoadingMessage,
     serverSettingsSaveBusy,
     providerWriteBusy,
     providerModelRefreshBusy,
@@ -4639,6 +4799,9 @@ export function createSettingsController(props: SettingsViewProps) {
     serverSettingsPayload,
     agentRunsSettings,
     agentRunsState,
+    memorySettings,
+    memoryStatus,
+    memoryProviderOptions,
     modelCapabilitiesStatus,
     executorFeatures,
     agentRunsProfiles,
@@ -4705,6 +4868,7 @@ export function createSettingsController(props: SettingsViewProps) {
     saveServerSettings,
     saveConversationSettings,
     saveSessionPolicySettings,
+    saveMemorySettings,
     saveAutoApprovalServerSettings,
     saveIntegrationsSettings,
     saveInfrastructureSettings,

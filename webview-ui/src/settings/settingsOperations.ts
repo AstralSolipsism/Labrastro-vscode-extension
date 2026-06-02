@@ -31,6 +31,7 @@ export type SettingsOperationKey =
   | "accounts"
   | "conversationSave"
   | "sessionPolicySave"
+  | "memorySave"
   | "serverSettingsSave"
   | "autoApprovalSave"
   | "integrationsSave"
@@ -60,6 +61,7 @@ export type SettingsBackgroundRefreshes = Partial<Record<SettingsOperationKey, t
 export const SETTINGS_SERVER_SETTINGS_SAVE_KEYS: SettingsOperationKey[] = [
   "conversationSave",
   "sessionPolicySave",
+  "memorySave",
   "serverSettingsSave",
   "autoApprovalSave",
   "integrationsSave",
@@ -122,6 +124,7 @@ export const SETTINGS_OPERATION_KEYS: SettingsOperationKey[] = [
   "accounts",
   "conversationSave",
   "sessionPolicySave",
+  "memorySave",
   "serverSettingsSave",
   "autoApprovalSave",
   "integrationsSave",
@@ -141,6 +144,7 @@ export const SETTINGS_PAGE_RESOURCES: Record<SettingsTab, SettingsOperationKey[]
   executors: [],
   accounts: ["accounts"],
   providers: ["providers", "modelProfiles"],
+  memory: ["serverSettings"],
   capabilities: ["serverSettings", "capabilities", "environmentManifest"],
   conversation: ["chatConfig", "serverSettings", "reasoningDisplay", "chatSendDuringRunMode"],
   sessionPolicy: ["serverSettings"],
@@ -150,6 +154,11 @@ export const SETTINGS_PAGE_RESOURCES: Record<SettingsTab, SettingsOperationKey[]
   integrations: ["serverSettings", "github"],
   other: ["serverSettings", "modelCapabilities"],
   diagnostics: ["serverSettings", "peerDiagnosticsLogging", "toolDiagnostics"],
+}
+
+export const SETTINGS_PAGE_INITIAL_RESOURCES: Partial<Record<SettingsTab, SettingsOperationKey[]>> = {
+  agentConfig: ["serverSettings"],
+  capabilities: ["serverSettings", "capabilities"],
 }
 
 export function initialSettingsOperationStates(): SettingsOperationStates {
@@ -334,6 +343,16 @@ export function settingsPageOperationKeys(tab: SettingsTab): SettingsOperationKe
   return SETTINGS_PAGE_RESOURCES[tab] || []
 }
 
-export function settingsPageIsRefreshing(states: SettingsOperationStates, tab: SettingsTab): boolean {
-  return settingsPageOperationKeys(tab).some((key) => settingsOperationIsBusy(states, key))
+export function settingsPageInitialOperationKeys(tab: SettingsTab): SettingsOperationKey[] {
+  return SETTINGS_PAGE_INITIAL_RESOURCES[tab] || settingsPageOperationKeys(tab)
+}
+
+export function settingsPageIsRefreshing(
+  states: SettingsOperationStates,
+  tab: SettingsTab,
+  backgroundRefreshes: SettingsBackgroundRefreshes = {},
+): boolean {
+  return settingsPageOperationKeys(tab).some((key) =>
+    settingsOperationIsBusy(states, key) || settingsBackgroundRefreshIsBusy(backgroundRefreshes, key)
+  )
 }

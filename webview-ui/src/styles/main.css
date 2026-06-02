@@ -2787,6 +2787,63 @@ button.settings-list-card.is-selected,
   background: color-mix(in srgb, var(--ez-focus) 8%, var(--ez-surface));
 }
 
+.settings-summary-card--static {
+  cursor: default;
+}
+
+.settings-summary-card--static:hover {
+  border-color: var(--ez-border);
+  background: color-mix(in srgb, var(--ez-surface) 86%, transparent);
+}
+
+.settings-summary-card small {
+  min-width: 0;
+  color: var(--ez-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.settings-list-item--static {
+  cursor: default;
+}
+
+.memory-status-row {
+  align-items: flex-start;
+}
+
+.memory-status-row__body {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.memory-status-row__body strong,
+.memory-status-row__body small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.memory-status-row__body small {
+  color: var(--ez-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.settings-advanced-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-advanced-panel > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.settings-advanced-panel > summary::-webkit-details-marker {
+  display: none;
+}
+
 .settings-detail-header {
   display: flex;
   align-items: flex-start;

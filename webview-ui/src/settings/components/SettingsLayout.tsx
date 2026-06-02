@@ -62,6 +62,11 @@ interface SettingsCompactFieldProps {
   label: string
 }
 
+interface SettingsLoadingStateProps {
+  title: string
+  detail?: string
+}
+
 export const SettingsPage: ParentComponent<SettingsPageProps> = (props) => (
   <div
     class={`settings-page ${props.extraClass || ""}`.trim()}
@@ -77,6 +82,14 @@ export const SettingsPage: ParentComponent<SettingsPageProps> = (props) => (
 export const SettingsPageHeader: ParentComponent = (props) => (
   <div class="settings-page-header">
     {props.children}
+  </div>
+)
+
+export const SettingsLoadingState: Component<SettingsLoadingStateProps> = (props) => (
+  <div class="settings-empty-state settings-empty-state--loading" role="status" aria-live="polite">
+    <span class="codicon codicon-loading codicon-modifier-spin" aria-hidden="true" />
+    <strong>{props.title}</strong>
+    {props.detail ? <small>{props.detail}</small> : null}
   </div>
 )
 

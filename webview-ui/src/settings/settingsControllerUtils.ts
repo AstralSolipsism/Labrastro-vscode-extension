@@ -4,6 +4,7 @@ export type SettingsTab =
   | "executors"
   | "accounts"
   | "providers"
+  | "memory"
   | "capabilities"
   | "conversation"
   | "sessionPolicy"
@@ -18,6 +19,8 @@ export function normalizeSettingsTab(value: unknown): SettingsTab | undefined {
   switch (value) {
     case "providers":
       return "providers"
+    case "memory":
+      return "memory"
     case "executors":
       return "executors"
     case "accounts":
