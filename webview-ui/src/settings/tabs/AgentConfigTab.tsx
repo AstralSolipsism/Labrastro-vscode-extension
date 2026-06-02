@@ -1,4 +1,4 @@
-import { Component, For, Show, createSignal } from "solid-js"
+import { Component, For, Show, createMemo, createSignal } from "solid-js"
 import { t } from "../../i18n"
 import { RefreshButton } from "../../components/common/RefreshButton"
 import { SelectableList } from "../../components/common/interaction"
@@ -6,11 +6,16 @@ import { StatusBadge } from "../components/StatusBadge"
 import { ChoiceMultiSelect } from "../components/ChoiceMultiSelect"
 import {
   SettingsActionRail,
+  SettingsLoadingState,
   SettingsPage,
   SettingsPageHeader,
   SettingsSubTabButton,
   SettingsSubTabs,
 } from "../components/SettingsLayout"
+import {
+  memoryProviderOptionLabel,
+  memoryProviderStatusLabelKey,
+} from "../memoryPresentation"
 import type { SettingsController } from "../useSettingsController"
 
 interface TabProps { controller: SettingsController & Record<string, any> }
@@ -65,6 +70,7 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
     setAgentNameInput,
     profileIdList,
     updateAgentField,
+    memoryProviderOptions,
     capabilityPackageOptions,
     selectedAgentCapabilityPackages,
     capabilityPackageComponentGroups,
@@ -90,11 +96,27 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
   } = props.controller
 
   const [section, setSection] = createSignal<AgentConfigSection>("profiles")
+  const agentConfigInitialLoading = () => props.controller.pageInitialLoading("agentConfig")
+  const agentConfigRevalidating = () => props.controller.pageRevalidating("agentConfig")
+  const agentConfigLoadingMessage = () =>
+    props.controller.pageLoadingMessage("agentConfig") || t("agentConfig.loading")
   const profileIds = () => Object.keys(profileDrafts())
   const agentIds = () => Object.keys(agentDrafts())
   const currentAgentReadOnly = () => Boolean(currentAgentDraft() && currentAgentDraft()!.visibility !== "user")
   const mcpChoiceOptions = () => registeredMcpServers().map((id: string) => ({ id, label: id, kind: "MCP" }))
   const capabilityChoiceOptions = () => capabilityPackageOptions().map((id: string) => ({ id, label: id, kind: "能力包" }))
+  const selectedMemoryProviderId = () => currentAgentDraft()?.memoryProvider.trim() || ""
+  const selectedMemoryProviderOption = createMemo(() => {
+    const providerId = selectedMemoryProviderId()
+    if (!providerId) return undefined
+    return memoryProviderOptions().find((provider: Record<string, unknown>) => stringValue(provider.id) === providerId)
+  })
+  const selectedMemoryProviderMissing = () => Boolean(selectedMemoryProviderId() && !selectedMemoryProviderOption())
+  const selectedMemoryProviderNeedsAttention = () =>
+    selectedMemoryProviderMissing() || selectedMemoryProviderOption()?.available === false
+  const selectedMemoryProviderStatus = () =>
+    selectedMemoryProviderMissing() ? "missing" : selectedMemoryProviderOption()?.status
+  const selectedMemoryProviderStatusLabel = () => t(memoryProviderStatusLabelKey(selectedMemoryProviderStatus()))
   const readonlyValue = (value: unknown) => {
     const text = String(value ?? "").trim()
     return text || "—"
@@ -186,6 +208,11 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
       <Show when={agentConfigSaved()}>
         <div class="settings-success">{t("agentConfig.saved")}</div>
       </Show>
+      <Show when={agentConfigRevalidating() && !agentConfigInitialLoading()}>
+        <p class="settings-empty-note">{agentConfigLoadingMessage()}</p>
+      </Show>
+      <Show when={agentConfigInitialLoading()} fallback={
+        <>
 
       {/* ── Runtime Profiles Section ── */}
       <SettingsSubTabs ariaLabel={t("agentConfig.title")}>
@@ -537,6 +564,64 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
                     {runtimeModelOptions().length > 0 ? t("agentConfig.agent.model.help") : t("agentConfig.agent.model.empty")}
                   </small>
                 </label>
+                <div class="settings-detail-section field-label--full">
+                  <span>{t("agentConfig.agent.memoryProviderSection")}</span>
+                  <small>{t("agentConfig.agent.memoryProviderSectionDesc")}</small>
+                </div>
+                <label class="field-label"><span>{t("agentConfig.agent.memoryProvider")}</span>
+                  <select value={currentAgentDraft()!.memoryProvider} onChange={(e) => updateAgentField("memoryProvider", e.currentTarget.value)}>
+                    <option value="">{t("agentConfig.agent.memoryProvider.inherit")}</option>
+                    <Show when={selectedMemoryProviderMissing()}>
+                      <option value={selectedMemoryProviderId()}>{t("agentConfig.agent.memoryProvider.missingOption", { id: selectedMemoryProviderId() })}</option>
+                    </Show>
+                    <For each={memoryProviderOptions()}>{(provider) => (
+                      <option value={provider.id}>{memoryProviderOptionLabel(provider, t)}</option>
+                    )}</For>
+                  </select>
+                  <small class="field-help">{t("agentConfig.agent.memoryProvider.help")}</small>
+                </label>
+                <Show when={selectedMemoryProviderNeedsAttention()}>
+                  <div class="settings-warning field-label--full">
+                    <span class="codicon codicon-warning" aria-hidden="true" />
+                    <span>
+                      {t("agentConfig.agent.memoryProvider.warning", {
+                        provider: selectedMemoryProviderId(),
+                        status: selectedMemoryProviderStatusLabel(),
+                      })}
+                    </span>
+                  </div>
+                </Show>
+                <label class="field-label agent-config-toggle">
+                  <input
+                    type="checkbox"
+                    checked={currentAgentDraft()!.memoryEnabled}
+                    onChange={(e) => updateAgentField("memoryEnabled", e.currentTarget.checked)}
+                  />
+                  <span>{t("agentConfig.agent.memoryEnabled")}</span>
+                  <small class="field-help">{t("agentConfig.agent.memoryEnabledDesc")}</small>
+                </label>
+                <label class="field-label agent-config-toggle">
+                  <input
+                    type="checkbox"
+                    checked={currentAgentDraft()!.memoryInject}
+                    onChange={(e) => updateAgentField("memoryInject", e.currentTarget.checked)}
+                  />
+                  <span>{t("agentConfig.agent.memoryInject")}</span>
+                  <small class="field-help">{t("agentConfig.agent.memoryInjectDesc")}</small>
+                </label>
+                <label class="field-label agent-config-toggle">
+                  <input
+                    type="checkbox"
+                    checked={currentAgentDraft()!.memoryCapture}
+                    onChange={(e) => updateAgentField("memoryCapture", e.currentTarget.checked)}
+                  />
+                  <span>{t("agentConfig.agent.memoryCapture")}</span>
+                  <small class="field-help">{t("agentConfig.agent.memoryCaptureDesc")}</small>
+                </label>
+                <label class="field-label"><span>{t("agentConfig.agent.memoryTokenBudget")}</span>
+                  <input type="number" min="0" step="1" value={currentAgentDraft()!.memoryTokenBudget} onInput={(e) => updateAgentField("memoryTokenBudget", Math.max(0, Math.floor(Number(e.currentTarget.value) || 0)))} />
+                  <small class="field-help">{t("agentConfig.agent.memoryTokenBudgetDesc")}</small>
+                </label>
                 <Show
                   when={currentAgentReadOnly()}
                   fallback={
@@ -631,6 +716,15 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
                     {t("agentConfig.advanced")}
                   </summary>
                   <div class="settings-form-grid">
+                    <label class="field-label agent-config-toggle">
+                      <input
+                        type="checkbox"
+                        checked={currentAgentDraft()!.memoryExposeTools}
+                        onChange={(e) => updateAgentField("memoryExposeTools", e.currentTarget.checked)}
+                      />
+                      <span>{t("agentConfig.agent.memoryExposeTools")}</span>
+                      <small class="field-help">{t("agentConfig.agent.memoryExposeToolsDesc")}</small>
+                    </label>
                     <Show
                       when={currentAgentReadOnly()}
                       fallback={
@@ -722,6 +816,13 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
           </Show>
         </div>
       </section>
+        </>
+      }>
+        <SettingsLoadingState
+          title={t("agentConfig.loadingTitle")}
+          detail={agentConfigLoadingMessage()}
+        />
+      </Show>
     </SettingsPage>
   )
 
