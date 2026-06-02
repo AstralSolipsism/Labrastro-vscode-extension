@@ -2097,6 +2097,61 @@ describe("LabrastroRemoteClient peer diagnostics settings", () => {
       http: false,
     })
   })
+
+  it("records approval replies with the canonical remote approval path", async () => {
+    vscodeMock.labrastroValue = DEFAULT_TEST_HOST_URL
+    const storagePath = await makeTempStorage()
+    const context = makePeerContext(storagePath)
+    const posted: Array<{ pathname: string; body: Record<string, unknown> }> = []
+    const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
+      const url = new URL(String(input))
+      posted.push({
+        pathname: url.pathname,
+        body: JSON.parse(String(init?.body || "{}")) as Record<string, unknown>,
+      })
+      if (url.pathname !== "/remote/approval/reply") {
+        return new Response(JSON.stringify({ error: "unexpected_url", url: url.pathname }), { status: 500 })
+      }
+      return new Response(JSON.stringify({ ok: true, state: "resolved" }), {
+        headers: { "Content-Type": "application/json" },
+      })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    const client = new LabrastroRemoteClient(context as never)
+    attachPeer(client, "peer-token-1")
+
+    await expect(client.approvalReply({
+      session_run_id: "run-1",
+      approval_id: "approval-1",
+      decision: "allow_once",
+    })).resolves.toMatchObject({ ok: true, state: "resolved" })
+
+    expect(posted).toEqual([{
+      pathname: "/remote/approval/reply",
+      body: {
+        peer_token: "peer-token-1",
+        session_run_id: "run-1",
+        approval_id: "approval-1",
+        decision: "allow_once",
+      },
+    }])
+    const records = await waitForPeerDiagnosticRecords(storagePath, (items) =>
+      items.some((record) =>
+        record.category === "http" &&
+        record.event === "http.post.ok" &&
+        (record.details as Record<string, unknown>).pathname === "/remote/approval/reply"
+      )
+    )
+    expect(records).toContainEqual(expect.objectContaining({
+      category: "http",
+      event: "http.post.ok",
+      details: expect.objectContaining({
+        method: "POST",
+        pathname: "/remote/approval/reply",
+        status: 200,
+      }),
+    }))
+  })
 })
 
 describe("LabrastroRemoteClient peer startup", () => {
