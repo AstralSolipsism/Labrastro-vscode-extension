@@ -2255,6 +2255,7 @@ function reviewItems(value: unknown, fallback: CapabilityComponentView[]): Capab
       configRequiredOn: [],
       userMessage: "",
     },
+    hooks: [],
     raw: item,
   }))
 }

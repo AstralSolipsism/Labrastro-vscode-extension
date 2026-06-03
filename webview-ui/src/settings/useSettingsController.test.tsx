@@ -216,6 +216,120 @@ describe("settings controller capability model", () => {
     })
   })
 
+  it("keeps lifecycle hook summaries from capability dashboard items", () => {
+    const controller = withController(makeServer({
+      capabilityState: () => ({
+        dashboard_items: [
+          {
+            id: "mcp:github",
+            kind: "mcp",
+            entry_type: "mcp",
+            name: "github",
+            display_name: "GitHub tools",
+            hook_views: [
+              {
+                id: "hook:mcp_server:github:PostToolUse:0",
+                event: "PostToolUse",
+                source: "mcp_server",
+                placement: "server",
+                handler_type: "mcp_tool",
+                display_name: "GitHub audit",
+                summary: "Records GitHub MCP tool results.",
+                permissions: ["audit.write"],
+                trust: "pending_review",
+                technical: { handler_ref: "github.audit" },
+              },
+            ],
+          },
+        ],
+      }),
+    }), (controller) => controller)
+
+    expect((controller.capabilityViews()[0] as any).hooks[0]).toMatchObject({
+      id: "hook:mcp_server:github:PostToolUse:0",
+      displayName: "GitHub audit",
+      trust: "pending_review",
+      technical: { handler_ref: "github.audit" },
+    })
+  })
+
+  it("keeps lifecycle hooks on installed capability package views", () => {
+    const controller = withController(makeServer({
+      serverSettingsState: () => ({
+        settings: {
+          capability_packages: {
+            review: {
+              name: "Review",
+              components: [],
+              hooks: [
+                {
+                  event: "SessionStart",
+                  placement: "server",
+                  handler_type: "prompt",
+                  display_name: "Review package startup",
+                  summary: "Adds review startup context.",
+                  trust: "pending_review",
+                },
+              ],
+              hook_views: [
+                {
+                  id: "hook:capability_package:review:SessionStart:0",
+                  event: "SessionStart",
+                  source: "capability_package",
+                  placement: "server",
+                  handler_type: "prompt",
+                  display_name: "Review package startup",
+                  summary: "Adds review startup context.",
+                  trust: "pending_review",
+                  executable: false,
+                  can_manage: true,
+                  unavailable_reason: "pending_review",
+                },
+              ],
+            },
+          },
+        },
+      }),
+    }), (controller) => controller)
+
+    expect((controller.capabilityPackageViews()[0] as any).hooks[0]).toMatchObject({
+      id: "hook:capability_package:review:SessionStart:0",
+      event: "SessionStart",
+      displayName: "Review package startup",
+      trust: "pending_review",
+      executable: false,
+      canManage: true,
+      unavailableReason: "pending_review",
+    })
+  })
+
+  it("ignores raw lifecycle hooks when server settings omit hook views", () => {
+    const controller = withController(makeServer({
+      serverSettingsState: () => ({
+        settings: {
+          capability_packages: {
+            review: {
+              name: "Review",
+              components: [],
+              hooks: [
+                {
+                  event: "SessionStart",
+                  placement: "server",
+                  handler_type: "prompt",
+                  display_name: "Review package startup",
+                  summary: "Adds review startup context.",
+                  trust: "trusted",
+                },
+              ],
+            },
+          },
+        },
+      }),
+    }), (controller) => controller)
+
+    expect((controller.capabilityPackageViews()[0] as any).hooks).toEqual([])
+  })
+
   it("runs environment checks only for environment requirements", () => {
     const controller = withController(makeServer({
       capabilityState: () => ({

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 import {
   aggregateRuntimeFootprint,
@@ -5,11 +6,35 @@ import {
   capabilityViewsFromSources,
   capabilityComponentSummary,
   groupCapabilityPackageComponents,
+  normalizeLifecycleHookViews,
   runtimeFootprintBadgeTone,
   runtimeFootprintLabel,
 } from "./capabilityPackageView"
 
 describe("capability package component view", () => {
+  it("does not reintroduce raw hooks fallbacks for lifecycle hook views", () => {
+    const files = [
+      new URL("./capabilityPackageView.ts", import.meta.url),
+      new URL("./useSettingsController.tsx", import.meta.url),
+      new URL("./tabs/CapabilitiesTab.tsx", import.meta.url),
+    ]
+    const forbidden = [
+      "|| item.hooks",
+      "|| record.hooks",
+      "|| component.hooks",
+      "|| config.hooks",
+      "normalizeLifecycleHookViews(record.hooks",
+      "normalizeLifecycleHookViews(item.hooks",
+    ]
+
+    for (const file of files) {
+      const text = readFileSync(file, "utf8")
+      for (const pattern of forbidden) {
+        expect(text, `${pattern} found in ${file.pathname}`).not.toContain(pattern)
+      }
+    }
+  })
+
   const components = {
     "skill:code-review": {
       kind: "skill",
@@ -133,6 +158,35 @@ describe("capability package component view", () => {
       envKeys: ["EDGEONE_TOKEN"],
     })
     expect(preview.servers[0].runtimeFootprint.userMessage).toBe("服务端运行，无需本机安装")
+  })
+
+  it("surfaces peer runtime requirements from pasted MCP JSON", () => {
+    const preview = capabilityInstallPreviewFromMcpJson(`{
+      "mcpServers": {
+        "filesystem": {
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+          "runtime_footprint": {
+            "runs_on": "peer",
+            "install_required_on": ["peer"],
+            "config_required_on": ["peer"]
+          }
+        }
+      }
+    }`)
+
+    expect(preview.ok).toBe(true)
+    expect(preview.servers[0]).toMatchObject({
+      name: "filesystem",
+      command: "npx",
+      args: ["-y", "@modelcontextprotocol/server-filesystem"],
+      runtimeFootprint: {
+        runsOn: "local_peer",
+        installRequiredOn: ["local_peer"],
+        configRequiredOn: ["local_peer"],
+        userMessage: "需要在本机安装/配置",
+      },
+    })
   })
 
   it("describes skill disabled state from global and per-skill settings", () => {
@@ -285,6 +339,157 @@ describe("capability package component view", () => {
         runsOn: "local_peer",
         userMessage: "需要在本机安装/配置",
       },
+    })
+  })
+
+  it("projects lifecycle hook summaries without leaking handler details into main fields", () => {
+    const capabilities = capabilityViewsFromSources({
+      mcpServers: [{
+        id: "mcp:github",
+        kind: "mcp",
+        name: "github",
+        enabled: true,
+        hook_views: [
+          {
+            id: "hook:mcp_server:github:PostToolUse:0",
+            event: "PostToolUse",
+            source: "mcp_server",
+            placement: "server",
+            handler_type: "mcp_tool",
+            display_name: "GitHub audit",
+            summary: "Records GitHub MCP tool results.",
+            trust: "pending_review",
+            permissions: ["audit.write"],
+            risk_level: "low",
+            executable: false,
+            can_manage: false,
+            unavailable_reason: "pending_review",
+            technical: {
+              handler_ref: "github.audit",
+              matcher: "*",
+            },
+          },
+        ],
+      }],
+    })
+
+    const hook = (capabilities[0] as any).hooks[0]
+    expect(hook).toMatchObject({
+      id: "hook:mcp_server:github:PostToolUse:0",
+      event: "PostToolUse",
+      source: "mcp_server",
+      placement: "server",
+      handlerType: "mcp_tool",
+      displayName: "GitHub audit",
+      summary: "Records GitHub MCP tool results.",
+      trust: "pending_review",
+      permissions: ["audit.write"],
+      riskLevel: "low",
+      executable: false,
+      canManage: false,
+      unavailableReason: "pending_review",
+      technical: {
+        handler_ref: "github.audit",
+        matcher: "*",
+      },
+    })
+    expect(hook.handler_ref).toBeUndefined()
+  })
+
+  it("preserves lifecycle hook placement runtime returned by the backend", () => {
+    const hooks = normalizeLifecycleHookViews([
+      {
+        id: "hook:mcp_server:github:PreToolUse:0",
+        event: "PreToolUse",
+        source: "mcp_server",
+        placement: "both",
+        handler_type: "internal",
+        display_name: "GitHub guard",
+        summary: "Checks GitHub tool calls.",
+        trust: "trusted",
+        executable: true,
+        can_manage: true,
+        placement_runtime: {
+          server: {
+            executable: true,
+            unavailable_reason: "",
+          },
+          peer: {
+            executable: false,
+            unavailable_reason: "peer_runtime_unavailable",
+          },
+        },
+      },
+    ])
+
+    expect(hooks[0].placementRuntime).toEqual({
+      server: {
+        executable: true,
+        unavailableReason: "",
+      },
+      peer: {
+        executable: false,
+        unavailableReason: "peer_runtime_unavailable",
+      },
+    })
+  })
+
+  it("does not create lifecycle hook cards from raw config hooks", () => {
+    const capabilities = capabilityViewsFromSources({
+      mcpServers: [{
+        id: "mcp:github",
+        kind: "mcp",
+        name: "github",
+        enabled: true,
+        hooks: [
+          {
+            event: "PostToolUse",
+            source: "mcp_server",
+            placement: "server",
+            handler_type: "mcp_tool",
+            display_name: "GitHub audit",
+            summary: "Records GitHub MCP tool results.",
+            trust: "trusted",
+          },
+        ],
+      }],
+    })
+
+    expect((capabilities[0] as any).hooks).toEqual([])
+  })
+
+  it("does not infer manageability or executability from canonical-looking ids or trust", () => {
+    const capabilities = capabilityViewsFromSources({
+      mcpServers: [{
+        id: "mcp:github",
+        kind: "mcp",
+        name: "github",
+        enabled: true,
+        hook_views: [
+          {
+            id: "hook:mcp_server:github:PostToolUse:0",
+            event: "PostToolUse",
+            source: "mcp_server",
+            placement: "server",
+            handler_type: "mcp_tool",
+            display_name: "GitHub audit",
+            summary: "Records GitHub MCP tool results.",
+            trust: "trusted",
+            executable: false,
+            can_manage: false,
+            unavailable_reason: "owner_disabled",
+          },
+        ],
+      }],
+    })
+
+    expect((capabilities[0] as any).hooks[0]).toMatchObject({
+      id: "hook:mcp_server:github:PostToolUse:0",
+      trust: "trusted",
+      executable: false,
+      enabled: false,
+      canManage: false,
+      unavailableReason: "owner_disabled",
     })
   })
 })

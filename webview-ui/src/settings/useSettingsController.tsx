@@ -81,7 +81,9 @@ import {
 import {
   capabilityViewsFromSources,
   groupCapabilityPackageComponents,
+  normalizeLifecycleHookViews,
   normalizeRuntimeFootprint,
+  type CapabilityHookView,
   type RuntimeRunsOn,
 } from "./capabilityPackageView"
 
@@ -379,6 +381,7 @@ interface CapabilityRecord {
   verify_prompt?: string
   notes?: string[]
   environment_requirement_refs?: string[]
+  hook_views?: Array<Record<string, unknown>>
 }
 
 interface CapabilityDashboardItem {
@@ -425,6 +428,7 @@ interface CapabilityDashboardItem {
   component_id: string
   package_ids: string[]
   managed_by: string
+  hooks: CapabilityHookView[]
 }
 
 interface ExecutorFeatureView {
@@ -456,6 +460,7 @@ interface CapabilityPackageView {
   credentials: string[]
   riskLevel: string
   runtimeFootprint: ReturnType<typeof normalizeRuntimeFootprint>
+  hooks: CapabilityHookView[]
 }
 
 export interface CapabilityPackageIngestState {
@@ -1517,6 +1522,7 @@ function capabilityPackageValue(id: string, value: unknown): CapabilityPackageVi
     credentials: stringArray(item.credentials),
     riskLevel: stringValue(item.risk_level),
     runtimeFootprint: normalizeRuntimeFootprint(item.runtime_footprint),
+    hooks: normalizeLifecycleHookViews(item.hook_views),
   }
 }
 
@@ -1626,6 +1632,12 @@ function normalizeEvidence(value: unknown): Array<Record<string, string>> {
     .filter((item) => Object.keys(item).length > 0)
 }
 
+function recordArray(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value)
+    ? value.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)))
+    : []
+}
+
 function normalizeCapabilityStatus(value: unknown): EnvironmentEntryStatus {
   const text = stringValue(value)
   if (text === "ready") return "available"
@@ -1708,6 +1720,7 @@ function capabilityRecordToDashboardItem(record: CapabilityRecord): CapabilityDa
     component_id: stringValue(record.component_id),
     package_ids: stringArray(record.package_ids),
     managed_by: stringValue(record.managed_by),
+    hooks: normalizeLifecycleHookViews(record.hook_views),
   }
 }
 
@@ -1740,6 +1753,7 @@ function normalizeCapabilityDashboardItems(
       enabled: summary.enabled,
       last_action: summary.last_action,
       last_updated: summary.last_updated,
+      hooks: summary.hooks.length ? summary.hooks : existing.hooks,
     })
   }
   const mergedItems = [...byId.values()]
@@ -1828,6 +1842,7 @@ function dashboardSummaryItem(item: Record<string, unknown>): CapabilityDashboar
     component_id: stringValue(item.component_id),
     package_ids: stringArray(item.package_ids),
     managed_by: stringValue(item.managed_by),
+    hooks: normalizeLifecycleHookViews(item.hook_views),
   }
 }
 
@@ -2918,8 +2933,12 @@ export function createSettingsController(props: SettingsViewProps) {
   )
   const capabilityViews = createMemo(() =>
     capabilityViewsFromSources({
-      mcpServers: capabilityDashboardItems().filter((item) => item.kind === "mcp") as unknown as Record<string, unknown>[],
-      skillRecords: capabilityDashboardItems().filter((item) => item.kind === "skill") as unknown as Record<string, unknown>[],
+      mcpServers: capabilityDashboardItems()
+        .filter((item) => item.kind === "mcp")
+        .map((item) => ({ ...item, hook_views: item.hooks })) as unknown as Record<string, unknown>[],
+      skillRecords: capabilityDashboardItems()
+        .filter((item) => item.kind === "skill")
+        .map((item) => ({ ...item, hook_views: item.hooks })) as unknown as Record<string, unknown>[],
       componentIndex: capabilityComponents(),
       packages: capabilityPackagesById(),
       ...capabilitySkillsSettings(),

@@ -11,6 +11,32 @@ export interface RuntimeFootprintView {
   userMessage: string
 }
 
+export interface CapabilityHookPlacementRuntimeEntry {
+  executable: boolean
+  unavailableReason: string
+}
+
+export type CapabilityHookPlacementRuntimeView = Partial<Record<"server" | "peer", CapabilityHookPlacementRuntimeEntry>>
+
+export interface CapabilityHookView {
+  id: string
+  event: string
+  source: string
+  placement: string
+  handlerType: string
+  displayName: string
+  summary: string
+  trust: string
+  enabled: boolean
+  executable: boolean
+  canManage: boolean
+  unavailableReason: string
+  placementRuntime: CapabilityHookPlacementRuntimeView
+  permissions: string[]
+  riskLevel: string
+  technical: Record<string, unknown>
+}
+
 export interface CapabilityComponentView {
   id: string
   kind: string
@@ -23,6 +49,7 @@ export interface CapabilityComponentView {
   pathHint: string
   sourcePath: string
   runtimeFootprint: RuntimeFootprintView
+  hooks: CapabilityHookView[]
   skillStatus?: SkillComponentStatus
   raw: Record<string, unknown>
 }
@@ -55,6 +82,7 @@ export interface CapabilityView {
   runtimeFootprint: RuntimeFootprintView
   sourcePackageIds: string[]
   dependencyIds: string[]
+  hooks: CapabilityHookView[]
   raw: Record<string, unknown>
   skill?: {
     pathHint: string
@@ -131,6 +159,58 @@ function recordArrayValue(value: unknown): Array<Record<string, unknown>> {
   return Array.isArray(value)
     ? value.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)))
     : []
+}
+
+function normalizeLifecycleHookPlacementRuntime(value: unknown): CapabilityHookPlacementRuntimeView {
+  const raw = objectValue(value)
+  const runtime: CapabilityHookPlacementRuntimeView = {}
+  for (const placement of ["server", "peer"] as const) {
+    const entry = objectValue(raw[placement])
+    if (!Object.keys(entry).length) continue
+    runtime[placement] = {
+      executable: entry.executable === true,
+      unavailableReason: stringValue(entry.unavailable_reason || entry.unavailableReason),
+    }
+  }
+  return runtime
+}
+
+export function normalizeLifecycleHookViews(value: unknown): CapabilityHookView[] {
+  return recordArrayValue(value).map((hook) => {
+    const event = stringValue(hook.event)
+    const id = stringValue(hook.id)
+    const displayName = stringValue(
+      hook.display_name || hook.displayName,
+      event ? `${event} Hook` : "Lifecycle Hook",
+    )
+    const trust = stringValue(hook.trust, "pending_review")
+    const technical = {
+      ...objectValue(hook.technical),
+    }
+    const handlerRef = stringValue(hook.handler_ref || hook.handlerRef)
+    if (handlerRef) technical.handler_ref = handlerRef
+    if (hook.matcher !== undefined) technical.matcher = hook.matcher
+    const executable = hook.executable === true
+    const canManage = id !== "" && (hook.can_manage === true || hook.canManage === true)
+    return {
+      id,
+      event,
+      source: stringValue(hook.source),
+      placement: stringValue(hook.placement, "server"),
+      handlerType: stringValue(hook.handler_type || hook.handlerType),
+      displayName,
+      summary: stringValue(hook.summary || hook.description, displayName),
+      trust,
+      enabled: executable,
+      executable,
+      canManage,
+      unavailableReason: stringValue(hook.unavailable_reason || hook.unavailableReason),
+      placementRuntime: normalizeLifecycleHookPlacementRuntime(hook.placement_runtime || hook.placementRuntime),
+      permissions: stringArrayValue(hook.permissions),
+      riskLevel: stringValue(hook.risk_level || hook.riskLevel),
+      technical,
+    }
+  })
 }
 
 const RUNTIME_TARGET_ORDER: RuntimeTarget[] = ["server", "local_peer"]
@@ -476,6 +556,7 @@ export function capabilityComponentView(
   const runtimeFootprint = runtimeFootprintForComponent(component, kind, config)
   const pathHint = stringValue(config.path_hint || component.path_hint)
   const sourcePath = stringValue(component.source_path || config.source_path)
+  const hooks = normalizeLifecycleHookViews(component.hook_views)
   const disabled = new Set((options.disabledSkills || []).map((item) => item.trim()).filter(Boolean))
   const componentDisabled = component.enabled === false || config.enabled === false
   const skillStatus = kind === "skill"
@@ -499,6 +580,7 @@ export function capabilityComponentView(
     pathHint,
     sourcePath,
     runtimeFootprint,
+    hooks,
     skillStatus,
     raw: component,
   }
@@ -559,6 +641,7 @@ function skillCapabilityView(
     runtimeFootprint,
     sourcePackageIds: packageIdsForComponent(packageLookupId, component, packages),
     dependencyIds,
+    hooks: normalizeLifecycleHookViews(component.hook_views),
     raw: component,
     skill: {
       pathHint: view.pathHint || stringValue(config.path_hint || component.path_hint || component.source_path),
@@ -614,6 +697,7 @@ function mcpCapabilityView(
     runtimeFootprint,
     sourcePackageIds,
     dependencyIds,
+    hooks: normalizeLifecycleHookViews(record.hook_views || component.hook_views),
     raw: record,
     mcp: {
       command,
