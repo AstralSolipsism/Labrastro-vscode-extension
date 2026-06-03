@@ -192,6 +192,41 @@ describe("transcript presentation", () => {
     })
   })
 
+  it("settles completed capability workflows even if the last live step was running", () => {
+    const parts: TranscriptItem[] = [
+      {
+        id: "step-1",
+        type: "workflow_step",
+        lane: "process",
+        workflow: "capability_package_ingest",
+        stage: "install",
+        status: "running",
+        title: "正在安装能力包",
+        details: { tool_call_id: "install-review" },
+      },
+      {
+        id: "result-1",
+        type: "workflow_result",
+        lane: "primary",
+        workflow: "capability_package_ingest",
+        resultType: "capability_package_install",
+        status: "done",
+        title: "能力包已安装",
+        result: { package_id: "review" },
+      },
+    ]
+
+    const summary = processSummary(buildTranscriptPresentation(parts, assistant(parts, "success")))
+
+    expect(summary).toMatchObject({
+      state: "completed",
+      currentLabel: "能力包已安装",
+      failureCount: 0,
+      isWorkflow: true,
+      workflow: "capability_package_ingest",
+    })
+  })
+
   it("keeps only the unresolved workflow tool step running after paired steps settle", () => {
     const parts: TranscriptItem[] = [
       {
