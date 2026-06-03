@@ -43,8 +43,10 @@ import {
   aggregateRuntimeFootprint,
   capabilityInstallPreviewFromMcpJson,
   groupCapabilityPackageComponents,
+  normalizeLifecycleHookViews,
   runtimeFootprintBadgeTone,
   runtimeFootprintLabel,
+  type CapabilityHookView,
   type CapabilityComponentGroups,
   type CapabilityComponentView,
   type CapabilityView,
@@ -96,6 +98,7 @@ interface CapabilityPackageView {
   credentials: string[]
   riskLevel: string
   runtimeFootprint: RuntimeFootprintView
+  hooks: CapabilityHookView[]
 }
 
 type BehaviorCatalogSection = "commands" | "mentions" | "uiActions" | "agentTools"
@@ -138,6 +141,12 @@ function stringArrayValue(value: unknown): string[] {
     : []
 }
 
+function recordArrayValue(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value)
+    ? value.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)))
+    : []
+}
+
 function componentListValue(value: unknown): Array<string | Record<string, unknown>> {
   if (!Array.isArray(value)) return []
   return value.filter((item): item is string | Record<string, unknown> =>
@@ -174,6 +183,46 @@ export function isPackageManagedResource(resource: Record<string, unknown>): boo
 
 export function isPackageManagedCapability(capability: Pick<CapabilityView, "raw" | "sourcePackageIds">): boolean {
   return isPackageManagedResource(capability as unknown as Record<string, unknown>)
+}
+
+export function isManageableLifecycleHook(hook: Record<string, unknown>): boolean {
+  const id = stringValue(hook.id)
+  return id !== "" && (hook.canManage === true || hook.can_manage === true)
+}
+
+export function lifecycleHookPlacementLabel(placement: string): string {
+  if (placement === "server") return "服务端"
+  if (placement === "peer" || placement === "local_peer") return "本地端"
+  if (placement === "both") return "服务端+本地端"
+  return placement || "未记录"
+}
+
+function hookRuntimeStatusLabel(executable: boolean, unavailableReason: string): string {
+  return executable
+    ? "可执行"
+    : `不可执行${unavailableReason ? `：${unavailableReason}` : ""}`
+}
+
+export function hookRuntimeStatusItems(hook: Record<string, unknown>): string[] {
+  const placement = stringValue(hook.placement, "server")
+  const runtime = objectValue(hook.placementRuntime)
+  const placements = placement === "both" ? ["server", "peer"] : [placement || "server"]
+  return placements.map((item) => {
+    const entry = objectValue(runtime[item])
+    if (Object.keys(entry).length) {
+      return `${lifecycleHookPlacementLabel(item)}：${hookRuntimeStatusLabel(
+        entry.executable === true,
+        stringValue(entry.unavailableReason),
+      )}`
+    }
+    if (placement === "both") {
+      return `${lifecycleHookPlacementLabel(item)}：状态未返回`
+    }
+    return `${lifecycleHookPlacementLabel(item)}：${hookRuntimeStatusLabel(
+      hook.executable === true,
+      stringValue(hook.unavailableReason),
+    )}`
+  })
 }
 
 export const CapabilitiesTab: Component<TabProps> = (props) => {
@@ -282,6 +331,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
           credentials: stringArrayValue(item.credentials),
           riskLevel: stringValue(item.risk_level),
           runtimeFootprint: aggregateRuntimeFootprint([objectValue(item.runtime_footprint)]),
+          hooks: normalizeLifecycleHookViews(item.hook_views),
         }
       })
       .sort((a, b) => a.id.localeCompare(b.id))
@@ -317,6 +367,12 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
   }
   const packageDependencyIds = (pkg: CapabilityPackageView) =>
     packageComponentGroups(pkg).dependencies.map((item) => item.id).filter(Boolean)
+  const packageHookSummary = (pkg: CapabilityPackageView) => {
+    if (!pkg.hooks.length) return "未携带 hooks"
+    const trusted = pkg.hooks.filter((hook) => stringValue(hook.trust) === "trusted").length
+    const pending = pkg.hooks.filter((hook) => stringValue(hook.trust, "pending_review") === "pending_review").length
+    return `${pkg.hooks.length} 个 hooks · ${trusted} 已信任 · ${pending} 待审查`
+  }
   const packageEnvironmentActionDisabled = (pkg: CapabilityPackageView) =>
     packageDependencyIds(pkg).length === 0 || environmentSnapshot().running || !environmentAgentAvailable()
   const runCapabilityPackageEnvironment = (mode: "check" | "configure", pkg: CapabilityPackageView) => {
@@ -772,6 +828,99 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
     stringValue(capabilityField(capability, "risk_level")) || "未记录"
   const capabilityCredentialItems = (capability: CapabilityView) =>
     capabilityStringListField(capability, "credentials")
+  const hookTrustLabel = (trust: string) => {
+    if (trust === "trusted") return "已信任"
+    if (trust === "disabled") return "已禁用"
+    if (trust === "blocked") return "已阻止"
+    return "待审查"
+  }
+  const hookSourceLabel = (source: string) => {
+    if (source === "skill") return "Skill"
+    if (source === "mcp_server") return "MCP Server"
+    if (source === "capability_package") return "能力包"
+    if (source === "system_builtin") return "系统内置"
+    if (source === "admin_managed") return "管理员策略"
+    return source || "未记录"
+  }
+  const hookPermissionText = (permissions: string[]) =>
+    permissions.length ? permissions.join("、") : "未声明额外权限"
+  const hookId = (hook: any) => stringValue(hook.id)
+  const hookDisplayName = (hook: any) =>
+    stringValue(hook.displayName || hook.display_name || hook.event || hook.id) || "Lifecycle Hook"
+  const hookSummary = (hook: any) =>
+    stringValue(hook.summary || hook.description) || hookDisplayName(hook)
+  const hookTrust = (hook: any) => stringValue(hook.trust, "pending_review")
+  const hookPlacement = (hook: any) => stringValue(hook.placement, "server")
+  const hookSource = (hook: any) => stringValue(hook.source)
+  const hookEvent = (hook: any) => stringValue(hook.event)
+  const hookPermissions = (hook: any) => stringArrayValue(hook.permissions)
+  const hookExecutable = (hook: any) => hook.executable === true
+  const hookExecutionLabel = (hook: any) =>
+    hookRuntimeStatusItems(hook).join("；")
+  const hookExecutionTone = (hook: any): "success" | "warning" | "muted" | "error" | undefined => {
+    if (hookExecutable(hook)) return "success"
+    if (hookTrust(hook) === "blocked") return "error"
+    if (hookTrust(hook) === "disabled") return "muted"
+    return "warning"
+  }
+  const hookCanManage = (hook: any) => isManageableLifecycleHook(hook)
+  const updateHookTrust = (hook: any, trust: "trusted" | "disabled" | "blocked") => {
+    if (!hookCanManage(hook)) return
+    const id = hookId(hook)
+    if (!id) return
+    recordCapabilityRequest("lifecycle_hook", { hook_id: id, trust })
+  }
+  const renderHookTrustActions = (hook: any) => (
+    <Show when={hookCanManage(hook)} fallback={<small>服务端未返回可管理 Hook ID，仅展示技术详情。</small>}>
+      <SettingsActionRail align="right">
+        <button class="btn btn-secondary btn--compact" type="button" disabled={hookTrust(hook) === "trusted"} onClick={() => updateHookTrust(hook, "trusted")}>
+          信任
+        </button>
+        <button class="btn btn-secondary btn--compact" type="button" disabled={hookTrust(hook) === "disabled"} onClick={() => updateHookTrust(hook, "disabled")}>
+          禁用
+        </button>
+        <button class="btn btn-danger btn--compact" type="button" disabled={hookTrust(hook) === "blocked"} onClick={() => updateHookTrust(hook, "blocked")}>
+          阻止
+        </button>
+      </SettingsActionRail>
+    </Show>
+  )
+  const renderHookCards = (hooks: Array<any>) => (
+    <SettingsBoundedList>
+      <For each={hooks}>
+        {(hook) => (
+          <SettingsListCard>
+            <SettingsListCardMain>
+              <strong>{hookDisplayName(hook)}</strong>
+              <small>{hookSummary(hook)}</small>
+              <small>
+                {[
+                  `来源：${hookSourceLabel(hookSource(hook))}`,
+                  `事件：${hookEvent(hook)}`,
+                  `运行位置：${lifecycleHookPlacementLabel(hookPlacement(hook))}`,
+                  `执行状态：${hookExecutionLabel(hook)}`,
+                  `信任状态：${hookTrustLabel(hookTrust(hook))}`,
+                  `权限需求：${hookPermissionText(hookPermissions(hook))}`,
+                ].join(" · ")}
+              </small>
+            </SettingsListCardMain>
+            <StatusBadge tone={hookExecutionTone(hook)}>
+              {hookExecutable(hook) ? "可执行" : "不可执行"}
+            </StatusBadge>
+            {renderHookTrustActions(hook)}
+          </SettingsListCard>
+        )}
+      </For>
+    </SettingsBoundedList>
+  )
+  const renderCapabilityHooks = (capability: CapabilityView) => (
+    <SettingsDetailSection>
+      <span>生命周期 Hooks</span>
+      <Show when={capability.hooks.length} fallback={<small>未声明生命周期 Hook。</small>}>
+        {renderHookCards(capability.hooks)}
+      </Show>
+    </SettingsDetailSection>
+  )
   const capabilityDocs = (capability: CapabilityView) => {
     const docs = capability.kind === "skill" ? capability.skill?.docs : capabilityField(capability, "docs")
     return Array.isArray(docs)
@@ -853,6 +1002,21 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
                   <div>
                     <strong>{stringValue(evidence.title || evidence.field || "evidence")}</strong>
                     <small>{stringValue(evidence.excerpt || evidence.url || evidence.title)}</small>
+                  </div>
+                )}
+              </For>
+            </div>
+          </SettingsDetailSection>
+        </Show>
+        <Show when={capability.hooks.some((hook) => Object.keys(hook.technical).length)}>
+          <SettingsDetailSection>
+            <span>Hook 技术详情</span>
+            <div class="capability-evidence-list">
+              <For each={capability.hooks.filter((hook) => Object.keys(hook.technical).length)}>
+                {(hook) => (
+                  <div>
+                    <strong>{hook.displayName}</strong>
+                    <pre class="structured-card__json">{JSON.stringify(hook.technical, null, 2)}</pre>
                   </div>
                 )}
               </For>
@@ -963,6 +1127,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
           ].join(" · ")}
         </small>
       </SettingsDetailSection>
+      {renderCapabilityHooks(capability)}
       {renderCapabilityTechnicalDetails(capability)}
       {renderCapabilityActions(capability)}
     </>
@@ -1837,8 +2002,9 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
                                 <span>{counts.capabilities} 能力</span>
                                 <span>{counts.dependencies} 依赖</span>
                                 <Show when={counts.other}><span>{counts.other} 其他</span></Show>
-                                <span>{runtimeFootprintLabel(footprint)}</span>
-                                <Show when={!pkg.enabled}><span>Agent 不可用</span></Show>
+                                 <span>{runtimeFootprintLabel(footprint)}</span>
+                                 <Show when={pkg.hooks.length}><span>{packageHookSummary(pkg)}</span></Show>
+                                 <Show when={!pkg.enabled}><span>Agent 不可用</span></Show>
                               </SettingsListCardMeta>
                             </SettingsListCardMain>
                             <StatusBadge tone={runtimeFootprintBadgeTone(footprint)}>{runtimeFootprintLabel(footprint)}</StatusBadge>
@@ -1892,12 +2058,23 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
                               <strong>{runtimeFootprintLabel(footprint)}</strong>
                               <small>{footprint.installRequiredOn.length ? `安装/配置：${footprint.installRequiredOn.join("、")}` : "无需外部进程"}</small>
                             </SettingsDetailBlock>
-                            <SettingsDetailBlock>
-                              <span>状态</span>
-                              <strong>{pkg().status || "installed"}</strong>
-                              <small>{pkg().enabled ? (pkg().riskLevel ? `风险：${pkg().riskLevel}` : "未标注风险") : "已停用，Agent 不可用"}</small>
-                            </SettingsDetailBlock>
-                          </SettingsDetailGrid>
+                             <SettingsDetailBlock>
+                               <span>状态</span>
+                               <strong>{pkg().status || "installed"}</strong>
+                               <small>{pkg().enabled ? (pkg().riskLevel ? `风险：${pkg().riskLevel}` : "未标注风险") : "已停用，Agent 不可用"}</small>
+                             </SettingsDetailBlock>
+                             <SettingsDetailBlock>
+                               <span>生命周期 Hooks</span>
+                               <strong>{pkg().hooks.length ? "携带 hooks" : "未携带 hooks"}</strong>
+                               <small>{packageHookSummary(pkg())}</small>
+                           </SettingsDetailBlock>
+                         </SettingsDetailGrid>
+                          <Show when={pkg().hooks.length}>
+                            <SettingsDetailSection>
+                              <span>生命周期 Hooks</span>
+                              {renderHookCards(pkg().hooks)}
+                            </SettingsDetailSection>
+                          </Show>
                           <Show when={pkg().effectiveCapabilities.length}>
                             <SettingsDetailSection>
                               <span>增强能力</span>

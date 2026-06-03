@@ -94,9 +94,23 @@ describe("capabilities settings label", () => {
     expect(capabilitiesTabSource).toContain("运行责任")
     expect(capabilitiesTabSource).toContain("服务端运行，无需本机安装")
     expect(capabilitiesTabSource).toContain("技术详情")
+    expect(capabilitiesTabSource).toContain("生命周期 Hooks")
+    expect(capabilitiesTabSource).toContain("信任状态")
+    expect(capabilitiesTabSource).toContain("权限需求")
+    expect(capabilitiesTabSource).toContain("hook.technical")
+    expect(capabilitiesTabSource).toContain("hookCanManage")
     expect(capabilitiesTabSource).toContain("filteredCapabilityItems")
+    expect(capabilityPackageViewSource).not.toContain("`hook:${event || \"event\"}:${index}`")
     expect(capabilitiesTabSource).toContain('item.kind === "environment_requirement"')
     expect(capabilitiesTabSource).not.toContain("环境依赖")
+  })
+
+  it("keeps lifecycle hook authority on the server instead of frontend inference", () => {
+    expect(capabilitiesTabSource).not.toContain("^hook:")
+    expect(capabilityPackageViewSource).not.toContain("^hook:")
+    expect(capabilityPackageViewSource).not.toContain('trust === "trusted"')
+    expect(capabilitiesTabSource).toContain("unavailableReason")
+    expect(capabilityPackageViewSource).toContain("unavailableReason")
   })
 
   it("locks direct actions only for package-managed capabilities", () => {
