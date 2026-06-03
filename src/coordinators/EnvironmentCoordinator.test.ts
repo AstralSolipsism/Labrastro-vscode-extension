@@ -17,6 +17,7 @@ function coordinator(active = false) {
       skillRecord: vi.fn(async () => ({ ok: true })),
       skillDelete: vi.fn(async () => ({ ok: true })),
       skillEnable: vi.fn(async () => ({ ok: true })),
+      lifecycleHookTrust: vi.fn(async () => ({ ok: true })),
     },
     isEnvironmentRunActive: vi.fn(() => active),
     agentRunSubmitPayload: vi.fn((payload) => ({ ...payload, normalized: true })),
@@ -123,6 +124,24 @@ describe("EnvironmentCoordinator", () => {
     }, post)
 
     expect(options.client.skillRecord).toHaveBeenCalledWith({ name: "code-review", path_hint: "/skills/code-review/SKILL.md" })
+    expect(options.refreshCapabilityState).toHaveBeenCalledWith(post)
+    expect(options.refreshEnvironmentManifest).toHaveBeenCalledWith(post)
+  })
+
+  it("records lifecycle hook trust through the split admin endpoint", async () => {
+    const { options, coordinator: subject } = coordinator(false)
+    const post = vi.fn()
+
+    await subject.handleMessage({
+      type: "capability.record",
+      kind: "lifecycle_hook",
+      payload: { hook_id: "hook:skill:code-review:UserPromptSubmit:0", trust: "trusted" },
+    }, post)
+
+    expect(options.client.lifecycleHookTrust).toHaveBeenCalledWith({
+      hook_id: "hook:skill:code-review:UserPromptSubmit:0",
+      trust: "trusted",
+    })
     expect(options.refreshCapabilityState).toHaveBeenCalledWith(post)
     expect(options.refreshEnvironmentManifest).toHaveBeenCalledWith(post)
   })

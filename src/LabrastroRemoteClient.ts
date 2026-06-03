@@ -550,6 +550,10 @@ export class LabrastroRemoteClient {
     return this.authenticatedPost("/remote/admin/skills/enable", { name, enabled })
   }
 
+  async lifecycleHookTrust(payload: JsonObject): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/lifecycle-hooks/trust", payload)
+  }
+
   async environmentManifest(): Promise<JsonObject> {
     const platform = peerPlatform()
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd()

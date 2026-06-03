@@ -866,6 +866,17 @@ describe("LabrastroRemoteClient runtime admin API", () => {
       body: { name: "code-review", enabled: false },
       authorization: "Bearer access-token-1",
     })
+    await expect(client.lifecycleHookTrust({
+      hook_id: "hook:skill:code-review:UserPromptSubmit:0",
+      trust: "trusted",
+    })).resolves.toMatchObject({
+      path: "/remote/admin/lifecycle-hooks/trust",
+      body: {
+        hook_id: "hook:skill:code-review:UserPromptSubmit:0",
+        trust: "trusted",
+      },
+      authorization: "Bearer access-token-1",
+    })
   })
 
   it("posts auth control-plane actions through bearer auth", async () => {

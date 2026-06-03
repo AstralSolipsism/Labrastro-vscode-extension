@@ -135,6 +135,9 @@ export class EnvironmentCoordinator {
             if (entryType === "skill") {
               return this.options.client.skillRecord(payload)
             }
+            if (entryType === "lifecycle_hook") {
+              return this.options.client.lifecycleHookTrust(payload)
+            }
             throw new Error(`unsupported capability entry type: ${stringValue(message.kind) || ""}`)
           })
         ) {
@@ -212,11 +215,12 @@ export class EnvironmentCoordinator {
 function capabilityEntryType(
   value: unknown,
   payload: Record<string, unknown> = {},
-): "environment_requirement" | "mcp" | "skill" | "" {
+): "environment_requirement" | "mcp" | "skill" | "lifecycle_hook" | "" {
   const text = stringValue(value) || stringValue(payload.entry_type) || stringValue(payload.entryType) || stringValue(payload.kind) || ""
   if (text === "environment_requirement") return "environment_requirement"
   if (text === "mcp" || text === "mcp_server") return "mcp"
   if (text === "skill") return "skill"
+  if (text === "lifecycle_hook" || text === "hook") return "lifecycle_hook"
   if ([
     "executable",
     "runtime",
