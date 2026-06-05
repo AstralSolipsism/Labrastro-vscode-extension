@@ -90,6 +90,24 @@ function initialCardDetailsOpenState(partId: string, fallback: boolean): boolean
   return saved ?? fallback
 }
 
+function createCardOpenState(
+  partId: string,
+  fallback: boolean,
+  forceOpen?: Accessor<boolean>,
+): [Accessor<boolean>, Setter<boolean>] {
+  const [open, setOpen] = createSignal(initialCardOpenState(partId, fallback))
+  createEffect(() => {
+    if (forceOpen?.()) {
+      setOpen(true)
+      CARD_OPEN_STATE.set(partId, true)
+    }
+  })
+  createEffect(() => {
+    CARD_OPEN_STATE.set(partId, open())
+  })
+  return [open, setOpen]
+}
+
 interface KeyedRecord<T> {
   key: string
   item: Accessor<T>
@@ -104,9 +122,7 @@ const KeyedFor = <T,>(props: {
   children: (item: Accessor<T>, index: Accessor<number>) => JSX.Element
 }) => {
   const records = new Map<string, KeyedRecord<T>>()
-  const [ordered, setOrdered] = createSignal<KeyedRecord<T>[]>([])
-
-  createEffect(() => {
+  const syncRecords = () => {
     const activeKeys = new Set<string>()
     const next = props.each.map((item, index) => {
       const baseKey = props.key(item, index) || String(index)
@@ -134,7 +150,12 @@ const KeyedFor = <T,>(props: {
     for (const key of Array.from(records.keys())) {
       if (!activeKeys.has(key)) records.delete(key)
     }
-    setOrdered(() => next)
+    return next
+  }
+  const [ordered, setOrdered] = createSignal<KeyedRecord<T>[]>(syncRecords())
+
+  createEffect(() => {
+    setOrdered(() => syncRecords())
   })
 
   return (
@@ -223,9 +244,25 @@ function processMetaLabel(
     ].filter(Boolean).join(" · ")
   }
   return [
+    currentLabel ? t("process.current", { value: currentLabel }) : "",
     failureCount ? processFailureLabel(failureCount) : "",
     processCountLabel(count),
   ].filter(Boolean).join(" · ")
+}
+
+function shouldOpenApprovalCard(part: ToolActivityItem): boolean {
+  return Boolean(part.approvalId && part.status === "awaiting_approval")
+}
+
+function approvalPrimaryText(part: ToolActivityItem, fallback: string): string {
+  return part.approvalIntent || part.approvalReason || fallback
+}
+
+function approvalSecondaryText(part: ToolActivityItem): string {
+  const primary = (part.approvalIntent || "").trim()
+  const reason = (part.approvalReason || "").trim()
+  if (!reason || reason === primary) return ""
+  return reason
 }
 
 export type WorkflowUsageSnapshot = Pick<
@@ -314,13 +351,12 @@ type ItemProps<T extends TranscriptItem> = Omit<PartProps, "part"> & { part: T }
 const ToolPart: Component<ItemProps<ToolActivityItem>> = (props) => {
   const openKey = `tool:${props.part.id}`
   const detailsKey = `tool:${props.part.id}:details`
-  const [open, setOpen] = createSignal(
-    initialCardOpenState(openKey, false)
+  const [open, setOpen] = createCardOpenState(
+    openKey,
+    shouldOpenApprovalCard(props.part),
+    () => shouldOpenApprovalCard(props.part),
   )
   const [detailsOpen, setDetailsOpen] = createSignal(initialCardDetailsOpenState(detailsKey, false))
-  createEffect(() => {
-    CARD_OPEN_STATE.set(openKey, open())
-  })
   createEffect(() => {
     CARD_DETAILS_OPEN_STATE.set(detailsKey, detailsOpen())
   })
@@ -397,6 +433,22 @@ const ToolPart: Component<ItemProps<ToolActivityItem>> = (props) => {
               <ToolOutput part={props.part} preview />
             </ToolSection>
           </Show>
+          <Show when={props.part.approvalId}>
+            <ToolSection title={t("tool.section.approval")}>
+              <div class="tool-card__approval">
+                <div class="tool-card__approval-main">
+                  <span>{approvalPrimaryText(props.part, t("tool.approval.needsApproval"))}</span>
+                  <strong>{approvalDecisionLabel(props.part.approvalDecision, props.part.status)}</strong>
+                </div>
+                <Show when={approvalSecondaryText(props.part)}>
+                  <div class="tool-card__approval-result">{approvalSecondaryText(props.part)}</div>
+                </Show>
+                <Show when={approvalResultReasonForPart(props.part)}>
+                  <div class="tool-card__approval-result">{approvalResultReasonForPart(props.part)}</div>
+                </Show>
+              </div>
+            </ToolSection>
+          </Show>
           <Show when={hasDetails()}>
             <button
               type="button"
@@ -426,11 +478,14 @@ const ToolPart: Component<ItemProps<ToolActivityItem>> = (props) => {
               <ToolSection title={t("tool.section.approval")}>
                 <div class="tool-card__approval">
                   <div class="tool-card__approval-main">
-                    <span>{props.part.approvalIntent || props.part.approvalReason || t("tool.approval.needsApproval")}</span>
+                    <span>{approvalPrimaryText(props.part, t("tool.approval.needsApproval"))}</span>
                     <Show when={props.part.approvalDecision}>
                       <strong>{approvalDecisionLabel(props.part.approvalDecision, props.part.status)}</strong>
                     </Show>
                   </div>
+                  <Show when={approvalSecondaryText(props.part)}>
+                    <div class="tool-card__approval-result">{approvalSecondaryText(props.part)}</div>
+                  </Show>
                   <Show when={approvalResultReasonForPart(props.part)}>
                     <div class="tool-card__approval-result">{approvalResultReasonForPart(props.part)}</div>
                   </Show>
@@ -587,13 +642,12 @@ function omitShellCommandFields(input?: Record<string, unknown>): Record<string,
 const ShellToolPart: Component<ItemProps<ToolActivityItem>> = (props) => {
   const openKey = `tool:${props.part.id}`
   const detailsKey = `tool:${props.part.id}:details`
-  const [open, setOpen] = createSignal(
-    initialCardOpenState(openKey, false)
+  const [open, setOpen] = createCardOpenState(
+    openKey,
+    shouldOpenApprovalCard(props.part),
+    () => shouldOpenApprovalCard(props.part),
   )
   const [detailsOpen, setDetailsOpen] = createSignal(initialCardDetailsOpenState(detailsKey, false))
-  createEffect(() => {
-    CARD_OPEN_STATE.set(openKey, open())
-  })
   createEffect(() => {
     CARD_DETAILS_OPEN_STATE.set(detailsKey, detailsOpen())
   })
@@ -676,7 +730,10 @@ const ShellToolPart: Component<ItemProps<ToolActivityItem>> = (props) => {
           <Show when={props.part.approvalId}>
             <div class="shell-card__approval">
               <span class="codicon codicon-shield" aria-hidden="true" />
-              <span>{props.part.approvalIntent || props.part.approvalReason || t("tool.shell.needsApproval")}</span>
+              <span>{approvalPrimaryText(props.part, t("tool.shell.needsApproval"))}</span>
+              <Show when={approvalSecondaryText(props.part)}>
+                <span class="shell-card__approval-result">{approvalSecondaryText(props.part)}</span>
+              </Show>
               <strong>{approvalDecisionLabel(props.part.approvalDecision, props.part.status)}</strong>
             </div>
           </Show>
@@ -739,7 +796,10 @@ const ShellToolPart: Component<ItemProps<ToolActivityItem>> = (props) => {
               <ToolSection title={t("tool.section.approval")}>
                 <div class="shell-card__approval-detail">
                   <div class="shell-card__approval-detail-text">
-                    <span>{props.part.approvalIntent || props.part.approvalReason || t("tool.shell.needsApproval")}</span>
+                    <span>{approvalPrimaryText(props.part, t("tool.shell.needsApproval"))}</span>
+                    <Show when={approvalSecondaryText(props.part)}>
+                      <span class="shell-card__approval-result">{approvalSecondaryText(props.part)}</span>
+                    </Show>
                     <Show when={approvalResultReasonForPart(props.part)}>
                       <span class="shell-card__approval-result">{approvalResultReasonForPart(props.part)}</span>
                     </Show>

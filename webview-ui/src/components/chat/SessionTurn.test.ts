@@ -1,9 +1,114 @@
 import { readFileSync } from "node:fs"
+import { createRequire } from "node:module"
+import { dirname } from "node:path"
+import { fileURLToPath } from "node:url"
+import { build } from "esbuild"
+import { solidPlugin } from "esbuild-plugin-solid"
 import { describe, expect, it } from "vitest"
+import type { MockTurn } from "./mock-data"
 
 const source = readFileSync(new URL("./SessionTurn.tsx", import.meta.url), "utf8")
+const requireFromTest = createRequire(import.meta.url)
+const testDir = dirname(fileURLToPath(import.meta.url))
+
+async function renderSessionTurnToString(turn: MockTurn): Promise<string> {
+  const result = await build({
+    stdin: {
+      contents: [
+        'import { renderToString } from "solid-js/web";',
+        'import { SessionTurn } from "./SessionTurn";',
+        `const turn = ${JSON.stringify(turn)};`,
+        "export default renderToString(() => SessionTurn({ turn }));",
+      ].join("\n"),
+      resolveDir: testDir,
+      loader: "ts",
+    },
+    bundle: true,
+    write: false,
+    format: "cjs",
+    platform: "node",
+    plugins: [solidPlugin({ solid: { generate: "ssr" } })],
+    logLevel: "silent",
+  })
+  const module = { exports: {} as { default?: string } }
+  new Function("require", "module", "exports", result.outputFiles[0].text)(
+    requireFromTest,
+    module,
+    module.exports,
+  )
+  return module.exports.default || ""
+}
 
 describe("SessionTurn source order", () => {
+  it("renders lifecycle approval cards with user-visible hook context before raw details", async () => {
+    const turn: MockTurn = {
+      userMessage: {
+        id: "user-1",
+        role: "user",
+        text: "install linked skill",
+        parts: [],
+        timestamp: 0,
+      },
+      assistantMessages: [{
+        id: "assistant-1",
+        role: "assistant",
+        text: "",
+        timestamp: 1,
+        parts: [
+          {
+            id: "hook-1",
+            type: "context_event",
+            title: "UserPromptSubmit hook asked for confirmation",
+            payload: {
+              schema: "lifecycle_hook.v1",
+              event_name: "UserPromptSubmit",
+              hook_id: "hook:admin:prompt-review:UserPromptSubmit:0",
+              decision: "ask",
+              raw_prompt: "private raw prompt",
+            },
+          },
+          {
+            id: "approval-1",
+            type: "tool",
+            tool: "lifecycle:UserPromptSubmit",
+            source: "lifecycle_hook",
+            status: "awaiting_approval",
+            approvalId: "approval-1",
+            approvalReason: "Review prompt before continuing.",
+            approvalIntent: "Prompt review",
+            input: { user_input: "install linked skill" },
+            resultMeta: {
+              lifecycle_event: "UserPromptSubmit",
+              lifecycle_hooks: [{
+                hook_id: "hook:admin:prompt-review:UserPromptSubmit:0",
+                display_name: "Prompt review",
+                handler_type: "prompt",
+              }],
+              raw_prompt: "private raw prompt",
+            },
+          },
+          {
+            id: "terminal-1",
+            type: "notice",
+            level: "info",
+            text: "Lifecycle hook is waiting for approval.",
+            format: "plain",
+          },
+        ],
+        traceNodeStatus: "success",
+      }],
+    }
+
+    const html = await renderSessionTurnToString(turn)
+
+    expect(html).toContain("UserPromptSubmit hook asked for confirmation")
+    expect(html).toContain("Prompt review")
+    expect(html).toContain("Review prompt before continuing.")
+    expect(html).toContain("等待批准")
+    expect(html).toContain("Lifecycle hook is waiting for approval.")
+    expect(html).not.toContain("private raw prompt")
+  })
+
   it("keeps user and assistant message actions after their content", () => {
     const sessionTurnStart = source.indexOf("export const SessionTurn")
     const userSectionStart = source.indexOf('class="user-message"', sessionTurnStart)
@@ -142,6 +247,27 @@ describe("SessionTurn source order", () => {
     expect(source).toContain('props.part.status === "preparing"')
     expect(source).toContain('if (status === "preparing") return t("tool.preparingGeneric")')
     expect(source).toContain("getToolExecutionStatusLabel(props.part.status)")
+  })
+
+  it("auto-expands tool cards when an existing card starts awaiting approval", () => {
+    const helperStart = source.indexOf("function createCardOpenState")
+    const keyedRecordStart = source.indexOf("interface KeyedRecord", helperStart)
+    const helperSource = source.slice(helperStart, keyedRecordStart)
+    const toolPartStart = source.indexOf("const ToolPart")
+    const toolSectionStart = source.indexOf("const ToolSection", toolPartStart)
+    const toolPartSource = source.slice(toolPartStart, toolSectionStart)
+    const shellPartStart = source.indexOf("const ShellToolPart")
+    const tracePartStart = source.indexOf("const TracePart", shellPartStart)
+    const shellPartSource = source.slice(shellPartStart, tracePartStart)
+
+    expect(helperSource).toContain("forceOpen?: Accessor<boolean>")
+    expect(helperSource).toContain("if (forceOpen?.())")
+    expect(helperSource).toContain("setOpen(true)")
+    expect(helperSource).toContain("CARD_OPEN_STATE.set(partId, true)")
+    expect(toolPartSource).toContain("const [open, setOpen] = createCardOpenState(")
+    expect(toolPartSource).toContain("() => shouldOpenApprovalCard(props.part)")
+    expect(shellPartSource).toContain("const [open, setOpen] = createCardOpenState(")
+    expect(shellPartSource).toContain("() => shouldOpenApprovalCard(props.part)")
   })
 
   it("renders projected reasoning through one collapsible card", () => {
