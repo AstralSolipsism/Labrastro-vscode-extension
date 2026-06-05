@@ -97,6 +97,8 @@ export type HostToWebviewMessageType =
   | "sessionRun.session"
   | "sessionRun.started"
   | "sessionRun.stream"
+  | "sessionRun.userInput.reply.error"
+  | "sessionRun.userInput.reply.ok"
   | "startup.metric"
   | "capability.actionResult"
   | "capability.error"
@@ -201,6 +203,7 @@ export type WebviewToHostMessageType =
   | "sessionRun.cancel"
   | "sessionRun.followup"
   | "sessionRun.followup.cancel"
+  | "sessionRun.userInput.reply"
   | "sessionRun.recover"
   | "settingsTabChanged"
   | "showInfo"
@@ -306,6 +309,8 @@ const HOST_TO_WEBVIEW_TYPES = new Set<HostToWebviewMessageType>([
   "sessionRun.session",
   "sessionRun.started",
   "sessionRun.stream",
+  "sessionRun.userInput.reply.error",
+  "sessionRun.userInput.reply.ok",
   "startup.metric",
   "capability.actionResult",
   "capability.error",
@@ -405,6 +410,7 @@ const WEBVIEW_TO_HOST_TYPES = new Set<WebviewToHostMessageType>([
   "sessionRun.cancel",
   "sessionRun.followup",
   "sessionRun.followup.cancel",
+  "sessionRun.userInput.reply",
   "sessionRun.recover",
   "settingsTabChanged",
   "showInfo",

@@ -999,6 +999,13 @@ export class LabrastroRemoteClient {
     }))
   }
 
+  async sessionRunUserInputReply(payload: JsonObject): Promise<JsonObject> {
+    return this.postPeerJson("/remote/session-runs/user-input/reply", (peer) => ({
+      ...payload,
+      peer_token: peer.peer_token,
+    }))
+  }
+
   async stopPeer(caller = "unknown"): Promise<void> {
     this.lastPeerStopCaller = caller
     this.peerStartupGeneration += 1

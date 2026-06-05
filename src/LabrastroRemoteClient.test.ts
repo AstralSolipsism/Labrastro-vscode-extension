@@ -2163,6 +2163,65 @@ describe("LabrastroRemoteClient peer diagnostics settings", () => {
       }),
     }))
   })
+
+  it("posts structured session run user input replies to the canonical remote path", async () => {
+    vscodeMock.labrastroValue = DEFAULT_TEST_HOST_URL
+    const storagePath = await makeTempStorage()
+    const context = makePeerContext(storagePath)
+    const posted: Array<{ pathname: string; body: Record<string, unknown> }> = []
+    const fetchMock = vi.fn(async (urlInput: unknown, init?: RequestInit) => {
+      const url = new URL(String(urlInput))
+      posted.push({
+        pathname: url.pathname,
+        body: JSON.parse(String(init?.body || "{}")) as Record<string, unknown>,
+      })
+      if (url.pathname !== "/remote/session-runs/user-input/reply") {
+        return new Response(JSON.stringify({ error: "unexpected_url", url: url.pathname }), { status: 500 })
+      }
+      return new Response(JSON.stringify({ ok: true, state: "resolved" }), {
+        headers: { "Content-Type": "application/json" },
+      })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    const client = new LabrastroRemoteClient(context as never)
+    attachPeer(client, "peer-token-1")
+
+    await expect(client.sessionRunUserInputReply({
+      session_run_id: "run-1",
+      input_id: "mcp-elicitation-1",
+      action: "accept",
+      content: { format: "markdown" },
+      reason: "chosen",
+    })).resolves.toMatchObject({ ok: true, state: "resolved" })
+
+    expect(posted).toEqual([{
+      pathname: "/remote/session-runs/user-input/reply",
+      body: {
+        peer_token: "peer-token-1",
+        session_run_id: "run-1",
+        input_id: "mcp-elicitation-1",
+        action: "accept",
+        content: { format: "markdown" },
+        reason: "chosen",
+      },
+    }])
+    const records = await waitForPeerDiagnosticRecords(storagePath, (items) =>
+      items.some((record) =>
+        record.category === "http" &&
+        record.event === "http.post.ok" &&
+        (record.details as Record<string, unknown>).pathname === "/remote/session-runs/user-input/reply"
+      )
+    )
+    expect(records).toContainEqual(expect.objectContaining({
+      category: "http",
+      event: "http.post.ok",
+      details: expect.objectContaining({
+        method: "POST",
+        pathname: "/remote/session-runs/user-input/reply",
+        status: 200,
+      }),
+    }))
+  })
 })
 
 describe("LabrastroRemoteClient peer startup", () => {

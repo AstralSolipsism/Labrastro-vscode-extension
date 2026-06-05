@@ -274,6 +274,43 @@ export class SessionRunCoordinator {
         }
         return true
       }
+      case "sessionRun.userInput.reply": {
+        const sessionRunId =
+          stringValue(message.sessionRunId) ||
+          stringValue(message.session_run_id) ||
+          this.activeSessionRunId ||
+          ""
+        const inputId = stringValue(message.inputId) || stringValue(message.input_id) || ""
+        const action = stringValue(message.action) || "decline"
+        const content = objectValue(message.content) || {}
+        try {
+          const payload = await this.options.client.sessionRunUserInputReply({
+            session_run_id: sessionRunId,
+            input_id: inputId,
+            action,
+            content,
+            reason: stringValue(message.reason),
+          })
+          post({
+            type: "sessionRun.userInput.reply.ok",
+            sessionRunId,
+            inputId,
+            action,
+            payload,
+          })
+        } catch (error) {
+          const resolvedError = chatErrorMessage(error)
+          post({
+            type: "sessionRun.userInput.reply.error",
+            sessionRunId,
+            inputId,
+            action,
+            message: resolvedError,
+          })
+          await this.options.postConnectionStateIfAuthRequired(error, post)
+        }
+        return true
+      }
       case "approval.openDetails":
         await this.options.approvalDocuments.open(stringValue(message.approvalId) || "")
         return true

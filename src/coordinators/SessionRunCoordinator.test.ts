@@ -5,6 +5,7 @@ function coordinator() {
   const options = {
     client: {
       approvalReply: vi.fn(),
+      sessionRunUserInputReply: vi.fn(async (): Promise<Record<string, unknown>> => ({ ok: true })),
       followUpSessionRun: vi.fn(async () => ({ ok: true })),
       cancelSessionRunFollowUp: vi.fn(async () => ({ ok: true })),
       recoverSessionRun: vi.fn(async () => ({ ok: true })),
@@ -283,6 +284,48 @@ describe("SessionRunCoordinator", () => {
     })
     expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "sessionRun.error" }))
     expect(subject.activeRun?.sessionRunId).toBe("active-run")
+  })
+
+  it("routes structured session run user input replies through the active run", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    options.client.sessionRunUserInputReply.mockResolvedValueOnce({
+      ok: true,
+      state: "resolved",
+    })
+    subject.setActiveRun({
+      sessionRunId: "active-run",
+      cursor: 0,
+      status: "running",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reconnectAttempts: 0,
+    })
+
+    await subject.handleMessage({
+      type: "sessionRun.userInput.reply",
+      inputId: "mcp-elicitation-1",
+      action: "accept",
+      content: { format: "markdown" },
+      reason: "chosen",
+    }, post)
+
+    expect(options.client.sessionRunUserInputReply).toHaveBeenCalledWith({
+      session_run_id: "active-run",
+      input_id: "mcp-elicitation-1",
+      action: "accept",
+      content: { format: "markdown" },
+      reason: "chosen",
+    })
+    expect(post).toHaveBeenCalledWith({
+      type: "sessionRun.userInput.reply.ok",
+      sessionRunId: "active-run",
+      inputId: "mcp-elicitation-1",
+      action: "accept",
+      payload: {
+        ok: true,
+        state: "resolved",
+      },
+    })
   })
 
   it("routes sessionRun.cancel with snake_case session_run_id", async () => {
