@@ -214,6 +214,39 @@ describe("ChatView context events", () => {
     expect(source).toContain('replyApproval(pendingApproval, "deny_once", autoDecision.replyReason)')
   })
 
+  it("routes MCP user input requests through a structured reply path", () => {
+    expect(source).toContain('type === "user_input_request"')
+    expect(source).toContain("setPendingUserInputs((items) => upsertPendingUserInput(items, userInput))")
+    expect(source).toContain('type: "sessionRun.userInput.reply"')
+    expect(source).toContain("buildUserInputContent(input, pendingUserInputContent(input.inputId))")
+    expect(source).toContain("content: contentResult.content")
+    expect(source).toContain('type === "user_input_resolved"')
+    expect(source).toContain("setPendingUserInputs((items) => items.filter((item) => item.inputId !== inputId))")
+    expect(source).toContain('msg.type === "sessionRun.userInput.reply.error"')
+  })
+
+  it("restores pending MCP user inputs from session run resume status", () => {
+    expect(source).toContain("const statusUserInputs = Array.isArray(payload.user_inputs) ? payload.user_inputs : []")
+    expect(source).toContain("if (sessionRunId) {")
+    expect(source).toContain("reconcileStatusUserInputs(items, statusUserInputs, sessionRunId)")
+    expect(source).toContain("setPendingUserInputValues((current) => reconcileStatusUserInputValues(current, statusUserInputs))")
+  })
+
+  it("scopes pending MCP user input cards to the active session run and clears terminal state", () => {
+    expect(source).toContain("visiblePendingUserInputsForRun(pendingUserInputs(), activeSessionRunId())")
+    expect(source).toContain("const clearPendingUserInputs =")
+    expect(source).toContain("clearPendingUserInputs()")
+    expect(source).toContain('String(event.session_run_id || "") || activeSessionRunId()')
+  })
+
+  it("renders optional boolean MCP user input as an explicit omit false true control", () => {
+    expect(source).toContain("userInputBooleanAllowsOmit(input, field)")
+    expect(source).toContain("userInputBooleanSelectedKey(input, field, draft())")
+    expect(source).toContain('<option value="">未填写</option>')
+    expect(source).toContain('<option value="false">否</option>')
+    expect(source).toContain('<option value="true">是</option>')
+  })
+
   it("guards slash command dispatch during active runs with command metadata", () => {
     expect(source).toContain("findChatCommandByText(chatCommandCatalog(), text)")
     expect(source).toContain("isWorking() && !command?.availableDuringRun")

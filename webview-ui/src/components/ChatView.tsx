@@ -87,6 +87,23 @@ import {
   type ApprovalSubmissionState,
 } from "../chat/approval-state"
 import {
+  buildUserInputContent,
+  reconcileStatusUserInputValues,
+  reconcileStatusUserInputs,
+  userInputBooleanAllowsOmit,
+  userInputBooleanSelectedKey,
+  userInputBooleanValueFromKey,
+  userInputDraftDisplayValue,
+  userInputEnumOptions,
+  userInputEnumSelectedKey,
+  userInputFieldKind,
+  userInputFieldNames,
+  userInputFromPayload,
+  visiblePendingUserInputsForRun,
+  type PendingUserInputState,
+  type UserInputDraft,
+} from "../chat/user-input-state"
+import {
   filterRawAuditEvents,
   rawAuditAgentRunQuery,
   rawAuditEventKey,
@@ -148,6 +165,11 @@ interface PendingApproval extends ApprovalDetails, ApprovalSubmissionFields {
   submissionState?: ApprovalSubmissionState
 }
 
+interface PendingUserInput extends PendingUserInputState {
+  submissionState?: "submitting" | "submit_failed"
+  submissionError?: string
+}
+
 interface ChatWebviewState {
   autoApproveOptions?: Record<string, boolean>
   autoApprovalAllowedCommands?: string[]
@@ -207,6 +229,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const [lastEnvironmentRunRequestId, setLastEnvironmentRunRequestId] = createSignal("")
   const [pendingApprovals, setPendingApprovals] = createSignal<PendingApproval[]>([])
   const [selectedApproval, setSelectedApproval] = createSignal<PendingApproval | undefined>()
+  const [pendingUserInputs, setPendingUserInputs] = createSignal<PendingUserInput[]>([])
+  const [pendingUserInputValues, setPendingUserInputValues] = createSignal<Record<string, UserInputDraft>>({})
   const [historyQuery, setHistoryQuery] = createSignal("")
   const [historySort, setHistorySort] = createSignal<SessionHistorySort>("newest")
   const [showBranchSessions, setShowBranchSessions] = createSignal(false)
@@ -486,6 +510,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     setPendingCancel(false)
     setPendingApprovals([])
     setSelectedApproval(undefined)
+    clearPendingUserInputs()
     setRememberingApprovalId("")
     clearActiveStreamDraft()
     trace.patchStats({ runStatus: nextStatus })
@@ -530,6 +555,15 @@ const ChatView: Component<ChatViewProps> = (props) => {
 
   const visibleIsWorking = () => isWorking() && currentRunSessionMatches()
   const visiblePendingApprovals = () => (currentRunSessionMatches() ? pendingApprovals() : [])
+  const visiblePendingUserInputs = () => (
+    currentRunSessionMatches()
+      ? visiblePendingUserInputsForRun(pendingUserInputs(), activeSessionRunId())
+      : []
+  )
+  const clearPendingUserInputs = () => {
+    setPendingUserInputs([])
+    setPendingUserInputValues({})
+  }
   const isCapabilityPackageSessionRun = () => {
     const runtime = sessionRuntimeState()
     const mode = stringValue(runtime.mode)
@@ -1600,6 +1634,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         setActiveRunSessionId("")
         setPendingApprovals([])
         setSelectedApproval(undefined)
+        clearPendingUserInputs()
         stopTimer()
         markRenderedEvent(eventMeta)
         return
@@ -1799,6 +1834,22 @@ const ChatView: Component<ChatViewProps> = (props) => {
         if (toolCallId) patch.toolCallId = toolCallId
         upsertToolPart(toolName, patch, toolCallId, { matchReturn: true, meta: eventMeta })
       }
+    } else if (type === "user_input_request") {
+      const userInput = userInputFromPayload(payload, String(event.session_run_id || "") || activeSessionRunId() || "")
+      if (!userInput.inputId) return
+      setPendingUserInputs((items) => upsertPendingUserInput(items, userInput))
+      setPendingUserInputValues((current) => ({
+        ...current,
+        [userInput.inputId]: current[userInput.inputId] || {},
+      }))
+    } else if (type === "user_input_resolved") {
+      const inputId = String(payload.input_id || "")
+      setPendingUserInputs((items) => items.filter((item) => item.inputId !== inputId))
+      setPendingUserInputValues((current) => {
+        const next = { ...current }
+        delete next[inputId]
+        return next
+      })
     } else if ((type === "approval_request" || type === "workflow_decision") && pendingApprovalForEvent) {
       const next = pendingApprovalForEvent!
       const autoDecision = autoDecisionForEvent || evaluateApprovalDecision(next)
@@ -2213,6 +2264,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     setWorkingText("处理中")
     setPendingApprovals([])
     setSelectedApproval(undefined)
+    clearPendingUserInputs()
     if (activeForkCompose && activeForkCompose.sessionId === sessionId) {
       setForkCompose(undefined)
     }
@@ -2262,6 +2314,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     setWorkingText("正在执行指令")
     setPendingApprovals([])
     setSelectedApproval(undefined)
+    clearPendingUserInputs()
     trace.patchStats({ taskText: text, runStatus: "running" })
     startTimer()
     chatMessages.dispatchCommand(vscode, {
@@ -2377,6 +2430,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     setWorkingText(item.mode === "check" ? "正在检查能力环境" : "正在配置能力环境")
     setPendingApprovals([])
     setSelectedApproval(undefined)
+    clearPendingUserInputs()
     trace.patchStats({ taskText: item.text, runStatus: "running" })
     startTimer()
     vscode.postMessage({
@@ -2480,6 +2534,136 @@ const ChatView: Component<ChatViewProps> = (props) => {
       decision,
       ...(reason ? { reason } : {}),
     })
+  }
+
+  const pendingUserInputContent = (inputId: string): UserInputDraft => pendingUserInputValues()[inputId] || {}
+
+  const updatePendingUserInputValue = (inputId: string, field: string, value: unknown) => {
+    setPendingUserInputValues((current) => ({
+      ...current,
+      [inputId]: {
+        ...(current[inputId] || {}),
+        [field]: value,
+      },
+    }))
+  }
+
+  const clearPendingUserInputValue = (inputId: string, field: string) => {
+    setPendingUserInputValues((current) => {
+      const draft = { ...(current[inputId] || {}) }
+      delete draft[field]
+      return {
+        ...current,
+        [inputId]: draft,
+      }
+    })
+  }
+
+  const replyUserInput = (input: PendingUserInput, action: "accept" | "decline" | "cancel", reason?: string) => {
+    const contentResult = action === "accept"
+      ? buildUserInputContent(input, pendingUserInputContent(input.inputId))
+      : { content: {}, errors: [] as string[] }
+    if (contentResult.errors.length > 0) {
+      const message = contentResult.errors[0]
+      setPendingUserInputs((items) =>
+        items.map((item) =>
+          item.inputId === input.inputId
+            ? { ...item, submissionState: "submit_failed", submissionError: message }
+            : item
+        )
+      )
+      return
+    }
+    setPendingUserInputs((items) =>
+      items.map((item) =>
+        item.inputId === input.inputId
+          ? { ...item, submissionState: "submitting", submissionError: undefined }
+          : item
+      )
+    )
+    vscode.postMessage({
+      type: "sessionRun.userInput.reply",
+      sessionRunId: input.sessionRunId || activeSessionRunId(),
+      inputId: input.inputId,
+      action,
+      content: contentResult.content,
+      ...(reason ? { reason } : {}),
+    })
+  }
+
+  const renderUserInputControl = (
+    input: PendingUserInput,
+    field: string,
+    submitting: boolean,
+  ) => {
+    const draft = () => pendingUserInputContent(input.inputId)
+    const kind = userInputFieldKind(input, field)
+    if (kind === "boolean") {
+      if (userInputBooleanAllowsOmit(input, field)) {
+        return (
+          <select
+            value={userInputBooleanSelectedKey(input, field, draft())}
+            disabled={submitting}
+            onChange={(event) => {
+              const value = userInputBooleanValueFromKey(event.currentTarget.value)
+              if (value === undefined) {
+                clearPendingUserInputValue(input.inputId, field)
+              } else {
+                updatePendingUserInputValue(input.inputId, field, value)
+              }
+            }}
+          >
+            <option value="">未填写</option>
+            <option value="false">否</option>
+            <option value="true">是</option>
+          </select>
+        )
+      }
+      return (
+        <input
+          type="checkbox"
+          checked={userInputBooleanSelectedKey(input, field, draft()) === "true"}
+          disabled={submitting}
+          onChange={(event) => updatePendingUserInputValue(input.inputId, field, event.currentTarget.checked)}
+        />
+      )
+    }
+    if (kind === "select") {
+      return (
+        <select
+          value={userInputEnumSelectedKey(input, field, draft())}
+          disabled={submitting}
+          onChange={(event) => {
+            const option = userInputEnumOptions(input, field).find((item) => item.key === event.currentTarget.value)
+            updatePendingUserInputValue(input.inputId, field, option?.value ?? "")
+          }}
+        >
+          <option value="">选择...</option>
+          <For each={userInputEnumOptions(input, field)}>
+            {(option) => <option value={option.key}>{option.label}</option>}
+          </For>
+        </select>
+      )
+    }
+    if (kind === "json") {
+      return (
+        <textarea
+          rows={3}
+          value={userInputDraftDisplayValue(draft()[field])}
+          disabled={submitting}
+          onInput={(event) => updatePendingUserInputValue(input.inputId, field, event.currentTarget.value)}
+        />
+      )
+    }
+    return (
+      <input
+        type={kind === "number" || kind === "integer" ? "number" : "text"}
+        step={kind === "integer" ? "1" : kind === "number" ? "any" : undefined}
+        value={userInputDraftDisplayValue(draft()[field])}
+        disabled={submitting}
+        onInput={(event) => updatePendingUserInputValue(input.inputId, field, event.currentTarget.value)}
+      />
+    )
   }
 
   const replyApproval = (approval: PendingApproval, decision: ApprovalDecision, reason?: string) => {
@@ -2765,6 +2949,13 @@ const ChatView: Component<ChatViewProps> = (props) => {
             mergeStatusApprovals(items, statusApprovals, sessionRunId)
           )
         }
+        const statusUserInputs = Array.isArray(payload.user_inputs) ? payload.user_inputs : []
+        if (sessionRunId) {
+          setPendingUserInputs((items) =>
+            reconcileStatusUserInputs(items, statusUserInputs, sessionRunId)
+          )
+          setPendingUserInputValues((current) => reconcileStatusUserInputValues(current, statusUserInputs))
+        }
         const runtime = sessionRuntimeStateFromMessage(msg as Record<string, unknown>, payload)
         if (Object.keys(runtime).length) {
           setSessionRuntimeState(runtime)
@@ -2896,6 +3087,31 @@ const ChatView: Component<ChatViewProps> = (props) => {
           }
         }
         appendNotice("error", `审批提交失败：${message}`, "error")
+      }
+      if (msg.type === "sessionRun.userInput.reply.ok") {
+        const inputId = stringValue(msg.inputId) || stringValue(msg.input_id)
+        if (inputId) {
+          setPendingUserInputs((items) => items.filter((item) => item.inputId !== inputId))
+          setPendingUserInputValues((current) => {
+            const next = { ...current }
+            delete next[inputId]
+            return next
+          })
+        }
+      }
+      if (msg.type === "sessionRun.userInput.reply.error") {
+        const inputId = stringValue(msg.inputId) || stringValue(msg.input_id)
+        const message = typeof msg.message === "string" ? msg.message : "user input reply failed"
+        if (inputId) {
+          setPendingUserInputs((items) =>
+            items.map((item) =>
+              item.inputId === inputId
+                ? { ...item, submissionState: "submit_failed", submissionError: message }
+                : item
+            )
+          )
+        }
+        appendNotice("error", `输入提交失败：${message}`, "error")
       }
       if (msg.type === "environment.run.error" && isWorking()) {
         appendNotice("error", `环境任务失败：${typeof msg.message === "string" ? msg.message : "unknown error"}`, "error")
@@ -3065,6 +3281,42 @@ const ChatView: Component<ChatViewProps> = (props) => {
           allowedCommands={autoApprovalAllowedCommands()}
           onToggleOption={handleToggleApproveOption}
         />
+        <Show when={visiblePendingUserInputs().length > 0}>
+          <div class="user-input-strip">
+            <For each={visiblePendingUserInputs()}>
+              {(input) => {
+                const fields = () => userInputFieldNames(input)
+                const submitting = () => input.submissionState === "submitting"
+                return (
+                  <div class="user-input-strip__item">
+                    <span class="codicon codicon-comment-discussion" aria-hidden="true" />
+                    <span class="user-input-strip__body">
+                      <strong>{input.message || "MCP request needs input"}</strong>
+                      <Show when={fields().length > 0} fallback={<small>这个 MCP 请求没有声明输入字段。</small>}>
+                        <For each={fields()}>
+                          {(field) => (
+                            <label class="user-input-strip__field">
+                              <span>{field}</span>
+                              {renderUserInputControl(input, field, submitting())}
+                            </label>
+                          )}
+                        </For>
+                      </Show>
+                      <span class="user-input-strip__actions">
+                        <button type="button" disabled={submitting()} onClick={() => replyUserInput(input, "accept")}>提交</button>
+                        <button type="button" disabled={submitting()} onClick={() => replyUserInput(input, "decline", "user_declined")}>拒绝</button>
+                        <button type="button" disabled={submitting()} onClick={() => replyUserInput(input, "cancel", "user_cancelled")}>取消</button>
+                      </span>
+                      <Show when={input.submissionState === "submit_failed"}>
+                        <small class="user-input-strip__error">提交失败：{input.submissionError || "请重试"}</small>
+                      </Show>
+                    </span>
+                  </div>
+                )
+              }}
+            </For>
+          </div>
+        </Show>
         <Show when={visiblePendingApprovals().length > 0}>
           <div class="approval-strip">
             <For each={visiblePendingApprovals()}>
@@ -3439,6 +3691,14 @@ function upsertPendingApproval(items: PendingApproval[], next: PendingApproval):
   if (index < 0) return [...items, next]
   const updated = [...items]
   updated[index] = next
+  return updated
+}
+
+function upsertPendingUserInput(items: PendingUserInput[], next: PendingUserInput): PendingUserInput[] {
+  const index = items.findIndex((item) => item.inputId === next.inputId)
+  if (index < 0) return [...items, next]
+  const updated = [...items]
+  updated[index] = { ...items[index], ...next }
   return updated
 }
 

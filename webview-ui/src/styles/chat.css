@@ -2155,6 +2155,136 @@
   background: color-mix(in srgb, var(--ez-warning) 12%, transparent);
 }
 
+.user-input-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0 8px;
+}
+
+.user-input-strip__item {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: start;
+  gap: 6px;
+  padding: 6px 7px;
+  border: 1px solid color-mix(in srgb, var(--ez-link) 42%, var(--ez-border));
+  border-radius: var(--ez-radius);
+  background: color-mix(in srgb, var(--ez-link) 8%, transparent);
+}
+
+.user-input-strip__item .codicon {
+  margin-top: 1px;
+  color: var(--ez-link);
+}
+
+.user-input-strip__body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.user-input-strip__body strong,
+.user-input-strip__body small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.user-input-strip__body strong {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.user-input-strip__body small {
+  color: var(--ez-muted);
+  font-size: 10px;
+}
+
+.user-input-strip__field {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(80px, 0.35fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+}
+
+.user-input-strip__field span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ez-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-input-strip__field input,
+.user-input-strip__field select,
+.user-input-strip__field textarea {
+  min-width: 0;
+  border: 1px solid var(--ez-border);
+  border-radius: 4px;
+  color: var(--ez-fg);
+  background: var(--vscode-input-background, transparent);
+}
+
+.user-input-strip__field input,
+.user-input-strip__field select {
+  height: 24px;
+  padding: 0 6px;
+}
+
+.user-input-strip__field input[type="checkbox"] {
+  width: 16px;
+  min-width: 16px;
+  height: 16px;
+  align-self: center;
+}
+
+.user-input-strip__field textarea {
+  min-height: 56px;
+  max-height: 160px;
+  padding: 5px 6px;
+  resize: vertical;
+}
+
+.user-input-strip__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.user-input-strip__item button {
+  height: 23px;
+  padding: 0 7px;
+  border: 1px solid var(--ez-border);
+  border-radius: 4px;
+  color: var(--ez-fg);
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.user-input-strip__item button:hover {
+  background: var(--ez-hover);
+}
+
+.user-input-strip__item button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.user-input-strip__item button:disabled:hover {
+  background: transparent;
+}
+
+.user-input-strip__error {
+  color: var(--ez-error);
+}
+
 .approval-strip {
   display: flex;
   flex-direction: column;
@@ -2665,10 +2795,16 @@
     opacity: 1;
   }
 
+  .user-input-strip__item,
   .approval-strip__item {
     grid-template-columns: 16px minmax(0, 1fr);
   }
 
+  .user-input-strip__field {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .user-input-strip__item button,
   .approval-strip__item button {
     width: fit-content;
   }
