@@ -190,6 +190,19 @@ export function isManageableLifecycleHook(hook: Record<string, unknown>): boolea
   return id !== "" && (hook.canManage === true || hook.can_manage === true)
 }
 
+export function lifecycleHookTrustActionPayload(
+  hook: Record<string, unknown>,
+  trust: "trusted" | "disabled" | "blocked",
+): { kind: "lifecycle_hook"; payload: { hook_id: string; trust: "trusted" | "disabled" | "blocked" } } | undefined {
+  if (!isManageableLifecycleHook(hook)) return undefined
+  const id = stringValue(hook.id)
+  if (!id) return undefined
+  return {
+    kind: "lifecycle_hook",
+    payload: { hook_id: id, trust },
+  }
+}
+
 export function lifecycleHookPlacementLabel(placement: string): string {
   if (placement === "server") return "服务端"
   if (placement === "peer" || placement === "local_peer") return "本地端"
@@ -223,6 +236,59 @@ export function hookRuntimeStatusItems(hook: Record<string, unknown>): string[] 
       stringValue(hook.unavailableReason),
     )}`
   })
+}
+
+export function lifecycleHookTrustLabel(trust: string): string {
+  if (trust === "trusted") return "已信任"
+  if (trust === "disabled") return "已禁用"
+  if (trust === "blocked") return "已阻止"
+  return "待审查"
+}
+
+export function lifecycleHookSourceLabel(source: string): string {
+  if (source === "skill") return "Skill"
+  if (source === "mcp_server") return "MCP Server"
+  if (source === "capability_package") return "能力包"
+  if (source === "system_builtin") return "系统内置"
+  if (source === "admin_managed") return "管理员策略"
+  return source || "未记录"
+}
+
+export function lifecycleHookPermissionText(permissions: string[]): string {
+  return permissions.length ? permissions.join("、") : "未声明额外权限"
+}
+
+export function lifecycleHookRecentResultText(recentResult: Record<string, unknown>): string {
+  const status = stringValue(recentResult.status, "unrecorded")
+  const summary = stringValue(recentResult.summary || recentResult.reason)
+  const label = lifecycleHookRecentStatusLabel(status)
+  return `最近结果：${summary ? `${label} · ${summary}` : label}`
+}
+
+export function lifecycleHookDetailItems(hook: Record<string, unknown>): string[] {
+  const credentials = stringArrayValue(hook.credentials)
+  const riskLevel = stringValue(hook.riskLevel || hook.risk_level)
+  const recentResult = objectValue(hook.recentResult || hook.recent_result)
+  return [
+    `来源：${lifecycleHookSourceLabel(stringValue(hook.source))}`,
+    `事件：${stringValue(hook.event)}`,
+    `运行位置：${lifecycleHookPlacementLabel(stringValue(hook.placement, "server"))}`,
+    `执行状态：${hookRuntimeStatusItems(hook).join("；")}`,
+    `信任状态：${lifecycleHookTrustLabel(stringValue(hook.trust, "pending_review"))}`,
+    `权限需求：${lifecycleHookPermissionText(stringArrayValue(hook.permissions))}`,
+    `凭据：${credentials.length ? credentials.join("、") : "未声明凭据"}`,
+    `风险：${riskLevel || "未记录"}`,
+    lifecycleHookRecentResultText(recentResult),
+  ]
+}
+
+function lifecycleHookRecentStatusLabel(status: string): string {
+  if (status === "ok" || status === "success" || status === "allowed" || status === "allow") return "成功"
+  if (status === "denied" || status === "deny" || status === "blocked") return "已阻断"
+  if (status === "deferred" || status === "defer") return "已延后"
+  if (status === "error" || status === "failed" || status === "failure") return "失败"
+  if (status === "unrecorded") return "未记录"
+  return status || "未记录"
 }
 
 export const CapabilitiesTab: Component<TabProps> = (props) => {
@@ -828,35 +894,13 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
     stringValue(capabilityField(capability, "risk_level")) || "未记录"
   const capabilityCredentialItems = (capability: CapabilityView) =>
     capabilityStringListField(capability, "credentials")
-  const hookTrustLabel = (trust: string) => {
-    if (trust === "trusted") return "已信任"
-    if (trust === "disabled") return "已禁用"
-    if (trust === "blocked") return "已阻止"
-    return "待审查"
-  }
-  const hookSourceLabel = (source: string) => {
-    if (source === "skill") return "Skill"
-    if (source === "mcp_server") return "MCP Server"
-    if (source === "capability_package") return "能力包"
-    if (source === "system_builtin") return "系统内置"
-    if (source === "admin_managed") return "管理员策略"
-    return source || "未记录"
-  }
-  const hookPermissionText = (permissions: string[]) =>
-    permissions.length ? permissions.join("、") : "未声明额外权限"
   const hookId = (hook: any) => stringValue(hook.id)
   const hookDisplayName = (hook: any) =>
     stringValue(hook.displayName || hook.display_name || hook.event || hook.id) || "Lifecycle Hook"
   const hookSummary = (hook: any) =>
     stringValue(hook.summary || hook.description) || hookDisplayName(hook)
   const hookTrust = (hook: any) => stringValue(hook.trust, "pending_review")
-  const hookPlacement = (hook: any) => stringValue(hook.placement, "server")
-  const hookSource = (hook: any) => stringValue(hook.source)
-  const hookEvent = (hook: any) => stringValue(hook.event)
-  const hookPermissions = (hook: any) => stringArrayValue(hook.permissions)
   const hookExecutable = (hook: any) => hook.executable === true
-  const hookExecutionLabel = (hook: any) =>
-    hookRuntimeStatusItems(hook).join("；")
   const hookExecutionTone = (hook: any): "success" | "warning" | "muted" | "error" | undefined => {
     if (hookExecutable(hook)) return "success"
     if (hookTrust(hook) === "blocked") return "error"
@@ -865,10 +909,9 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
   }
   const hookCanManage = (hook: any) => isManageableLifecycleHook(hook)
   const updateHookTrust = (hook: any, trust: "trusted" | "disabled" | "blocked") => {
-    if (!hookCanManage(hook)) return
-    const id = hookId(hook)
-    if (!id) return
-    recordCapabilityRequest("lifecycle_hook", { hook_id: id, trust })
+    const action = lifecycleHookTrustActionPayload(hook, trust)
+    if (!action) return
+    recordCapabilityRequest(action.kind, action.payload)
   }
   const renderHookTrustActions = (hook: any) => (
     <Show when={hookCanManage(hook)} fallback={<small>服务端未返回可管理 Hook ID，仅展示技术详情。</small>}>
@@ -894,14 +937,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
               <strong>{hookDisplayName(hook)}</strong>
               <small>{hookSummary(hook)}</small>
               <small>
-                {[
-                  `来源：${hookSourceLabel(hookSource(hook))}`,
-                  `事件：${hookEvent(hook)}`,
-                  `运行位置：${lifecycleHookPlacementLabel(hookPlacement(hook))}`,
-                  `执行状态：${hookExecutionLabel(hook)}`,
-                  `信任状态：${hookTrustLabel(hookTrust(hook))}`,
-                  `权限需求：${hookPermissionText(hookPermissions(hook))}`,
-                ].join(" · ")}
+                {lifecycleHookDetailItems(hook).join(" · ")}
               </small>
             </SettingsListCardMain>
             <StatusBadge tone={hookExecutionTone(hook)}>

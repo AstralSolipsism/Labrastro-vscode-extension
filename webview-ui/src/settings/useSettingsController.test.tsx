@@ -253,6 +253,91 @@ describe("settings controller capability model", () => {
     })
   })
 
+  it("keeps MCP lifecycle hooks and MCP memory providers on separate controller surfaces", () => {
+    const controller = withController(makeServer({
+      capabilityState: () => ({
+        dashboard_items: [
+          {
+            id: "mcp:github",
+            kind: "mcp",
+            entry_type: "mcp",
+            name: "github",
+            display_name: "GitHub tools",
+            hook_views: [
+              {
+                id: "hook:mcp_server:github:PostToolUse:0",
+                event: "PostToolUse",
+                source: "mcp_server",
+                placement: "server",
+                handler_type: "mcp_tool",
+                display_name: "GitHub audit",
+                summary: "Records GitHub MCP tool results.",
+                permissions: ["audit.write"],
+                trust: "pending_review",
+              },
+            ],
+            hooks: [
+              {
+                event: "UserPromptSubmit",
+                handler_type: "mcp_tool",
+                display_name: "Raw hook config",
+              },
+            ],
+            memory_provider: {
+              id: "github_memory",
+              adapter: "mcp_memory",
+              hooks: [
+                {
+                  event: "UserPromptSubmit",
+                  handler_type: "mcp_tool",
+                  display_name: "Memory audit",
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      serverSettingsState: () => ({
+        settings: {
+          memory: {
+            providers: {
+              github_memory: { adapter: "mcp_memory", mcp_server: "github" },
+            },
+          },
+          memory_status: {
+            providers: [
+              {
+                id: "github_memory",
+                adapter: "mcp_memory",
+                status: "adapter_missing",
+                available: false,
+              },
+            ],
+          },
+        },
+      }),
+    }), (controller) => controller)
+
+    const capability = controller.capabilityViews()[0] as any
+
+    expect(capability.hooks).toHaveLength(1)
+    expect(capability.hooks[0]).toMatchObject({
+      id: "hook:mcp_server:github:PostToolUse:0",
+      source: "mcp_server",
+      displayName: "GitHub audit",
+    })
+    expect(JSON.stringify(capability.hooks)).not.toContain("github_memory")
+    expect(JSON.stringify(capability.hooks)).not.toContain("Memory audit")
+    expect(controller.memoryProviderOptions()).toEqual([
+      {
+        id: "github_memory",
+        adapter: "mcp_memory",
+        status: "adapter_missing",
+        available: false,
+      },
+    ])
+  })
+
   it("keeps lifecycle hooks on installed capability package views", () => {
     const controller = withController(makeServer({
       serverSettingsState: () => ({

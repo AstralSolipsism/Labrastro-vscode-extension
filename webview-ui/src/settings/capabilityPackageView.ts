@@ -33,7 +33,9 @@ export interface CapabilityHookView {
   unavailableReason: string
   placementRuntime: CapabilityHookPlacementRuntimeView
   permissions: string[]
+  credentials: string[]
   riskLevel: string
+  recentResult: Record<string, unknown>
   technical: Record<string, unknown>
 }
 
@@ -207,7 +209,9 @@ export function normalizeLifecycleHookViews(value: unknown): CapabilityHookView[
       unavailableReason: stringValue(hook.unavailable_reason || hook.unavailableReason),
       placementRuntime: normalizeLifecycleHookPlacementRuntime(hook.placement_runtime || hook.placementRuntime),
       permissions: stringArrayValue(hook.permissions),
+      credentials: stringArrayValue(hook.credentials),
       riskLevel: stringValue(hook.risk_level || hook.riskLevel),
+      recentResult: objectValue(hook.recent_result || hook.recentResult),
       technical,
     }
   })

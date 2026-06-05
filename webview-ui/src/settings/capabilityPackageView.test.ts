@@ -396,6 +396,38 @@ describe("capability package component view", () => {
     expect(hook.handler_ref).toBeUndefined()
   })
 
+  it("preserves lifecycle hook credentials and recent result for management display", () => {
+    const hooks = normalizeLifecycleHookViews([
+      {
+        id: "hook:mcp_server:github:PreToolUse:0",
+        event: "PreToolUse",
+        source: "mcp_server",
+        placement: "server",
+        handler_type: "command",
+        display_name: "GitHub guard",
+        summary: "Checks GitHub shell commands.",
+        trust: "trusted",
+        credentials: ["GITHUB_TOKEN"],
+        risk_level: "high",
+        recent_result: {
+          status: "denied",
+          summary: "Denied shell command",
+          session_run_id: "session-run-1",
+        },
+      },
+    ])
+
+    expect(hooks[0]).toMatchObject({
+      credentials: ["GITHUB_TOKEN"],
+      riskLevel: "high",
+      recentResult: {
+        status: "denied",
+        summary: "Denied shell command",
+        session_run_id: "session-run-1",
+      },
+    })
+  })
+
   it("preserves lifecycle hook placement runtime returned by the backend", () => {
     const hooks = normalizeLifecycleHookViews([
       {
@@ -456,6 +488,50 @@ describe("capability package component view", () => {
     })
 
     expect((capabilities[0] as any).hooks).toEqual([])
+  })
+
+  it("keeps MCP memory provider metadata out of lifecycle hook cards", () => {
+    const capabilities = capabilityViewsFromSources({
+      mcpServers: [{
+        id: "mcp:github",
+        kind: "mcp",
+        name: "github",
+        enabled: true,
+        hook_views: [
+          {
+            id: "hook:mcp_server:github:PostToolUse:0",
+            event: "PostToolUse",
+            source: "mcp_server",
+            placement: "server",
+            handler_type: "mcp_tool",
+            display_name: "GitHub audit",
+            summary: "Records GitHub MCP tool results.",
+            trust: "pending_review",
+          },
+        ],
+        memory_provider: {
+          id: "github_memory",
+          adapter: "mcp_memory",
+          hooks: [
+            {
+              event: "UserPromptSubmit",
+              handler_type: "mcp_tool",
+              display_name: "Memory audit",
+              summary: "This must not become a lifecycle hook card.",
+            },
+          ],
+        },
+      }],
+    })
+
+    expect((capabilities[0] as any).hooks).toHaveLength(1)
+    expect((capabilities[0] as any).hooks[0]).toMatchObject({
+      id: "hook:mcp_server:github:PostToolUse:0",
+      source: "mcp_server",
+      displayName: "GitHub audit",
+    })
+    expect(JSON.stringify((capabilities[0] as any).hooks)).not.toContain("github_memory")
+    expect(JSON.stringify((capabilities[0] as any).hooks)).not.toContain("Memory audit")
   })
 
   it("does not infer manageability or executability from canonical-looking ids or trust", () => {
