@@ -73,6 +73,7 @@ export const SESSION_RUN_TRANSCRIPT_EVENT_TYPES = new Set([
   "output",
   "view",
   "context_event",
+  "lifecycle_hook",
   "workflow_step",
   "workflow_artifact",
   "workflow_decision",
@@ -290,6 +291,9 @@ function applySessionRunTranscriptEventToBundle(
     } else {
       appendContextEvent(next, payload, meta, context, labels, now)
     }
+    markChanged()
+  } else if (type === "lifecycle_hook") {
+    appendLifecycleHookEvent(next, payload, meta, context, labels, now)
     markChanged()
   } else if (type === "workflow_step") {
     appendWorkflowStep(next, payload, meta, context, now)
@@ -778,6 +782,37 @@ function appendContextEvent(
   }, context)
 }
 
+function appendLifecycleHookEvent(
+  bundle: MockSessionBundle,
+  payload: Record<string, unknown>,
+  meta: EventRenderMeta,
+  context: SessionRunTranscriptContext,
+  labels: SessionRunTranscriptLabels,
+  now: number,
+): void {
+  const title =
+    stringValue(payload.title) ||
+    stringValue(payload.message) ||
+    stringValue(payload.display_name) ||
+    stringValue(payload.event_name) ||
+    stringValue(payload.event_type) ||
+    stringValue(payload.hook_id) ||
+    labels.contextEvent
+  updateAssistantItems(bundle, (parts) => {
+    const nextParts = closeTrailingInlineStream(parts)
+    return [
+      ...nextParts,
+      withEventMeta({
+        id: stablePartId("lifecycle-hook", meta, now, nextParts.length),
+        type: "context_event",
+        title,
+        payload,
+        rawEventRefs: rawEventRefsFromPayload(payload),
+      }, meta),
+    ]
+  }, context)
+}
+
 function appendWorkflowStep(
   bundle: MockSessionBundle,
   payload: Record<string, unknown>,
@@ -1095,6 +1130,7 @@ function appendToolEnd(
     stringValue(payload.tool_result_format)
   const toolSource = stringValue(payload.tool_source)
   const finalOutput = String(payload.tool_result || "")
+  const resultMeta = objectValue(payload.meta)
   updateAssistantItems(bundle, (parts) => {
     const existingIndex = resolveToolPartIndex(parts, toolName, toolCallId, true)
     const existing = existingIndex >= 0 ? parts[existingIndex] as ToolActivityItem : undefined
@@ -1108,8 +1144,9 @@ function appendToolEnd(
         ? existing.outputChunks
         : shellChunksFromText(reconciledShellOutput)
       : existing?.outputChunks
+    const permissionStatus = statusAfterPermissionResult(resultMeta.permission)
     const patch: Partial<ToolActivityItem> = {
-      status: statusAfterToolReturn(existing?.status),
+      status: permissionStatus || statusAfterToolReturn(existing?.status),
       toolCallId,
       source: resolvedToolSource,
       endedAt: numberValue(payload.ended_at),
@@ -1117,11 +1154,28 @@ function appendToolEnd(
       outputFormat: inferToolOutputFormat(toolName, resolvedToolSource, outputFormat),
       outputChunks: shellChunks,
       finalOutput: isShell ? finalOutput : undefined,
-      resultMeta: objectValue(payload.meta),
+      resultMeta,
       rawEventRefs: rawEventRefsFromPayload(payload),
     }
     return upsertToolPartWithPreparing(parts, toolName, patch, toolCallId, { matchReturn: true, meta })
   }, context)
+}
+
+function statusAfterPermissionResult(value: unknown): ToolActivityItem["status"] | undefined {
+  const permission = objectValue(value)
+  const action = (stringValue(permission.action) || "").toLowerCase()
+  const authorized = permission.authorized
+  if (
+    authorized === false ||
+    action === "deny" ||
+    action === "denied" ||
+    action === "defer" ||
+    action === "blocked" ||
+    action === "blocked_review"
+  ) {
+    return "denied"
+  }
+  return undefined
 }
 
 function appendApprovalRequest(
@@ -1145,9 +1199,48 @@ function appendApprovalRequest(
       approvalContent: stringValue(payload.content),
       approvalSections: Array.isArray(payload.sections) ? payload.sections as Record<string, unknown>[] : undefined,
       approvalDecision: decision === "allow" ? "auto_approved" : decision === "deny" ? "auto_denied" : undefined,
+      resultMeta: approvalRequestResultMeta(payload),
       rawEventRefs: rawEventRefsFromPayload(payload),
     }, toolCallId, { meta }),
   context)
+}
+
+function approvalRequestResultMeta(payload: Record<string, unknown>): Record<string, unknown> | undefined {
+  const resultMeta = objectValue(payload.meta)
+  const permission = objectValue(payload.permission)
+  if (Object.keys(permission).length > 0) {
+    resultMeta.permission = permission
+  }
+  const lifecycleEvent = stringValue(payload.lifecycle_event)
+  if (lifecycleEvent) {
+    resultMeta.lifecycle_event = lifecycleEvent
+  }
+  const lifecycleHooks = approvalLifecycleHooks(payload.lifecycle_hooks)
+  if (lifecycleHooks.length > 0) {
+    resultMeta.lifecycle_hooks = lifecycleHooks
+  }
+  return Object.keys(resultMeta).length > 0 ? resultMeta : undefined
+}
+
+const APPROVAL_LIFECYCLE_HOOK_FIELDS = [
+  "hook_id",
+  "display_name",
+  "source",
+  "handler_type",
+  "decision",
+  "reason",
+]
+
+function approvalLifecycleHooks(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((item) => objectValue(item))
+    .map((item) => Object.fromEntries(
+      APPROVAL_LIFECYCLE_HOOK_FIELDS
+        .filter((field) => item[field] !== undefined && item[field] !== null)
+        .map((field) => [field, item[field]]),
+    ))
+    .filter((item) => Object.keys(item).length > 0)
 }
 
 function appendApprovalResolved(

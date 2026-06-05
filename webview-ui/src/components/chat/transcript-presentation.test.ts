@@ -111,6 +111,120 @@ describe("transcript presentation", () => {
     expect(presentation.find((item) => item.type === "final_answer")).toBeUndefined()
   })
 
+  it("keeps lifecycle hook context in process summary before the final answer", () => {
+    const parts: TranscriptItem[] = [
+      {
+        id: "hook-1",
+        type: "context_event",
+        title: "PreToolUse hook denied",
+        payload: {
+          schema: "lifecycle_hook.v1",
+          event_name: "PreToolUse",
+          hook_id: "guard/pretool",
+          decision: "deny",
+          continue_flow: false,
+        },
+      },
+      { id: "text-1", type: "assistant_text", markdown: "Blocked.", format: "markdown", streamKey: "assistant-message" },
+    ]
+
+    const presentation = buildTranscriptPresentation(parts, assistant(parts, "success"))
+
+    expect(presentation.map((item) => item.type)).toEqual([
+      "process_summary",
+      "final_answer",
+    ])
+    expect(processSummary(presentation)).toMatchObject({
+      count: 1,
+      state: "completed",
+      currentLabel: "PreToolUse hook denied",
+    })
+    expect(presentation[1]).toMatchObject({ type: "final_answer", parts: [{ id: "text-1" }] })
+  })
+
+  it("keeps StopFailure recovery lifecycle context in process timeline instead of the final answer", () => {
+    const parts: TranscriptItem[] = [
+      {
+        id: "hook-1",
+        type: "context_event",
+        title: "StopFailure hook recorded recovery guidance",
+        payload: {
+          schema: "lifecycle_hook.v1",
+          event_name: "StopFailure",
+          hook_id: "guard/stop-failure",
+          message: "Lifecycle recovery: retry after reconnecting.",
+          artifacts: [{ kind: "failure_report", id: "failure-1" }],
+        },
+      },
+    ]
+
+    const presentation = buildTranscriptPresentation(parts, assistant(parts, "error"))
+
+    expect(presentation.map((item) => item.type)).toEqual(["timeline_process_group"])
+    expect(groups(presentation)).toHaveLength(1)
+    expect(groups(presentation)[0]).toMatchObject({
+      count: 1,
+      currentLabel: "StopFailure hook recorded recovery guidance",
+    })
+    expect(groups(presentation)[0].items[0]).toMatchObject({
+      type: "context_event",
+      payload: {
+        event_name: "StopFailure",
+        hook_id: "guard/stop-failure",
+        message: "Lifecycle recovery: retry after reconnecting.",
+      },
+    })
+    expect(presentation.find((item) => item.type === "final_answer")).toBeUndefined()
+  })
+
+  it("keeps MCP elicitation lifecycle events in process timeline before the final answer", () => {
+    const parts: TranscriptItem[] = [
+      {
+        id: "elicitation-1",
+        type: "context_event",
+        title: "Elicitation",
+        payload: {
+          schema: "lifecycle_hook.v1",
+          event_name: "Elicitation",
+          phase: "request",
+          tool_name: "search",
+          tool_call_id: "call-mcp-1",
+          mcp_server: "docs",
+          message: "Choose repository",
+        },
+      },
+      {
+        id: "elicitation-result-1",
+        type: "context_event",
+        title: "ElicitationResult",
+        payload: {
+          schema: "lifecycle_hook.v1",
+          event_name: "ElicitationResult",
+          phase: "result",
+          tool_name: "search",
+          tool_call_id: "call-mcp-1",
+          mcp_server: "docs",
+          result_action: "accept",
+          message: "MCP elicitation accepted.",
+        },
+      },
+      { id: "text-1", type: "assistant_text", markdown: "Done.", format: "markdown", streamKey: "assistant-message" },
+    ]
+
+    const presentation = buildTranscriptPresentation(parts, assistant(parts, "success"))
+
+    expect(presentation.map((item) => item.type)).toEqual([
+      "process_summary",
+      "final_answer",
+    ])
+    expect(processSummary(presentation)).toMatchObject({
+      count: 2,
+      state: "completed",
+      currentLabel: "ElicitationResult",
+    })
+    expect(presentation[1]).toMatchObject({ type: "final_answer", parts: [{ id: "text-1" }] })
+  })
+
   it("keeps capability workflow summaries running while a workflow step is active", () => {
     const parts: TranscriptItem[] = [
       {

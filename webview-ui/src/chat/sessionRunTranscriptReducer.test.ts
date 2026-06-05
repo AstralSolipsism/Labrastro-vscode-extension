@@ -3,6 +3,7 @@ import type { MockSessionBundle } from "../components/chat/mock-data"
 import {
   applySessionRunTranscriptEvent,
   applySessionRunTranscriptEvents,
+  isSessionRunTranscriptEventType,
 } from "./sessionRunTranscriptReducer"
 
 function bundle(): MockSessionBundle {
@@ -265,6 +266,125 @@ describe("sessionRunTranscriptReducer", () => {
     expect(parts[4]).toMatchObject({ markdown: "C", streamKey: "assistant-stream" })
   })
 
+  it("renders lifecycle hook audit events as process context instead of dropping them", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
+
+    current = reduce(current, "lifecycle_hook", {
+      title: "PreToolUse hook denied",
+      event_name: "PreToolUse",
+      hook_id: "guard/pretool",
+      decision: "deny",
+      continue_flow: false,
+      reason: "shell command blocked by lifecycle",
+      user_message: "This command needs review.",
+      diagnostics: [{ code: "lifecycle_output_field_ignored", message: "updated_input is audited elsewhere." }],
+      artifacts: [{ kind: "review", id: "artifact-1" }],
+      raw_event_refs: [{ agent_run_id: "agent-run-1", seq: 42, type: "lifecycle_hook" }],
+    }, 2)
+
+    expect(isSessionRunTranscriptEventType("lifecycle_hook")).toBe(true)
+    const parts = current.turns[0].assistantMessages[0].parts
+    expect(parts).toHaveLength(1)
+    expect(parts[0]).toMatchObject({
+      type: "context_event",
+      title: "PreToolUse hook denied",
+      payload: {
+        event_name: "PreToolUse",
+        hook_id: "guard/pretool",
+        decision: "deny",
+        continue_flow: false,
+        reason: "shell command blocked by lifecycle",
+        user_message: "This command needs review.",
+        diagnostics: [{ code: "lifecycle_output_field_ignored", message: "updated_input is audited elsewhere." }],
+        artifacts: [{ kind: "review", id: "artifact-1" }],
+      },
+      rawEventRefs: [{ agent_run_id: "agent-run-1", seq: 42, type: "lifecycle_hook" }],
+    })
+    expect(parts[0]).not.toHaveProperty("markdown")
+  })
+
+  it("renders StopFailure lifecycle recovery as process context instead of answer text", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
+
+    current = reduce(current, "lifecycle_hook", {
+      title: "StopFailure hook recorded recovery guidance",
+      event_name: "StopFailure",
+      hook_id: "guard/stop-failure",
+      message: "Lifecycle recovery: retry after reconnecting.",
+      artifacts: [{ kind: "failure_report", id: "failure-1" }],
+      diagnostics: [{ code: "failure_review", message: "Failure review recorded." }],
+      raw_event_refs: [{ agent_run_id: "agent-run-1", seq: 44, type: "lifecycle_hook" }],
+    }, 2)
+
+    const parts = current.turns[0].assistantMessages[0].parts
+    expect(parts).toHaveLength(1)
+    expect(parts[0]).toMatchObject({
+      type: "context_event",
+      title: "StopFailure hook recorded recovery guidance",
+      payload: {
+        event_name: "StopFailure",
+        hook_id: "guard/stop-failure",
+        message: "Lifecycle recovery: retry after reconnecting.",
+        artifacts: [{ kind: "failure_report", id: "failure-1" }],
+        diagnostics: [{ code: "failure_review", message: "Failure review recorded." }],
+      },
+      rawEventRefs: [{ agent_run_id: "agent-run-1", seq: 44, type: "lifecycle_hook" }],
+    })
+    expect(parts[0]).not.toHaveProperty("markdown")
+  })
+
+  it("renders MCP elicitation lifecycle request and result as process context", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "use docs mcp" }, 1)
+    current = reduce(current, "lifecycle_hook", {
+      title: "Elicitation",
+      event_name: "Elicitation",
+      phase: "request",
+      tool_name: "search",
+      tool_call_id: "call-mcp-1",
+      mcp_server: "docs",
+      message: "Choose repository",
+      raw_event_refs: [{ agent_run_id: "agent-run-1", seq: 45, type: "lifecycle_hook" }],
+    }, 2)
+    current = reduce(current, "lifecycle_hook", {
+      title: "ElicitationResult",
+      event_name: "ElicitationResult",
+      phase: "result",
+      tool_name: "search",
+      tool_call_id: "call-mcp-1",
+      mcp_server: "docs",
+      result_action: "accept",
+      message: "MCP elicitation accepted.",
+      raw_event_refs: [{ agent_run_id: "agent-run-1", seq: 46, type: "lifecycle_hook" }],
+    }, 3)
+
+    const parts = current.turns[0].assistantMessages[0].parts
+    expect(parts).toHaveLength(2)
+    expect(parts[0]).toMatchObject({
+      type: "context_event",
+      title: "Elicitation",
+      payload: {
+        event_name: "Elicitation",
+        phase: "request",
+        tool_name: "search",
+        tool_call_id: "call-mcp-1",
+        mcp_server: "docs",
+      },
+    })
+    expect(parts[1]).toMatchObject({
+      type: "context_event",
+      title: "ElicitationResult",
+      payload: {
+        event_name: "ElicitationResult",
+        phase: "result",
+        result_action: "accept",
+      },
+    })
+    expect(parts.some((part) => "markdown" in part)).toBe(false)
+  })
+
   it("continues the same reasoning stream across tool, view, and context cards", () => {
     let current = bundle()
     current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
@@ -433,6 +553,182 @@ describe("sessionRunTranscriptReducer", () => {
         { agent_run_id: "agent-run-1", seq: 10, type: "tool_use" },
         { agent_run_id: "agent-run-1", seq: 11, type: "tool_result" },
       ],
+    })
+  })
+
+  it("projects final PermissionRequest decisions onto tool card status and audit metadata", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
+    current = reduce(current, "tool_call_start", {
+      tool_call_id: "tool-1",
+      tool_name: "shell",
+      tool_args: { command: "npm test" },
+    }, 2)
+    current = reduce(current, "tool_call_end", {
+      tool_call_id: "tool-1",
+      tool_name: "shell",
+      tool_result: "Permission denied",
+      meta: {
+        permission: {
+          action: "deny",
+          authorized: false,
+          policy_matched: "lifecycle_hook:deny",
+          reason: "PermissionRequest lifecycle denied shell.",
+          lifecycle_event: "PermissionRequest",
+          lifecycle_hooks: [{
+            hook_id: "hook:admin:shell-permission:PermissionRequest:0",
+            display_name: "Shell permission guard",
+            decision: "deny",
+            reason: "Blocks shell in this workspace.",
+          }],
+        },
+      },
+    }, 3)
+
+    const part = current.turns[0].assistantMessages[0].parts[0]
+    expect(part).toMatchObject({
+      type: "tool",
+      status: "denied",
+      resultMeta: {
+        permission: {
+          action: "deny",
+          authorized: false,
+          policy_matched: "lifecycle_hook:deny",
+          reason: "PermissionRequest lifecycle denied shell.",
+          lifecycle_event: "PermissionRequest",
+          lifecycle_hooks: [{
+            hook_id: "hook:admin:shell-permission:PermissionRequest:0",
+            display_name: "Shell permission guard",
+            decision: "deny",
+            reason: "Blocks shell in this workspace.",
+          }],
+        },
+      },
+    })
+    expect(JSON.stringify(part)).not.toContain("PreToolUse")
+    expect(JSON.stringify(part)).not.toContain("private-data")
+  })
+
+  it("renders background PermissionRequest blocked reviews as workflow decisions", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
+    current = reduce(current, "workflow_decision", {
+      workflow: "agent_run_permission",
+      decision_type: "permission_review",
+      status: "pending",
+      title: "Permission review required",
+      summary: "PermissionRequest lifecycle asked for shell review.",
+      approval_id: "approval-1",
+      tool_name: "shell",
+      review: {
+        tool_name: "shell",
+        reason: "PermissionRequest lifecycle asked for shell review.",
+        permission: {
+          action: "blocked_review",
+          authorized: false,
+          reason: "PermissionRequest lifecycle asked for shell review.",
+        },
+      },
+      raw_event_refs: [{
+        agent_run_id: "agent-run-1",
+        seq: 12,
+        type: "permission.blocked_review",
+      }],
+    }, 2)
+
+    const part = current.turns[0].assistantMessages[0].parts[0]
+    expect(part).toMatchObject({
+      type: "workflow_decision",
+      workflow: "agent_run_permission",
+      decisionType: "permission_review",
+      status: "pending",
+      title: "Permission review required",
+      summary: "PermissionRequest lifecycle asked for shell review.",
+      approvalId: "approval-1",
+      review: {
+        tool_name: "shell",
+        permission: {
+          action: "blocked_review",
+          authorized: false,
+        },
+      },
+      rawEventRefs: [{
+        agent_run_id: "agent-run-1",
+        seq: 12,
+        type: "permission.blocked_review",
+      }],
+    })
+  })
+
+  it("preserves PermissionRequest ask metadata on approval tool cards", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
+    current = reduce(current, "approval_request", {
+      approval_id: "approval-1",
+      tool_call_id: "tool-1",
+      tool_name: "shell",
+      reason: "PermissionRequest lifecycle asked for shell review.",
+      intent: "Review shell command",
+      tool_args: { command: "npm test" },
+      permission: {
+        action: "require_approval",
+        authorized: true,
+        policy_matched: "lifecycle_hook:ask",
+        reason: "PermissionRequest lifecycle asked for shell review.",
+      },
+    }, 2)
+
+    const part = current.turns[0].assistantMessages[0].parts[0]
+    expect(part).toMatchObject({
+      type: "tool",
+      status: "awaiting_approval",
+      approvalId: "approval-1",
+      approvalReason: "PermissionRequest lifecycle asked for shell review.",
+      approvalIntent: "Review shell command",
+      resultMeta: {
+        permission: {
+          action: "require_approval",
+          authorized: true,
+          policy_matched: "lifecycle_hook:ask",
+          reason: "PermissionRequest lifecycle asked for shell review.",
+        },
+      },
+    })
+  })
+
+  it("preserves lifecycle hook identity on approval tool cards", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
+    current = reduce(current, "approval_request", {
+      approval_id: "approval-1",
+      tool_call_id: "tool-1",
+      tool_name: "lifecycle:UserPromptSubmit",
+      tool_source: "lifecycle_hook",
+      reason: "Review prompt before continuing.",
+      tool_args: { user_input: "install linked skill" },
+      lifecycle_event: "UserPromptSubmit",
+      lifecycle_hooks: [{
+        hook_id: "hook:admin:prompt-review:UserPromptSubmit:0",
+        display_name: "Prompt review",
+        handler_type: "prompt",
+        reason: "Review prompt before continuing.",
+      }],
+    }, 2)
+
+    const part = current.turns[0].assistantMessages[0].parts[0]
+    expect(part).toMatchObject({
+      type: "tool",
+      status: "awaiting_approval",
+      source: "lifecycle_hook",
+      resultMeta: {
+        lifecycle_event: "UserPromptSubmit",
+        lifecycle_hooks: [{
+          hook_id: "hook:admin:prompt-review:UserPromptSubmit:0",
+          display_name: "Prompt review",
+          handler_type: "prompt",
+          reason: "Review prompt before continuing.",
+        }],
+      },
     })
   })
 
