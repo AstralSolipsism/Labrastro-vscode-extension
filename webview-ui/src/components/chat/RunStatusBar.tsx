@@ -68,7 +68,7 @@ function agentLabel(state: AgentRunState): string {
   return `${t("runtimeStatus.agentRun.label")} · ${phase}`
 }
 
-function runPeerTitle(state: RunPeerState): string {
+export function runPeerTitle(state: RunPeerState): string {
   return [
     runPeerLabel(state),
     state.mode ? `${t("runtimeStatus.detail.mode")}: ${state.mode}` : "",

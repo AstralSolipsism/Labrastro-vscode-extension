@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
+import { setLocale } from "../../i18n"
+import { runPeerTitle } from "./RunStatusBar"
 
 const source = readFileSync(new URL("./RunStatusBar.tsx", import.meta.url), "utf8")
 
@@ -20,5 +22,23 @@ describe("RunStatusBar source", () => {
     expect(source).toContain("run-status-chip--${agentTone(props.agentRun.phase)}")
     expect(source).toContain("run-status-chip--${runPeerTone(props.runPeer.status)}")
     expect(source).toContain('props.agentRun.phase === "queued"')
+  })
+
+  it("keeps peer workspace root in the user-visible run peer tooltip", () => {
+    setLocale("en")
+
+    const title = runPeerTitle({
+      status: "connected",
+      peerId: "peer-1",
+      sessionId: "session-1",
+      fingerprint: "fp-1",
+      mode: "chat",
+      model: "gpt-4o",
+      workspaceRoot: "G:/repo/main",
+    })
+
+    expect(title).toContain("Workspace: G:/repo/main")
+    expect(title).toContain("Peer: peer-1")
+    expect(title).not.toContain("runtimeStatus.detail.workspace")
   })
 })
