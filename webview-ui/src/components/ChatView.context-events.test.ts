@@ -23,9 +23,12 @@ describe("ChatView context events", () => {
     expect(source).toContain('} else if (type === "usage_update" || type === "run_stats") {')
   })
 
-  it("routes live deltas into the canonical transcript reducer", () => {
+  it("routes live deltas into the streaming overlay before canonical transcript commits", () => {
     expect(source).toContain('msg.type === "sessionRun.stream"')
     expect(source).toContain("const handleLiveStreamEvent =")
+    expect(source).toContain("const mergeStreamingTextOverlayParts =")
+    expect(source).toContain("STREAMING_TEXT_OVERLAY_COMMIT_DELAY_MS = 100")
+    expect(source).toContain("const scheduleStreamingTextOverlayCommit =")
     expect(source).toContain("const isBufferableLiveTranscriptEvent =")
     expect(source).toContain("LIVE_TRANSCRIPT_EVENT_TYPES.has(type) && isSessionRunTranscriptEventType(type)")
     expect(source).toContain("let liveTranscriptEvents")
@@ -36,6 +39,14 @@ describe("ChatView context events", () => {
     const liveHandlerStart = source.indexOf("const handleLiveStreamEvent =")
     const remoteHandlerStart = source.indexOf("const handleRemoteEvent =", liveHandlerStart)
     const liveHandlerSource = source.slice(liveHandlerStart, remoteHandlerStart)
+    expect(liveHandlerSource).toContain('if (type === "assistant_delta")')
+    expect(liveHandlerSource).toContain("upsertAssistantStream(String(payload.content || \"\"), eventMeta)")
+    expect(liveHandlerSource).toContain('if (type === "reasoning_delta")')
+    expect(liveHandlerSource).toContain("updateThinkingFromReasoning(String(payload.content || \"\"), eventMeta)")
+    expect(liveHandlerSource).toContain('if (type === "tool_call_delta")')
+    expect(liveHandlerSource).toContain("appendToolCallDeltaToToolPart(payload, eventMeta)")
+    expect(liveHandlerSource).toContain('if (type === "tool_call_stream")')
+    expect(liveHandlerSource).toContain("appendToolStreamToToolPart(payload, eventMeta)")
     expect(liveHandlerSource).toContain("const liveEvent = createLiveTranscriptEvent(event, payload, eventMeta)")
     expect(liveHandlerSource).toContain("markPendingLiveEvent(eventMeta)")
     expect(liveHandlerSource).toContain("liveTranscriptEvents.push(liveEvent)")
@@ -44,13 +55,35 @@ describe("ChatView context events", () => {
       liveHandlerSource.indexOf("if (applyTranscriptReducer(event, type))")
     )
     expect(bufferedBranch).not.toContain("markRenderedEvent(eventMeta)")
-    expect(liveHandlerSource).not.toContain("updateThinkingFromReasoning")
-    expect(liveHandlerSource).not.toContain("upsertAssistantStream")
-    expect(liveHandlerSource).not.toContain("appendToolCallDeltaToToolPart")
-    expect(liveHandlerSource).not.toContain("appendToolStreamToToolPart")
+    expect(liveHandlerSource.indexOf("upsertAssistantStream(String(payload.content || \"\"), eventMeta)")).toBeLessThan(
+      liveHandlerSource.indexOf("const liveEvent = createLiveTranscriptEvent(event, payload, eventMeta)")
+    )
     expect(source).toContain("const visibleTurns =")
     expect(source).toContain('format: "markdown"')
     expect(source).toContain('type: "thinking"')
+  })
+
+  it("keeps a 1200-delta stream off the full transcript reducer hot path", () => {
+    const deltaFixture = Array.from({ length: 1200 }, (_item, index) => ({
+      type: "assistant_delta",
+      payload: { content: `${index % 10}` },
+    }))
+    const finalText = deltaFixture.map((event) => event.payload.content).join("")
+    const liveHandlerStart = source.indexOf("const handleLiveStreamEvent =")
+    const remoteHandlerStart = source.indexOf("const handleRemoteEvent =", liveHandlerStart)
+    const liveHandlerSource = source.slice(liveHandlerStart, remoteHandlerStart)
+    const assistantBranch = liveHandlerSource.slice(
+      liveHandlerSource.indexOf('if (type === "assistant_delta")'),
+      liveHandlerSource.indexOf('if (type === "reasoning_delta")'),
+    )
+
+    expect(deltaFixture).toHaveLength(1200)
+    expect(finalText).toHaveLength(1200)
+    expect(assistantBranch).toContain("upsertAssistantStream(String(payload.content || \"\"), eventMeta)")
+    expect(assistantBranch).toContain("markRenderedEvent(eventMeta)")
+    expect(assistantBranch).not.toContain("trace.applySessionRunTranscriptEventsToSession")
+    expect(assistantBranch).not.toContain("liveTranscriptEvents.push")
+    expect(assistantBranch).not.toContain("applyTranscriptReducer")
   })
 
   it("keeps session-run transcript events on the canonical reducer path", () => {
@@ -70,7 +103,7 @@ describe("ChatView context events", () => {
     expect(remoteHandlerSource).toContain("if (!canonicalTranscriptEvent && payload.response")
   })
 
-  it("flushes buffered live transcript events before structural session-run events", () => {
+  it("commits streaming overlay before structural session-run events", () => {
     const remoteHandlerStart = source.indexOf("const handleRemoteEvent =")
     const sendCancelStart = source.indexOf("const sendCancel =", remoteHandlerStart)
     const remoteHandlerSource = source.slice(remoteHandlerStart, sendCancelStart)
@@ -78,8 +111,12 @@ describe("ChatView context events", () => {
     expect(source).toContain("const flushLiveTranscriptEvents =")
     expect(source).toContain('if (msg.type !== "sessionRun.stream")')
     expect(source).toContain("flushLiveTranscriptEvents()")
+    expect(source).toContain("archiveActiveTranscriptItems()")
     expect(remoteHandlerSource).toContain("handleLiveStreamEvent(event)")
     expect(remoteHandlerSource).toContain("flushLiveTranscriptEvents()")
+    expect(remoteHandlerSource.indexOf("archiveActiveTranscriptItems()")).toBeLessThan(
+      remoteHandlerSource.indexOf("const pendingApprovalForEvent")
+    )
   })
 
   it("loads raw AgentRun audit events from transcript card references", () => {
@@ -145,14 +182,17 @@ describe("ChatView context events", () => {
     expect(finalizeIndex).toBeLessThan(clearIndex)
   })
 
-  it("updates an archived reasoning thinking anchor instead of creating another row", () => {
+  it("keeps reasoning deltas in the streaming overlay until commit boundaries", () => {
     expect(source).toContain("const updateThinkingFromReasoning =")
     expect(source).toContain("const updateThinkingItem = (part: ThinkingItem): ThinkingItem =>")
-    expect(source).toContain("const currentAssistant = currentAssistantMessages()[0]")
-    expect(source).toContain("currentAssistant?.parts.some(isReasoningThinkingItem)")
-    expect(source).toContain("const index = findLastItemIndex(parts, isReasoningThinkingItem)")
     expect(source).toContain("streamKey: REASONING_STREAM_KEY")
     expect(source).toContain('id: `thinking-${activeSessionRunId() || "pending"}`')
+    const updateThinkingStart = source.indexOf("const updateThinkingFromReasoning =")
+    const appendToolStart = source.indexOf("const appendToolStreamToToolPart =", updateThinkingStart)
+    const updateThinkingSource = source.slice(updateThinkingStart, appendToolStart)
+    expect(updateThinkingSource).toContain("upsertActiveTranscriptItem(")
+    expect(updateThinkingSource).toContain("scheduleStreamingTextOverlayCommit()")
+    expect(updateThinkingSource).not.toContain("updateAssistantItems((parts)")
   })
 
   it("only shows the footer working indicator before the running turn has transcript content", () => {

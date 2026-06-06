@@ -1680,6 +1680,15 @@
   background: var(--vscode-textCodeBlock-background, var(--ez-surface));
 }
 
+.tool-card__markdown:not(.tool-card__preview-block) {
+  max-height: min(42vh, 360px);
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--ez-border);
+  border-radius: 4px;
+  background: var(--vscode-textCodeBlock-background, var(--ez-surface));
+}
+
 .tool-card__section {
   min-width: 0;
   display: flex;
@@ -1986,6 +1995,10 @@
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.tool-card__output:not(.tool-card__preview-block) {
+  max-height: min(42vh, 360px);
 }
 
 .view-card__content,

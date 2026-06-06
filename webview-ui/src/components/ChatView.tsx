@@ -201,6 +201,7 @@ interface ChatViewProps {
 const MODEL_SWITCH_TIMEOUT_MS = 20_000
 const REASONING_STREAM_KEY = "reasoning-stream"
 const LIVE_TRANSCRIPT_FLUSH_MAX_DELAY_MS = 32
+const STREAMING_TEXT_OVERLAY_COMMIT_DELAY_MS = 100
 const LIVE_TRANSCRIPT_EVENT_TYPES = new Set(["assistant_delta", "reasoning_delta", "tool_call_delta", "tool_call_stream"])
 type SessionRunStatus = "idle" | "running" | "stopping" | "cancelled" | "done" | "error" | "interrupted"
 
@@ -209,6 +210,11 @@ function isReasoningThinkingItem(item: TranscriptItem): item is ThinkingItem {
     item.streamKey === REASONING_STREAM_KEY ||
     item.active === true
   )
+}
+
+function isChatStreamDiagnosticsEnabled(): boolean {
+  return typeof globalThis !== "undefined" &&
+    Boolean((globalThis as { __LABRASTRO_CHAT_STREAM_DEBUG__?: boolean }).__LABRASTRO_CHAT_STREAM_DEBUG__)
 }
 
 const ChatView: Component<ChatViewProps> = (props) => {
@@ -269,6 +275,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const renderedEventKeys = new Set<string>()
   const pendingLiveEventKeys = new Set<string>()
   const [activeTranscriptItems, setActiveTranscriptItems] = createSignal<TranscriptItem[]>([])
+  let streamingTextOverlayCommitTimeoutId: number | undefined
   const [runPeerState, setRunPeerState] = createSignal(initialRunPeerState())
   const [agentRunState, setAgentRunState] = createSignal(initialAgentRunState())
 
@@ -582,6 +589,55 @@ const ChatView: Component<ChatViewProps> = (props) => {
       isCapabilityPackageSessionRun() &&
       hasCapabilityPackageInstallApproval()
     )
+  const findLastOverlayPartIndex = (
+    parts: readonly TranscriptItem[],
+    predicate: (item: TranscriptItem) => boolean,
+  ): number => {
+    for (let index = parts.length - 1; index >= 0; index -= 1) {
+      if (predicate(parts[index])) return index
+    }
+    return -1
+  }
+
+  const mergeStreamingTextOverlayParts = (
+    baseParts: readonly TranscriptItem[],
+    overlayParts: readonly TranscriptItem[],
+  ): TranscriptItem[] => {
+    const next = [...baseParts]
+    for (const item of overlayParts) {
+      if (item.type === "assistant_text" && item.streamKey === "assistant-stream") {
+        const index = findLastOverlayPartIndex(next, (part) => part.type === "assistant_text" && part.streamKey === "assistant-stream")
+        if (index >= 0) {
+          const current = next[index] as AssistantTextItem
+          next[index] = {
+            ...current,
+            markdown: `${current.markdown || ""}${item.markdown || ""}`,
+            format: item.format || current.format,
+            streaming: true,
+            eventKey: item.eventKey || current.eventKey,
+            sessionEventSeq: item.sessionEventSeq ?? current.sessionEventSeq,
+          }
+          continue
+        }
+      } else if (isReasoningThinkingItem(item)) {
+        const index = findLastOverlayPartIndex(next, isReasoningThinkingItem)
+        if (index >= 0) {
+          const current = next[index] as ThinkingItem
+          next[index] = {
+            ...current,
+            raw: `${current.raw || ""}${(item as ThinkingItem).raw || ""}`,
+            active: true,
+            eventKey: item.eventKey || current.eventKey,
+            sessionEventSeq: item.sessionEventSeq ?? current.sessionEventSeq,
+          }
+          continue
+        }
+      }
+      next.push(item)
+    }
+    return next
+  }
+
   const activeStreamMessage = createMemo<MockMessage | undefined>(() => {
     const parts = activeTranscriptItems()
     if (!parts.length || !currentRunSessionMatches()) return undefined
@@ -605,6 +661,26 @@ const ChatView: Component<ChatViewProps> = (props) => {
     if (!draft || !turns.length) return turns
     const next = [...turns]
     const last = next[next.length - 1]
+    const lastAssistant = last.assistantMessages[last.assistantMessages.length - 1]
+    if (lastAssistant) {
+      const mergedParts = mergeStreamingTextOverlayParts(lastAssistant.parts, draft.parts)
+      const mergedText = mergedParts
+        .filter((part): part is AssistantTextItem => part.type === "assistant_text")
+        .map((part) => part.markdown || "")
+        .join("")
+      const assistantMessages = [...last.assistantMessages]
+      assistantMessages[assistantMessages.length - 1] = {
+        ...lastAssistant,
+        text: mergedText,
+        parts: mergedParts,
+        traceNodeStatus: "active",
+      }
+      next[next.length - 1] = {
+        ...last,
+        assistantMessages,
+      }
+      return next
+    }
     next[next.length - 1] = {
       ...last,
       assistantMessages: [...last.assistantMessages, draft],
@@ -615,7 +691,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const clearCurrentSession = () => {
     trace.clearSession()
     setSelectedApproval(undefined)
-    setActiveTranscriptItems([])
+    clearActiveStreamDraft()
   }
 
   createEffect(() => {
@@ -837,7 +913,10 @@ const ChatView: Component<ChatViewProps> = (props) => {
     ])
   }
 
-  const clearActiveStreamDraft = () => setActiveTranscriptItems([])
+  const clearActiveStreamDraft = () => {
+    clearStreamingTextOverlayCommitSchedule()
+    setActiveTranscriptItems([])
+  }
 
   const clearActiveTranscriptItems = (predicate: (item: TranscriptItem) => boolean) => {
     setActiveTranscriptItems((items) => items.filter((item) => !predicate(item)))
@@ -857,21 +936,83 @@ const ChatView: Component<ChatViewProps> = (props) => {
     return -1
   }
 
+  const clearStreamingTextOverlayCommitSchedule = () => {
+    if (streamingTextOverlayCommitTimeoutId !== undefined) {
+      window.clearTimeout(streamingTextOverlayCommitTimeoutId)
+      streamingTextOverlayCommitTimeoutId = undefined
+    }
+  }
+
+  const mergeArchivedActiveTranscriptItems = (
+    items: TranscriptItem[],
+    archived: TranscriptItem[],
+  ): TranscriptItem[] => {
+    let next = [...items]
+    for (const item of archived) {
+      if (item.type === "assistant_text" && item.streamKey === "assistant-stream") {
+        const index = findLastItemIndex(next, (part) => part.type === "assistant_text" && part.streamKey === "assistant-stream")
+        if (index >= 0) {
+          const current = next[index] as AssistantTextItem
+          next[index] = withEventMeta({
+            ...current,
+            markdown: `${current.markdown || ""}${item.markdown || ""}`,
+            format: item.format || current.format,
+            streaming: true,
+            streamKey: "assistant-stream",
+          }, item)
+          continue
+        }
+      } else if (isReasoningThinkingItem(item)) {
+        const index = findLastItemIndex(next, isReasoningThinkingItem)
+        if (index >= 0) {
+          const current = next[index] as ThinkingItem
+          next[index] = withEventMeta({
+            ...current,
+            title: current.title || t("chat.thinking"),
+            raw: `${current.raw || ""}${(item as ThinkingItem).raw || ""}`,
+            active: true,
+            streamKey: REASONING_STREAM_KEY,
+          }, item)
+          continue
+        }
+      }
+      next = [...next, item]
+    }
+    return next
+  }
+
   const archiveActiveTranscriptItems = (
     options: {
       normalize?: (item: TranscriptItem) => TranscriptItem
       traceNodeStatus?: MockMessage["traceNodeStatus"]
     } = {},
   ) => {
+    clearStreamingTextOverlayCommitSchedule()
     const archived = activeTranscriptItems()
       .filter(isArchivableActiveTranscriptItem)
       .map((item) => options.normalize?.(item) ?? item)
     if (!archived.length) return
     const archivedIds = new Set(archived.map((item) => item.id))
-    updateAssistantItems((items) => [...items, ...archived], {
+    updateAssistantItems((items) => mergeArchivedActiveTranscriptItems(items, archived), {
       traceNodeStatus: options.traceNodeStatus,
     })
     setActiveTranscriptItems((items) => items.filter((item) => !archivedIds.has(item.id)))
+  }
+
+  const scheduleStreamingTextOverlayCommit = () => {
+    if (streamingTextOverlayCommitTimeoutId !== undefined) return
+    streamingTextOverlayCommitTimeoutId = window.setTimeout(() => {
+      streamingTextOverlayCommitTimeoutId = undefined
+      const startedAt = performance.now()
+      const partCount = activeTranscriptItems().length
+      archiveActiveTranscriptItems()
+      if (isChatStreamDiagnosticsEnabled()) {
+        console.debug("[Labrastro] streaming-text-overlay.commit", {
+          partCount,
+          durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
+        })
+      }
+    }, STREAMING_TEXT_OVERLAY_COMMIT_DELAY_MS)
   }
 
   const traceStatusForRunEnd = (status: "cancelled" | "done" | "error" | "interrupted"): MockMessage["traceNodeStatus"] => {
@@ -1021,7 +1162,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     upsertActiveTranscriptItem(
       (part) => part.type === "assistant_text" && part.streamKey === "assistant-stream",
       (parts) => withEventMeta({
-        id: `assistant-stream-${Date.now()}-${parts.length}`,
+        id: `assistant-stream-${activeSessionRunId() || "pending"}`,
         type: "assistant_text",
         markdown: content,
         format: "markdown",
@@ -1036,6 +1177,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         streamKey: "assistant-stream",
       }, meta),
     )
+    scheduleStreamingTextOverlayCommit()
   }
 
   const updateThinkingFromReasoning = (text: string, meta?: EventRenderMeta) => {
@@ -1052,17 +1194,6 @@ const ChatView: Component<ChatViewProps> = (props) => {
         streamKey: REASONING_STREAM_KEY,
       }, meta)
     }
-    const currentAssistant = currentAssistantMessages()[0]
-    if (currentAssistant?.parts.some(isReasoningThinkingItem)) {
-      updateAssistantItems((parts) => {
-        const index = findLastItemIndex(parts, isReasoningThinkingItem)
-        if (index < 0) return parts
-        const updated = [...parts]
-        updated[index] = updateThinkingItem(updated[index] as ThinkingItem)
-        return updated
-      })
-      return
-    }
     upsertActiveTranscriptItem(
       isReasoningThinkingItem,
       (parts) => withEventMeta({
@@ -1075,6 +1206,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       }, meta),
       (part) => updateThinkingItem(part as ThinkingItem),
     )
+    scheduleStreamingTextOverlayCommit()
   }
 
   const appendToolStreamToToolPart = (payload: Record<string, unknown>, meta?: EventRenderMeta) => {
@@ -1422,6 +1554,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const flushLiveTranscriptEvents = () => {
     clearLiveTranscriptFlushSchedule()
     if (!liveTranscriptEvents.length) return
+    const startedAt = performance.now()
     const events = liveTranscriptEvents
     liveTranscriptEvents = []
     const retryEvents: LiveTranscriptEvent[] = []
@@ -1459,6 +1592,13 @@ const ChatView: Component<ChatViewProps> = (props) => {
     }
     if (retryEvents.length) {
       liveTranscriptEvents = [...retryEvents, ...liveTranscriptEvents]
+    }
+    if (isChatStreamDiagnosticsEnabled()) {
+      console.debug("[Labrastro] live-transcript.flush", {
+        eventCount: events.length,
+        retryCount: retryEvents.length,
+        durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
+      })
     }
   }
 
@@ -1534,6 +1674,28 @@ const ChatView: Component<ChatViewProps> = (props) => {
         setPendingCancel(false)
       }
     }
+    if (type === "assistant_delta") {
+      upsertAssistantStream(String(payload.content || ""), eventMeta)
+      markRenderedEvent(eventMeta)
+      return
+    }
+    if (type === "reasoning_delta") {
+      updateThinkingFromReasoning(String(payload.content || ""), eventMeta)
+      markRenderedEvent(eventMeta)
+      return
+    }
+    if (type === "tool_call_delta") {
+      archiveActiveTranscriptItems()
+      appendToolCallDeltaToToolPart(payload, eventMeta)
+      markRenderedEvent(eventMeta)
+      return
+    }
+    if (type === "tool_call_stream") {
+      archiveActiveTranscriptItems()
+      appendToolStreamToToolPart(payload, eventMeta)
+      markRenderedEvent(eventMeta)
+      return
+    }
     if (isBufferableLiveTranscriptEvent(type)) {
       const liveEvent = createLiveTranscriptEvent(event, payload, eventMeta)
       if (liveEvent) {
@@ -1573,6 +1735,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       return
     }
     flushLiveTranscriptEvents()
+    archiveActiveTranscriptItems()
     const pendingApprovalForEvent = (type === "approval_request" || (type === "workflow_decision" && stringValue(payload.approval_id)))
       ? {
           ...approvalFromPayload(payload),
@@ -3127,6 +3290,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     onCleanup(() => {
       unsubscribe()
       clearLiveTranscriptFlushSchedule()
+      clearStreamingTextOverlayCommitSchedule()
       for (const item of liveTranscriptEvents) {
         releasePendingLiveEvent(item.meta)
       }
