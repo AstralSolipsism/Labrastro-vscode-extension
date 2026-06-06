@@ -1704,6 +1704,14 @@ button {
   gap: 8px;
 }
 
+.provider-diagnostic-detail {
+  max-height: 180px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .provider-segmented-list {
   display: flex;
   flex-wrap: wrap;

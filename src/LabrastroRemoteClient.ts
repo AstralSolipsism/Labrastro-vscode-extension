@@ -1874,7 +1874,7 @@ export async function parseJsonResponse(response: Response): Promise<JsonObject>
     const payload = body && typeof body === "object" ? (body as JsonObject) : {}
     const code = typeof payload.error === "string" ? payload.error : ""
     const detail = typeof payload.message === "string" ? payload.message : text
-    const message = [response.status, code || detail].filter(Boolean).join(" ")
+    const message = detail || code || `HTTP ${response.status}`
     throw new RemoteError(response.status, code, message, body)
   }
   return body && typeof body === "object" ? (body as JsonObject) : {}

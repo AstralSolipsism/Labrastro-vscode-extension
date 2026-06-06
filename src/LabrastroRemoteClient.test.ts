@@ -351,7 +351,30 @@ describe("LabrastroRemoteClient remote errors", () => {
     await expect(parseJsonResponse(response)).rejects.toMatchObject({
       status: 401,
       code: "invalid_peer_token",
-      message: "401 invalid_peer_token",
+      message: "expired",
+    })
+  })
+
+  it("uses provider diagnostic messages as the user-facing remote error", async () => {
+    const response = new Response(
+      JSON.stringify({
+        error: "provider_test_failed",
+        message: "This provider is configured as Anthropic Messages, but the endpoint/error looks OpenAI-compatible. Try provider type openai_chat. Upstream error: invalid csrf token",
+        provider_id: "Zenmux",
+        provider_type: "anthropic_messages",
+        recommended_action: "Try provider type openai_chat.",
+      }),
+      { status: 500 }
+    )
+
+    await expect(parseJsonResponse(response)).rejects.toMatchObject({
+      status: 500,
+      code: "provider_test_failed",
+      message: expect.stringContaining("openai_chat"),
+      body: expect.objectContaining({
+        provider_id: "Zenmux",
+        recommended_action: "Try provider type openai_chat.",
+      }),
     })
   })
 

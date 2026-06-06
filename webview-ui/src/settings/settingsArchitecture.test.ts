@@ -153,6 +153,18 @@ describe("settings architecture", () => {
     expect(refreshButton).not.toContain("providerActionBusy()")
   })
 
+  it("keeps provider test protocol diagnostics attached to the settings error surface", () => {
+    const source = readFileSync(controllerPath, "utf8")
+    const providersSource = readFileSync(join(tabsDir, "ProvidersTab.tsx"), "utf8")
+
+    expect(source).toContain("providerDiagnosticDetailFromAdminMessage")
+    expect(source).toContain("objectValue(body.details)")
+    expect(source).toContain('if (key === "providerTest") setProviderErrorDetail(detail)')
+    expect(source).toContain('if (key === "providerTest") setProviderErrorDetail("")')
+    expect(providersSource).toContain("providerErrorDetail")
+    expect(providersSource).toContain("provider-diagnostic-detail")
+  })
+
   it("uses background refresh for first tab load without tracking refresh buttons", () => {
     const source = readFileSync(controllerPath, "utf8")
 

@@ -89,6 +89,7 @@ import {
 
 type ProviderType = "openai_chat" | "anthropic_messages" | "openai_responses"
 type ProviderCompat = "generic" | "deepseek" | "kimi" | "glm" | "qwen" | "zenmux"
+type AdminMessage = Record<string, unknown>
 
 /** 主执行器运行位置 */
 type ExecutorLocation = "local" | "remote"
@@ -2358,6 +2359,38 @@ function providerActionKeyForResult(
   return pendingKeys.length === 1 ? pendingKeys[0] : undefined
 }
 
+function providerDiagnosticRecordFromAdminMessage(message: AdminMessage): Record<string, unknown> {
+  const body = objectValue(message.body)
+  const details = objectValue(body.details)
+  if (Object.keys(details).length) return details
+  return body
+}
+
+function providerDiagnosticDetailFromAdminMessage(message: AdminMessage): string {
+  const diagnostic = providerDiagnosticRecordFromAdminMessage(message)
+  const lines: string[] = []
+  const recommendedAction = stringValue(diagnostic.recommended_action)
+  const suspectedReason = stringValue(diagnostic.suspected_reason)
+  const providerId = stringValue(diagnostic.provider_id)
+  const providerType = stringValue(diagnostic.provider_type)
+  const baseUrl = stringValue(diagnostic.base_url)
+  const model = stringValue(diagnostic.model)
+  const upstreamStatus = diagnostic.upstream_status === undefined || diagnostic.upstream_status === null
+    ? ""
+    : String(diagnostic.upstream_status)
+  const upstreamMessage = stringValue(diagnostic.upstream_message)
+  const diagnosticId = stringValue(diagnostic.diagnostic_id)
+  if (recommendedAction) lines.push(`建议：${recommendedAction}`)
+  if (suspectedReason) lines.push(`疑似原因：${suspectedReason}`)
+  if (providerId || providerType) lines.push(`服务商：${providerId || "-"} / ${providerType || "-"}`)
+  if (baseUrl) lines.push(`Base URL：${baseUrl}`)
+  if (model) lines.push(`模型：${model}`)
+  if (upstreamStatus) lines.push(`上游状态：${upstreamStatus}`)
+  if (upstreamMessage) lines.push(`上游错误：${upstreamMessage}`)
+  if (diagnosticId) lines.push(`诊断 ID：${diagnosticId}`)
+  return lines.join("\n")
+}
+
 function formatConnectionSaveResult(result: Record<string, unknown> | undefined): string | undefined {
   if (!result) return undefined
   const requested = stringValue(result.hostUrlSaveRequested)
@@ -2429,6 +2462,7 @@ export function createSettingsController(props: SettingsViewProps) {
   const [providerApiKey, setProviderApiKey] = createSignal("")
   const [providerModel, setProviderModel] = createSignal("")
   const [providerEnabled, setProviderEnabled] = createSignal(true)
+  const [providerErrorDetail, setProviderErrorDetail] = createSignal("")
   const [providerCopyId, setProviderCopyId] = createSignal("")
   const [modelSearch, setModelSearch] = createSignal("")
   const [fetchedModels, setFetchedModels] = createSignal<ProviderModelEntry[]>([])
@@ -2654,9 +2688,10 @@ export function createSettingsController(props: SettingsViewProps) {
       return next
     })
   }
-  const settlePendingProviderActionError = (message: string) => {
+  const settlePendingProviderActionError = (message: string, detail = "") => {
     for (const key of pendingProviderActionKeyList()) {
       markOperationError(key, message)
+      if (key === "providerTest") setProviderErrorDetail(detail)
     }
     setPendingProviderActionKeys({})
   }
@@ -3336,7 +3371,7 @@ export function createSettingsController(props: SettingsViewProps) {
         settleRemoteStateSlice(stringValue(payload.key), objectValue(payload.slice))
       }
       if (msg.type === "admin.error") {
-        settlePendingProviderActionError(message)
+        settlePendingProviderActionError(message, providerDiagnosticDetailFromAdminMessage(rawMessage))
         failPendingProviderModelReads(message)
       }
       if (msg.type === "providers.state") settleRefreshSuccess("providers")
@@ -3380,6 +3415,7 @@ export function createSettingsController(props: SettingsViewProps) {
           const key = providerActionKeyForResult(result, pendingProviderActionKeyList())
           if (key) {
             markOperationSuccess(key)
+            if (key === "providerTest") setProviderErrorDetail("")
             clearPendingProviderActionKey(key)
           }
         }
@@ -3966,6 +4002,7 @@ export function createSettingsController(props: SettingsViewProps) {
     if (!settingsOperationIsProviderWrite(key) && operationBusy(key)) return
     addPendingProviderActionKey(key)
     markOperationStarted(key, status)
+    if (key === "providerTest") setProviderErrorDetail("")
     setActionIntent(intent)
     action()
   }
@@ -4653,6 +4690,7 @@ export function createSettingsController(props: SettingsViewProps) {
     setProviderModel,
     providerEnabled,
     setProviderEnabled,
+    providerErrorDetail,
     providerCopyId,
     setProviderCopyId,
     modelSearch,

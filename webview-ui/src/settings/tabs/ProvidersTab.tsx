@@ -52,6 +52,7 @@ export const ProvidersTab: Component<TabProps> = (props) => {
     server,
     resetProviderForm,
     providerErrorMessage,
+    providerErrorDetail,
     connectionStatus,
     connectionMessage,
     isDefaultLocalHost,
@@ -387,7 +388,15 @@ export const ProvidersTab: Component<TabProps> = (props) => {
       </SettingsPageHeader>
 
       <Show when={providerErrorMessage()}>
-        <div class="settings-error">{providerErrorMessage()}</div>
+        <div class="settings-error">
+          <div>{providerErrorMessage()}</div>
+          <Show when={providerErrorDetail()}>
+            <details class="settings-details settings-details--embedded">
+              <summary>诊断详情</summary>
+              <pre class="provider-diagnostic-detail">{providerErrorDetail()}</pre>
+            </details>
+          </Show>
+        </div>
       </Show>
       <Show when={connectionStatus() === "error" && connectionMessage()}>
         <div class="settings-error">{connectionMessage()}</div>
