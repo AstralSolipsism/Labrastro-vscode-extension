@@ -113,6 +113,17 @@ export const RUN_TOOLS = new Set([
   "run_terminal_cmd",
 ])
 
+let transcriptPresentationBuildCount = 0
+
+function isTranscriptPresentationDiagnosticsEnabled(): boolean {
+  return typeof globalThis !== "undefined" &&
+    Boolean((globalThis as { __LABRASTRO_CHAT_STREAM_DEBUG__?: boolean }).__LABRASTRO_CHAT_STREAM_DEBUG__)
+}
+
+function nowMs(): number {
+  return typeof performance !== "undefined" ? performance.now() : Date.now()
+}
+
 // Presentation contract:
 // TranscriptItem[] is canonical event storage, while this function owns the
 // user-facing projection. Reasoning is always collected into one
@@ -124,6 +135,21 @@ export function buildTranscriptPresentation(
   message?: Pick<MockMessage, "id" | "traceNodeStatus">,
   options: TranscriptPresentationOptions = {},
 ): TranscriptPresentationItem[] {
+  const diagnosticsEnabled = isTranscriptPresentationDiagnosticsEnabled()
+  const startedAt = diagnosticsEnabled ? nowMs() : 0
+  const finish = (output: TranscriptPresentationItem[]): TranscriptPresentationItem[] => {
+    if (diagnosticsEnabled) {
+      transcriptPresentationBuildCount += 1
+      console.debug("[Labrastro] transcript-presentation.build", {
+        count: transcriptPresentationBuildCount,
+        messageId: message?.id,
+        partCount: parts.length,
+        itemCount: output.length,
+        durationMs: Math.round((nowMs() - startedAt) * 10) / 10,
+      })
+    }
+    return output
+  }
   const reasoningPanel = buildReasoningPanel(parts, message)
   const explicitPrimaryParts = parts.filter(isPrimaryLanePart)
 
@@ -140,7 +166,7 @@ export function buildTranscriptPresentation(
     if (summary) output.push({ type: "process_summary", summary })
     if (reasoningPanel) output.push({ type: "reasoning_panel", panel: reasoningPanel })
     output.push(...explicitPrimaryParts.map((part) => ({ type: "primary_part" as const, part })))
-    return output
+    return finish(output)
   }
 
   const finalAnswerStart = resolveFinalAnswerStartIndex(parts, message)
@@ -166,12 +192,12 @@ export function buildTranscriptPresentation(
     output.push(...prefixNotices)
     output.push(...lateNotices.map((part) => ({ type: "timeline_notice" as const, part })))
     if (finalParts.length) output.push({ type: "final_answer", parts: finalParts })
-    return output
+    return finish(output)
   }
 
   const output: TranscriptPresentationItem[] = [...buildTimelineItems(parts, message, options)]
   if (reasoningPanel) output.push({ type: "reasoning_panel", panel: reasoningPanel })
-  return output
+  return finish(output)
 }
 
 function buildReasoningPanel(

@@ -200,11 +200,13 @@ export function useVirtualMessageList(options: UseVirtualMessageListOptions): Us
 
   let viewportObserver: ResizeObserver | undefined
   let pendingScrollFrame = 0
+  let pendingMeasureFrame = 0
   let lastDiagnosticsAt = 0
   let followLiveOutput = false
   let observedTurnCount: number | undefined
   let userLayoutIntentUntil = 0
   const observedItems = new Map<string, { element: HTMLDivElement; observer?: ResizeObserver }>()
+  const pendingMeasurements = new Map<string, { item: VirtualTurnItem; element: HTMLDivElement }>()
 
   const turnRecords = createMemo<TurnRecord[]>(() => {
     const width = contentWidth()
@@ -322,6 +324,28 @@ export function useVirtualMessageList(options: UseVirtualMessageListOptions): Us
     queueMicrotask(run)
   }
 
+  const scheduleMeasureElement = (item: VirtualTurnItem, element: HTMLDivElement) => {
+    pendingMeasurements.set(item.measureKey, { item, element })
+    if (pendingMeasureFrame) return
+
+    const run = () => {
+      pendingMeasureFrame = 0
+      const measurements = [...pendingMeasurements.values()]
+      pendingMeasurements.clear()
+      for (const measurement of measurements) {
+        measureElement(measurement.item, measurement.element)
+      }
+    }
+
+    if (typeof requestAnimationFrame !== "undefined") {
+      pendingMeasureFrame = requestAnimationFrame(run)
+      return
+    }
+
+    pendingMeasureFrame = 1
+    queueMicrotask(run)
+  }
+
   const bindItem = (item: VirtualTurnItem) => (element: HTMLDivElement) => {
     const current = observedItems.get(item.measureKey)
     if (current?.element === element) {
@@ -337,7 +361,7 @@ export function useVirtualMessageList(options: UseVirtualMessageListOptions): Us
       return
     }
 
-    const observer = new ResizeObserver(() => measureElement(item, element))
+    const observer = new ResizeObserver(() => scheduleMeasureElement(item, element))
     observer.observe(element)
     observedItems.set(item.measureKey, { element, observer })
   }
@@ -347,7 +371,7 @@ export function useVirtualMessageList(options: UseVirtualMessageListOptions): Us
     if (!height) return
 
     const previousHeight = untrack(() => measuredHeights().get(item.measureKey) ?? item.height)
-    if (Math.abs(previousHeight - height) < 1) return
+    if (Math.abs(previousHeight - height) <= 2) return
 
     const currentScrollTop = untrack(scrollTop)
     const itemTop = untrack(() => offsets()[item.index] || 0)
@@ -427,6 +451,11 @@ export function useVirtualMessageList(options: UseVirtualMessageListOptions): Us
 
   onCleanup(() => {
     viewportObserver?.disconnect()
+    if (pendingMeasureFrame && typeof cancelAnimationFrame !== "undefined") {
+      cancelAnimationFrame(pendingMeasureFrame)
+    }
+    pendingMeasureFrame = 0
+    pendingMeasurements.clear()
     for (const entry of observedItems.values()) {
       entry.observer?.disconnect()
     }
@@ -456,6 +485,10 @@ function parseCssPx(value: string): number {
 }
 
 function isDiagnosticsEnabled(): boolean {
-  return typeof globalThis !== "undefined" &&
-    Boolean((globalThis as { __EZCODE_VIRTUAL_LIST_DEBUG__?: boolean }).__EZCODE_VIRTUAL_LIST_DEBUG__)
+  if (typeof globalThis === "undefined") return false
+  const debugState = globalThis as {
+    __EZCODE_VIRTUAL_LIST_DEBUG__?: boolean
+    __LABRASTRO_CHAT_STREAM_DEBUG__?: boolean
+  }
+  return Boolean(debugState.__EZCODE_VIRTUAL_LIST_DEBUG__ || debugState.__LABRASTRO_CHAT_STREAM_DEBUG__)
 }

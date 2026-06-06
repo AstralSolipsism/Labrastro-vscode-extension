@@ -42,6 +42,15 @@ function cloneValue<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
 
+function isChatStreamDiagnosticsEnabled(): boolean {
+  return typeof globalThis !== "undefined" &&
+    Boolean((globalThis as { __LABRASTRO_CHAT_STREAM_DEBUG__?: boolean }).__LABRASTRO_CHAT_STREAM_DEBUG__)
+}
+
+function nowMs(): number {
+  return typeof performance !== "undefined" ? performance.now() : Date.now()
+}
+
 function buildMockId(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
 }
@@ -1548,6 +1557,8 @@ export const TraceProvider: ParentComponent = (props) => {
     const bundle = getSessionBundle(sessionId)
     if (!bundle) return undefined
 
+    const diagnosticsEnabled = isChatStreamDiagnosticsEnabled()
+    const startedAt = diagnosticsEnabled ? nowMs() : 0
     const reduction = applySessionRunTranscriptEvents(bundle, events, {
       ...context,
       currentSessionId: context.currentSessionId ?? sessionId,
@@ -1556,6 +1567,15 @@ export const TraceProvider: ParentComponent = (props) => {
       writeSessionBundle(sessionId, reduction.bundle, {
         applyToCurrent: sessionId === currentSessionId(),
         preserveIntent: true,
+      })
+    }
+    if (diagnosticsEnabled) {
+      console.debug("[Labrastro] transcript-reducer.apply", {
+        sessionId,
+        eventCount: events.length,
+        changed: reduction.changed,
+        durationMs: Math.round((nowMs() - startedAt) * 10) / 10,
+        turnCount: reduction.bundle.turns.length,
       })
     }
     return reduction

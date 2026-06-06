@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { readFileSync } from "node:fs"
 import type { MockMessage } from "./mock-data"
 import {
   buildTranscriptPresentation,
@@ -7,6 +8,8 @@ import {
   transcriptPresentationItemKey,
 } from "./transcript-presentation"
 import type { TranscriptItem } from "./transcript-model"
+
+const source = readFileSync(new URL("./transcript-presentation.ts", import.meta.url), "utf8")
 
 function assistant(parts: TranscriptItem[], traceNodeStatus?: MockMessage["traceNodeStatus"]): MockMessage {
   return {
@@ -41,6 +44,14 @@ function processSummary(items: ReturnType<typeof buildTranscriptPresentation>) {
 }
 
 describe("transcript presentation", () => {
+  it("keeps presentation rebuild diagnostics behind the chat stream debug flag", () => {
+    expect(source).toContain("transcriptPresentationBuildCount")
+    expect(source).toContain("__LABRASTRO_CHAT_STREAM_DEBUG__")
+    expect(source).toContain("[Labrastro] transcript-presentation.build")
+    expect(source).toContain("partCount: parts.length")
+    expect(source).toContain("durationMs:")
+  })
+
   it("keeps reasoning_panel after process timeline before final answer", () => {
     const parts: TranscriptItem[] = [
       { id: "thinking-1", type: "thinking", title: "正在思考", active: true, raw: "plan" },

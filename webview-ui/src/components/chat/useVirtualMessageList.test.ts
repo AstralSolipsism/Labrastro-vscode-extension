@@ -163,4 +163,13 @@ describe("virtual message list windowing", () => {
     expect(intentBody).toContain("followLiveOutput = false")
     expect(intentBody).toContain("setUserScrolled(true)")
   })
+
+  it("batches resize observer measurements and ignores tiny height jitter", () => {
+    expect(source).toContain("const pendingMeasurements = new Map")
+    expect(source).toContain("const scheduleMeasureElement =")
+    expect(source).toContain("pendingMeasureFrame = requestAnimationFrame(run)")
+    expect(source).toContain("new ResizeObserver(() => scheduleMeasureElement(item, element))")
+    expect(source).toContain("if (Math.abs(previousHeight - height) <= 2) return")
+    expect(source).toContain("__LABRASTRO_CHAT_STREAM_DEBUG__")
+  })
 })

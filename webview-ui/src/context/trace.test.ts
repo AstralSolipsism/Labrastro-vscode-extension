@@ -11,6 +11,14 @@ describe("trace session normalization", () => {
     expect(traceSource).toContain("currentSessionId: context.currentSessionId ?? sessionId")
   })
 
+  it("keeps session-run transcript reducer diagnostics behind the chat stream debug flag", () => {
+    expect(traceSource).toContain("function isChatStreamDiagnosticsEnabled()")
+    expect(traceSource).toContain("__LABRASTRO_CHAT_STREAM_DEBUG__")
+    expect(traceSource).toContain("[Labrastro] transcript-reducer.apply")
+    expect(traceSource).toContain("eventCount: events.length")
+    expect(traceSource).toContain("durationMs:")
+  })
+
   it("normalizes persisted session-document parts into transcript items", () => {
     const bundle = normalizeSessionBundle({
       session: {
