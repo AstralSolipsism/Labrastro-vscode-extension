@@ -1,7 +1,15 @@
 import type { MockSession } from "../components/chat/mock-data"
+import {
+  peerPreparationDetail,
+  peerPreparationIsActive,
+  peerPreparationStatusLabel,
+  peerPreparationView,
+  type PeerPreparationView,
+} from "../peerPreparation"
 
 export type SessionHistorySort = "newest" | "oldest"
 export type SessionHistoryListStatus = "idle" | "loading" | "unauthenticated" | "unavailable" | "empty" | "ready" | "error"
+export type SessionLoadStatus = "idle" | "loading" | "ready" | "auth-required" | "not-found" | "error"
 
 export function filterSessionHistory(
   sessions: MockSession[],
@@ -56,11 +64,43 @@ export function sessionOperationErrorAfterMessage(
 export function sessionHistoryEmptyMessage(
   state: { status?: SessionHistoryListStatus; message?: string },
   hasQuery = false,
+  peerPreparation?: PeerPreparationView,
 ): string {
-  if (state.status === "loading") return "正在加载会话历史。"
+  if (state.status === "loading") {
+    const peer = peerPreparationView(peerPreparation)
+    if (peerPreparationIsActive(peer)) {
+      return `正在准备 peer：${peerPreparationStatusLabel(peer)} · ${peerPreparationDetail(peer)}`
+    }
+    return "正在加载会话历史。"
+  }
   if (state.status === "unauthenticated") return state.message || "未登录，无法加载会话历史。"
   if (state.status === "unavailable") return state.message || "当前后端不支持会话历史。"
   if (state.status === "error") return state.message || "会话历史加载失败。"
   if (hasQuery) return "没有匹配的会话。"
   return state.message || "当前没有可恢复的历史会话。"
+}
+
+export function sessionLoadTitle(state: { status?: SessionLoadStatus }): string {
+  if (state.status === "auth-required") return "需要重新登录"
+  if (state.status === "not-found") return "未找到会话"
+  if (state.status === "error") return "会话加载失败"
+  if (state.status === "loading") return "正在加载会话"
+  return ""
+}
+
+export function sessionLoadMessage(
+  state: { status?: SessionLoadStatus; message?: string },
+  peerPreparation?: PeerPreparationView,
+): string {
+  if (state.status === "loading") {
+    const peer = peerPreparationView(peerPreparation)
+    if (peerPreparationIsActive(peer)) {
+      return `正在准备 peer：${peerPreparationStatusLabel(peer)} · ${peerPreparationDetail(peer)}`
+    }
+    return state.message || "正在加载会话。"
+  }
+  if (state.status === "auth-required") return state.message || "登录状态已失效，请重新登录后继续加载会话。"
+  if (state.status === "not-found") return state.message || "未找到这个会话。"
+  if (state.status === "error") return state.message || "会话加载失败。"
+  return ""
 }

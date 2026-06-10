@@ -371,6 +371,29 @@ describe("ChatView context events", () => {
     expect(branchIndex).toBeGreaterThan(0)
   })
 
+  it("shows recoverable session load states for loading, auth, not-found, and failed loads", () => {
+    expect(source).toContain("const [sessionLoadState, setSessionLoadState]")
+    expect(source).toContain("sessionLoadMessage")
+    expect(source).toContain("sessionLoadTitle")
+    expect(source).toContain("class=\"settings-empty-state session-load-state\"")
+    expect(source).toContain('status: "loading", sessionId')
+    expect(source).toContain('return "auth-required"')
+    expect(source).toContain('return "not-found"')
+    expect(source).toContain('return "error"')
+    expect(source).toContain('msg.type === "session.error"')
+  })
+
+  it("clears failed session-load selection without clearing the active conversation", () => {
+    const clearFailedStart = source.indexOf("const clearFailedSessionSelection =")
+    const nextEffectStart = source.indexOf("createEffect", clearFailedStart)
+    const clearFailedSource = source.slice(clearFailedStart, nextEffectStart)
+
+    expect(clearFailedSource).toContain("clearSessionLoadState()")
+    expect(clearFailedSource).toContain('setSessionOperationError("")')
+    expect(clearFailedSource).not.toContain("clearCurrentSession()")
+    expect(clearFailedSource).not.toContain("trace.clearSession()")
+  })
+
   it("keeps REMOTE PEER READY TUI out of chat transcript and out of status state", () => {
     expect(source).toContain("function isRunPeerReadyTui")
     expect(source).toContain('=== "REMOTE PEER READY"')

@@ -69,9 +69,13 @@ import {
   filterSessionHistory,
   sessionOperationErrorAfterMessage,
   sessionHistoryEmptyMessage,
+  sessionLoadMessage,
+  sessionLoadTitle,
   sessionKindBadge,
+  type SessionLoadStatus,
   type SessionHistorySort,
 } from "../chat/sessionHistoryView"
+import { peerPreparationView } from "../peerPreparation"
 import {
   addSessionCommandRules,
   evaluateSessionCommandApproval,
@@ -242,6 +246,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const [showBranchSessions, setShowBranchSessions] = createSignal(false)
   const [deleteSessionId, setDeleteSessionId] = createSignal<string | undefined>()
   const [sessionOperationError, setSessionOperationError] = createSignal("")
+  const [sessionLoadState, setSessionLoadState] = createSignal<{ status: SessionLoadStatus; sessionId?: string; message?: string }>({ status: "idle" })
   const [sessionSyncStatus, setSessionSyncStatus] = createSignal<Record<string, unknown>>({})
   const [queuedPrompts, setQueuedPrompts] = createSignal<PromptQueueState>(createPromptQueueState())
   const [streamRecoveryMessage, setStreamRecoveryMessage] = createSignal("")
@@ -351,8 +356,11 @@ const ChatView: Component<ChatViewProps> = (props) => {
     })
   })
   const historyListState = createMemo(() => trace.sessionListState())
+  const peerPreparation = createMemo(() =>
+    peerPreparationView(server.connectionState().peerPreparation)
+  )
   const historyEmptyMessage = createMemo(() =>
-    sessionHistoryEmptyMessage(historyListState(), Boolean(historyQuery()))
+    sessionHistoryEmptyMessage(historyListState(), Boolean(historyQuery()), peerPreparation())
   )
   const sessionSyncNotice = createMemo(() => {
     const status = sessionSyncStatus()
@@ -368,6 +376,35 @@ const ChatView: Component<ChatViewProps> = (props) => {
     if (status === "failed") return "同步失败"
     if (status === "synced") return "已同步"
     return ""
+  }
+  const sessionLoadVisible = createMemo(() => {
+    const status = sessionLoadState().status
+    return status === "loading" || status === "auth-required" || status === "not-found" || status === "error"
+  })
+  const classifySessionLoadError = (message: Record<string, unknown>): SessionLoadStatus => {
+    const text = [
+      stringValue(message.category),
+      stringValue(message.code),
+      stringValue(message.error),
+      stringValue(message.status),
+      stringValue(message.message),
+    ].join(" ").toLowerCase()
+    if (text.includes("unauth") || text.includes("login") || text.includes("forbidden") || text.includes("401") || text.includes("403")) {
+      return "auth-required"
+    }
+    if (text.includes("not_found") || text.includes("not-found") || text.includes("404")) {
+      return "not-found"
+    }
+    return "error"
+  }
+  const clearSessionLoadState = () => setSessionLoadState({ status: "idle" })
+  const dismissSessionLoadState = () => {
+    clearSessionLoadState()
+    props.onHistoryClose?.()
+  }
+  const clearFailedSessionSelection = () => {
+    clearSessionLoadState()
+    setSessionOperationError("")
   }
 
   createEffect(() => {
@@ -689,6 +726,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   })
 
   const clearCurrentSession = () => {
+    clearSessionLoadState()
     trace.clearSession()
     setSelectedApproval(undefined)
     clearActiveStreamDraft()
@@ -2179,6 +2217,10 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const selectSession = (sessionId: string) => {
     setSelectedApproval(undefined)
     setForkCompose(undefined)
+    setSessionOperationError("")
+    setSessionLoadState(trace.getSessionBundle(sessionId)
+      ? { status: "idle" }
+      : { status: "loading", sessionId })
     trace.loadSession(sessionId)
     props.onHistoryClose?.()
   }
@@ -2988,6 +3030,10 @@ const ChatView: Component<ChatViewProps> = (props) => {
         ) &&
         typeof msg.sessionId === "string"
       ) {
+        const pendingLoad = sessionLoadState()
+        if (pendingLoad.status !== "idle" && (!pendingLoad.sessionId || pendingLoad.sessionId === msg.sessionId)) {
+          clearSessionLoadState()
+        }
         if (remoteSessionIdForMutation(msg.sessionId)) {
           setLocalModelOverrideProfile("")
         }
@@ -3007,6 +3053,17 @@ const ChatView: Component<ChatViewProps> = (props) => {
           setSessionRuntimeState(runtime)
         }
         retryLiveTranscriptFlushSoon()
+      }
+      if (msg.type === "session.error") {
+        const pendingLoad = sessionLoadState()
+        const failedSessionId = stringValue(msg.sessionId) || stringValue(msg.session_id)
+        if (pendingLoad.status === "loading" && (!pendingLoad.sessionId || !failedSessionId || pendingLoad.sessionId === failedSessionId)) {
+          setSessionLoadState({
+            status: classifySessionLoadError(msg as Record<string, unknown>),
+            sessionId: pendingLoad.sessionId || failedSessionId,
+            message: stringValue(msg.message),
+          })
+        }
       }
       if (msg.type === "session.forked" && typeof msg.sessionId === "string") {
         const composeText = stringValue(msg.composeText) || ""
@@ -3396,6 +3453,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
       />
 
       <main class="chat-main">
+        <Show
+          when={sessionLoadVisible()}
+          fallback={
         <MessageList
           turns={visibleTurns()}
           recentSessions={trace.recentSessions()}
@@ -3426,6 +3486,22 @@ const ChatView: Component<ChatViewProps> = (props) => {
           onLoadRawAuditEvents={loadRawAuditEvents}
           rawAuditEvents={rawAuditEvents()}
         />
+          }
+        >
+          <div class="settings-empty-state session-load-state" role="status" aria-live="polite">
+            <span class={`codicon codicon-${sessionLoadState().status === "loading" ? "loading codicon-modifier-spin" : sessionLoadState().status === "auth-required" ? "lock" : "warning"}`} aria-hidden="true" />
+            <strong>{sessionLoadTitle(sessionLoadState())}</strong>
+            <small>{sessionLoadMessage(sessionLoadState(), peerPreparation())}</small>
+            <div class="settings-actions">
+              <button class="btn btn-secondary" type="button" onClick={dismissSessionLoadState}>
+                返回当前对话
+              </button>
+              <button class="btn btn-secondary" type="button" onClick={clearFailedSessionSelection}>
+                清除当前选择
+              </button>
+            </div>
+          </div>
+        </Show>
       </main>
 
       <Show when={taskflowId()}>
