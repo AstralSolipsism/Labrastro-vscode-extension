@@ -8,6 +8,7 @@ import { ChoiceMultiSelect } from "../components/ChoiceMultiSelect"
 import {
   SettingsActionRail,
   SettingsAsidePane,
+  SettingsAuthRequiredState,
   SettingsBoundedList,
   SettingsCatalogTable,
   SettingsCompactField,
@@ -37,11 +38,23 @@ import {
   SettingsToolbar,
   SettingsWorkbench,
 } from "../components/SettingsLayout"
+import {
+  peerPreparationDetail,
+  peerPreparationIsActive,
+  peerPreparationProgressPercent,
+  peerPreparationProgressText as formatPeerPreparationProgressText,
+  peerPreparationStatusLabel,
+  peerPreparationView,
+} from "../../peerPreparation"
 import { agentToolPermissionLabel, agentToolPermissionTitle } from "../capabilityCatalogLabels"
 import { CAPABILITY_SECTIONS, type CapabilitySection } from "../capabilitySections"
 import {
   aggregateRuntimeFootprint,
+  capabilityEnabledStatusLabel,
+  capabilityEnabledStatusTone,
   capabilityInstallPreviewFromMcpJson,
+  capabilityInstallStatusLabel,
+  capabilityInstallStatusTone,
   groupCapabilityPackageComponents,
   normalizeLifecycleHookViews,
   runtimeFootprintBadgeTone,
@@ -57,7 +70,6 @@ import type { SettingsController } from "../useSettingsController"
 
 type EnvironmentEntryKind = "environment_requirement" | "mcp"
 type CapabilityKind = EnvironmentEntryKind | "skill"
-type CapabilityKindFilter = "all" | "mcp_server" | "skill"
 type CapabilityResourceKind =
   | "executable"
   | "runtime"
@@ -115,7 +127,7 @@ interface BehaviorCatalogEntry {
 interface TabProps { controller: SettingsController & Record<string, any> }
 
 const MCP_ENVIRONMENT_ACTION_TITLE = "MCP Server 通过环境要求引用间接检查"
-const PACKAGE_MANAGED_RESOURCE_MESSAGE = "该资源由能力包管理，请在能力包页启停或删除来源能力包。"
+const PACKAGE_MANAGED_RESOURCE_MESSAGE = "该资源由能力管理，请在能力页启停或删除来源能力。"
 
 function capabilityIngestStatusLabel(status: string): string {
   if (status === "opening_session") return "正在打开对话"
@@ -248,7 +260,7 @@ export function lifecycleHookTrustLabel(trust: string): string {
 export function lifecycleHookSourceLabel(source: string): string {
   if (source === "skill") return "Skill"
   if (source === "mcp_server") return "MCP Server"
-  if (source === "capability_package") return "能力包"
+  if (source === "capability_package") return "能力"
   if (source === "system_builtin") return "系统内置"
   if (source === "admin_managed") return "管理员策略"
   return source || "未记录"
@@ -300,6 +312,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
     pageRefreshing,
     serverSettingsSaveBusy,
     refreshCapabilities: refreshCapabilitiesRequest,
+    refreshCapabilityDependencies,
     saveCapabilitySettings,
     recordCapability: recordCapabilityRequest,
     enableCapability: enableCapabilityRequest,
@@ -312,6 +325,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
     stringValue,
     server,
     runEnvironment,
+    environmentManifest,
     environmentSnapshot,
     environmentError,
     environmentAgentCandidates,
@@ -359,8 +373,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
   const capabilitiesInitialLoading = () => props.controller.pageInitialLoading("capabilities")
   const capabilitiesRevalidating = () => props.controller.pageRevalidating("capabilities")
   const capabilitiesLoadingMessage = () =>
-    props.controller.pageLoadingMessage("capabilities") || "正在加载服务器设置、能力清单、环境清单"
-  const [capabilityKindFilter, setCapabilityKindFilter] = createSignal<CapabilityKindFilter>("all")
+    props.controller.pageLoadingMessage("capabilities") || "正在加载服务器设置、能力清单"
   const [selectedCapabilityResourceId, setSelectedCapabilityResourceId] = createSignal("")
   const [selectedCapabilityPackageId, setSelectedCapabilityPackageId] = createSignal("")
   const [behaviorSection, setBehaviorSection] = createSignal<BehaviorCatalogSection>("commands")
@@ -372,6 +385,16 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
   const [skillsScanProject, setSkillsScanProject] = createSignal(true)
   const [skillsScanUser, setSkillsScanUser] = createSignal(true)
   const [skillsDisabledText, setSkillsDisabledText] = createSignal("")
+  const dependencyManifestLoaded = () =>
+    Boolean(environmentManifest?.() || environmentSnapshot().lastManifestAt || environmentSnapshot().entries.length)
+  const peerPreparation = createMemo(() => peerPreparationView(server.connectionState().peerPreparation))
+  const peerProgress = () => peerPreparationProgressPercent(peerPreparation())
+  const peerProgressText = () => formatPeerPreparationProgressText(peerPreparation())
+  const peerProgressVisible = () =>
+    peerPreparationIsActive(peerPreparation()) &&
+    (peerProgress() !== undefined || Boolean(peerProgressText()))
+  const dependencyPeerNoticeVisible = () =>
+    server.connectionState().peerConnected !== true || peerPreparationIsActive(peerPreparation())
 
   const serverSettings = createMemo(() => {
     const direct = objectValue(server.serverSettingsState()?.settings)
@@ -487,8 +510,9 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
   }
   const filteredCapabilityItems = createMemo(() => {
     const query = capabilitySearch().trim().toLowerCase()
+    const sectionKind = section() === "skills" ? "skill" : "mcp_server"
     return (capabilityViews() as CapabilityView[])
-      .filter((item) => capabilityKindFilter() === "all" || item.kind === capabilityKindFilter())
+      .filter((item) => item.kind === sectionKind)
       .filter((item) => {
         if (!query) return true
         return [
@@ -703,7 +727,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
         { label: "来源", value: tool.sourceLabel || tool.sourceType || "—" },
         { label: "启用", value: tool.enabled ? "是" : "否" },
         { label: "权限", value: agentToolPermissionLabel(tool.permission?.action || tool.executionPolicy || tool.approvalStatus), title: agentToolPermissionTitle(tool.permission?.action ? tool.permission : tool.executionPolicy || tool.approvalStatus) },
-        { label: "能力包/组件", value: catalogListText([...tool.relatedPackageIds.map((id: string) => `包:${id}`), ...tool.relatedComponents.map((id: string) => `组件:${id}`)]) },
+        { label: "能力/组件", value: catalogListText([...tool.relatedPackageIds.map((id: string) => `能力:${id}`), ...tool.relatedComponents.map((id: string) => `组件:${id}`)]) },
         { label: "模式", value: catalogListText(tool.modeRefs), mono: true },
         { label: "注册路径", value: tool.registrationPath || "—", mono: true, title: tool.registrationPath || "" },
       ],
@@ -792,7 +816,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
     return "启用"
   }
   const skillComponentDetail = (component: CapabilityComponentView) => [
-    component.packageIds.length ? `来源能力包：${component.packageIds.join("、")}` : "",
+    component.packageIds.length ? `来源能力：${component.packageIds.join("、")}` : "",
     component.kind === "skill" ? `状态：${skillStatusLabel(component.skillStatus)}` : "",
   ].filter(Boolean).join(" · ")
   const componentConfig = (component: CapabilityComponentView) => objectValue(component.raw.config)
@@ -889,7 +913,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
   const capabilityStringListField = (capability: CapabilityView, field: string) =>
     stringArrayValue(capabilityField(capability, field))
   const capabilitySourceText = (capability: CapabilityView) =>
-    capability.sourcePackageIds.length ? capability.sourcePackageIds.join("、") : "未关联能力包"
+    capability.sourcePackageIds.length ? capability.sourcePackageIds.join("、") : "未关联能力"
   const capabilityRiskText = (capability: CapabilityView) =>
     stringValue(capabilityField(capability, "risk_level")) || "未记录"
   const capabilityCredentialItems = (capability: CapabilityView) =>
@@ -1099,7 +1123,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
                 {[
                   capability.summary,
                   `运行责任：${runtimeFootprintLabel(capability.runtimeFootprint)}`,
-                  capability.sourcePackageIds.length ? `来源能力包：${capability.sourcePackageIds.join("、")}` : "未关联能力包",
+                  capability.sourcePackageIds.length ? `来源能力：${capability.sourcePackageIds.join("、")}` : "未关联能力",
                   capability.dependencyIds.length ? `能力依赖：${capability.dependencyIds.map(dependencySummaryText).join("、")}` : "",
                 ].filter(Boolean).join(" · ")}
               </small>
@@ -1129,7 +1153,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
         <small>{capability.description || capability.summary || "未记录能力说明。"}</small>
       </SettingsDetailSection>
       <SettingsDetailSection>
-        <span>来源</span>
+        <span>来源能力</span>
         <small>{capabilitySourceText(capability)}</small>
       </SettingsDetailSection>
       <SettingsDetailSection>
@@ -1172,6 +1196,14 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
   const refreshCapabilities = () => {
     refreshCapabilitiesRequest()
   }
+
+  createEffect(() => {
+    if (section() !== "dependencies") return
+    if (dependencyManifestLoaded()) return
+    const status = operations.state("environmentManifest").status
+    if (status === "loading" || status === "error") return
+    refreshCapabilityDependencies?.()
+  })
 
   const openCreateCapability = (kind: CapabilityKind) => {
     setCapabilityEditor(emptyCapabilityEditor(kind))
@@ -1364,7 +1396,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
                 <label class="field-label">
                   <span>部署属性</span>
                   <select value={editor.placement} onChange={(event) => patchCapabilityEditor({ placement: event.currentTarget.value })}>
-                    <option value="peer">peer</option>
+                    <option value="peer">本地端</option>
                     <option value="server">server</option>
                     <option value="both">both</option>
                   </select>
@@ -1418,7 +1450,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
                 <label class="field-label">
                   <span>安装位置</span>
                   <select value={editor.placement} onChange={(event) => patchCapabilityEditor({ placement: event.currentTarget.value })}>
-                    <option value="peer">peer</option>
+                    <option value="peer">本地端</option>
                     <option value="both">both</option>
                     <option value="server">server</option>
                   </select>
@@ -1506,7 +1538,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
           <div>
             <h2>{t("capability.title")}</h2>
             <p class="setting-description">
-              当前状态：{environmentRunStatusLabel(environmentSnapshot().status)} · 最近清单刷新：{formatTimestamp(environmentSnapshot().lastManifestAt)}
+              管理能力、MCP、Skills、依赖与行为。依赖检查会在进入“依赖”后按需加载。
             </p>
           </div>
           <SettingsActionRail align="right">
@@ -1514,14 +1546,13 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
               class="btn-secondary"
               loading={pageRefreshing("capabilities")}
               onClick={refreshCapabilities}
-              disabled={environmentSnapshot().running}
             >
               刷新
             </RefreshButton>
           </SettingsActionRail>
         </SettingsPageHeader>
 
-        <Show when={environmentError()}>
+        <Show when={environmentError() && section() === "dependencies"}>
           <div class="settings-error">{environmentError()}</div>
         </Show>
         <Show when={capabilityError()}>
@@ -1533,18 +1564,19 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
         <Show when={capabilitiesRevalidating() && !capabilitiesInitialLoading()}>
           <p class="settings-empty-note">{capabilitiesLoadingMessage()}</p>
         </Show>
-        <Show when={!capabilitiesInitialLoading() && !environmentAgentAvailable()}>
+        <Show when={!capabilitiesInitialLoading() && section() === "dependencies" && !environmentAgentAvailable()}>
           <div class="settings-empty-note">内建环境 Agent environment_configurator 不可用。请刷新服务器设置或检查后端配置。</div>
         </Show>
 
         <Show when={capabilitiesInitialLoading()} fallback={
-          <>
+          <Show when={props.controller.adminUsable()} fallback={<SettingsAuthRequiredState />}>
+            <>
 
         <SettingsSubTabs ariaLabel="能力/行为管理视图">
           <For each={CAPABILITY_SECTIONS}>
             {(item) => (
               <SettingsSubTabButton
-                active={section() === item.id || (item.id === "packages" && (section() === "dependencies" || section() === "logs"))}
+                active={section() === item.id}
                 icon={item.icon}
                 onClick={() => setSection(item.id)}
               >
@@ -1558,26 +1590,13 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
           <div class="settings-error">行为管理加载失败：{capabilityBehaviorError()}</div>
         </Show>
 
-        <SettingsWorkbench hidden={section() !== "capabilities"}>
+        <SettingsWorkbench hidden={section() !== "mcp" && section() !== "skills"}>
           <SettingsPane>
             <SettingsToolbar>
-              <SettingsSegmentedControl ariaLabel="能力类型筛选">
-                <For each={[
-                  ["all", "全部"],
-                  ["mcp_server", "MCP Server"],
-                  ["skill", "Skill"],
-                ] as Array<[CapabilityKindFilter, string]>}>
-                  {([id, label]) => (
-                    <button type="button" classList={{ "is-active": capabilityKindFilter() === id }} onClick={() => setCapabilityKindFilter(id)}>
-                      {label}
-                    </button>
-                  )}
-                </For>
-              </SettingsSegmentedControl>
               <SettingsSearchField
-                ariaLabel="搜索能力"
+                ariaLabel="搜索资源"
                 value={capabilitySearch()}
-                placeholder="搜索 MCP Server、Skill、能力包或依赖"
+                placeholder={section() === "mcp" ? "搜索 MCP Server" : "搜索 Skill"}
                 onInput={setCapabilitySearch}
               />
               <SettingsActionRail align="right">
@@ -1597,11 +1616,11 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
               </SettingsActionRail>
             </SettingsToolbar>
             <SettingsPaneBody>
-              <p class="settings-empty-note">单独注册的 MCP/Skill 只进入资源管理，不自动授予 Agent 使用权限；Agent 仍通过 capability_refs 绑定能力包。</p>
+              <p class="settings-empty-note">单独注册的 MCP/Skill 只进入资源管理，不自动授予 Agent 使用权限；Agent 仍通过 capability_refs 绑定能力。</p>
               <Show when={operations.state("capabilitySettingsSave").status === "success" && !capabilityDirty()}>
                 <div class="settings-success">Skills 设置已保存并重载。</div>
               </Show>
-              <Show when={filteredCapabilityItems().length} fallback={<div class="capability-empty">暂无 MCP Server 或 Skill。</div>}>
+              <Show when={filteredCapabilityItems().length} fallback={<div class="capability-empty">{section() === "mcp" ? "暂无 MCP Server。" : "暂无 Skill。"}</div>}>
                 {renderCapabilityCards(filteredCapabilityItems())}
               </Show>
             </SettingsPaneBody>
@@ -1755,9 +1774,9 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
                 onInput={setCapabilitySearch}
               />
               <SettingsActionRail align="right">
-                <button class="btn btn-secondary btn--compact" type="button" onClick={() => setSection("packages")}>
+                <button class="btn btn-secondary btn--compact" type="button" onClick={() => setSection("capabilities")}>
                   <span class="codicon codicon-arrow-left" aria-hidden="true" />
-                  返回能力包
+                  返回能力
                 </button>
                 <SettingsCompactField label="环境 Agent">
                   <input value={environmentAgentLabel()} disabled />
@@ -1779,8 +1798,26 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
 
             <SettingsPaneBody>
               <p class="settings-empty-note">
-                这里管理能力依赖：CLI、SDK、Runtime、凭据、路径等由能力引用的外部资源。MCP Server 和 Skill 在“能力”页管理。
+                这里管理能力依赖：CLI、SDK、Runtime、凭据、路径等由能力引用的外部资源。MCP Server 和 Skill 在对应标签管理。
               </p>
+              <Show when={dependencyPeerNoticeVisible()}>
+                <div class="peer-preparation-note" role="status" aria-live="polite">
+                  <div class="peer-preparation-note__body">
+                    <strong>peer 准备情况：{peerPreparationStatusLabel(peerPreparation(), server.connectionState().peerConnected === true)}</strong>
+                    <span>{peerPreparationDetail(peerPreparation(), server.connectionState().peerConnected === true)}</span>
+                  </div>
+                  <Show when={peerProgressVisible()}>
+                    <div class="peer-preparation-progress" aria-label="peer 准备进度">
+                      <div
+                        class="peer-preparation-progress__bar"
+                        classList={{ "peer-preparation-progress__bar--indeterminate": peerProgress() === undefined }}
+                        style={`--peer-preparation-progress:${peerProgress() ?? 35};`}
+                      />
+                      <span>{peerProgressText()}</span>
+                    </div>
+                  </Show>
+                </div>
+              </Show>
               <Show when={filteredDependencyItems().length} fallback={<div class="capability-empty">没有匹配的能力依赖。</div>}>
                 <SettingsBoundedList>
                   <For each={filteredDependencyItems()}>
@@ -1811,7 +1848,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
                             </button>
                             <Show
                               when={!packageManaged()}
-                              fallback={<StatusBadge tone="muted">能力包管理</StatusBadge>}
+                              fallback={<StatusBadge tone="muted">能力管理</StatusBadge>}
                             >
                               <button class="ez-icon-button" type="button" title="编辑" onClick={(event) => { event.stopPropagation(); openEditCapability(record()) }}>
                                 <span class="codicon codicon-edit" aria-hidden="true" />
@@ -1951,13 +1988,13 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
           </SettingsAsidePane>
         </SettingsWorkbench>
 
-        <SettingsFlatSection hidden={section() !== "packages"}>
+        <SettingsFlatSection hidden={section() !== "capabilities"}>
           <SettingsSectionHeading>
-            <span>能力包生成</span>
+            <span>能力生成</span>
             <SettingsActionRail align="right">
               <button class="btn btn-primary" type="button" disabled={operations.isBusy("capabilityIngestStart")} onClick={startCapabilityPackageIngest}>
                 <span class="codicon codicon-play" aria-hidden="true" />
-                在会话中生成能力包
+                在会话中生成能力
               </button>
             </SettingsActionRail>
           </SettingsSectionHeading>
@@ -1968,15 +2005,11 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
             <div class="settings-error">{capabilityPackageIngestState().error}</div>
           </Show>
           <SettingsSectionHeading compact>
-            <span>能力包运行环境</span>
+            <span>能力运行环境</span>
             <SettingsActionRail align="right">
               <button class="btn btn-secondary btn--compact" type="button" onClick={() => setSection("dependencies")}>
                 <span class="codicon codicon-symbol-method" aria-hidden="true" />
                 全部能力依赖资源
-              </button>
-              <button class="btn btn-secondary btn--compact" type="button" onClick={() => setSection("logs")}>
-                <span class="codicon codicon-output" aria-hidden="true" />
-                运行日志
               </button>
             </SettingsActionRail>
           </SettingsSectionHeading>
@@ -1991,7 +2024,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
                     <option value="project_notes">项目说明</option>
                   </select>
                 </label>
-                <label class="field-label"><span>能力包 ID 提示</span>
+                <label class="field-label"><span>能力 ID 提示</span>
                   <input value={capabilityPackageIdHint()} onInput={(event) => setCapabilityPackageIdHint(event.currentTarget.value)} placeholder="review / pr / deploy" />
                 </label>
                 <Show when={capabilitySourceType() !== "project_notes"}>
@@ -2014,10 +2047,10 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
           </div>
 
           <SettingsSectionHeading compact>
-            <span>已安装能力包</span>
+            <span>已安装能力</span>
             <StatusBadge>{String(installedCapabilityPackages().length)}</StatusBadge>
           </SettingsSectionHeading>
-          <Show when={installedCapabilityPackages().length} fallback={<p class="settings-empty-note">暂无已确认安装的能力包。</p>}>
+          <Show when={installedCapabilityPackages().length} fallback={<p class="settings-empty-note">暂无已确认安装的能力。</p>}>
             <SettingsWorkbench>
               <SettingsPane>
                 <SettingsPaneBody>
@@ -2040,10 +2073,11 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
                                 <Show when={counts.other}><span>{counts.other} 其他</span></Show>
                                  <span>{runtimeFootprintLabel(footprint)}</span>
                                  <Show when={pkg.hooks.length}><span>{packageHookSummary(pkg)}</span></Show>
-                                 <Show when={!pkg.enabled}><span>Agent 不可用</span></Show>
-                              </SettingsListCardMeta>
-                            </SettingsListCardMain>
-                            <StatusBadge tone={runtimeFootprintBadgeTone(footprint)}>{runtimeFootprintLabel(footprint)}</StatusBadge>
+                                  <StatusBadge tone={capabilityInstallStatusTone(pkg.status)}>{capabilityInstallStatusLabel(pkg.status)}</StatusBadge>
+                                  <StatusBadge tone={capabilityEnabledStatusTone(pkg.enabled)}>{capabilityEnabledStatusLabel(pkg.enabled)}</StatusBadge>
+                               </SettingsListCardMeta>
+                             </SettingsListCardMain>
+                             <StatusBadge tone={runtimeFootprintBadgeTone(footprint)}>{runtimeFootprintLabel(footprint)}</StatusBadge>
                           </SettingsListButton>
                         )
                       }}
@@ -2053,7 +2087,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
               </SettingsPane>
               <SettingsAsidePane>
                 <SettingsPaneBody>
-                  <Show when={selectedCapabilityPackage()} fallback={<div class="capability-empty">选择一个能力包查看详情。</div>}>
+                  <Show when={selectedCapabilityPackage()} fallback={<div class="capability-empty">选择一个能力查看详情。</div>}>
                     {(pkg) => {
                       const counts = packageComponentCounts(pkg())
                       const footprint = packageRuntimeFootprint(pkg())
@@ -2062,20 +2096,23 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
                           <SettingsDetailHeader>
                             <div>
                               <StatusBadge>{pkg().id}</StatusBadge>
-                              <h3>{pkg().name || pkg().id}</h3>
-                              <p>{pkg().description || capabilityPackageSourceLabel(pkg().source)}</p>
-                            </div>
-                            <StatusBadge tone={pkg().enabled ? "success" : "muted"}>{pkg().enabled ? "enabled" : "disabled"}</StatusBadge>
-                          </SettingsDetailHeader>
-                          <SettingsDetailActions>
-                            <button class="btn btn-secondary btn--compact" type="button" disabled={packageEnvironmentActionDisabled(pkg())} onClick={() => runCapabilityPackageEnvironment("check", pkg())}>
-                              <span class="codicon codicon-search" aria-hidden="true" />
-                              检查该包依赖
-                            </button>
-                            <button class="btn btn-secondary btn--compact" type="button" disabled={packageEnvironmentActionDisabled(pkg())} onClick={() => runCapabilityPackageEnvironment("configure", pkg())}>
-                              <span class="codicon codicon-tools" aria-hidden="true" />
-                              配置该包依赖
-                            </button>
+                               <h3>{pkg().name || pkg().id}</h3>
+                               <p>{pkg().description || capabilityPackageSourceLabel(pkg().source)}</p>
+                             </div>
+                             <div class="settings-actions">
+                               <StatusBadge tone={capabilityInstallStatusTone(pkg().status)}>{capabilityInstallStatusLabel(pkg().status)}</StatusBadge>
+                               <StatusBadge tone={capabilityEnabledStatusTone(pkg().enabled)}>{capabilityEnabledStatusLabel(pkg().enabled)}</StatusBadge>
+                             </div>
+                           </SettingsDetailHeader>
+                           <SettingsDetailActions>
+                             <button class="btn btn-secondary btn--compact" type="button" disabled={packageEnvironmentActionDisabled(pkg())} onClick={() => runCapabilityPackageEnvironment("check", pkg())}>
+                               <span class="codicon codicon-search" aria-hidden="true" />
+                               检查该能力依赖
+                             </button>
+                             <button class="btn btn-secondary btn--compact" type="button" disabled={packageEnvironmentActionDisabled(pkg())} onClick={() => runCapabilityPackageEnvironment("configure", pkg())}>
+                               <span class="codicon codicon-tools" aria-hidden="true" />
+                               配置该能力依赖
+                             </button>
                             <button class="btn btn-secondary btn--compact" type="button" disabled={pkg().id === "environment"} onClick={() => enableCapabilityPackage(pkg().id, !pkg().enabled)}>
                               {pkg().enabled ? "停用" : "启用"}
                             </button>
@@ -2096,8 +2133,8 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
                             </SettingsDetailBlock>
                              <SettingsDetailBlock>
                                <span>状态</span>
-                               <strong>{pkg().status || "installed"}</strong>
-                               <small>{pkg().enabled ? (pkg().riskLevel ? `风险：${pkg().riskLevel}` : "未标注风险") : "已停用，Agent 不可用"}</small>
+                               <strong>{capabilityInstallStatusLabel(pkg().status)}</strong>
+                               <small>{capabilityEnabledStatusLabel(pkg().enabled)} · {pkg().riskLevel ? `风险：${pkg().riskLevel}` : "未标注风险"}</small>
                              </SettingsDetailBlock>
                              <SettingsDetailBlock>
                                <span>生命周期 Hooks</span>
@@ -2138,14 +2175,14 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
           </Show>
         </SettingsFlatSection>
 
-        <SettingsFlatSection hidden={section() !== "logs"}>
+        <SettingsFlatSection hidden={section() !== "dependencies"}>
           <SettingsSectionHeading>
             <span>运行日志</span>
             <SettingsActionRail align="right">
               <StatusBadge>{String(environmentSnapshot().logs.length)}</StatusBadge>
-              <button class="btn btn-secondary btn--compact" type="button" onClick={() => setSection("packages")}>
+              <button class="btn btn-secondary btn--compact" type="button" onClick={() => setSection("capabilities")}>
                 <span class="codicon codicon-arrow-left" aria-hidden="true" />
-                返回能力包
+                返回能力
               </button>
             </SettingsActionRail>
           </SettingsSectionHeading>
@@ -2167,10 +2204,11 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
             </Show>
           </div>
         </SettingsFlatSection>
-          </>
+            </>
+          </Show>
         }>
           <SettingsLoadingState
-            title="正在加载能力包与能力管理"
+            title="正在加载能力与行为管理"
             detail={capabilitiesLoadingMessage()}
           />
         </Show>

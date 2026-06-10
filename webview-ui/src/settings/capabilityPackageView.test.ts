@@ -2,7 +2,11 @@ import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 import {
   aggregateRuntimeFootprint,
+  capabilityEnabledStatusLabel,
+  capabilityEnabledStatusTone,
   capabilityInstallPreviewFromMcpJson,
+  capabilityInstallStatusLabel,
+  capabilityInstallStatusTone,
   capabilityViewsFromSources,
   capabilityComponentSummary,
   groupCapabilityPackageComponents,
@@ -567,5 +571,14 @@ describe("capability package component view", () => {
       canManage: false,
       unavailableReason: "owner_disabled",
     })
+  })
+
+  it("keeps install state and enabled state as separate user-facing dimensions", () => {
+    expect(capabilityInstallStatusLabel("installed")).toBe("已安装")
+    expect(capabilityInstallStatusTone("installed")).toBe("success")
+    expect(capabilityEnabledStatusLabel(true)).toBe("已启用")
+    expect(capabilityEnabledStatusTone(true)).toBe("success")
+    expect(capabilityEnabledStatusLabel(false)).toBe("已停用")
+    expect(capabilityEnabledStatusTone(false)).toBe("muted")
   })
 })

@@ -114,6 +114,32 @@ export interface CapabilityViewsFromSourcesOptions extends CapabilityComponentGr
   packages?: Record<string, unknown>
 }
 
+export function capabilityInstallStatusLabel(status: string): string {
+  const normalized = status.trim().toLowerCase()
+  if (!normalized || normalized === "installed" || normalized === "available" || normalized === "ready") return "已安装"
+  if (normalized === "installing" || normalized === "pending" || normalized === "pending_install") return "安装中"
+  if (normalized === "failed" || normalized === "error") return "安装失败"
+  if (normalized === "removed" || normalized === "deleted") return "已移除"
+  return status
+}
+
+export function capabilityInstallStatusTone(status: string): "success" | "warning" | "muted" | "error" | undefined {
+  const normalized = status.trim().toLowerCase()
+  if (!normalized || normalized === "installed" || normalized === "available" || normalized === "ready") return "success"
+  if (normalized === "installing" || normalized === "pending" || normalized === "pending_install") return "warning"
+  if (normalized === "failed" || normalized === "error") return "error"
+  if (normalized === "removed" || normalized === "deleted") return "muted"
+  return undefined
+}
+
+export function capabilityEnabledStatusLabel(enabled: boolean): string {
+  return enabled ? "已启用" : "已停用"
+}
+
+export function capabilityEnabledStatusTone(enabled: boolean): "success" | "muted" {
+  return enabled ? "success" : "muted"
+}
+
 const ENVIRONMENT_REQUIREMENT_KINDS = new Set([
   "executable",
   "runtime",

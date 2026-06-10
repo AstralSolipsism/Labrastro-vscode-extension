@@ -1,12 +1,14 @@
 export type CapabilitySection =
   | "capabilities"
-  | "packages"
+  | "mcp"
+  | "skills"
   | "dependencies"
   | "behavior"
-  | "logs"
 
 export const CAPABILITY_SECTIONS: Array<{ id: CapabilitySection; label: string; icon: string }> = [
-  { id: "capabilities", label: "能力", icon: "extensions" },
-  { id: "packages", label: "能力包", icon: "package" },
-  { id: "behavior", label: "行为管理", icon: "terminal" },
+  { id: "capabilities", label: "能力", icon: "sparkle" },
+  { id: "mcp", label: "MCP", icon: "extensions" },
+  { id: "skills", label: "Skills", icon: "tools" },
+  { id: "dependencies", label: "依赖", icon: "package" },
+  { id: "behavior", label: "行为", icon: "symbol-event" },
 ]

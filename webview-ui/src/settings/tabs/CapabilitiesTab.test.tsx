@@ -248,6 +248,7 @@ async function renderCapabilitiesTab(fixture: Record<string, unknown>): Promise<
         "  pageRefreshing: () => false,",
         "  serverSettingsSaveBusy: () => false,",
         "  refreshCapabilities: () => {},",
+        "  refreshCapabilityDependencies: () => {},",
         "  saveCapabilitySettings: () => {},",
         "  recordCapability: () => {},",
         "  enableCapability: () => {},",
@@ -258,8 +259,9 @@ async function renderCapabilitiesTab(fixture: Record<string, unknown>): Promise<
         "  capabilityEditorFromRecord: () => ({}),",
         "  capabilityPayloadFromEditor: () => ({}),",
         "  stringValue, objectValue, numberValue,",
-        "  server: { serverSettingsState: () => ({ settings: fixture.serverSettings }) },",
+        "  server: { serverSettingsState: () => ({ settings: fixture.serverSettings }), connectionState: () => fixture.connectionState || ({ peerConnected: true, peerId: 'peer-test' }) },",
         "  runEnvironment: () => {},",
+        "  environmentManifest: () => ({ entries: [] }),",
         "  environmentSnapshot: () => ({ status: 'idle', running: false, lastManifestAt: '2026-06-05T00:00:00.000Z', entries: [], logs: [] }),",
         "  environmentError: () => '',",
         "  environmentAgentCandidates: () => [{ id: 'agent-1', name: 'Agent' }],",
@@ -301,6 +303,7 @@ async function renderCapabilitiesTab(fixture: Record<string, unknown>): Promise<
         "  pageInitialLoading: () => false,",
         "  pageRevalidating: () => false,",
         "  pageLoadingMessage: () => '',",
+        "  adminUsable: () => true,",
         "};",
         "globalThis.confirm = globalThis.confirm || (() => true);",
         "export default renderToString(() => createComponent(CapabilitiesTab, { controller }));",
@@ -435,11 +438,33 @@ describe("CapabilitiesTab lifecycle hook management", () => {
     expect(html).toContain("REVIEW_TOKEN")
   })
 
+  it("surfaces peer preparation progress for dependency work", async () => {
+    const fixture = {
+      ...capabilitiesTabFixture(),
+      connectionState: {
+        peerConnected: false,
+        peerPreparation: {
+          phase: "downloading",
+          label: "正在下载",
+          detail: "正在下载 peer 二进制。",
+          progressPercent: 38,
+        },
+      },
+    }
+
+    const html = await renderCapabilitiesTab(fixture)
+
+    expect(html).toContain("peer 准备情况：正在下载")
+    expect(html).toContain("正在下载 peer 二进制。 · 38%")
+    expect(html).toContain("38%")
+  })
+
   it("renders Skill lifecycle hook source package, trust, risk, and recent result in the management component", async () => {
     const html = await renderCapabilitiesTab(skillCapabilitiesTabFixture())
 
     expect(html).toContain("Code review skill")
-    expect(html).toContain("来源能力包：repo-review")
+    expect(html).toContain("来源能力")
+    expect(html).toContain("repo-review")
     expect(html).toContain("Code review prompt guard")
     expect(html).toContain("Reviews prompts before the model sees them.")
     expect(html).toContain("来源：Skill")

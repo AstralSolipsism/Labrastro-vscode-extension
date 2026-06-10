@@ -6,6 +6,7 @@ import { StatusBadge } from "../components/StatusBadge"
 import { ChoiceMultiSelect } from "../components/ChoiceMultiSelect"
 import {
   SettingsActionRail,
+  SettingsAuthRequiredState,
   SettingsLoadingState,
   SettingsPage,
   SettingsPageHeader,
@@ -104,7 +105,7 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
   const agentIds = () => Object.keys(agentDrafts())
   const currentAgentReadOnly = () => Boolean(currentAgentDraft() && currentAgentDraft()!.visibility !== "user")
   const mcpChoiceOptions = () => registeredMcpServers().map((id: string) => ({ id, label: id, kind: "MCP" }))
-  const capabilityChoiceOptions = () => capabilityPackageOptions().map((id: string) => ({ id, label: id, kind: "能力包" }))
+  const capabilityChoiceOptions = () => capabilityPackageOptions().map((id: string) => ({ id, label: id, kind: "能力" }))
   const selectedMemoryProviderId = () => currentAgentDraft()?.memoryProvider.trim() || ""
   const selectedMemoryProviderOption = createMemo(() => {
     const providerId = selectedMemoryProviderId()
@@ -212,7 +213,8 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
         <p class="settings-empty-note">{agentConfigLoadingMessage()}</p>
       </Show>
       <Show when={agentConfigInitialLoading()} fallback={
-        <>
+        <Show when={props.controller.adminUsable()} fallback={<SettingsAuthRequiredState />}>
+          <>
 
       {/* ── Runtime Profiles Section ── */}
       <SettingsSubTabs ariaLabel={t("agentConfig.title")}>
@@ -553,7 +555,7 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
                 >
                   <ReadonlyField label={t("agentConfig.agent.runtimeProfile")} value={() => currentAgentDraft()!.runtime_profile} help={t("agentConfig.agent.runtimeProfileDesc")} />
                 </Show>
-                <label class="field-label"><span>{selectedAgentId() === "capability_packager" ? "能力包生成使用的模型" : t("agentConfig.agent.model")}</span>
+                <label class="field-label"><span>{selectedAgentId() === "capability_packager" ? "能力生成使用的模型" : t("agentConfig.agent.model")}</span>
                   <select value={currentAgentDraft()!.modelKey} onChange={(e) => updateAgentField("modelKey", e.currentTarget.value)}>
                     <option value="">{t("agentConfig.agent.model.none")}</option>
                     <For each={runtimeModelOptions()}>{(option) => (
@@ -688,7 +690,7 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
                         delimiter=", "
                         onChangeText={(next) => updateAgentField("capabilityRefsText", formatAgentConfigList(parseAgentConfigListText(next), ", "))}
                         emptyMessage={t("agentConfig.agent.capabilityRefs.empty")}
-                        searchPlaceholder="搜索能力包"
+                        searchPlaceholder="搜索能力"
                         unknownLabel={t("agentConfig.choice.custom")}
                       />
                       <small class="field-help">{t("agentConfig.agent.capabilityRefsDesc")}</small>
@@ -816,7 +818,8 @@ export const AgentConfigTab: Component<TabProps> = (props) => {
           </Show>
         </div>
       </section>
-        </>
+          </>
+        </Show>
       }>
         <SettingsLoadingState
           title={t("agentConfig.loadingTitle")}

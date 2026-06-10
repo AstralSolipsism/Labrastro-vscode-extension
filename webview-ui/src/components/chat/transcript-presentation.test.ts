@@ -106,7 +106,7 @@ describe("transcript presentation", () => {
         lane: "primary",
         workflow: "capability_package_ingest",
         artifactType: "capability_package_draft",
-        title: "能力包草案 review 已生成",
+        title: "能力草案 review 已生成",
         artifact: { package_id: "review" },
       },
     ]
@@ -326,7 +326,7 @@ describe("transcript presentation", () => {
         workflow: "capability_package_ingest",
         stage: "install",
         status: "running",
-        title: "正在安装能力包",
+        title: "正在安装能力",
         details: { tool_call_id: "install-review" },
       },
       {
@@ -336,7 +336,7 @@ describe("transcript presentation", () => {
         workflow: "capability_package_ingest",
         resultType: "capability_package_install",
         status: "done",
-        title: "能力包已安装",
+        title: "能力已安装",
         result: { package_id: "review" },
       },
     ]
@@ -345,7 +345,7 @@ describe("transcript presentation", () => {
 
     expect(summary).toMatchObject({
       state: "completed",
-      currentLabel: "能力包已安装",
+      currentLabel: "能力已安装",
       failureCount: 0,
       isWorkflow: true,
       workflow: "capability_package_ingest",
@@ -415,7 +415,7 @@ describe("transcript presentation", () => {
         workflow: "capability_package_ingest",
         resultType: "command_evidence_missing",
         status: "error",
-        title: "能力包依赖命令缺少来源证据",
+        title: "能力依赖命令缺少来源证据",
         result: { messages: ["envreq:executable:npx command lacks evidence: npx --version"] },
       },
     ]
@@ -425,7 +425,7 @@ describe("transcript presentation", () => {
     expect(summary).toMatchObject({
       state: "error",
       failureCount: 1,
-      currentLabel: "能力包依赖命令缺少来源证据",
+      currentLabel: "能力依赖命令缺少来源证据",
       isWorkflow: true,
     })
   })
@@ -481,7 +481,7 @@ describe("transcript presentation", () => {
 
     expect(group).toMatchObject({
       state: "running",
-      label: "能力包流程",
+      label: "能力流程",
       currentLabel: "正在获取 GitHub 内容",
       isWorkflow: true,
     })

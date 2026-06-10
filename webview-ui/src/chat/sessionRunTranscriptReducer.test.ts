@@ -856,7 +856,7 @@ describe("sessionRunTranscriptReducer", () => {
     current = reduce(current, "workflow_artifact", {
       workflow: "capability_package_ingest",
       artifact_type: "capability_package_draft",
-      title: "能力包草案 review 已生成",
+      title: "能力草案 review 已生成",
       artifact: {
         package_id: "review",
         description: "Review package",
@@ -878,7 +878,7 @@ describe("sessionRunTranscriptReducer", () => {
       lane: "primary",
       workflow: "capability_package_ingest",
       artifactType: "capability_package_draft",
-      title: "能力包草案 review 已生成",
+      title: "能力草案 review 已生成",
       artifact: {
         package_id: "review",
       },

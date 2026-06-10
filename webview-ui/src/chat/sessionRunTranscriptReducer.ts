@@ -122,7 +122,7 @@ const DEFAULT_LABELS: SessionRunTranscriptLabels = {
   streamInterruptedPrefix: "输出中断：",
   providerStreamInterrupted: "模型输出流中断，正在尝试恢复。",
   streamInterruptedCanContinue: "模型输出流中断，可继续生成。",
-  capabilityPackageSessionFailed: "能力包流程执行失败。",
+  capabilityPackageSessionFailed: "能力流程执行失败。",
 }
 
 const REASONING_STREAM_KEY = "reasoning-stream"

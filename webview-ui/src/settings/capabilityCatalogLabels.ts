@@ -14,7 +14,7 @@ export function agentToolExecutionPolicyTitle(value: string): string {
   if (value === "deny") return "运行时 tool 调用会被策略拒绝。"
   if (value === "require_approval" || value === "require_user") return "仅交互式 ChatView 场景适合请求用户确认；后台任务应阻断或升级。"
   if (value === "escalate") return "后台任务遇到该能力时应升级给主 agent 或转为待处理状态。"
-  if (value === "inherits_component_policy" || value === "inherit") return "能力包本身不是一次 tool 调用；实际执行策略由包内组件或 agent 授权结果决定。"
+  if (value === "inherits_component_policy" || value === "inherit") return "能力本身不是一次 tool 调用；实际执行策略由能力组件或 agent 授权结果决定。"
   return "运行时 tool 调用的执行授权策略。"
 }
 
@@ -53,7 +53,7 @@ export function agentToolPermissionTitle(value: string | AgentToolPermissionView
     action === "require_approval" || action === "require_user" ? "PermissionGateway 要求交互式 ChatView 中由用户确认后执行。" :
     action === "blocked_review" ? "PermissionGateway 判断后台/无人值守场景不能等待审批，已转为待复核。" :
     action === "deny" ? "PermissionGateway 已拒绝该 tool 在当前 Agent 权限上下文中执行。" :
-    action === "inherits_component_policy" || action === "inherit" ? "该项继承能力包或组件策略，最终仍以后端 PermissionGateway 裁决为准。" :
+    action === "inherits_component_policy" || action === "inherit" ? "该项继承能力或组件策略，最终仍以后端 PermissionGateway 裁决为准。" :
     "后端 PermissionGateway 返回的运行时权限裁决。"
   if (!value || typeof value === "string") return base
   const details = [

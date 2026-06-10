@@ -163,9 +163,9 @@ function capabilityPackageInstallSummary(approval: ApprovalDetails): {
     stringValue(review.packageId) ||
     approval.toolName
   return {
-    title: "安装能力包",
+    title: "安装能力",
     primary: packageLabel,
-    secondary: stringValue(review.summary) || approval.intent || approval.reason || "确认后会安装能力包及其组件。",
+    secondary: stringValue(review.summary) || approval.intent || approval.reason || "确认后会安装能力及其组件。",
     icon: "extensions",
     category: "unknown",
   }

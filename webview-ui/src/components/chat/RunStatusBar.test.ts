@@ -24,7 +24,7 @@ describe("RunStatusBar source", () => {
     expect(source).toContain('props.agentRun.phase === "queued"')
   })
 
-  it("keeps peer workspace root in the user-visible run peer tooltip", () => {
+  it("keeps local executor workspace root in the user-visible run channel tooltip", () => {
     setLocale("en")
 
     const title = runPeerTitle({
@@ -38,7 +38,7 @@ describe("RunStatusBar source", () => {
     })
 
     expect(title).toContain("Workspace: G:/repo/main")
-    expect(title).toContain("Peer: peer-1")
+    expect(title).toContain("Local executor: peer-1")
     expect(title).not.toContain("runtimeStatus.detail.workspace")
   })
 })
