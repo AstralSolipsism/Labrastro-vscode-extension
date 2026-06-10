@@ -1,4 +1,5 @@
 .vscode/**
+.vs/**
 .github/**
 .claude/**
 .rcoder/**
@@ -8,6 +9,7 @@ webview-ui/**
 node_modules/**
 scripts/**
 AGENTS.md
+AGENT.md
 CLAUDE.md
 *.ts
 *.vsix
