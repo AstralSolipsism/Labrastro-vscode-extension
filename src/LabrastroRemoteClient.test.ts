@@ -226,7 +226,11 @@ function mockPeerFetch(artifactContent = Buffer.from("peer-binary"), serverVersi
         })
       }
       return new Response(new Uint8Array(artifactContent), {
-        headers: { "Content-Type": "application/octet-stream", ETag: artifactEtag },
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "Content-Length": String(artifactContent.byteLength),
+          ETag: artifactEtag,
+        },
       })
     }
     if (url.endsWith("/remote/environment/manifest")) {
@@ -2441,6 +2445,197 @@ describe("LabrastroRemoteClient peer startup", () => {
     expect(childProcessMock.spawn.mock.calls[0][0]).toBe(binaryPath)
   })
 
+  it("reports peer preparation progress while downloading the peer artifact", async () => {
+    const storagePath = await makeTempStorage()
+    const artifactContent = Buffer.from("downloaded-peer-binary")
+    const context = makePeerContext(storagePath)
+    mockPeerFetch(artifactContent)
+    mockPeerSpawn()
+
+    const client = new LabrastroRemoteClient(context as never)
+    const states: unknown[] = []
+    client.setPeerPreparationListener((state) => states.push(state))
+
+    await client.environmentManifest()
+
+    expect(states).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        phase: "downloading",
+        totalBytes: artifactContent.byteLength,
+        progressPercent: 0,
+      }),
+      expect.objectContaining({
+        phase: "downloading",
+        loadedBytes: artifactContent.byteLength,
+        totalBytes: artifactContent.byteLength,
+        progressPercent: 100,
+      }),
+      expect.objectContaining({
+        phase: "installing",
+        progressPercent: 100,
+      }),
+      expect.objectContaining({
+        phase: "connected",
+        peerId: "peer-1",
+      }),
+    ]))
+  })
+
+  it("retries transient peer registration failures before surfacing startup failure", async () => {
+    const storagePath = await makeTempStorage()
+    const context = makePeerContext(storagePath)
+    mockPeerFetch()
+    let spawnCount = 0
+    childProcessMock.spawn.mockImplementation((_binaryPath: string, args: string[]) => {
+      spawnCount += 1
+      const peerProcess = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter
+        stderr: EventEmitter
+        exitCode: number | null
+        signalCode: NodeJS.Signals | null
+        kill: ReturnType<typeof vi.fn>
+      }
+      peerProcess.stdout = new EventEmitter()
+      peerProcess.stderr = new EventEmitter()
+      peerProcess.exitCode = null
+      peerProcess.signalCode = null
+      peerProcess.kill = vi.fn(() => {
+        peerProcess.exitCode = 0
+        peerProcess.emit("exit", 0, null)
+        return true
+      })
+      if (spawnCount === 1) {
+        queueMicrotask(() => {
+          peerProcess.stderr.emit(
+            "data",
+            Buffer.from('agent exited with error: register failed: Post "https://host/remote/register": context deadline exceeded')
+          )
+          peerProcess.exitCode = 1
+          peerProcess.emit("exit", 1, null)
+        })
+        return peerProcess
+      }
+
+      const peerInfoIndex = args.indexOf("--peer-info-file")
+      const peerInfoPath = String(args[peerInfoIndex + 1])
+      fsSync.writeFileSync(
+        peerInfoPath,
+        JSON.stringify({ peer_id: "peer-after-retry", peer_token: "peer-token-after-retry" }),
+        "utf-8"
+      )
+      return peerProcess
+    })
+
+    const client = new LabrastroRemoteClient(context as never)
+    const states: unknown[] = []
+    client.setPeerPreparationListener((state) => states.push(state))
+
+    await client.environmentManifest()
+
+    expect(childProcessMock.spawn).toHaveBeenCalledTimes(2)
+    expect(states).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        phase: "starting",
+        label: "正在重试",
+      }),
+      expect.objectContaining({
+        phase: "connected",
+        peerId: "peer-after-retry",
+      }),
+    ]))
+  })
+
+  it("retries aborted bootstrap token requests during peer startup", async () => {
+    const storagePath = await makeTempStorage()
+    const context = makePeerContext(storagePath)
+    const target = peerTarget()
+    const artifactContent = Buffer.from("peer-binary")
+    const artifactEtag = strongTestEtag(artifactContent)
+    let bootstrapCount = 0
+    const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith("/remote/auth/refresh")) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            access_token: "access-token-1",
+            access_expires_at: Math.floor(Date.now() / 1000) + 3600,
+            refresh_token: "refresh-token-2",
+            user: { id: "usr-1", username: "admin", role: "superadmin" },
+            device: { id: "dev-1" },
+          }),
+          { headers: { "Content-Type": "application/json" } }
+        )
+      }
+      if (url.endsWith("/remote/auth/bootstrap-token")) {
+        bootstrapCount += 1
+        if (bootstrapCount === 1) {
+          throw Object.assign(new Error("This operation was aborted"), { code: "AbortError" })
+        }
+        return new Response(
+          JSON.stringify({ ok: true, bootstrap_token: "bootstrap-token" }),
+          { headers: { "Content-Type": "application/json" } }
+        )
+      }
+      if (url.endsWith("/remote/features")) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            api_version: 1,
+            server_version: "0.2.9",
+            features: {
+              sessions: true,
+              session_runs: true,
+              fresh_session_without_session_hint: true,
+              peer_token_heartbeat_refresh: true,
+            },
+          }),
+          { headers: { "Content-Type": "application/json" } }
+        )
+      }
+      if (url.endsWith(`/remote/artifacts/${target.os}/${target.arch}/rcoder-peer`)) {
+        if (headerValue(init?.headers, "If-None-Match") === artifactEtag) {
+          return new Response(null, { status: 304, headers: { ETag: artifactEtag } })
+        }
+        return new Response(new Uint8Array(artifactContent), {
+          headers: {
+            "Content-Type": "application/octet-stream",
+            "Content-Length": String(artifactContent.byteLength),
+            ETag: artifactEtag,
+          },
+        })
+      }
+      if (url.endsWith("/remote/environment/manifest")) {
+        return new Response(
+          JSON.stringify({ ok: true, environment_requirements: [], mcp_servers: [] }),
+          { headers: { "Content-Type": "application/json" } }
+        )
+      }
+      return new Response(JSON.stringify({ error: "unexpected_url", url }), { status: 500 })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    mockPeerSpawn()
+
+    const client = new LabrastroRemoteClient(context as never)
+    const states: unknown[] = []
+    client.setPeerPreparationListener((state) => states.push(state))
+
+    await client.environmentManifest()
+
+    expect(bootstrapCount).toBe(2)
+    expect(childProcessMock.spawn).toHaveBeenCalledTimes(1)
+    expect(states).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        phase: "starting",
+        label: "正在重试",
+      }),
+      expect.objectContaining({
+        phase: "connected",
+        peerId: "peer-1",
+      }),
+    ]))
+  })
+
   it("reports peer stderr when registration exits before writing peer info", async () => {
     const storagePath = await makeTempStorage()
     const context = makePeerContext(storagePath)
@@ -2487,6 +2682,47 @@ describe("LabrastroRemoteClient peer startup", () => {
     expect(message).toContain("invalid_peer_runtime_context")
     expect(message).toContain("host_info_min.shell")
     expect(message).not.toContain("ENOENT")
+  })
+
+  it("does not expose peer-info ENOENT when peer exits before registration output", async () => {
+    const storagePath = await makeTempStorage()
+    const context = makePeerContext(storagePath)
+    mockPeerFetch()
+    childProcessMock.spawn.mockImplementation(() => {
+      const peerProcess = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter
+        stderr: EventEmitter
+        exitCode: number | null
+        signalCode: NodeJS.Signals | null
+        kill: ReturnType<typeof vi.fn>
+      }
+      peerProcess.stdout = new EventEmitter()
+      peerProcess.stderr = new EventEmitter()
+      peerProcess.exitCode = null
+      peerProcess.signalCode = null
+      peerProcess.kill = vi.fn(() => {
+        peerProcess.exitCode = 0
+        peerProcess.emit("exit", 0, null)
+        return true
+      })
+      queueMicrotask(() => {
+        peerProcess.exitCode = 1
+        peerProcess.emit("exit", 1, null)
+      })
+      return peerProcess
+    })
+
+    const client = new LabrastroRemoteClient(context as never)
+    let message = ""
+    try {
+      await client.environmentManifest()
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error)
+    }
+
+    expect(message).toContain("peer 注册失败")
+    expect(message).not.toContain("ENOENT")
+    expect(message).not.toContain("peer-info.json")
   })
 
   it("reports local peer binary file locks as a local remediation error", async () => {

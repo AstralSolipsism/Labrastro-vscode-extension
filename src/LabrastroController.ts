@@ -6,6 +6,7 @@ import {
   BackendFeatures,
   LabrastroRemoteClient,
   type ConnectionState,
+  type PeerPreparationState,
 } from "./LabrastroRemoteClient"
 import { classifyRemoteError, isRemoteError } from "./remote-errors"
 import { WebviewBus, type PostMessage, type WebviewTarget } from "./WebviewBus"
@@ -129,6 +130,7 @@ export class LabrastroController implements vscode.Disposable {
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.client = new LabrastroRemoteClient(context)
+    this.client.setPeerPreparationListener((state) => this.applyPeerPreparationState(state))
     this.approvalDocuments = new ApprovalDocumentProvider()
     this.adminCoordinator = new AdminCoordinator({
       client: this.client,
@@ -149,6 +151,7 @@ export class LabrastroController implements vscode.Disposable {
       refreshBackendFeatures: this.refreshBackendFeatures.bind(this),
       refreshCapabilityState: this.refreshCapabilityState.bind(this),
       refreshEnvironmentManifest: this.refreshEnvironmentManifest.bind(this),
+      postSessionList: (post) => this.sessionCoordinator.postSessionList(post),
       broadcastState: this.broadcastWebviewMessage.bind(this),
       runAdminAction: this.runAdminAction.bind(this),
       openFileTarget: this.openFileTarget.bind(this),
@@ -628,6 +631,18 @@ export class LabrastroController implements vscode.Disposable {
   private setConnectionState(post: PostMessage, state: ConnectionState): void {
     const slice = this.remoteState.setReady("connection", { ...state })
     this.emitRemoteStatePatch(post, "connection", slice)
+  }
+
+  private applyPeerPreparationState(state: PeerPreparationState): void {
+    const current = this.remoteState.slice("connection").data || this.client.startupConnectionState()
+    const next = {
+      ...current,
+      peerConnected: state.phase === "connected",
+      peerId: state.peerId,
+      peerPreparation: state,
+    }
+    const slice = this.remoteState.setReady("connection", next)
+    this.emitRemoteStatePatch(undefined, "connection", slice)
   }
 
   private async broadcastConnectionState(): Promise<void> {

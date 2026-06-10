@@ -41,6 +41,27 @@ export type JsonObject = Record<string, unknown>
 export const SESSION_RUN_EVENTS_TIMEOUT_SEC = 10
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
 const LEGACY_AUTH_SESSION_KEY = "labrastro.authSession"
+const PEER_INFO_WAIT_TIMEOUT_MS = 35_000
+const PEER_INFO_POLL_INTERVAL_MS = 200
+const PEER_STARTUP_MAX_ATTEMPTS = 3
+const PEER_STARTUP_RETRY_DELAYS_MS = [500, 1500]
+const PEER_STARTUP_RETRYABLE_FRAGMENTS = [
+  "context deadline exceeded",
+  "client.timeout",
+  "this operation was aborted",
+  "timeout",
+  "timed out",
+  "econnreset",
+  "etimedout",
+  "econnrefused",
+  "socket hang up",
+  "http 408",
+  "http 429",
+  "http 500",
+  "http 502",
+  "http 503",
+  "http 504",
+]
 
 export interface BackendFeatures {
   ok: boolean
@@ -95,10 +116,31 @@ export interface ConnectionState {
   securityWarnings?: string[]
   peerConnected: boolean
   peerId?: string
+  peerPreparation: PeerPreparationState
   status: "checking" | "login-required" | "ready" | "error"
   message?: string
   hostUrlSaveRequested?: string
   hostUrlSaveApplied?: boolean
+}
+
+export type PeerPreparationPhase =
+  | "idle"
+  | "checking"
+  | "downloading"
+  | "installing"
+  | "starting"
+  | "connected"
+  | "error"
+
+export interface PeerPreparationState {
+  phase: PeerPreparationPhase
+  label: string
+  detail?: string
+  loadedBytes?: number
+  totalBytes?: number
+  progressPercent?: number
+  peerId?: string
+  updatedAt: string
 }
 
 interface StoredAuthSession {
@@ -121,11 +163,23 @@ interface PeerStartupOutput {
   stderr: string[]
 }
 
+class PeerStartupError extends Error {
+  constructor(
+    message: string,
+    public readonly retryable: boolean
+  ) {
+    super(message)
+    this.name = "PeerStartupError"
+  }
+}
+
 export class LabrastroRemoteClient {
   private peerProcess: ChildProcessWithoutNullStreams | undefined
   private peerInfo: PeerInfo | undefined
   private peerStartupPromise: Promise<PeerInfo> | undefined
   private peerStartupGeneration = 0
+  private peerPreparation: PeerPreparationState = idlePeerPreparationState()
+  private peerPreparationListener: ((state: PeerPreparationState) => void) | undefined
   private lastPeerStopCaller: string | undefined
   private readonly peerStopCallers = new WeakMap<ChildProcessWithoutNullStreams, string>()
   private readonly peerDiagnosticsLogger: PeerDiagnosticsLogger
@@ -135,6 +189,10 @@ export class LabrastroRemoteClient {
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.peerDiagnosticsLogger = new PeerDiagnosticsLogger(context)
+  }
+
+  setPeerPreparationListener(listener: ((state: PeerPreparationState) => void) | undefined): void {
+    this.peerPreparationListener = listener
   }
 
   get hostUrl(): string {
@@ -149,6 +207,7 @@ export class LabrastroRemoteClient {
       hostUrlSource: host.source,
       peerConnected: this.isPeerRunning(),
       peerId: this.peerInfo?.peer_id,
+      peerPreparation: this.peerPreparationSnapshot(),
     })
   }
 
@@ -1010,6 +1069,15 @@ export class LabrastroRemoteClient {
     this.lastPeerStopCaller = caller
     this.peerStartupGeneration += 1
     this.peerStartupPromise = undefined
+    this.updatePeerPreparation({
+      phase: "idle",
+      label: "未触发",
+      detail: "peer 已停止；需要会话、环境依赖或本机工作区任务时会自动准备。",
+      loadedBytes: undefined,
+      totalBytes: undefined,
+      progressPercent: undefined,
+      peerId: undefined,
+    })
     const peer = this.peerInfo
     const peerProcess = this.peerProcess
     const pid = peerProcess?.pid
@@ -1219,7 +1287,7 @@ export class LabrastroRemoteClient {
 
   private connectionStatePayload(
     host: HostUrlState,
-    patch: Omit<Partial<ConnectionState>, "hostUrl" | "hostUrlConfigured" | "hostUrlSource" | "peerConnected" | "peerId">
+    patch: Omit<Partial<ConnectionState>, "hostUrl" | "hostUrlConfigured" | "hostUrlSource" | "peerConnected" | "peerId" | "peerPreparation">
   ): ConnectionState {
     return {
       hostUrl: host.url,
@@ -1230,9 +1298,48 @@ export class LabrastroRemoteClient {
       authenticated: false,
       peerConnected: this.isPeerRunning(),
       peerId: this.peerInfo?.peer_id,
+      peerPreparation: this.peerPreparationSnapshot(),
       status: "login-required",
       ...patch,
     }
+  }
+
+  private peerPreparationSnapshot(): PeerPreparationState {
+    if (this.isPeerRunning()) {
+      return {
+        phase: "connected",
+        label: "已就绪",
+        detail: "peer 已连接，可以处理依赖它的本机工作区请求。",
+        peerId: this.peerInfo?.peer_id,
+        progressPercent: 100,
+        updatedAt: new Date().toISOString(),
+      }
+    }
+    return { ...this.peerPreparation }
+  }
+
+  private updatePeerPreparation(
+    patch: Omit<Partial<PeerPreparationState>, "updatedAt">
+  ): PeerPreparationState {
+    const next: PeerPreparationState = {
+      ...this.peerPreparation,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    }
+    if (
+      next.phase === this.peerPreparation.phase &&
+      next.label === this.peerPreparation.label &&
+      next.detail === this.peerPreparation.detail &&
+      next.loadedBytes === this.peerPreparation.loadedBytes &&
+      next.totalBytes === this.peerPreparation.totalBytes &&
+      next.progressPercent === this.peerPreparation.progressPercent &&
+      next.peerId === this.peerPreparation.peerId
+    ) {
+      return this.peerPreparation
+    }
+    this.peerPreparation = next
+    this.peerPreparationListener?.({ ...next })
+    return next
   }
 
   private async postPeerJson(
@@ -1356,6 +1463,15 @@ export class LabrastroRemoteClient {
 
   private async ensurePeer(): Promise<PeerInfo> {
     if (this.peerInfo && this.isPeerRunning()) {
+      this.updatePeerPreparation({
+        phase: "connected",
+        label: "已就绪",
+        detail: "peer 已连接，可以处理依赖它的本机工作区请求。",
+        loadedBytes: undefined,
+        totalBytes: undefined,
+        progressPercent: 100,
+        peerId: this.peerInfo.peer_id,
+      })
       return this.peerInfo
     }
     if (this.peerStartupPromise) {
@@ -1363,10 +1479,21 @@ export class LabrastroRemoteClient {
     }
 
     const generation = this.peerStartupGeneration
-    const startup = this.startPeer(generation)
+    const startup = this.startPeerWithRetries(generation)
     this.peerStartupPromise = startup
     try {
       return await startup
+    } catch (error) {
+      this.updatePeerPreparation({
+        phase: "error",
+        label: "准备失败",
+        detail: errorMessage(error),
+        loadedBytes: undefined,
+        totalBytes: undefined,
+        progressPercent: undefined,
+        peerId: undefined,
+      })
+      throw error
     } finally {
       if (this.peerStartupPromise === startup) {
         this.peerStartupPromise = undefined
@@ -1374,9 +1501,58 @@ export class LabrastroRemoteClient {
     }
   }
 
+  private async startPeerWithRetries(generation: number): Promise<PeerInfo> {
+    let lastError: unknown
+    for (let attempt = 1; attempt <= PEER_STARTUP_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        return await this.startPeer(generation)
+      } catch (error) {
+        lastError = error
+        if (
+          this.peerStartupGeneration !== generation ||
+          attempt >= PEER_STARTUP_MAX_ATTEMPTS ||
+          !isRetryablePeerStartupError(error)
+        ) {
+          throw error
+        }
+        const nextAttempt = attempt + 1
+        this.updatePeerPreparation({
+          phase: "starting",
+          label: "正在重试",
+          detail: `peer 注册暂时失败，正在自动重试（${nextAttempt}/${PEER_STARTUP_MAX_ATTEMPTS}）。`,
+          loadedBytes: undefined,
+          totalBytes: undefined,
+          progressPercent: undefined,
+          peerId: undefined,
+        })
+        await this.peerDiagnosticsLogger.log("lifecycle", "peer.start.retry", "Retrying local peer startup after a transient registration failure.", {
+          attempt,
+          nextAttempt,
+          maxAttempts: PEER_STARTUP_MAX_ATTEMPTS,
+          error: errorDiagnostics(error),
+        }, "warn")
+        await delay(
+          PEER_STARTUP_RETRY_DELAYS_MS[attempt - 1] ??
+          PEER_STARTUP_RETRY_DELAYS_MS[PEER_STARTUP_RETRY_DELAYS_MS.length - 1] ??
+          1500
+        )
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(String(lastError))
+  }
+
   private async startPeer(generation: number): Promise<PeerInfo> {
     await fs.mkdir(this.context.globalStorageUri.fsPath, { recursive: true })
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd()
+    this.updatePeerPreparation({
+      phase: "checking",
+      label: "正在检查",
+      detail: "正在获取 peer 启动令牌。",
+      loadedBytes: undefined,
+      totalBytes: undefined,
+      progressPercent: undefined,
+      peerId: undefined,
+    })
     await this.peerDiagnosticsLogger.log("lifecycle", "peer.start.request", "Starting local peer process.", {
       host: this.hostUrl,
       workspaceRoot,
@@ -1389,6 +1565,11 @@ export class LabrastroRemoteClient {
     if (this.peerStartupGeneration !== generation) {
       throw new Error("Peer startup was cancelled.")
     }
+    this.updatePeerPreparation({
+      phase: "checking",
+      label: "正在检查",
+      detail: "正在检查 peer 二进制。",
+    })
     const binaryPath = await this.ensurePeerBinary()
     const peerInfoPath = path.join(this.context.globalStorageUri.fsPath, "peer-info.json")
     await fs.rm(peerInfoPath, { force: true })
@@ -1397,6 +1578,14 @@ export class LabrastroRemoteClient {
       throw new Error("Peer startup was cancelled.")
     }
 
+    this.updatePeerPreparation({
+      phase: "starting",
+      label: "正在启动",
+      detail: "正在启动 peer 并等待注册。",
+      loadedBytes: undefined,
+      totalBytes: undefined,
+      progressPercent: undefined,
+    })
     const peerProcess = spawn(
       binaryPath,
       [
@@ -1467,6 +1656,15 @@ export class LabrastroRemoteClient {
       if (this.peerProcess === peerProcess) {
         this.peerProcess = undefined
         this.peerInfo = undefined
+        this.updatePeerPreparation({
+          phase: stopCaller ? "idle" : "error",
+          label: stopCaller ? "未触发" : "准备失败",
+          detail: stopCaller ? "peer 已停止。" : "peer 进程已退出。",
+          loadedBytes: undefined,
+          totalBytes: undefined,
+          progressPercent: undefined,
+          peerId: undefined,
+        })
       }
     })
 
@@ -1483,6 +1681,14 @@ export class LabrastroRemoteClient {
         signalCode: peerProcess.signalCode,
         error: errorDiagnostics(error),
       }, "error")
+      if (this.peerProcess === peerProcess) {
+        this.peerProcess = undefined
+        this.peerInfo = undefined
+      }
+      if (!peerProcessExited(peerProcess)) {
+        this.peerStopCallers.set(peerProcess, "startup_failure")
+        peerProcess.kill()
+      }
       throw error
     }
     if (this.peerStartupGeneration !== generation) {
@@ -1492,6 +1698,15 @@ export class LabrastroRemoteClient {
       throw new Error("Peer startup was cancelled.")
     }
     this.peerInfo = peerInfo
+    this.updatePeerPreparation({
+      phase: "connected",
+      label: "已就绪",
+      detail: "peer 已连接，可以处理依赖它的本机工作区请求。",
+      loadedBytes: undefined,
+      totalBytes: undefined,
+      progressPercent: 100,
+      peerId: peerInfo.peer_id,
+    })
     await this.peerDiagnosticsLogger.log("lifecycle", "peer.registered", "Local peer registered with host.", {
       peerId: peerInfo.peer_id,
       heartbeatIntervalMs: peerInfo.heartbeat_interval_ms,
@@ -1553,6 +1768,14 @@ export class LabrastroRemoteClient {
     const artifactPath = `/remote/artifacts/${platform.os}/${platform.arch}/rcoder-peer`
     let existingEtag: string | undefined
     let hasExistingBinary = false
+    this.updatePeerPreparation({
+      phase: "checking",
+      label: "正在检查",
+      detail: `正在检查 peer 二进制缓存（${platform.os}/${platform.arch}）。`,
+      loadedBytes: undefined,
+      totalBytes: undefined,
+      progressPercent: undefined,
+    })
     try {
       await fs.mkdir(path.dirname(binaryPath), { recursive: true })
       if (await isUsableFile(binaryPath)) {
@@ -1565,11 +1788,36 @@ export class LabrastroRemoteClient {
       throw peerBinaryAccessError(error, binaryPath)
     }
 
-    const artifact = await this.requestArtifactBuffer(artifactPath, existingEtag)
+    this.updatePeerPreparation({
+      phase: "downloading",
+      label: "正在下载",
+      detail: hasExistingBinary ? "正在校验 peer 二进制版本。" : "正在下载 peer 二进制。",
+      loadedBytes: 0,
+      totalBytes: undefined,
+      progressPercent: undefined,
+    })
+    const artifact = await this.requestArtifactBuffer(artifactPath, existingEtag, (progress) => {
+      this.updatePeerPreparation({
+        phase: "downloading",
+        label: "正在下载",
+        detail: hasExistingBinary ? "正在校验 peer 二进制版本。" : "正在下载 peer 二进制。",
+        loadedBytes: progress.loadedBytes,
+        totalBytes: progress.totalBytes,
+        progressPercent: progress.progressPercent,
+      })
+    })
     if (artifact.notModified) {
       try {
         if (await isUsableFile(binaryPath)) {
           await this.ensurePeerBinaryExecutable(binaryPath)
+          this.updatePeerPreparation({
+            phase: "starting",
+            label: "正在启动",
+            detail: "peer 二进制缓存可用，准备启动。",
+            loadedBytes: undefined,
+            totalBytes: undefined,
+            progressPercent: 100,
+          })
           return binaryPath
         }
       } catch (error) {
@@ -1578,7 +1826,16 @@ export class LabrastroRemoteClient {
     }
 
     const content = artifact.notModified
-      ? (await this.requestArtifactBuffer(artifactPath)).content
+      ? (await this.requestArtifactBuffer(artifactPath, undefined, (progress) => {
+          this.updatePeerPreparation({
+            phase: "downloading",
+            label: "正在下载",
+            detail: "正在重新下载 peer 二进制。",
+            loadedBytes: progress.loadedBytes,
+            totalBytes: progress.totalBytes,
+            progressPercent: progress.progressPercent,
+          })
+        })).content
       : artifact.content
     if (!content) {
       throw new Error("Peer artifact response did not include binary content.")
@@ -1586,12 +1843,28 @@ export class LabrastroRemoteClient {
     if (hasExistingBinary && existingEtag && bufferStrongEtag(content) === existingEtag) {
       try {
         await this.ensurePeerBinaryExecutable(binaryPath)
+        this.updatePeerPreparation({
+          phase: "starting",
+          label: "正在启动",
+          detail: "peer 二进制已是最新，准备启动。",
+          loadedBytes: undefined,
+          totalBytes: undefined,
+          progressPercent: 100,
+        })
         return binaryPath
       } catch (error) {
         throw peerBinaryAccessError(error, binaryPath)
       }
     }
     try {
+      this.updatePeerPreparation({
+        phase: "installing",
+        label: "正在安装",
+        detail: "正在写入 peer 二进制。",
+        loadedBytes: content.byteLength,
+        totalBytes: content.byteLength,
+        progressPercent: 100,
+      })
       return await this.installPeerBinary(binaryPath, content, hasExistingBinary)
     } catch (error) {
       throw peerBinaryAccessError(error, binaryPath)
@@ -1708,7 +1981,8 @@ export class LabrastroRemoteClient {
 
   private async requestArtifactBuffer(
     pathname: string,
-    ifNoneMatch?: string
+    ifNoneMatch?: string,
+    onProgress?: (progress: { loadedBytes: number; totalBytes?: number; progressPercent?: number }) => void
   ): Promise<{ content?: Buffer; notModified: boolean }> {
     const startedAt = Date.now()
     let status: number | undefined
@@ -1731,7 +2005,8 @@ export class LabrastroRemoteClient {
       if (!response.ok) {
         throw new Error(`${response.status} ${await response.text()}`)
       }
-      const buffer = Buffer.from(await response.arrayBuffer())
+      const totalBytes = responseContentLength(response)
+      const buffer = await responseBufferWithProgress(response, totalBytes, onProgress)
       await this.peerDiagnosticsLogger.log("http", "http.get.buffer.ok", "Extension HTTP request completed.", {
         method: "GET",
         pathname: diagnosticPathname(pathname),
@@ -2027,6 +2302,67 @@ function peerBinaryAccessError(error: unknown, binaryPath: string): Error {
   return error instanceof Error ? error : new Error(String(error))
 }
 
+function idlePeerPreparationState(): PeerPreparationState {
+  return {
+    phase: "idle",
+    label: "未触发",
+    detail: "需要会话、环境依赖或本机工作区任务时会自动准备。",
+    updatedAt: new Date().toISOString(),
+  }
+}
+
+function responseContentLength(response: Response): number | undefined {
+  const value = response.headers.get("content-length")
+  if (!value) return undefined
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
+}
+
+async function responseBufferWithProgress(
+  response: Response,
+  totalBytes: number | undefined,
+  onProgress?: (progress: { loadedBytes: number; totalBytes?: number; progressPercent?: number }) => void
+): Promise<Buffer> {
+  const progress = (loadedBytes: number, force = false) => {
+    if (!onProgress) return
+    const progressPercent = totalBytes ? Math.round((loadedBytes / totalBytes) * 100) : undefined
+    if (!force && progressPercent === undefined) return
+    onProgress({ loadedBytes, totalBytes, progressPercent })
+  }
+  if (!response.body) {
+    const buffer = Buffer.from(await response.arrayBuffer())
+    progress(buffer.byteLength, true)
+    return buffer
+  }
+
+  const reader = response.body.getReader()
+  const chunks: Buffer[] = []
+  let loadedBytes = 0
+  let lastProgressPercent = -1
+  let lastProgressAt = 0
+  progress(0, true)
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    if (!value) continue
+    const chunk = Buffer.from(value)
+    chunks.push(chunk)
+    loadedBytes += chunk.byteLength
+    const progressPercent = totalBytes ? Math.round((loadedBytes / totalBytes) * 100) : undefined
+    const now = Date.now()
+    if (
+      progressPercent !== lastProgressPercent ||
+      now - lastProgressAt > 250
+    ) {
+      onProgress?.({ loadedBytes, totalBytes, progressPercent })
+      lastProgressPercent = progressPercent ?? lastProgressPercent
+      lastProgressAt = now
+    }
+  }
+  progress(loadedBytes, true)
+  return Buffer.concat(chunks)
+}
+
 function safePathSegment(value: string, fallback: string): string {
   const sanitized = value
     .trim()
@@ -2075,7 +2411,7 @@ async function waitForPeerInfo(
   peerProcess: ChildProcessWithoutNullStreams,
   output: PeerStartupOutput
 ): Promise<PeerInfo> {
-  const deadline = Date.now() + 15000
+  const deadline = Date.now() + PEER_INFO_WAIT_TIMEOUT_MS
   let lastError: unknown
   while (Date.now() < deadline) {
     try {
@@ -2088,11 +2424,11 @@ async function waitForPeerInfo(
       lastError = error
     }
     if (peerProcessExited(peerProcess)) {
-      throw new Error(peerStartupFailureMessage(peerInfoPath, peerProcess, output, lastError, false))
+      throw peerStartupFailure(peerProcess, output, lastError, false)
     }
-    await new Promise((resolve) => setTimeout(resolve, 200))
+    await delay(PEER_INFO_POLL_INTERVAL_MS)
   }
-  throw new Error(peerStartupFailureMessage(peerInfoPath, peerProcess, output, lastError, true))
+  throw peerStartupFailure(peerProcess, output, lastError, true)
 }
 
 function peerProcessExited(peerProcess: ChildProcessWithoutNullStreams): boolean {
@@ -2106,22 +2442,35 @@ function appendPeerOutput(target: string[], text: string): void {
   }
 }
 
-function peerStartupFailureMessage(
-  peerInfoPath: string,
+function peerStartupFailure(
   peerProcess: ChildProcessWithoutNullStreams,
   output: PeerStartupOutput,
   lastError: unknown,
   timedOut: boolean
+): PeerStartupError {
+  return new PeerStartupError(
+    peerStartupFailureMessage(peerProcess, output, timedOut),
+    isRetryablePeerStartupFailure(output, lastError, timedOut)
+  )
+}
+
+function peerStartupFailureMessage(
+  peerProcess: ChildProcessWithoutNullStreams,
+  output: PeerStartupOutput,
+  timedOut: boolean
 ): string {
+  const hasPeerOutput = output.stderr.length > 0 || output.stdout.length > 0
+  if (!hasPeerOutput) {
+    return timedOut
+      ? "peer 注册超时：未能在限定时间内完成注册，系统会自动重试。"
+      : "peer 注册失败：peer 进程退出但未完成注册。"
+  }
   const reason = timedOut
     ? "Peer did not report registration info in time"
     : `Peer exited before reporting registration info (exit=${peerProcess.exitCode ?? "null"}, signal=${peerProcess.signalCode ?? "null"})`
-  const hasPeerOutput = output.stderr.length > 0 || output.stdout.length > 0
   const details = [
     peerOutputDetail("stderr", output.stderr),
     peerOutputDetail("stdout", output.stdout),
-    lastError && !hasPeerOutput ? `last file read error: ${errorMessage(lastError)}` : "",
-    `peer info path: ${peerInfoPath}`,
   ].filter(Boolean)
   return `${reason}. ${details.join(" ")}`
 }
@@ -2129,4 +2478,37 @@ function peerStartupFailureMessage(
 function peerOutputDetail(label: string, chunks: string[]): string {
   const text = chunks.join("").trim()
   return text ? `${label}: ${text}` : ""
+}
+
+function isRetryablePeerStartupError(error: unknown): boolean {
+  if (error instanceof PeerStartupError) {
+    return error.retryable
+  }
+  if (classifyRemoteError(error) === "transient_network") {
+    return true
+  }
+  return isRetryablePeerStartupText(errorMessage(error))
+}
+
+function isRetryablePeerStartupFailure(
+  output: PeerStartupOutput,
+  lastError: unknown,
+  timedOut: boolean
+): boolean {
+  if (timedOut) return true
+  const outputText = `${output.stderr.join("")}\n${output.stdout.join("")}`
+  if (outputText.trim()) {
+    return isRetryablePeerStartupText(outputText)
+  }
+  const code = errorCode(lastError)
+  return !code || code === "ENOENT"
+}
+
+function isRetryablePeerStartupText(text: string): boolean {
+  const lower = text.toLowerCase()
+  return PEER_STARTUP_RETRYABLE_FRAGMENTS.some((fragment) => lower.includes(fragment))
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }

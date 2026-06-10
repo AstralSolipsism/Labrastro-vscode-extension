@@ -61,6 +61,7 @@ export interface AdminCoordinatorOptions {
   refreshBackendFeatures: (post?: PostMessage) => Promise<void>
   refreshCapabilityState: (post: PostMessage) => Promise<void>
   refreshEnvironmentManifest: (post: PostMessage) => Promise<void>
+  postSessionList: (post: PostMessage) => Promise<void>
   broadcastState: (payload: Record<string, unknown>) => void
   runAdminAction: (
     post: PostMessage,
@@ -111,6 +112,11 @@ export class AdminCoordinator {
           })
           post({ type: "connection.result", payload: state })
           this.options.setConnectionState(post, state)
+          if (state.status === "ready" && state.authenticated === true) {
+            void this.options.postSessionList(post).catch((error) => {
+              post({ type: "session.error", message: errorMessage(error) })
+            })
+          }
           await this.refreshModularAdminState(post)
           await this.options.postModelCapabilitiesState(post)
           await this.options.refreshBackendFeatures(post)

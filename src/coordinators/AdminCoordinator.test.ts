@@ -112,6 +112,7 @@ function coordinator() {
     refreshBackendFeatures: vi.fn(),
     refreshCapabilityState: vi.fn(),
     refreshEnvironmentManifest: vi.fn(),
+    postSessionList: vi.fn(async () => undefined),
     broadcastState: vi.fn(),
     runAdminAction: vi.fn(async (_post, action) => {
       await action()
@@ -469,6 +470,7 @@ describe("AdminCoordinator", () => {
     expect(options.postModelProfilesState).toHaveBeenCalledWith(post)
     expect(options.postChatConfigState).toHaveBeenCalledWith(post)
     expect(options.postGithubState).toHaveBeenCalledWith(post)
+    expect(options.postSessionList).toHaveBeenCalledWith(post)
     expect(options.refreshBackendFeatures).toHaveBeenCalledWith(post)
     expect(options.refreshCapabilityState).toHaveBeenCalledWith(post)
     expect(options.refreshEnvironmentManifest).toHaveBeenCalledWith(post)
@@ -508,6 +510,7 @@ describe("AdminCoordinator", () => {
     expect(options.refreshCapabilityState).not.toHaveBeenCalled()
     expect(options.refreshEnvironmentManifest).not.toHaveBeenCalled()
     expect(options.refreshBackendFeatures).not.toHaveBeenCalled()
+    expect(options.postSessionList).not.toHaveBeenCalled()
     expect(options.client.modelCapabilitiesStatus).not.toHaveBeenCalled()
     expect(options.setConnectionState).toHaveBeenCalledWith(post, {
       status: "error",

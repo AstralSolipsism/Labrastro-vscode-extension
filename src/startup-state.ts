@@ -6,6 +6,7 @@ export interface StartupConnectionInput {
   hostUrlSource: ConnectionState["hostUrlSource"]
   peerConnected: boolean
   peerId?: string
+  peerPreparation: ConnectionState["peerPreparation"]
 }
 
 export function buildStartupConnectionState(input: StartupConnectionInput): ConnectionState {
@@ -17,6 +18,7 @@ export function buildStartupConnectionState(input: StartupConnectionInput): Conn
     authenticated: false,
     peerConnected: input.peerConnected,
     peerId: input.peerId,
+    peerPreparation: input.peerPreparation,
     status: "checking",
     message: "正在检查 Labrastro 连接状态。",
   }
