@@ -3,7 +3,14 @@ import { t } from "../../i18n"
 import { DialogSurface } from "../../components/common/interaction"
 import { RefreshButton } from "../../components/common/RefreshButton"
 import { StatusBadge } from "../components/StatusBadge"
-import { SettingsActionRail, SettingsPage, SettingsPageHeader } from "../components/SettingsLayout"
+import {
+  SettingsActionRail,
+  SettingsAuthRequiredState,
+  SettingsInlineRevalidating,
+  SettingsLoadingState,
+  SettingsPage,
+  SettingsPageHeader,
+} from "../components/SettingsLayout"
 import { prioritizeProviderModelEntries } from "../providerModels"
 import type { SettingsController } from "../useSettingsController"
 import {
@@ -386,6 +393,15 @@ export const ProvidersTab: Component<TabProps> = (props) => {
           </RefreshButton>
         </SettingsActionRail>
       </SettingsPageHeader>
+
+      <Show
+        when={!props.controller.pageInitialLoading("providers")}
+        fallback={<SettingsLoadingState title="正在加载服务商" detail={props.controller.pageLoadingMessage("providers") || "正在加载服务商、模型配置"} />}
+      >
+        <Show when={adminUsable()} fallback={<SettingsAuthRequiredState />}>
+          <Show when={props.controller.pageRevalidating("providers")}>
+            <SettingsInlineRevalidating message={props.controller.pageLoadingMessage("providers") || "正在刷新服务商"} />
+          </Show>
 
       <Show when={providerErrorMessage()}>
         <div class="settings-error">
@@ -939,6 +955,8 @@ export const ProvidersTab: Component<TabProps> = (props) => {
             </button>
           </SettingsActionRail>
         </DialogSurface>
+      </Show>
+        </Show>
       </Show>
     </SettingsPage>
   )

@@ -24,6 +24,8 @@ import {
   settingsServerSettingsReadIsBusy,
   settingsServerSettingsSaveIsBusy,
   settingsServerSettingsWriteIsBusy,
+  SETTINGS_EXPLICIT_HEAVY_RESOURCES,
+  SETTINGS_IDLE_PREWARM_RESOURCES,
   type SettingsBackgroundRefreshes,
 } from "./settingsOperations"
 
@@ -77,11 +79,30 @@ describe("settings operations", () => {
     ])
   })
 
-  it("maps capabilities refresh to server settings, capabilities, and environment manifest", () => {
+  it("maps capabilities refresh to first-paint resources only", () => {
     expect(settingsPageOperationKeys("capabilities")).toEqual([
       "serverSettings",
       "capabilities",
+    ])
+  })
+
+  it("keeps settings idle prewarm light and explicit heavy resources separate", () => {
+    expect(SETTINGS_IDLE_PREWARM_RESOURCES).toEqual([
+      "serverSettings",
+      "chatConfig",
+      "modelProfiles",
+      "providers",
+      "capabilities",
+    ])
+    expect(SETTINGS_IDLE_PREWARM_RESOURCES).not.toContain("environment" + "Manifest")
+    expect(SETTINGS_IDLE_PREWARM_RESOURCES).not.toContain("provider" + "Models")
+    expect(SETTINGS_IDLE_PREWARM_RESOURCES).not.toContain("toolDiagnostics")
+    expect(SETTINGS_IDLE_PREWARM_RESOURCES).not.toContain("authAudit")
+    expect(SETTINGS_EXPLICIT_HEAVY_RESOURCES).toEqual([
       "environmentManifest",
+      "toolDiagnostics",
+      "authAudit",
+      "providerModels",
     ])
   })
 

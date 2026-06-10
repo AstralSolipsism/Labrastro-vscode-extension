@@ -77,6 +77,21 @@ describe("settings architecture", () => {
     expect(offenders).toEqual([])
   })
 
+  it("keeps capability package terminology out of user-visible copy", () => {
+    const files = [
+      join(process.cwd(), "webview-ui", "src", "i18n", "zh-CN.ts"),
+      join(process.cwd(), "webview-ui", "src", "i18n", "en.ts"),
+      join(tabsDir, "CapabilitiesTab.tsx"),
+      join(tabsDir, "AgentConfigTab.tsx"),
+      join(process.cwd(), "webview-ui", "src", "components", "chat", "SessionTurn.tsx"),
+      join(process.cwd(), "webview-ui", "src", "components", "chat", "approval-details.ts"),
+      join(process.cwd(), "webview-ui", "src", "components", "chat", "transcript-presentation.ts"),
+    ]
+    const visibleSource = files.map((file) => readFileSync(file, "utf8")).join("\n")
+
+    expect(visibleSource).not.toMatch(/能力包|Capability Package|capability package/)
+  })
+
   it("keeps server settings saves behind the shared busy guard", () => {
     const saveKeys = [
       "conversationSave",
@@ -182,7 +197,7 @@ describe("settings architecture", () => {
     expect(bootstrapStart).toBeGreaterThanOrEqual(0)
     expect(bootstrapEnd).toBeGreaterThan(bootstrapStart)
     expect(bootstrapBlock).toContain('refreshOperation("capabilities", { mode: "background" })')
-    expect(bootstrapBlock).toContain('refreshOperation("environmentManifest", { mode: "background" })')
+    expect(bootstrapBlock).not.toContain('refreshOperation("environmentManifest", { mode: "background" })')
     expect(bootstrapBlock).toContain('refreshOperation("serverSettings", { mode: "background" })')
     expect(bootstrapBlock).not.toContain('refreshOperation("capabilities")')
     expect(bootstrapBlock).not.toContain('refreshOperation("serverSettings")')
@@ -202,8 +217,22 @@ describe("settings architecture", () => {
     expect(agentConfigSource).toContain("<SettingsLoadingState")
     expect(capabilitiesSource).toContain('pageInitialLoading("capabilities")')
     expect(capabilitiesSource).toContain('pageRevalidating("capabilities")')
-    expect(capabilitiesSource).toContain("!capabilitiesInitialLoading() && !environmentAgentAvailable()")
+    expect(capabilitiesSource).toContain('section() === "dependencies" && !environmentAgentAvailable()')
     expect(capabilitiesSource).toContain("<SettingsLoadingState")
+  })
+
+  it("keeps capabilities first paint independent from dependency manifest loading", () => {
+    const source = readFileSync(controllerPath, "utf8")
+    const operationsSource = readFileSync(operationsPath, "utf8")
+    const capabilitiesSource = readFileSync(join(tabsDir, "CapabilitiesTab.tsx"), "utf8")
+
+    expect(operationsSource).toContain('capabilities: ["serverSettings", "capabilities"]')
+    expect(source).toContain("SETTINGS_IDLE_PREWARM_RESOURCES")
+    expect(source).toContain("const refreshCapabilityDependencies = () => refreshOperation(\"environmentManifest\")")
+    expect(source).toContain("const refreshCapabilities = () => {\n    refreshOperation(\"capabilities\")\n  }")
+    expect(capabilitiesSource).toContain('if (section() !== "dependencies") return')
+    expect(capabilitiesSource).toContain("refreshCapabilityDependencies?.()")
+    expect(capabilitiesSource).not.toContain("refreshCapabilitiesRequest()\n    refreshCapabilityDependencies")
   })
 
   it("keeps provider model refresh out of background initialization", () => {
@@ -216,6 +245,27 @@ describe("settings architecture", () => {
     expect(providerModelsCaseIndex).toBeGreaterThanOrEqual(0)
     expect(operationsSource).toContain('if (key === "providerModels" && mode === "background") return false')
     expect(source).toContain('if (mode === "background" || providerModelRefreshBusy()) return')
+  })
+
+  it("keeps high-traffic settings tabs behind explicit loading and auth states", () => {
+    const tabs = [
+      ["ProvidersTab.tsx", "providers"],
+      ["MemoryTab.tsx", "memory"],
+      ["ConversationTab.tsx", "conversation"],
+      ["ServerSettingsTab.tsx", "serverSettings"],
+      ["IntegrationsTab.tsx", "integrations"],
+      ["DiagnosticsTab.tsx", "diagnostics"],
+      ["SessionPolicyTab.tsx", "sessionPolicy"],
+      ["OtherTab.tsx", "other"],
+      ["AgentConfigTab.tsx", "agentConfig"],
+      ["CapabilitiesTab.tsx", "capabilities"],
+    ] as const
+
+    for (const [file, tab] of tabs) {
+      const source = readFileSync(join(tabsDir, file), "utf8")
+      expect(source).toContain(`pageInitialLoading("${tab}")`)
+      expect(source).toContain("SettingsAuthRequiredState")
+    }
   })
 
   it("keeps settings business refreshes off the legacy admin status channel", () => {
@@ -397,7 +447,7 @@ describe("settings architecture", () => {
     expect(capabilitiesSource).toContain("SettingsDetailGrid")
     expect(capabilitiesSource).toContain("SettingsDetailBlock")
     expect(capabilitiesSource).toContain("SettingsDetailSection")
-    expect(capabilitiesSource).toContain("在会话中生成能力包")
+    expect(capabilitiesSource).toContain("在会话中生成能力")
     expect(capabilitiesSource).not.toContain("currentDraftComponentCounts")
     expect(capabilitiesSource).not.toContain("renderComponentGroupsDetails(currentDraftComponentGroups())")
     expect(capabilitiesSource).not.toContain("capabilityPackage.draft.accept")
@@ -503,7 +553,7 @@ describe("settings architecture", () => {
 
     expect(agentConfigSource).toContain("const agentIds = () => Object.keys(agentDrafts())")
     expect(agentConfigSource).toContain('selectedAgentId() === "capability_packager"')
-    expect(agentConfigSource).toContain("能力包生成使用的模型")
+    expect(agentConfigSource).toContain("能力生成使用的模型")
     expect(agentConfigSource).toContain("const currentAgentReadOnly")
     expect(agentConfigSource).toContain("data-agent-config-readonly")
     expect(agentConfigSource).toContain("ReadonlyField")

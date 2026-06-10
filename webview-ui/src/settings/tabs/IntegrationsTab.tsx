@@ -1,6 +1,7 @@
 import { Component, Show, createEffect, createMemo, createSignal } from "solid-js"
 import { RefreshButton } from "../../components/common/RefreshButton"
 import { StatusBadge } from "../components/StatusBadge"
+import { SettingsAuthRequiredState, SettingsInlineRevalidating, SettingsLoadingState } from "../components/SettingsLayout"
 import type { SettingsController } from "../useSettingsController"
 
 interface TabProps { controller: SettingsController & Record<string, any> }
@@ -101,6 +102,15 @@ export const IntegrationsTab: Component<TabProps> = (props) => {
         </div>
       </div>
 
+      <Show
+        when={!props.controller.pageInitialLoading("integrations")}
+        fallback={<SettingsLoadingState title="正在加载集成设置" detail={props.controller.pageLoadingMessage("integrations") || "正在加载集成设置"} />}
+      >
+        <Show when={props.controller.adminUsable()} fallback={<SettingsAuthRequiredState />}>
+          <Show when={props.controller.pageRevalidating("integrations")}>
+            <SettingsInlineRevalidating message={props.controller.pageLoadingMessage("integrations") || "正在刷新集成设置"} />
+          </Show>
+
       <Show when={operations.error("integrationsSave") || operations.error("serverSettings")}>
         <div class="settings-error">{operations.error("integrationsSave") || operations.error("serverSettings")}</div>
       </Show>
@@ -160,6 +170,8 @@ export const IntegrationsTab: Component<TabProps> = (props) => {
           <pre class="settings-result">{JSON.stringify(githubStatus(), null, 2)}</pre>
         </details>
       </section>
+        </Show>
+      </Show>
     </div>
   )
 }

@@ -67,6 +67,15 @@ interface SettingsLoadingStateProps {
   detail?: string
 }
 
+interface SettingsAuthRequiredStateProps {
+  title?: string
+  detail?: string
+}
+
+interface SettingsInlineRevalidatingProps {
+  message: string
+}
+
 export const SettingsPage: ParentComponent<SettingsPageProps> = (props) => (
   <div
     class={`settings-page ${props.extraClass || ""}`.trim()}
@@ -91,6 +100,18 @@ export const SettingsLoadingState: Component<SettingsLoadingStateProps> = (props
     <strong>{props.title}</strong>
     {props.detail ? <small>{props.detail}</small> : null}
   </div>
+)
+
+export const SettingsAuthRequiredState: Component<SettingsAuthRequiredStateProps> = (props) => (
+  <div class="settings-empty-state settings-empty-state--auth">
+    <span class="codicon codicon-lock" aria-hidden="true" />
+    <strong>{props.title || "需要登录"}</strong>
+    <small>{props.detail || "登录状态不可用，请重新登录后继续管理设置。"}</small>
+  </div>
+)
+
+export const SettingsInlineRevalidating: Component<SettingsInlineRevalidatingProps> = (props) => (
+  <p class="settings-empty-note" role="status" aria-live="polite">{props.message}</p>
 )
 
 export const SettingsSubTabs: ParentComponent<{ ariaLabel: string }> = (props) => (

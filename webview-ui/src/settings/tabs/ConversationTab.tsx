@@ -3,6 +3,7 @@ import { t, locale, LOCALES, type Locale } from "../../i18n"
 import { RefreshButton } from "../../components/common/RefreshButton"
 import { ChoiceMultiSelect } from "../components/ChoiceMultiSelect"
 import { StatusBadge } from "../components/StatusBadge"
+import { SettingsAuthRequiredState, SettingsInlineRevalidating, SettingsLoadingState } from "../components/SettingsLayout"
 import type { SettingsController } from "../useSettingsController"
 
 interface TabProps { controller: SettingsController & Record<string, any> }
@@ -211,6 +212,15 @@ export const ConversationTab: Component<TabProps> = (props) => {
         </div>
       </div>
 
+      <Show
+        when={!props.controller.pageInitialLoading("conversation")}
+        fallback={<SettingsLoadingState title="正在加载对话设置" detail={props.controller.pageLoadingMessage("conversation") || "正在加载对话设置"} />}
+      >
+        <Show when={props.controller.adminUsable()} fallback={<SettingsAuthRequiredState />}>
+          <Show when={props.controller.pageRevalidating("conversation")}>
+            <SettingsInlineRevalidating message={props.controller.pageLoadingMessage("conversation") || "正在刷新对话设置"} />
+          </Show>
+
       <Show when={operations.error("conversationSave") || operations.error("serverSettings")}>
         <div class="settings-error">{operations.error("conversationSave") || operations.error("serverSettings")}</div>
       </Show>
@@ -351,6 +361,8 @@ export const ConversationTab: Component<TabProps> = (props) => {
           </label>
         </details>
       </section>
+        </Show>
+      </Show>
     </div>
   )
 }

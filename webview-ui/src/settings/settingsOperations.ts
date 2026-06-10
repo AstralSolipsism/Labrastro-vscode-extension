@@ -96,6 +96,21 @@ export const SETTINGS_CAPABILITY_INGEST_OPERATION_KEYS: SettingsOperationKey[] =
   "capabilityIngestStatus",
 ]
 
+export const SETTINGS_IDLE_PREWARM_RESOURCES: SettingsOperationKey[] = [
+  "serverSettings",
+  "chatConfig",
+  "modelProfiles",
+  "providers",
+  "capabilities",
+]
+
+export const SETTINGS_EXPLICIT_HEAVY_RESOURCES: SettingsOperationKey[] = [
+  "environmentManifest",
+  "toolDiagnostics",
+  "authAudit",
+  "providerModels",
+]
+
 export const SETTINGS_OPERATION_KEYS: SettingsOperationKey[] = [
   "providers",
   "modelProfiles",
@@ -145,7 +160,7 @@ export const SETTINGS_PAGE_RESOURCES: Record<SettingsTab, SettingsOperationKey[]
   accounts: ["accounts"],
   providers: ["providers", "modelProfiles"],
   memory: ["serverSettings"],
-  capabilities: ["serverSettings", "capabilities", "environmentManifest"],
+  capabilities: ["serverSettings", "capabilities"],
   conversation: ["chatConfig", "serverSettings", "reasoningDisplay", "chatSendDuringRunMode"],
   sessionPolicy: ["serverSettings"],
   serverSettings: ["serverSettings"],

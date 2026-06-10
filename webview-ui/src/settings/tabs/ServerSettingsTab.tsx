@@ -2,7 +2,14 @@ import { Component, Show, createEffect, createMemo, createSignal } from "solid-j
 import { t } from "../../i18n"
 import { RefreshButton } from "../../components/common/RefreshButton"
 import { StatusBadge } from "../components/StatusBadge"
-import { SettingsActionRail, SettingsPage, SettingsPageHeader } from "../components/SettingsLayout"
+import {
+  SettingsActionRail,
+  SettingsAuthRequiredState,
+  SettingsInlineRevalidating,
+  SettingsLoadingState,
+  SettingsPage,
+  SettingsPageHeader,
+} from "../components/SettingsLayout"
 import type { SettingsController } from "../useSettingsController"
 
 interface TabProps { controller: SettingsController & Record<string, any> }
@@ -128,6 +135,15 @@ export const ServerSettingsTab: Component<TabProps> = (props) => {
             </button>
           </SettingsActionRail>
         </SettingsPageHeader>
+
+        <Show
+          when={!props.controller.pageInitialLoading("serverSettings")}
+          fallback={<SettingsLoadingState title="正在加载服务端设置" detail={props.controller.pageLoadingMessage("serverSettings") || "正在加载服务端设置"} />}
+        >
+          <Show when={props.controller.adminUsable()} fallback={<SettingsAuthRequiredState />}>
+            <Show when={props.controller.pageRevalidating("serverSettings")}>
+              <SettingsInlineRevalidating message={props.controller.pageLoadingMessage("serverSettings") || "正在刷新服务端设置"} />
+            </Show>
 
         <Show when={operations.error("serverSettingsSave") || operations.error("serverSettings")}>
           <div class="settings-error">{operations.error("serverSettingsSave") || operations.error("serverSettings")}</div>
@@ -282,6 +298,8 @@ export const ServerSettingsTab: Component<TabProps> = (props) => {
             </button>
           </SettingsActionRail>
         </section>
+          </Show>
+        </Show>
       </SettingsPage>
     )
 }

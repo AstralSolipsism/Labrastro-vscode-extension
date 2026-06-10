@@ -1,6 +1,7 @@
 import { Component, For, Show, createMemo } from "solid-js"
 import { t } from "../../i18n"
 import { RefreshButton } from "../../components/common/RefreshButton"
+import { SettingsAuthRequiredState, SettingsInlineRevalidating, SettingsLoadingState } from "../components/SettingsLayout"
 import type { SettingsController } from "../useSettingsController"
 
 interface TabProps { controller: SettingsController & Record<string, any> }
@@ -119,6 +120,15 @@ export const DiagnosticsTab: Component<TabProps> = (props) => {
           {t("common.refresh")}
         </RefreshButton>
       </div>
+
+      <Show
+        when={!props.controller.pageInitialLoading("diagnostics")}
+        fallback={<SettingsLoadingState title="正在加载诊断设置" detail={props.controller.pageLoadingMessage("diagnostics") || "正在加载诊断设置"} />}
+      >
+        <Show when={props.controller.adminUsable()} fallback={<SettingsAuthRequiredState />}>
+          <Show when={props.controller.pageRevalidating("diagnostics")}>
+            <SettingsInlineRevalidating message={props.controller.pageLoadingMessage("diagnostics") || "正在刷新诊断设置"} />
+          </Show>
 
       <section class="settings-section settings-section--plain peer-diagnostics-section">
         <div class="settings-section-heading">
@@ -386,6 +396,8 @@ export const DiagnosticsTab: Component<TabProps> = (props) => {
           modelCapabilities: server.modelCapabilitiesState(),
         }, null, 2)}</pre>
       </details>
+        </Show>
+      </Show>
     </div>
   )
 }

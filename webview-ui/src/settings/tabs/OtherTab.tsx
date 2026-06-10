@@ -2,7 +2,16 @@ import { Component, Show, createEffect, createMemo, createSignal } from "solid-j
 import { t } from "../../i18n"
 import { RefreshButton } from "../../components/common/RefreshButton"
 import { StatusBadge } from "../components/StatusBadge"
-import { SettingsActionRail, SettingsFlatSection, SettingsPage, SettingsPageHeader, SettingsSectionHeading } from "../components/SettingsLayout"
+import {
+  SettingsActionRail,
+  SettingsAuthRequiredState,
+  SettingsFlatSection,
+  SettingsInlineRevalidating,
+  SettingsLoadingState,
+  SettingsPage,
+  SettingsPageHeader,
+  SettingsSectionHeading,
+} from "../components/SettingsLayout"
 import type { SettingsController } from "../useSettingsController"
 
 interface TabProps { controller: SettingsController & Record<string, any> }
@@ -113,6 +122,15 @@ export const OtherTab: Component<TabProps> = (props) => {
         </SettingsActionRail>
       </SettingsPageHeader>
 
+      <Show
+        when={!props.controller.pageInitialLoading("other")}
+        fallback={<SettingsLoadingState title="正在加载其他设置" detail={props.controller.pageLoadingMessage("other") || "正在加载其他设置"} />}
+      >
+        <Show when={adminUsable()} fallback={<SettingsAuthRequiredState />}>
+          <Show when={props.controller.pageRevalidating("other")}>
+            <SettingsInlineRevalidating message={props.controller.pageLoadingMessage("other") || "正在刷新其他设置"} />
+          </Show>
+
       <SettingsFlatSection>
         <SettingsSectionHeading>
           <span>模型能力表维护</span>
@@ -178,6 +196,8 @@ export const OtherTab: Component<TabProps> = (props) => {
           <p class="settings-empty-note settings-empty-note--error">{capabilityError()}</p>
         </Show>
       </SettingsFlatSection>
+        </Show>
+      </Show>
     </SettingsPage>
   )
 }

@@ -4,7 +4,10 @@ import { t } from "../../i18n"
 import { StatusBadge } from "../components/StatusBadge"
 import {
   SettingsActionRail,
+  SettingsAuthRequiredState,
   SettingsFlatSection,
+  SettingsInlineRevalidating,
+  SettingsLoadingState,
   SettingsPage,
   SettingsPageHeader,
   SettingsSectionHeading,
@@ -220,6 +223,15 @@ export const MemoryTab: Component<TabProps> = (props) => {
         </SettingsActionRail>
       </SettingsPageHeader>
 
+      <Show
+        when={!props.controller.pageInitialLoading("memory")}
+        fallback={<SettingsLoadingState title="正在加载记忆设置" detail={props.controller.pageLoadingMessage("memory") || "正在加载服务器设置"} />}
+      >
+        <Show when={props.controller.adminUsable()} fallback={<SettingsAuthRequiredState />}>
+          <Show when={props.controller.pageRevalidating("memory")}>
+            <SettingsInlineRevalidating message={props.controller.pageLoadingMessage("memory") || "正在刷新记忆设置"} />
+          </Show>
+
       <Show when={operations.error("memorySave") || operations.error("serverSettings")}>
         <div class="settings-error">{operations.error("memorySave") || operations.error("serverSettings")}</div>
       </Show>
@@ -422,6 +434,8 @@ export const MemoryTab: Component<TabProps> = (props) => {
           </div>
         </details>
       </SettingsFlatSection>
+        </Show>
+      </Show>
     </SettingsPage>
   )
 }

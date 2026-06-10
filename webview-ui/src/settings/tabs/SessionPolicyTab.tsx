@@ -4,7 +4,10 @@ import { RefreshButton } from "../../components/common/RefreshButton"
 import { StatusBadge } from "../components/StatusBadge"
 import {
   SettingsActionRail,
+  SettingsAuthRequiredState,
   SettingsFlatSection,
+  SettingsInlineRevalidating,
+  SettingsLoadingState,
   SettingsPage,
   SettingsPageHeader,
   SettingsSectionHeading,
@@ -110,6 +113,15 @@ export const SessionPolicyTab: Component<TabProps> = (props) => {
         </SettingsActionRail>
       </SettingsPageHeader>
 
+      <Show
+        when={!props.controller.pageInitialLoading("sessionPolicy")}
+        fallback={<SettingsLoadingState title="正在加载会话策略" detail={props.controller.pageLoadingMessage("sessionPolicy") || "正在加载会话策略"} />}
+      >
+        <Show when={props.controller.adminUsable()} fallback={<SettingsAuthRequiredState />}>
+          <Show when={props.controller.pageRevalidating("sessionPolicy")}>
+            <SettingsInlineRevalidating message={props.controller.pageLoadingMessage("sessionPolicy") || "正在刷新会话策略"} />
+          </Show>
+
       <Show when={operations.error("sessionPolicySave") || operations.error("serverSettings")}>
         <div class="settings-error">{operations.error("sessionPolicySave") || operations.error("serverSettings")}</div>
       </Show>
@@ -159,6 +171,8 @@ export const SessionPolicyTab: Component<TabProps> = (props) => {
           </label>
         </div>
       </SettingsFlatSection>
+        </Show>
+      </Show>
     </SettingsPage>
   )
 }

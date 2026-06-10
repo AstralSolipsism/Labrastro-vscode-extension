@@ -34,6 +34,7 @@ import {
   type SettingsTab,
 } from "./settingsControllerUtils"
 import {
+  SETTINGS_IDLE_PREWARM_RESOURCES,
   getSettingsOperationState,
   initialSettingsOperationStates,
   markSettingsBackgroundRefreshFinished,
@@ -2449,6 +2450,7 @@ export function createSettingsController(props: SettingsViewProps) {
   const [resetPasswordValue, setResetPasswordValue] = createSignal("")
   const [auditEventType, setAuditEventType] = createSignal("")
   const [accountsBootstrapped, setAccountsBootstrapped] = createSignal(false)
+  const [settingsPrewarmed, setSettingsPrewarmed] = createSignal(false)
   const [hostUrlDirty, setHostUrlDirty] = createSignal(false)
   const [pendingHostSave, setPendingHostSave] = createSignal<string | undefined>()
   const [hostUrlError, setHostUrlError] = createSignal<string | undefined>()
@@ -2819,13 +2821,17 @@ export function createSettingsController(props: SettingsViewProps) {
   const pageRefreshing = (tab: SettingsTab): boolean =>
     settingsPageIsRefreshing(operationStates(), tab, backgroundRefreshes())
   const pageLoadingItems = (tab: SettingsTab): string[] =>
+    !adminUsable()
+      ? []
+      :
     settingsPageOperationKeys(tab)
       .filter((key) => resourceRefreshBusy(key))
       .map(resourceLoadingLabel)
   const pageInitialLoading = (tab: SettingsTab): boolean =>
+    adminUsable() &&
     settingsPageInitialOperationKeys(tab).some((key) => resourceRefreshBusy(key) && !resourceHasData(key))
   const pageRevalidating = (tab: SettingsTab): boolean =>
-    !pageInitialLoading(tab) && settingsPageOperationKeys(tab).some((key) => resourceRefreshBusy(key))
+    adminUsable() && !pageInitialLoading(tab) && settingsPageOperationKeys(tab).some((key) => resourceRefreshBusy(key))
   const pageLoadingMessage = (tab: SettingsTab): string => {
     const items = pageLoadingItems(tab)
     if (!items.length) return ""
@@ -3086,7 +3092,7 @@ export function createSettingsController(props: SettingsViewProps) {
     for (const item of groups.environment_requirement) add(item.id || item.name, resourceKindLabel(item.resourceKind), item.command || stringValue((item as unknown as Record<string, unknown>).alias))
     for (const item of groups.mcp) add(item.name, "MCP", item.command || stringValue((item as unknown as Record<string, unknown>).alias))
     for (const item of groups.skill) add(item.name, "Skill", item.path_hint || item.source_path || stringValue((item as unknown as Record<string, unknown>).alias))
-    for (const item of capabilityPackageViews()) add(item.id, "能力包", item.description || item.name)
+    for (const item of capabilityPackageViews()) add(item.id, "能力", item.description || item.name)
     return options.sort((a, b) => `${a.kind}:${a.id}`.localeCompare(`${b.kind}:${b.id}`))
   })
   const profileIdList = createMemo(() => Object.keys(profileDrafts()))
@@ -4430,10 +4436,6 @@ export function createSettingsController(props: SettingsViewProps) {
       setCapabilityBootstrapped(true)
       refreshOperation("capabilities", { mode: "background" })
     }
-    if (!environmentBootstrapped()) {
-      setEnvironmentBootstrapped(true)
-      refreshOperation("environmentManifest", { mode: "background" })
-    }
   })
 
   createEffect(() => {
@@ -4455,7 +4457,36 @@ export function createSettingsController(props: SettingsViewProps) {
   createEffect(() => {
     if (!adminUsable()) {
       setAccountsBootstrapped(false)
+      setSettingsPrewarmed(false)
+      setBackgroundRefreshes({})
+      setOperationStates((states) => {
+        let next = states
+        for (const key of [
+          ...SETTINGS_IDLE_PREWARM_RESOURCES,
+          "accounts",
+          "authUsers",
+          "authDevices",
+          "authAudit",
+          "environmentManifest",
+          "toolDiagnostics",
+        ] as SettingsOperationKey[]) {
+          next = markSettingsOperationIdle(next, key)
+        }
+        return next
+      })
     }
+  })
+
+  createEffect(() => {
+    if (!adminUsable()) return
+    if (settingsPrewarmed()) return
+    const timer = setTimeout(() => {
+      for (const key of SETTINGS_IDLE_PREWARM_RESOURCES) {
+        refreshOperation(key, { mode: "background" })
+      }
+      setSettingsPrewarmed(true)
+    }, 300)
+    onCleanup(() => clearTimeout(timer))
   })
 
   createEffect(() => {
@@ -4590,8 +4621,8 @@ export function createSettingsController(props: SettingsViewProps) {
   const readToolDiagnosticsStats = () => refreshOperation("toolDiagnostics")
   const refreshCapabilities = () => {
     refreshOperation("capabilities")
-    refreshOperation("environmentManifest")
   }
+  const refreshCapabilityDependencies = () => refreshOperation("environmentManifest")
   const recordCapability = (kind: string, payload: Record<string, unknown>) => {
     markOperationStarted("capabilities", "saving")
     settingsMessages.recordCapability(vscode, kind, payload)
@@ -4939,6 +4970,7 @@ export function createSettingsController(props: SettingsViewProps) {
     clearPeerDiagnosticsLog,
     readToolDiagnosticsStats,
     refreshCapabilities,
+    refreshCapabilityDependencies,
     recordCapability,
     enableCapability,
     deleteCapabilityRecord,

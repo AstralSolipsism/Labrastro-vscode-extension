@@ -941,9 +941,8 @@ describe("settings controller capability model", () => {
       expect(controller.pageLoadingItems("capabilities")).toEqual([
         "服务器设置",
         "能力清单",
-        "环境清单",
       ])
-      expect(controller.pageLoadingMessage("capabilities")).toBe("正在加载服务器设置、能力清单、环境清单")
+      expect(controller.pageLoadingMessage("capabilities")).toBe("正在加载服务器设置、能力清单")
     })
   })
 
@@ -961,7 +960,6 @@ describe("settings controller capability model", () => {
       expect(controller.pageLoadingItems("capabilities")).toEqual([
         "服务器设置",
         "能力清单",
-        "环境清单",
       ])
     })
   })
@@ -989,6 +987,18 @@ describe("settings controller capability model", () => {
       expect(controller.pageRefreshing("providers")).toBe(true)
       expect(controller.pageInitialLoading("providers")).toBe(true)
       expect(controller.pageLoadingMessage("providers")).toBe("正在加载服务商、模型配置")
+    })
+  })
+
+  it("does not keep admin tabs in loading mode after auth is unavailable", () => {
+    withController(makeServer({
+      connectionState: () => ({ status: "login-required", authenticated: false }),
+    }), (controller) => {
+      controller.refreshPage("providers", { mode: "background" })
+
+      expect(controller.adminUsable()).toBe(false)
+      expect(controller.pageInitialLoading("providers")).toBe(false)
+      expect(controller.pageLoadingMessage("providers")).toBe("")
     })
   })
 
