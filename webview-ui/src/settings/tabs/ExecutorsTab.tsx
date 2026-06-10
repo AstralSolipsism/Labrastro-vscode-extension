@@ -2,6 +2,14 @@ import { Component, For, Show } from "solid-js"
 import { t } from "../../i18n"
 import { DialogSurface } from "../../components/common/interaction"
 import { RefreshButton } from "../../components/common/RefreshButton"
+import {
+  peerPreparationDetail,
+  peerPreparationIsActive,
+  peerPreparationProgressPercent,
+  peerPreparationProgressText,
+  peerPreparationStatusLabel,
+  peerPreparationView,
+} from "../../peerPreparation"
 import { StatusBadge } from "../components/StatusBadge"
 import type { SettingsController } from "../useSettingsController"
 
@@ -54,6 +62,13 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
     stringValue,
   } = props.controller
   const connectionReady = () => connectionStatus() === "ready" && server.connectionState().authenticated === true
+  const localExecutorConnected = () => server.connectionState().peerConnected === true
+  const peerPreparation = () => peerPreparationView(server.connectionState().peerPreparation)
+  const peerProgress = () => peerPreparationProgressPercent(peerPreparation())
+  const peerProgressText = () => peerPreparationProgressText(peerPreparation())
+  const peerProgressVisible = () =>
+    peerPreparationIsActive(peerPreparation()) &&
+    (peerProgress() !== undefined || Boolean(peerProgressText()))
 
   return (
     <div class="settings-page settings-page--narrow">
@@ -97,6 +112,30 @@ export const ExecutorsTab: Component<TabProps> = (props) => {
           <div class="executor-status-card__body">
             <small>{t("executor.status.connectionStatus")}</small>
             <strong>{connectionReady() ? t("executor.status.connected") : connectionStatus() === "error" ? t("executor.status.unavailable") : t("executor.status.disconnected")}</strong>
+          </div>
+        </div>
+        <div class="executor-status-card executor-status-card--peer">
+          <div class="executor-status-card__icon">
+            <span
+              class={`codicon codicon-${localExecutorConnected() ? "vm-active" : "vm-outline"}`}
+              aria-hidden="true"
+              style={localExecutorConnected() ? "color:var(--ez-success)" : "color:var(--ez-muted)"}
+            />
+          </div>
+          <div class="executor-status-card__body">
+            <small>peer 准备情况</small>
+            <strong>{peerPreparationStatusLabel(peerPreparation(), localExecutorConnected())}</strong>
+            <small>{peerPreparationDetail(peerPreparation(), localExecutorConnected())}</small>
+            <Show when={peerProgressVisible()}>
+              <div class="executor-progress" aria-label="peer 准备进度">
+                <div
+                  class="executor-progress__bar"
+                  classList={{ "executor-progress__bar--indeterminate": peerProgress() === undefined }}
+                  style={`--executor-progress:${peerProgress() ?? 35};`}
+                />
+                <span>{peerProgressText()}</span>
+              </div>
+            </Show>
           </div>
         </div>
       </section>
