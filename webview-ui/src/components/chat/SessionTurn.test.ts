@@ -11,14 +11,18 @@ const source = readFileSync(new URL("./SessionTurn.tsx", import.meta.url), "utf8
 const requireFromTest = createRequire(import.meta.url)
 const testDir = dirname(fileURLToPath(import.meta.url))
 
-async function renderSessionTurnToString(turn: MockTurn): Promise<string> {
+async function renderSessionTurnToString(
+  turn: MockTurn,
+  props: { defaultReasoningOpen?: boolean } = {},
+): Promise<string> {
   const result = await build({
     stdin: {
       contents: [
         'import { renderToString } from "solid-js/web";',
         'import { SessionTurn } from "./SessionTurn";',
         `const turn = ${JSON.stringify(turn)};`,
-        "export default renderToString(() => SessionTurn({ turn }));",
+        `const props = ${JSON.stringify(props)};`,
+        "export default renderToString(() => SessionTurn({ turn, ...props }));",
       ].join("\n"),
       resolveDir: testDir,
       loader: "ts",
@@ -282,10 +286,7 @@ describe("SessionTurn source order", () => {
     expect(source).toContain('panel={(item() as Extract<TranscriptPresentationItem, { type: "reasoning_panel" }>).panel}')
     expect(source).toContain("initialCardOpenState(props.panel.id, props.defaultReasoningOpen === true)")
     expect(source).toContain("initialCardOpenState(props.part.id, false)")
-    expect(source).toContain('<MarkdownBlock text={detailsText()} class="reasoning-card__markdown" />')
-    expect(source).toContain("const isStreaming = () => props.panel.state === \"running\"")
-    expect(source).toContain("streaming={isStreaming()}")
-    expect(source).not.toContain('<MarkdownBlock text={detailsText()} class="reasoning-card__markdown" />\n        </div>')
+    expect(source).toContain("<ReasoningTextBlock text={detailsText()} />")
   })
 
   it("keeps raw AgentRun event references visible through unified card details", () => {
@@ -320,17 +321,47 @@ describe("SessionTurn source order", () => {
     expect(workflowSource).not.toContain("capability_package_draft-card__json")
   })
 
-  it("treats a running reasoning panel as streaming markdown", () => {
+  it("renders reasoning details as preserved plain text instead of streaming markdown", () => {
     const reasoningPanelStart = source.indexOf("const ReasoningPanelPart")
     const noticePartStart = source.indexOf("const NoticePart")
     const reasoningPanelSource = source.slice(reasoningPanelStart, noticePartStart)
 
-    expect(reasoningPanelSource).toContain("const isStreaming = () => props.panel.state === \"running\"")
-    expect(reasoningPanelSource).toContain("<MarkdownBlock")
     expect(reasoningPanelSource).toContain("text={detailsText()}")
-    expect(reasoningPanelSource).toContain('class="reasoning-card__markdown"')
-    expect(reasoningPanelSource).toContain("streaming={isStreaming()}")
-    expect(reasoningPanelSource).not.toContain('<MarkdownBlock text={detailsText()} class="reasoning-card__markdown" />')
+    expect(reasoningPanelSource).toContain("<ReasoningTextBlock")
+    expect(reasoningPanelSource).not.toContain("<MarkdownBlock")
+    expect(reasoningPanelSource).not.toContain("streaming={")
+    expect(reasoningPanelSource).not.toContain("const isStreaming")
+  })
+
+  it("preserves whitespace and newlines in rendered reasoning details", async () => {
+    const turn: MockTurn = {
+      userMessage: {
+        id: "user-reasoning",
+        role: "user",
+        text: "show reasoning",
+        parts: [],
+        timestamp: 0,
+      },
+      assistantMessages: [{
+        id: "assistant-reasoning",
+        role: "assistant",
+        text: "",
+        timestamp: 1,
+        traceNodeStatus: "active",
+        parts: [{
+          id: "thinking-1",
+          type: "thinking",
+          title: "正在思考",
+          active: true,
+          raw: "第一行\n  缩进两格\n\n- 列表项",
+        }],
+      }],
+    }
+
+    const html = await renderSessionTurnToString(turn, { defaultReasoningOpen: true })
+
+    expect(html).toContain("reasoning-card__plain")
+    expect(html).toContain("第一行\n  缩进两格\n\n- 列表项")
   })
 
   it("keeps wording focused on thinking and processing", () => {

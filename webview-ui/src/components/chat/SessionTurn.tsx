@@ -930,6 +930,10 @@ const MarkdownText: Component<{ text?: string; format?: "plain" | "markdown"; st
   </Show>
 )
 
+const ReasoningTextBlock: Component<{ text: string }> = (props) => (
+  <pre class="reasoning-card__plain">{props.text}</pre>
+)
+
 const ThinkingPart: Component<ItemProps<ThinkingItem>> = (props) => {
   const detail = () => props.part.detail || props.part.raw || ""
   return (
@@ -975,12 +979,7 @@ const ReasoningPart: Component<ItemProps<ReasoningItem>> = (props) => {
       </button>
       <Show when={open()}>
         <div class="reasoning-card__content">
-          <Show
-            when={props.part.format !== "plain"}
-            fallback={<div class="assistant-text-part reasoning-card__plain">{detailsText()}</div>}
-          >
-            <MarkdownBlock text={detailsText()} class="reasoning-card__markdown" />
-          </Show>
+          <ReasoningTextBlock text={detailsText()} />
         </div>
       </Show>
     </div>
@@ -1008,7 +1007,6 @@ const ReasoningPanelPart: Component<ReasoningPanelPartProps> = (props) => {
   })
   const title = () => props.panel.state === "running" ? t("process.group.reasoning.running") : t("process.group.reasoning")
   const detailsText = () => props.panel.raw || props.panel.summary || ""
-  const isStreaming = () => props.panel.state === "running"
 
   return (
     <div
@@ -1043,11 +1041,7 @@ const ReasoningPanelPart: Component<ReasoningPanelPartProps> = (props) => {
       </button>
       <Show when={open()}>
         <div class="reasoning-card__content" ref={contentRef}>
-          <MarkdownBlock
-            text={detailsText()}
-            class="reasoning-card__markdown"
-            streaming={isStreaming()}
-          />
+          <ReasoningTextBlock text={detailsText()} />
         </div>
       </Show>
     </div>
