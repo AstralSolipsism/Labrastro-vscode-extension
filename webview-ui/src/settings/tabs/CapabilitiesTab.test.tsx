@@ -82,8 +82,37 @@ function capabilitiesTabFixture(): Record<string, unknown> {
         components: ["mcp:github"],
         enabled: true,
         status: "installed",
+        state: {
+          install_state: "installed",
+          activation_state: "active",
+          runtime_state: "failed",
+          check_state: "stale",
+          update_state: "candidate_ready",
+          mapping_state: "mapping_required",
+        },
+        credential_state: "bound",
+        target_facts: {
+          server: {
+            runtime_state: "running",
+            check_state: "passed",
+          },
+          local_peer: {
+            runtime_state: "not_applicable",
+            check_state: "missing",
+          },
+        },
         risk_level: "medium",
         credentials: ["REVIEW_TOKEN"],
+        credential_requirements: [
+          {
+            requirement_id: "credreq:review",
+            provider: "github",
+            kind: "oauth",
+            placement: "server",
+            state: "bound",
+            scope: "user",
+          },
+        ],
         runtime_footprint: { runs_on: "server" },
         hook_views: [packageHook],
       },
@@ -457,6 +486,27 @@ describe("CapabilitiesTab lifecycle hook management", () => {
     expect(html).toContain("peer 准备情况：正在下载")
     expect(html).toContain("正在下载 peer 二进制。 · 38%")
     expect(html).toContain("38%")
+  })
+
+  it("renders package state axes as user-facing labels", async () => {
+    const html = await renderCapabilitiesTab(capabilitiesTabFixture())
+
+    expect(html).toContain("安装状态")
+    expect(html).toContain("激活状态")
+    expect(html).toContain("服务端状态")
+    expect(html).toContain("本地端状态")
+    expect(html).toContain("凭据状态")
+    expect(html).toContain("更新状态")
+    expect(html).toContain("已安装")
+    expect(html).toContain("已激活")
+    expect(html).toContain("服务端：运行中，检查通过")
+    expect(html).toContain("本地端：无需运行进程，缺失")
+    expect(html).toContain("已绑定凭据")
+    expect(html).toContain("默认使用当前用户凭据")
+    expect(html).toContain("更新候选已准备")
+    expect(html).not.toContain("本地端：运行中，检查通过")
+    expect(html).not.toContain("mapping_required")
+    expect(html).not.toContain("等待开发者")
   })
 
   it("renders Skill lifecycle hook source package, trust, risk, and recent result in the management component", async () => {

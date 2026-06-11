@@ -55,14 +55,19 @@ import {
   capabilityInstallPreviewFromMcpJson,
   capabilityInstallStatusLabel,
   capabilityInstallStatusTone,
+  capabilityPackageStatePayload,
+  capabilityPackageStateView,
+  credentialRequirementViews,
   groupCapabilityPackageComponents,
   normalizeLifecycleHookViews,
   runtimeFootprintBadgeTone,
   runtimeFootprintLabel,
+  type CapabilityCredentialRequirementView,
   type CapabilityHookView,
   type CapabilityComponentGroups,
   type CapabilityComponentView,
   type CapabilityView,
+  type CapabilityPackageStateView,
   type RuntimeFootprintView,
   type RuntimeRunsOn,
 } from "../capabilityPackageView"
@@ -110,6 +115,9 @@ interface CapabilityPackageView {
   credentials: string[]
   riskLevel: string
   runtimeFootprint: RuntimeFootprintView
+  state: Record<string, unknown>
+  stateView: CapabilityPackageStateView
+  credentialRequirements: CapabilityCredentialRequirementView[]
   hooks: CapabilityHookView[]
 }
 
@@ -406,6 +414,7 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
     return Object.entries(packages)
       .map(([id, raw]) => {
         const item = objectValue(raw)
+        const state = capabilityPackageStatePayload(item)
         return {
           id,
           name: stringValue(item.name, id),
@@ -420,6 +429,9 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
           credentials: stringArrayValue(item.credentials),
           riskLevel: stringValue(item.risk_level),
           runtimeFootprint: aggregateRuntimeFootprint([objectValue(item.runtime_footprint)]),
+          state,
+          stateView: capabilityPackageStateView(state),
+          credentialRequirements: credentialRequirementViews(item.credential_requirements),
           hooks: normalizeLifecycleHookViews(item.hook_views),
         }
       })
@@ -2073,6 +2085,12 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
                                 <Show when={counts.other}><span>{counts.other} 其他</span></Show>
                                  <span>{runtimeFootprintLabel(footprint)}</span>
                                  <Show when={pkg.hooks.length}><span>{packageHookSummary(pkg)}</span></Show>
+                                  <span>安装状态：{pkg.stateView.installLabel}</span>
+                                  <span>激活状态：{pkg.stateView.activationLabel}</span>
+                                  <span>服务端状态：{pkg.stateView.serverTargetLabel}</span>
+                                  <span>本地端状态：{pkg.stateView.localPeerTargetLabel}</span>
+                                  <span>凭据状态：{pkg.stateView.credentialLabel}</span>
+                                  <span>更新状态：{pkg.stateView.updateLabel}</span>
                                   <StatusBadge tone={capabilityInstallStatusTone(pkg.status)}>{capabilityInstallStatusLabel(pkg.status)}</StatusBadge>
                                   <StatusBadge tone={capabilityEnabledStatusTone(pkg.enabled)}>{capabilityEnabledStatusLabel(pkg.enabled)}</StatusBadge>
                                </SettingsListCardMeta>
@@ -2132,9 +2150,34 @@ export const CapabilitiesTab: Component<TabProps> = (props) => {
                               <small>{footprint.installRequiredOn.length ? `安装/配置：${footprint.installRequiredOn.join("、")}` : "无需外部进程"}</small>
                             </SettingsDetailBlock>
                              <SettingsDetailBlock>
-                               <span>状态</span>
-                               <strong>{capabilityInstallStatusLabel(pkg().status)}</strong>
-                               <small>{capabilityEnabledStatusLabel(pkg().enabled)} · {pkg().riskLevel ? `风险：${pkg().riskLevel}` : "未标注风险"}</small>
+                               <span>安装状态</span>
+                               <strong>{pkg().stateView.installLabel}</strong>
+                               <small>{pkg().riskLevel ? `风险：${pkg().riskLevel}` : "未标注风险"}</small>
+                             </SettingsDetailBlock>
+                             <SettingsDetailBlock>
+                               <span>激活状态</span>
+                               <strong>{pkg().stateView.activationLabel}</strong>
+                               <small>{capabilityEnabledStatusLabel(pkg().enabled)}</small>
+                             </SettingsDetailBlock>
+                             <SettingsDetailBlock>
+                               <span>服务端状态</span>
+                               <strong>{pkg().stateView.serverTargetLabel}</strong>
+                               <small>服务端集中登记与执行事实</small>
+                             </SettingsDetailBlock>
+                             <SettingsDetailBlock>
+                               <span>本地端状态</span>
+                               <strong>{pkg().stateView.localPeerTargetLabel}</strong>
+                               <small>来自本地端回报的检查/安装事实</small>
+                             </SettingsDetailBlock>
+                             <SettingsDetailBlock>
+                               <span>凭据状态</span>
+                               <strong>{pkg().stateView.credentialLabel}</strong>
+                               <small>{pkg().credentialRequirements.length ? pkg().credentialRequirements.map((item) => item.scopeLabel).join("、") : "无需额外凭据"}</small>
+                             </SettingsDetailBlock>
+                             <SettingsDetailBlock>
+                               <span>更新状态</span>
+                               <strong>{pkg().stateView.updateLabel}</strong>
+                               <small>{pkg().stateView.mappingLabel}</small>
                              </SettingsDetailBlock>
                              <SettingsDetailBlock>
                                <span>生命周期 Hooks</span>
