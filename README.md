@@ -11,7 +11,7 @@
     <img alt="VS Code Extension" src="https://img.shields.io/badge/VS%20Code-Extension-007ACC?logo=visualstudiocode&logoColor=white" />
     <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white" />
     <img alt="SolidJS" src="https://img.shields.io/badge/SolidJS-Webview-2C4F7C?logo=solid&logoColor=white" />
-    <img alt="Status" src="https://img.shields.io/badge/status-MVP-orange" />
+    <img alt="Status" src="https://img.shields.io/badge/status-architecture--stabilization-blue" />
     <img alt="Self hosted" src="https://img.shields.io/badge/self--hosted-first-2E7D32" />
   </p>
 </div>
@@ -22,7 +22,7 @@
 
 Labrastro 后端基座负责远端 relay、会话持久化、Provider 管理、MCP 分发、环境清单、Agent Runtime 和任务控制面。VS Code 插件连接这个基座，把中心化配置和任务调度落到当前本地工作区。
 
-当前工作区中，`Labrastro-vscode-extension` 是 VS Code/Webview MVP 的事实来源；ReuleauxCoder/Labrastro server 是后端控制面与执行基座。插件前端已经完成基础建设，不应被视为缺失项。
+当前工作区中，`Labrastro-vscode-extension` 是 VS Code/Webview 的事实来源；ReuleauxCoder/Labrastro server 是后端控制面与执行基座。插件前端已经完成基础建设，不应被视为缺失项。
 
 ## 架构关系
 
