@@ -1,6 +1,6 @@
 import { t } from "../../i18n"
 import type { MockMessage } from "./mock-data"
-import type { AssistantTextItem, NoticeItem, ToolActivityItem, TranscriptItem } from "./transcript-model"
+import type { AssistantTextItem, FileChangeItem, NoticeItem, ToolActivityItem, TranscriptItem } from "./transcript-model"
 
 export type ProcessGroupKind =
   | "explore"
@@ -100,10 +100,6 @@ export const EXPLORE_TOOLS = new Set([
 ])
 
 export const MODIFY_TOOLS = new Set([
-  "write_file",
-  "edit_file",
-  "write_to_file",
-  "replace_in_file",
   "apply_patch",
 ])
 
@@ -570,6 +566,9 @@ interface ProcessGroupInfo {
 
 function processGroupInfoForPart(part: TranscriptItem): ProcessGroupInfo {
   if (part.type === "tool") return toolGroupInfo(part)
+  if (part.type === "file_change" || part.type === "document_draft") {
+    return { key: "modify", kind: "modify", label: t("process.group.modify") }
+  }
   if (part.type === "terminal") return { key: "run:terminal", kind: "run", label: t("process.group.run") }
   if (part.type === "session") {
     return { key: "context:session", kind: "context", label: t("process.group.context") }
@@ -625,6 +624,8 @@ function toolGroupInfo(part: ToolActivityItem): ProcessGroupInfo {
 function isProcessItem(part: TranscriptItem): boolean {
   return (
     part.type === "tool" ||
+    part.type === "file_change" ||
+    part.type === "document_draft" ||
     part.type === "trace" ||
     part.type === "session" ||
     part.type === "terminal" ||
@@ -670,12 +671,27 @@ function processItemCurrentLabel(item: TranscriptItem): string {
     }
     return [getToolActionLabel(item.tool), processItemTarget(item)].filter(Boolean).join(" ")
   }
+  if (item.type === "file_change") {
+    return [t("tool.fileChange"), compactLabel(fileChangeTarget(item))].filter(Boolean).join(" ")
+  }
+  if (item.type === "document_draft") {
+    return [t("tool.documentDraft"), compactLabel(item.targetPath || item.title || "")].filter(Boolean).join(" ")
+  }
   if (item.type === "terminal") return item.title || t("process.group.run")
   if (item.type === "workflow_step") return item.title || workflowStageLabel(item.stage)
   if (item.type === "session") return item.title || item.sessionId || t("process.group.context")
   if ("title" in item && item.title) return item.title
   if (item.type === "notice") return item.text
   return processGroupInfoForPart(item).label
+}
+
+function fileChangeTarget(item: FileChangeItem): string {
+  if (item.path) return item.path
+  for (const change of item.changes || []) {
+    const path = change.move_path || change.movePath || change.path
+    if (typeof path === "string" && path.trim()) return path.trim()
+  }
+  return ""
 }
 
 function processItemTarget(item: ToolActivityItem): string {
@@ -715,14 +731,11 @@ export function getToolActionLabel(toolName?: string): string {
   const labels: Record<string, string> = {
     read_file: t("tool.readFile"),
     read_files: t("tool.readFile"),
-    write_file: t("tool.writeFile"),
-    edit_file: t("tool.editFile"),
     shell: t("tool.shell"),
     grep: t("tool.grep"),
     glob: t("tool.glob"),
     mcp: t("tool.mcp"),
     delegate_agent: t("tool.delegateAgent"),
-    write_to_file: t("tool.writeToFile"),
     execute_command: t("tool.executeCommand"),
     run_terminal_cmd: t("tool.executeCommand"),
     list_file: t("tool.listFile"),
@@ -731,7 +744,7 @@ export function getToolActionLabel(toolName?: string): string {
     search_file: t("tool.searchFiles"),
     search_files: t("tool.searchFiles"),
     apply_patch: t("tool.applyPatch"),
-    replace_in_file: t("tool.applyPatch"),
+    draft_document_begin: t("tool.documentDraft"),
     install_capability_package: t("tool.installCapabilityPackage"),
   }
   const normalized = (toolName || "").trim()
@@ -748,6 +761,8 @@ export function isMessageRunning(
     if (part.type === "thinking") return part.active === true
     if (part.type === "workflow_step") return part.status === "running"
     if (part.type === "workflow_decision") return part.status === "pending"
+    if (part.type === "file_change") return part.status === "in_progress"
+    if (part.type === "document_draft") return part.status === "streaming" || part.status === "committing"
     if (part.type !== "tool") return false
     return isRunningTool(part)
   })
@@ -779,6 +794,8 @@ function isRunningProcessItem(part: TranscriptItem): boolean {
   if (part.type === "thinking") return part.active === true
   if (part.type === "workflow_step") return part.status === "running"
   if (part.type === "workflow_decision") return part.status === "pending"
+  if (part.type === "file_change") return part.status === "in_progress"
+  if (part.type === "document_draft") return part.status === "streaming" || part.status === "committing"
   if (part.type === "tool") return isRunningTool(part)
   if (part.traceNodeStatus === "active" || part.traceNodeStatus === "streaming") return true
   if (part.type === "session") return part.state === "active" || part.state === "streaming"
@@ -789,6 +806,8 @@ function isErrorProcessItem(part: TranscriptItem): boolean {
   if (isParallelItem(part)) return processFailureCount(part.items || []) > 0
   if (part.traceNodeStatus === "error") return true
   if (part.type === "tool") return part.status === "error" || part.status === "protocol_error"
+  if (part.type === "file_change") return part.status === "failed"
+  if (part.type === "document_draft") return part.status === "failed"
   if (part.type === "notice") return part.level === "error"
   if (part.type === "session") return part.state === "error"
   if (part.type === "workflow_step" || part.type === "workflow_result") return part.status === "error"

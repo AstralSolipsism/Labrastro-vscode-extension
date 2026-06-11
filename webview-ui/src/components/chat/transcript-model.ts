@@ -77,6 +77,50 @@ export interface ToolActivityItem extends TranscriptMeta {
   approvalContent?: string
 }
 
+export type FileChangeStatus = "in_progress" | "completed" | "failed" | "declined" | "cancelled"
+
+export interface FileChangeEntry {
+  path?: string
+  kind?: "add" | "update" | "delete" | "move" | string
+  diff?: string
+  move_path?: string
+  movePath?: string
+}
+
+export interface FileChangeItem extends TranscriptMeta {
+  type: "file_change"
+  itemId: string
+  toolCallId?: string
+  status: FileChangeStatus
+  changes: FileChangeEntry[]
+  diff?: string
+  path?: string
+  addedLines?: number
+  removedLines?: number
+  patchPreview?: string
+  approvalId?: string
+  approvalReason?: string
+  approvalDecision?: string
+  approvalResultReason?: string
+  durationMs?: number
+  error?: string
+}
+
+export type DocumentDraftStatus = "declared" | "streaming" | "committing" | "committed" | "cancelled" | "failed"
+
+export interface DocumentDraftItem extends TranscriptMeta {
+  type: "document_draft"
+  draftId: string
+  targetPath?: string
+  title?: string
+  format?: "markdown" | string
+  status: DocumentDraftStatus
+  itemId?: string
+  approvalId?: string
+  error?: string
+  reason?: string
+}
+
 export interface NoticeItem extends TranscriptMeta {
   type: "notice"
   level: NoticeLevel
@@ -207,6 +251,8 @@ export type TranscriptItem =
   | ThinkingItem
   | ReasoningItem
   | ToolActivityItem
+  | FileChangeItem
+  | DocumentDraftItem
   | NoticeItem
   | TraceItem
   | SessionItem

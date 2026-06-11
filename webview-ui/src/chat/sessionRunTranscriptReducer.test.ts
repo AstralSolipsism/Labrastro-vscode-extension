@@ -266,6 +266,100 @@ describe("sessionRunTranscriptReducer", () => {
     expect(parts[4]).toMatchObject({ markdown: "C", streamKey: "assistant-stream" })
   })
 
+  it("projects file change events into one stable transcript item", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "patch file" }, 1)
+    current = reduce(current, "file_change_started", {
+      item_id: "file-change-1",
+      tool_call_id: "tool-1",
+      changes: [],
+    }, 2)
+    current = reduce(current, "file_change_patch_updated", {
+      item_id: "file-change-1",
+      tool_call_id: "tool-1",
+      patch_preview: "*** Update File: src/a.ts\n@@\n-old\n+new",
+      changes: [{
+        path: "src/a.ts",
+        kind: "update",
+        diff: "--- a/src/a.ts\n+++ b/src/a.ts\n-old\n+new",
+      }],
+    }, 3)
+    current = reduce(current, "file_change_approval_requested", {
+      item_id: "file-change-1",
+      tool_call_id: "tool-1",
+      approval_id: "approval-1",
+      reason: "需要修改文件",
+    }, 4)
+    current = reduce(current, "file_change_approval_resolved", {
+      item_id: "file-change-1",
+      tool_call_id: "tool-1",
+      approval_id: "approval-1",
+      decision: "allow_once",
+    }, 5)
+    current = reduce(current, "file_change_completed", {
+      item_id: "file-change-1",
+      tool_call_id: "tool-1",
+      status: "completed",
+      changes: [{
+        path: "src/a.ts",
+        kind: "update",
+        diff: "--- a/src/a.ts\n+++ b/src/a.ts\n-old\n+new",
+      }],
+    }, 6)
+
+    const parts = current.turns[0].assistantMessages[0].parts
+    expect(parts).toHaveLength(1)
+    expect(parts[0]).toMatchObject({
+      id: "file-change-1",
+      type: "file_change",
+      itemId: "file-change-1",
+      toolCallId: "tool-1",
+      status: "completed",
+      path: "src/a.ts",
+      addedLines: 1,
+      removedLines: 1,
+      patchPreview: "*** Update File: src/a.ts\n@@\n-old\n+new",
+      approvalId: "approval-1",
+      approvalDecision: "allow_once",
+    })
+  })
+
+  it("projects document draft lifecycle events into one stable transcript item", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "write docs" }, 1)
+    current = reduce(current, "document_draft_started", {
+      draft_id: "draft-1",
+      target_path: "docs/a.md",
+      title: "ADR",
+      format: "markdown",
+    }, 2)
+    current = reduce(current, "document_draft_commit_requested", {
+      draft_id: "draft-1",
+      target_path: "docs/a.md",
+      item_id: "file-change-1",
+      approval_id: "approval-1",
+    }, 3)
+    current = reduce(current, "document_draft_committed", {
+      draft_id: "draft-1",
+      target_path: "docs/a.md",
+      item_id: "file-change-1",
+    }, 4)
+
+    const parts = current.turns[0].assistantMessages[0].parts
+    expect(parts).toHaveLength(1)
+    expect(parts[0]).toMatchObject({
+      id: "draft-1",
+      type: "document_draft",
+      draftId: "draft-1",
+      targetPath: "docs/a.md",
+      title: "ADR",
+      format: "markdown",
+      itemId: "file-change-1",
+      approvalId: "approval-1",
+      status: "committed",
+    })
+  })
+
   it("renders lifecycle hook audit events as process context instead of dropping them", () => {
     let current = bundle()
     current = reduce(current, "session_run_start", { prompt: "hi" }, 1)

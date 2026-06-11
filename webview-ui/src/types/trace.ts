@@ -642,9 +642,8 @@ export function inferTraceNodeKindFromToolName(toolName?: string): TraceNodeKind
     case "execute_command":
     case "run_terminal_cmd":
       return "command_run"
-    case "write_to_file":
-    case "replace_in_file":
     case "apply_patch":
+    case "draft_document_begin":
       return "file_edit"
     case "delegate_agent":
       return "delegated_run_spawn"

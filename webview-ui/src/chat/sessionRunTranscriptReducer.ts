@@ -1,6 +1,10 @@
 import type { MockMessage, MockSessionBundle, MockTaskStats, MockTurn } from "../components/chat/mock-data"
 import type {
   AssistantTextItem,
+  DocumentDraftItem,
+  FileChangeEntry,
+  FileChangeItem,
+  FileChangeStatus,
   NoticeLevel,
   RawEventRef,
   ReasoningItem,
@@ -92,6 +96,17 @@ export const SESSION_RUN_TRANSCRIPT_EVENT_TYPES = new Set([
   "taskflow_started",
   "provider_stream_interrupted",
   "session_run_interrupted",
+  "file_change_started",
+  "file_change_patch_updated",
+  "file_change_approval_requested",
+  "file_change_approval_resolved",
+  "file_change_completed",
+  "turn_diff_updated",
+  "document_draft_started",
+  "document_draft_commit_requested",
+  "document_draft_committed",
+  "document_draft_failed",
+  "document_draft_cancelled",
   "tool_call_delta",
   "tool_call_stream",
   "tool_call_start",
@@ -333,6 +348,25 @@ function applySessionRunTranscriptEventToBundle(
     finalizeRunTranscriptItems(next, "interrupted", context)
     patchRunStatus(next, "interrupted")
     next.session = { ...next.session, state: "active" }
+    markChanged()
+  } else if (
+    type === "file_change_started" ||
+    type === "file_change_patch_updated" ||
+    type === "file_change_approval_requested" ||
+    type === "file_change_approval_resolved" ||
+    type === "file_change_completed" ||
+    type === "turn_diff_updated"
+  ) {
+    upsertFileChange(next, type, payload, meta, context)
+    markChanged()
+  } else if (
+    type === "document_draft_started" ||
+    type === "document_draft_commit_requested" ||
+    type === "document_draft_committed" ||
+    type === "document_draft_failed" ||
+    type === "document_draft_cancelled"
+  ) {
+    upsertDocumentDraft(next, type, payload, meta, context)
     markChanged()
   } else if (type === "tool_call_delta") {
     appendToolCallDelta(next, payload, meta, context)
@@ -977,6 +1011,197 @@ function appendUiEvent(
       }, meta),
     ]
   }, context)
+}
+
+function upsertFileChange(
+  bundle: MockSessionBundle,
+  eventType: string,
+  payload: Record<string, unknown>,
+  meta: EventRenderMeta,
+  context: SessionRunTranscriptContext,
+): void {
+  const itemId = stringValue(payload.item_id) ||
+    stringValue(payload.itemId) ||
+    `file-change-${meta.sessionEventSeq ?? context.now ?? Date.now()}`
+  updateAssistantItems(bundle, (parts) => {
+    const existingIndex = parts.findIndex((part) =>
+      part.type === "file_change" && part.itemId === itemId
+    )
+    const existing = existingIndex >= 0 ? parts[existingIndex] as FileChangeItem : undefined
+    const changes = normalizeFileChangeEntries(payload.changes, existing?.changes)
+    const combinedDiff = stringValue(payload.diff) || combinedFileChangeDiff(changes) || existing?.diff
+    const stats = fileChangeDiffStats(combinedDiff)
+    const patch: Partial<FileChangeItem> = {
+      itemId,
+      toolCallId: stringValue(payload.tool_call_id) || stringValue(payload.toolCallId) || existing?.toolCallId,
+      status: fileChangeStatus(payload, eventType, existing?.status),
+      changes,
+      diff: combinedDiff,
+      path: primaryFileChangePath(changes) || stringValue(payload.path) || stringValue(payload.target_path) || existing?.path,
+      addedLines: numberValue(payload.added_lines) ?? numberValue(payload.addedLines) ?? stats.added,
+      removedLines: numberValue(payload.removed_lines) ?? numberValue(payload.removedLines) ?? stats.removed,
+      patchPreview: eventType === "file_change_patch_updated"
+        ? stringValue(payload.patch_preview) || stringValue(payload.patchPreview) || existing?.patchPreview
+        : existing?.patchPreview,
+      approvalId: stringValue(payload.approval_id) || stringValue(payload.approvalId) || existing?.approvalId,
+      approvalReason: eventType === "file_change_approval_requested"
+        ? stringValue(payload.reason) || existing?.approvalReason
+        : existing?.approvalReason,
+      approvalDecision: eventType === "file_change_approval_resolved"
+        ? stringValue(payload.decision) || existing?.approvalDecision
+        : existing?.approvalDecision,
+      approvalResultReason: eventType === "file_change_approval_resolved"
+        ? stringValue(payload.reason) || existing?.approvalResultReason
+        : existing?.approvalResultReason,
+      durationMs: numberValue(payload.duration_ms) ?? numberValue(payload.durationMs) ?? existing?.durationMs,
+      error: stringValue(payload.error) || existing?.error,
+      rawEventRefs: rawEventRefsFromPayload(payload),
+    }
+    const nextPart: FileChangeItem = withEventMeta({
+      id: existing?.id || itemId,
+      type: "file_change",
+      itemId,
+      status: "in_progress",
+      changes: [],
+      ...defined(patch),
+      rawEventRefs: mergeRawEventRefs(existing?.rawEventRefs, patch.rawEventRefs),
+    }, meta)
+    if (existingIndex >= 0) {
+      const next = [...parts]
+      next[existingIndex] = nextPart
+      return next
+    }
+    return [...closeTrailingInlineStream(parts), nextPart]
+  }, context)
+}
+
+function normalizeFileChangeEntries(
+  value: unknown,
+  fallback: FileChangeEntry[] = [],
+): FileChangeEntry[] {
+  if (!Array.isArray(value)) return fallback
+  return value
+    .map((item) => objectValue(item))
+    .filter((item) => Object.keys(item).length > 0) as FileChangeEntry[]
+}
+
+function fileChangeStatus(
+  payload: Record<string, unknown>,
+  eventType: string,
+  fallback?: FileChangeStatus,
+): FileChangeStatus {
+  const status = stringValue(payload.status)
+  if (
+    status === "in_progress" ||
+    status === "completed" ||
+    status === "failed" ||
+    status === "declined" ||
+    status === "cancelled"
+  ) {
+    return status
+  }
+  if (eventType === "file_change_approval_resolved") {
+    return stringValue(payload.decision) === "allow_once" ? "in_progress" : "declined"
+  }
+  if (eventType === "file_change_completed") return "completed"
+  return fallback || "in_progress"
+}
+
+function primaryFileChangePath(changes: FileChangeEntry[]): string {
+  for (const change of changes) {
+    const path = change.move_path || change.movePath || change.path
+    if (typeof path === "string" && path.trim()) return path.trim()
+  }
+  return ""
+}
+
+function combinedFileChangeDiff(changes: FileChangeEntry[]): string {
+  return changes
+    .map((change) => typeof change.diff === "string" ? change.diff : "")
+    .filter(Boolean)
+    .join("\n")
+    .trim()
+}
+
+function fileChangeDiffStats(diff: string | undefined): { added: number; removed: number } {
+  let added = 0
+  let removed = 0
+  for (const line of (diff || "").split(/\r?\n/)) {
+    if (line.startsWith("+++") || line.startsWith("---")) continue
+    if (line.startsWith("+")) added += 1
+    else if (line.startsWith("-")) removed += 1
+  }
+  return { added, removed }
+}
+
+function upsertDocumentDraft(
+  bundle: MockSessionBundle,
+  eventType: string,
+  payload: Record<string, unknown>,
+  meta: EventRenderMeta,
+  context: SessionRunTranscriptContext,
+): void {
+  const draftId = stringValue(payload.draft_id) ||
+    stringValue(payload.draftId) ||
+    `draft-${meta.sessionEventSeq ?? context.now ?? Date.now()}`
+  updateAssistantItems(bundle, (parts) => {
+    const existingIndex = parts.findIndex((part) =>
+      part.type === "document_draft" && part.draftId === draftId
+    )
+    const existing = existingIndex >= 0 ? parts[existingIndex] as DocumentDraftItem : undefined
+    const patch: Partial<DocumentDraftItem> = {
+      draftId,
+      targetPath: stringValue(payload.target_path) || stringValue(payload.targetPath) || existing?.targetPath,
+      title: stringValue(payload.title) || existing?.title,
+      format: stringValue(payload.format) || existing?.format,
+      status: documentDraftStatus(payload, eventType, existing?.status),
+      itemId: stringValue(payload.item_id) || stringValue(payload.itemId) || existing?.itemId,
+      approvalId: stringValue(payload.approval_id) || stringValue(payload.approvalId) || existing?.approvalId,
+      error: stringValue(payload.error) || existing?.error,
+      reason: stringValue(payload.reason) || existing?.reason,
+      rawEventRefs: rawEventRefsFromPayload(payload),
+    }
+    const nextPart: DocumentDraftItem = withEventMeta({
+      id: existing?.id || draftId,
+      type: "document_draft",
+      draftId,
+      status: "streaming",
+      ...defined(patch),
+      rawEventRefs: mergeRawEventRefs(existing?.rawEventRefs, patch.rawEventRefs),
+    }, meta)
+    if (existingIndex >= 0) {
+      const next = [...parts]
+      next[existingIndex] = nextPart
+      return next
+    }
+    return [...closeTrailingInlineStream(parts), nextPart]
+  }, context)
+}
+
+function documentDraftStatus(
+  payload: Record<string, unknown>,
+  eventType: string,
+  fallback?: DocumentDraftItem["status"],
+): DocumentDraftItem["status"] {
+  const status = stringValue(payload.status)
+  if (
+    status === "declared" ||
+    status === "streaming" ||
+    status === "committing" ||
+    status === "committed" ||
+    status === "cancelled" ||
+    status === "failed"
+  ) {
+    return status
+  }
+  const mapped: Record<string, DocumentDraftItem["status"]> = {
+    document_draft_started: "streaming",
+    document_draft_commit_requested: "committing",
+    document_draft_committed: "committed",
+    document_draft_failed: "failed",
+    document_draft_cancelled: "cancelled",
+  }
+  return mapped[eventType] || fallback || "streaming"
 }
 
 function appendToolStream(

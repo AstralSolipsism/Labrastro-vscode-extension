@@ -620,7 +620,7 @@ describe("transcript presentation", () => {
     ]
     const nextParts: TranscriptItem[] = [
       { id: "tool-1", type: "tool", tool: "apply_patch", status: "returned", input: { path: "src/a.ts" } },
-      { id: "tool-2", type: "tool", tool: "edit_file", status: "running", input: { path: "src/b.ts" } },
+      { id: "file-change-2", type: "file_change", itemId: "file-change-2", status: "in_progress", path: "src/b.ts", changes: [] },
     ]
 
     const firstGroup = groups(buildTranscriptPresentation(firstParts, assistant(firstParts, "active")))[0]

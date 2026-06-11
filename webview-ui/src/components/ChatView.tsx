@@ -206,7 +206,23 @@ const MODEL_SWITCH_TIMEOUT_MS = 20_000
 const REASONING_STREAM_KEY = "reasoning-stream"
 const LIVE_TRANSCRIPT_FLUSH_MAX_DELAY_MS = 32
 const STREAMING_TEXT_OVERLAY_COMMIT_DELAY_MS = 100
-const LIVE_TRANSCRIPT_EVENT_TYPES = new Set(["assistant_delta", "reasoning_delta", "tool_call_delta", "tool_call_stream"])
+const LIVE_TRANSCRIPT_EVENT_TYPES = new Set([
+  "assistant_delta",
+  "reasoning_delta",
+  "tool_call_delta",
+  "tool_call_stream",
+  "file_change_started",
+  "file_change_patch_updated",
+  "file_change_approval_requested",
+  "file_change_approval_resolved",
+  "file_change_completed",
+  "turn_diff_updated",
+  "document_draft_started",
+  "document_draft_commit_requested",
+  "document_draft_committed",
+  "document_draft_failed",
+  "document_draft_cancelled",
+])
 type SessionRunStatus = "idle" | "running" | "stopping" | "cancelled" | "done" | "error" | "interrupted"
 
 function isReasoningThinkingItem(item: TranscriptItem): item is ThinkingItem {
@@ -1768,7 +1784,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         setPendingCancel(false)
       }
     }
-    if (type === "assistant_delta" || type === "reasoning_delta" || type === "tool_call_delta" || type === "tool_call_stream") {
+    if (isBufferableLiveTranscriptEvent(type)) {
       handleLiveStreamEvent(event)
       return
     }
