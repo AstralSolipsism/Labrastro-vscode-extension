@@ -107,6 +107,34 @@ export interface CapabilityView {
   }
 }
 
+export interface CapabilityCredentialRequirementView {
+  requirementId: string
+  provider: string
+  kind: string
+  placement: RuntimeRunsOn
+  requiredBy: string[]
+  state: string
+  statusLabel: string
+  scope: string
+  scopeLabel: string
+  secretRefId: string
+  credentialActor: string
+  message: string
+}
+
+export interface CapabilityPackageStateView {
+  installLabel: string
+  activationLabel: string
+  runtimeLabel: string
+  checkLabel: string
+  credentialLabel: string
+  updateLabel: string
+  mappingLabel: string
+  serverTargetLabel: string
+  localPeerTargetLabel: string
+  summaryLabel: string
+}
+
 export interface CapabilityViewsFromSourcesOptions extends CapabilityComponentGroupOptions {
   mcpServers?: Record<string, unknown>[]
   skillRecords?: Record<string, unknown>[]
@@ -138,6 +166,177 @@ export function capabilityEnabledStatusLabel(enabled: boolean): string {
 
 export function capabilityEnabledStatusTone(enabled: boolean): "success" | "muted" {
   return enabled ? "success" : "muted"
+}
+
+export function capabilityPackageStateView(value: unknown): CapabilityPackageStateView {
+  const raw = objectValue(value)
+  const installLabel = installStateLabel(stringValue(raw.install_state || raw.installState))
+  const activationLabel = activationStateLabel(stringValue(raw.activation_state || raw.activationState))
+  const runtimeLabel = runtimeStateLabel(stringValue(raw.runtime_state || raw.runtimeState))
+  const checkLabel = checkStateLabel(stringValue(raw.check_state || raw.checkState))
+  const credentialLabel = credentialStateLabel(stringValue(raw.credential_state || raw.credentialState))
+  const updateLabel = updateStateLabel(stringValue(raw.update_state || raw.updateState))
+  const mappingLabel = mappingStateLabel(stringValue(raw.mapping_state || raw.mappingState))
+  const serverTargetLabel = targetStatusLabel("server", raw)
+  const localPeerTargetLabel = targetStatusLabel("local_peer", raw)
+  return {
+    installLabel,
+    activationLabel,
+    runtimeLabel,
+    checkLabel,
+    credentialLabel,
+    updateLabel,
+    mappingLabel,
+    serverTargetLabel,
+    localPeerTargetLabel,
+    summaryLabel: [
+      installLabel,
+      activationLabel,
+      credentialLabel,
+      updateLabel,
+      mappingLabel,
+    ].filter(Boolean).join(" · "),
+  }
+}
+
+export function capabilityPackageStatePayload(value: unknown): Record<string, unknown> {
+  const raw = objectValue(value)
+  const state = { ...objectValue(raw.state) }
+  copyPackageFact(state, raw, "credential_state", "credentialState")
+  copyPackageFact(state, raw, "target_facts", "targetFacts")
+  copyPackageFact(state, raw, "targets", "targets")
+  copyPackageFact(state, raw, "server", "server")
+  copyPackageFact(state, raw, "local_peer", "localPeer")
+  return state
+}
+
+export function capabilityPackageUserStateLabel(value: unknown): string {
+  return capabilityPackageStateView(value).summaryLabel
+}
+
+function copyPackageFact(
+  target: Record<string, unknown>,
+  raw: Record<string, unknown>,
+  snakeKey: string,
+  camelKey: string,
+): void {
+  if (raw[snakeKey] !== undefined) {
+    target[snakeKey] = raw[snakeKey]
+    return
+  }
+  if (raw[camelKey] !== undefined) {
+    target[snakeKey] = raw[camelKey]
+  }
+}
+
+function installStateLabel(state: string): string {
+  const normalized = state.trim().toLowerCase()
+  if (normalized === "not_installed") return "未安装"
+  if (normalized === "registered") return "已登记"
+  if (normalized === "materialized") return "已写入"
+  if (normalized === "installed") return "已安装"
+  if (normalized === "blocked") return "安装受阻"
+  if (normalized === "failed") return "安装失败"
+  return normalized ? humanizeName(normalized) : "未登记"
+}
+
+function activationStateLabel(state: string): string {
+  const normalized = state.trim().toLowerCase()
+  if (normalized === "inactive") return "未激活"
+  if (normalized === "active") return "已激活"
+  if (normalized === "degraded") return "部分可用"
+  if (normalized === "blocked") return "激活受阻"
+  return normalized ? humanizeName(normalized) : "未激活"
+}
+
+function runtimeStateLabel(state: string): string {
+  const normalized = state.trim().toLowerCase()
+  if (normalized === "not_applicable") return "无需运行进程"
+  if (normalized === "stopped") return "未运行"
+  if (normalized === "starting") return "启动中"
+  if (normalized === "running") return "运行中"
+  if (normalized === "connected") return "已连接"
+  if (normalized === "failed") return "运行失败"
+  return normalized ? humanizeName(normalized) : "未返回运行状态"
+}
+
+function checkStateLabel(state: string): string {
+  const normalized = state.trim().toLowerCase()
+  if (normalized === "unknown") return "未检查"
+  if (normalized === "pending") return "检查中"
+  if (normalized === "passed") return "检查通过"
+  if (normalized === "missing") return "缺失"
+  if (normalized === "failed") return "检查失败"
+  if (normalized === "stale") return "需要重新检查"
+  return normalized ? humanizeName(normalized) : "未检查"
+}
+
+export function credentialStateLabel(state: string): string {
+  const normalized = state.trim().toLowerCase()
+  if (normalized === "not_required") return "无需凭据"
+  if (normalized === "missing") return "缺少凭据"
+  if (normalized === "bound") return "已绑定凭据"
+  if (normalized === "verified") return "凭据已验证"
+  if (normalized === "failed") return "凭据验证失败"
+  return normalized ? humanizeName(normalized) : "无需凭据"
+}
+
+export function updateStateLabel(state: string): string {
+  const normalized = state.trim().toLowerCase()
+  if (normalized === "not_checked") return "未检查更新"
+  if (normalized === "current") return "已是当前上游版本"
+  if (normalized === "update_available") return "有可用更新"
+  if (normalized === "candidate_ready") return "更新候选已准备"
+  if (normalized === "updating") return "正在更新"
+  if (normalized === "rollback_available") return "可回滚"
+  if (normalized === "failed") return "更新失败"
+  return normalized ? humanizeName(normalized) : "未检查更新"
+}
+
+function mappingStateLabel(state: string): string {
+  const normalized = state.trim().toLowerCase()
+  if (normalized === "mapped") return "映射完成"
+  if (normalized === "unmapped") return "存在未映射项"
+  if (normalized === "mapping_required") return "需要管理员映射"
+  if (normalized === "invalid") return "映射无效"
+  return normalized ? humanizeName(normalized) : "映射完成"
+}
+
+export function targetStatusLabel(target: RuntimeTarget, state: unknown): string {
+  const raw = targetStateValue(target, state)
+  const prefix = target === "server" ? "服务端" : "本地端"
+  const runtimeLabel = runtimeStateLabel(stringValue(raw.runtime_state || raw.runtimeState))
+  const checkLabel = checkStateLabel(stringValue(raw.check_state || raw.checkState))
+  return `${prefix}：${runtimeLabel}，${checkLabel}`
+}
+
+function targetStateValue(target: RuntimeTarget, state: unknown): Record<string, unknown> {
+  const raw = objectValue(state)
+  const targetFacts = objectValue(raw.target_facts || raw.targetFacts)
+  const fromTargetFacts = objectValue(targetFacts[target])
+  if (Object.keys(fromTargetFacts).length) return fromTargetFacts
+
+  const targets = objectValue(raw.targets)
+  const fromTargets = objectValue(targets[target])
+  if (Object.keys(fromTargets).length) return fromTargets
+
+  const camelTarget = target === "local_peer" ? "localPeer" : target
+  const direct = objectValue(raw[target] || raw[camelTarget])
+  if (Object.keys(direct).length) return direct
+
+  return {}
+}
+
+export function manualStepUserActionLabel(category: string): string {
+  const normalized = category.trim().toLowerCase()
+  if (normalized === "credential_auth_required") return "需要完成凭据授权"
+  if (normalized === "credential_secret_required") return "需要录入凭据"
+  if (normalized === "gui_authorization_required") return "需要在授权窗口确认"
+  if (normalized === "system_package_install_required") return "需要系统权限安装"
+  if (normalized === "manual_command_review_required") return "需要确认命令"
+  if (normalized === "license_acceptance_required") return "需要接受许可"
+  if (normalized === "path_selection_required") return "需要选择路径"
+  return "需要用户处理"
 }
 
 const ENVIRONMENT_REQUIREMENT_KINDS = new Set([
@@ -181,6 +380,43 @@ function stringArrayValue(value: unknown): string[] {
   return Array.isArray(value)
     ? value.map((item) => stringValue(item).trim()).filter(Boolean)
     : []
+}
+
+export function credentialBindingScopeLabel(scope: string): string {
+  const normalized = scope.trim()
+  if (normalized === "user") return "默认使用当前用户凭据"
+  if (normalized === "workspace") return "工作区共享凭据"
+  if (normalized === "server_global") return "服务端全局凭据"
+  return "需要绑定凭据"
+}
+
+export function credentialRequirementViews(value: unknown): CapabilityCredentialRequirementView[] {
+  return recordArrayValue(value).map((item) => {
+    const state = stringValue(item.state, "missing")
+    const scope = stringValue(item.scope)
+    return {
+      requirementId: stringValue(item.requirement_id || item.requirementId || item.id),
+      provider: stringValue(item.provider),
+      kind: stringValue(item.kind),
+      placement: normalizeRunsOn(item.placement, "server"),
+      requiredBy: stringArrayValue(item.required_by || item.requiredBy),
+      state,
+      statusLabel: credentialBindingStatusLabel(state),
+      scope,
+      scopeLabel: credentialBindingScopeLabel(scope),
+      secretRefId: stringValue(item.secret_ref_id || item.secretRefId),
+      credentialActor: stringValue(item.credential_actor || item.credentialActor, "user_delegated"),
+      message: stringValue(item.message),
+    }
+  })
+}
+
+function credentialBindingStatusLabel(state: string): string {
+  const normalized = state.trim().toLowerCase()
+  if (normalized === "bound") return "已绑定"
+  if (normalized === "verified") return "已验证"
+  if (normalized === "failed") return "凭据验证失败"
+  return "需要绑定凭据"
 }
 
 function recordArrayValue(value: unknown): Array<Record<string, unknown>> {

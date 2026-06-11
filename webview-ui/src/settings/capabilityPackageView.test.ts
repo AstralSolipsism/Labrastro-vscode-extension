@@ -7,12 +7,20 @@ import {
   capabilityInstallPreviewFromMcpJson,
   capabilityInstallStatusLabel,
   capabilityInstallStatusTone,
+  capabilityPackageStatePayload,
+  capabilityPackageStateView,
+  capabilityPackageUserStateLabel,
   capabilityViewsFromSources,
   capabilityComponentSummary,
+  credentialBindingScopeLabel,
+  credentialRequirementViews,
   groupCapabilityPackageComponents,
+  manualStepUserActionLabel,
   normalizeLifecycleHookViews,
   runtimeFootprintBadgeTone,
   runtimeFootprintLabel,
+  targetStatusLabel,
+  updateStateLabel,
 } from "./capabilityPackageView"
 
 describe("capability package component view", () => {
@@ -580,5 +588,127 @@ describe("capability package component view", () => {
     expect(capabilityEnabledStatusTone(true)).toBe("success")
     expect(capabilityEnabledStatusLabel(false)).toBe("已停用")
     expect(capabilityEnabledStatusTone(false)).toBe("muted")
+  })
+
+  it("projects package state axes into user-facing labels without leaking internal enum names", () => {
+    const state = {
+      install_state: "registered",
+      activation_state: "inactive",
+      runtime_state: "failed",
+      check_state: "stale",
+      credential_state: "bound",
+      update_state: "candidate_ready",
+      mapping_state: "mapping_required",
+      target_facts: {
+        server: {
+          runtime_state: "running",
+          check_state: "passed",
+        },
+        local_peer: {
+          runtime_state: "not_applicable",
+          check_state: "missing",
+        },
+      },
+    }
+    const view = capabilityPackageStateView(state)
+
+    expect(view.installLabel).toBe("已登记")
+    expect(view.activationLabel).toBe("未激活")
+    expect(view.runtimeLabel).toBe("运行失败")
+    expect(view.checkLabel).toBe("需要重新检查")
+    expect(view.serverTargetLabel).toBe("服务端：运行中，检查通过")
+    expect(view.localPeerTargetLabel).toBe("本地端：无需运行进程，缺失")
+    expect(view.credentialLabel).toBe("已绑定凭据")
+    expect(view.updateLabel).toBe("更新候选已准备")
+    expect(view.mappingLabel).toBe("需要管理员映射")
+    expect(capabilityPackageUserStateLabel(state)).not.toContain("mapping_required")
+    expect(capabilityPackageUserStateLabel(state)).not.toContain("不支持")
+    expect(capabilityPackageUserStateLabel(state)).not.toContain("等待开发者")
+    expect(updateStateLabel("rollback_available")).toBe("可回滚")
+    expect(targetStatusLabel("server", state)).toBe("服务端：运行中，检查通过")
+    expect(manualStepUserActionLabel("manual_command_review_required")).toBe("需要确认命令")
+  })
+
+  it("builds package state payload from top-level backend facts", () => {
+    const state = capabilityPackageStatePayload({
+      state: {
+        install_state: "installed",
+        activation_state: "active",
+        credential_state: "missing",
+      },
+      credential_state: "bound",
+      target_facts: {
+        server: {
+          runtime_state: "running",
+          check_state: "passed",
+        },
+      },
+    })
+
+    expect(state.credential_state).toBe("bound")
+    expect(targetStatusLabel("server", state)).toBe("服务端：运行中，检查通过")
+  })
+
+  it("does not duplicate package-level runtime state into target labels", () => {
+    const state = {
+      runtime_state: "running",
+      check_state: "passed",
+    }
+
+    expect(targetStatusLabel("server", state)).toBe("服务端：未返回运行状态，未检查")
+    expect(targetStatusLabel("local_peer", state)).toBe("本地端：未返回运行状态，未检查")
+  })
+
+  it("projects credential binding scopes without exposing secret values", () => {
+    expect(credentialBindingScopeLabel("user")).toBe("默认使用当前用户凭据")
+    expect(credentialBindingScopeLabel("workspace")).toBe("工作区共享凭据")
+    expect(credentialBindingScopeLabel("server_global")).toBe("服务端全局凭据")
+
+    const views = credentialRequirementViews([
+      {
+        requirement_id: "credreq:github:user",
+        provider: "github",
+        kind: "oauth",
+        placement: "server",
+        state: "bound",
+        scope: "user",
+        secret_ref_id: "github-user",
+        secret_value: "ghp_user_secret",
+      },
+      {
+        requirement_id: "credreq:github:workspace",
+        provider: "github",
+        kind: "token",
+        placement: "local_peer",
+        state: "bound",
+        scope: "workspace",
+        secret_ref_id: "github-workspace",
+        token: "ghp_workspace_secret",
+      },
+      {
+        requirement_id: "credreq:github:global",
+        provider: "github",
+        kind: "app_installation",
+        placement: "server",
+        state: "bound",
+        scope: "server_global",
+        secret_ref_id: "github-app",
+        api_key: "plain-secret",
+      },
+    ])
+
+    expect(views.map((view) => view.scopeLabel)).toEqual([
+      "默认使用当前用户凭据",
+      "工作区共享凭据",
+      "服务端全局凭据",
+    ])
+    expect(views.map((view) => view.secretRefId)).toEqual([
+      "github-user",
+      "github-workspace",
+      "github-app",
+    ])
+    expect(JSON.stringify(views)).not.toContain("ghp_user_secret")
+    expect(JSON.stringify(views)).not.toContain("ghp_workspace_secret")
+    expect(JSON.stringify(views)).not.toContain("plain-secret")
   })
 })
