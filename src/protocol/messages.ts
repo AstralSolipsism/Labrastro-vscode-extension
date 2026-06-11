@@ -42,6 +42,9 @@ export type HostToWebviewMessageType =
   | "capabilityPackage.actionResult"
   | "capabilityPackage.error"
   | "capabilityPackage.ingest.session.started"
+  | "capabilityPackage.installPlan"
+  | "capabilityPackage.installResult"
+  | "capabilityPackage.peerStatus"
   | "chat.sendDuringRunMode.state"
   | "chatConfig.error"
   | "chatConfig.state"
@@ -254,6 +257,9 @@ const HOST_TO_WEBVIEW_TYPES = new Set<HostToWebviewMessageType>([
   "capabilityPackage.actionResult",
   "capabilityPackage.error",
   "capabilityPackage.ingest.session.started",
+  "capabilityPackage.installPlan",
+  "capabilityPackage.installResult",
+  "capabilityPackage.peerStatus",
   "chat.sendDuringRunMode.state",
   "chatConfig.error",
   "chatConfig.state",
