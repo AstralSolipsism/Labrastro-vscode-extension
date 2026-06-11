@@ -188,9 +188,10 @@ describe("SessionTurn source order", () => {
     const toolHeaderStart = source.indexOf('class="tool-card__header"', toolPartStart)
     const expandedDetailsStart = source.indexOf('<Show when={open()}>', toolHeaderStart)
     const paramsSectionIndex = source.indexOf('<ToolSection title={t("tool.section.params")}>', expandedDetailsStart)
+    const collapsedHeaderSource = source.slice(toolHeaderStart, expandedDetailsStart)
 
     expect(source).not.toContain("const subtitle = () =>")
-    expect(source.indexOf('class="tool-card__subtitle"', toolHeaderStart)).toBe(-1)
+    expect(collapsedHeaderSource).not.toContain('class="tool-card__subtitle"')
     expect(paramsSectionIndex).toBeGreaterThan(expandedDetailsStart)
   })
 

@@ -84,7 +84,7 @@ describe("approval-state", () => {
         },
         {
           approval_id: "approval-2",
-          tool_name: "edit_file",
+          tool_name: "apply_patch",
           state: "requested",
         },
       ],
@@ -103,7 +103,7 @@ describe("approval-state", () => {
       {
         approvalId: "approval-2",
         sessionRunId: "run-1",
-        toolName: "edit_file",
+        toolName: "apply_patch",
       },
     ])
   })

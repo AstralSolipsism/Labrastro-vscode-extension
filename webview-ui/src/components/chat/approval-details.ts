@@ -99,7 +99,7 @@ export function approvalSummary(approval: ApprovalDetails): {
   }
   if (category === "write") {
     return {
-      title: approval.toolName === "edit_file" || approval.toolName === "apply_patch" ? "修改文件" : "写入文件",
+      title: "修改文件",
       primary: filePath || approval.toolName,
       secondary: approval.reason || "此文件变更需要批准。",
       icon: "diff-modified",
@@ -176,7 +176,7 @@ export function classifyApproval(approval: ApprovalDetails): AutoApprovalCategor
   const tool = approval.toolName.toLowerCase()
   if (source.includes("mcp") || tool === "mcp" || tool.startsWith("mcp_") || tool.includes("mcp")) return "mcp"
   if (/(delete|remove|unlink|rmdir|rm_file|trash)/.test(tool)) return "delete"
-  if (/(write|edit|patch|create|append|replace|move|rename)/.test(tool)) return "write"
+  if (/(write|edit|patch|create|append|replace|move|rename|commit)/.test(tool)) return "write"
   if (/(shell|execute|command|terminal|run)/.test(tool)) return "execute"
   if (/(read|list|search|grep|glob|find|cat|ls|stat|inspect|view)/.test(tool)) return "readOnly"
   return "unknown"

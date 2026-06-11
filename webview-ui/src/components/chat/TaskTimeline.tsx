@@ -4,7 +4,7 @@
  * 复刻 Kilocode v5 的过程记录条形图：
  * - 每个色块代表一次 LLM 请求/响应/工具调用
  * - 宽度 ∝ 耗时，高度 ∝ 内容长度
- * - 不同类型用不同颜色：用户交互(橙)、文件读取(浅蓝)、文件写入(深蓝)、
+ * - 不同类型用不同颜色：用户交互(橙)、文件读取(浅蓝)、文件变更(深蓝)、
  *   工具调用(蓝)、成功(绿)、错误(红)、文本/推理(灰)
  * - 支持水平滚动和点击跳转
  */
@@ -17,7 +17,7 @@ export type TimelineEventType =
   | "user"        // 用户消息
   | "text"        // 助手文本
   | "read_file"   // 读取文件
-  | "write_file"  // 写入文件
+  | "file_change" // 文件变更
   | "tool"        // 通用工具调用
   | "command"     // 执行命令
   | "success"     // 完成/成功
@@ -39,7 +39,7 @@ const COLOR_MAP: Record<TimelineEventType, string> = {
   user:       "var(--vscode-editorWarning-foreground, #e5a200)",
   text:       "var(--vscode-descriptionForeground, #888)",
   read_file:  "var(--vscode-textLink-foreground, #3794ff)",
-  write_file: "var(--vscode-focusBorder, #007fd4)",
+  file_change:"var(--vscode-focusBorder, #007fd4)",
   tool:       "var(--vscode-activityBarBadge-background, #4080d0)",
   command:    "var(--vscode-activityBarBadge-background, #4080d0)",
   success:    "var(--vscode-editorGutter-addedBackground, #4caf50)",

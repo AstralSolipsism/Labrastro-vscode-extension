@@ -78,7 +78,7 @@ const now = new Date("2026-04-26T08:00:00.000Z").toISOString()
 export const mockRecentSessions: MockSession[] = [
   {
     id: "s1",
-    title: "验证 Labrastro 侧边栏 MVP",
+    title: "验证 Labrastro 侧边栏架构收敛",
     updatedAt: now,
     kind: "main",
     state: "active",
@@ -101,7 +101,7 @@ export const mockStats: MockTaskStats = {
 export const mockTimelineEvents: TimelineEvent[] = [
   { id: "timeline-1", type: "user", label: "需求", contentLength: 96, durationMs: 120 },
   { id: "timeline-2", type: "tool", label: "检查", contentLength: 180, durationMs: 480 },
-  { id: "timeline-3", type: "write_file", label: "修改", contentLength: 260, durationMs: 720 },
+  { id: "timeline-3", type: "file_change", label: "修改", contentLength: 260, durationMs: 720 },
 ]
 
 export const mockTraceNodes: TraceNode[] = [
@@ -128,7 +128,7 @@ export const mockTraceNodes: TraceNode[] = [
     startedAt: now,
     parentId: "trace-user-1",
     transcriptAnchorId: "part-plan",
-    title: "确认 MVP 精简边界",
+    title: "确认侧边栏架构边界",
   },
   {
     id: "trace-tool-1",
@@ -197,7 +197,7 @@ export const mockTurns: MockTurn[] = [
     userMessage: {
       id: "user-1",
       role: "user",
-      text: "把 Labrastro 前端侧边栏收敛成 MVP，布局和样式对齐 Kilo v5。",
+      text: "把 Labrastro 前端侧边栏收敛到清晰架构，布局和样式对齐 Kilo v5。",
       parts: [],
       timestamp: Date.now() - 120000,
       traceNodeId: "trace-user-1",
@@ -213,7 +213,7 @@ export const mockTurns: MockTurn[] = [
           {
             id: "part-plan",
             type: "trace",
-            title: "MVP 方向",
+            title: "架构方向",
             text: "侧边栏保持聊天主路径，完整 DAG 延后到独立深查页。",
             traceNodeId: "trace-plan-1",
             traceNodeKind: "plan_update",

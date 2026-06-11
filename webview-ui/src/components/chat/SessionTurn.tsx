@@ -3,6 +3,8 @@ import { t } from "../../i18n"
 import type { MockTaskStats, MockTurn, MockMessage } from "./mock-data"
 import type {
   AssistantTextItem,
+  DocumentDraftItem,
+  FileChangeItem,
   NoticeItem,
   RawEventRef,
   ReasoningItem,
@@ -29,6 +31,7 @@ import {
   getTraceStatusLabel,
   inferTraceNodeKindFromToolName,
   type TraceNodeKind,
+  type TraceNodeStatus,
 } from "../../types/trace"
 import { IconButton } from "../common/IconButton"
 import { MarkdownBlock } from "../common/MarkdownBlock"
@@ -60,14 +63,11 @@ import { RoseFourLoader } from "./RoseFourLoader"
 const TOOL_ICONS: Record<string, string> = {
   read_file: "file",
   read_files: "file",
-  write_file: "edit",
-  edit_file: "diff-modified",
   shell: "terminal",
   grep: "search",
   glob: "symbol-file",
   mcp: "server-process",
   delegate_agent: "hubot",
-  write_to_file: "edit",
   execute_command: "terminal",
   list_file: "list-tree",
   list_files: "list-tree",
@@ -75,6 +75,7 @@ const TOOL_ICONS: Record<string, string> = {
   search_file: "search",
   search_files: "search",
   apply_patch: "diff-modified",
+  draft_document_begin: "file-text",
   install_capability_package: "package",
 }
 
@@ -167,14 +168,31 @@ const KeyedFor = <T,>(props: {
 }
 
 function traceKindForPart(part: TranscriptItem): TraceNodeKind {
+  if (part.type === "file_change" || part.type === "document_draft") return "file_edit"
   return part.traceNodeKind || inferTraceNodeKindFromToolName(part.type === "tool" ? part.tool : undefined)
 }
 
 function traceStatusForPart(part: TranscriptItem) {
   if (part.traceNodeStatus) return part.traceNodeStatus
   if (part.type === "tool") return TOOL_STATUS_TO_TRACE_STATUS[part.status || "pending"]
+  if (part.type === "file_change") return fileChangeTraceStatus(part)
+  if (part.type === "document_draft") return documentDraftTraceStatus(part)
   if (part.type === "session") return part.state === "error" ? "error" : "success"
   return "success"
+}
+
+function fileChangeTraceStatus(part: FileChangeItem): TraceNodeStatus {
+  if (part.status === "completed") return "success"
+  if (part.status === "failed") return "error"
+  if (part.status === "declined" || part.status === "cancelled") return "cancelled"
+  return "active"
+}
+
+function documentDraftTraceStatus(part: DocumentDraftItem): TraceNodeStatus {
+  if (part.status === "committed") return "success"
+  if (part.status === "failed") return "error"
+  if (part.status === "cancelled") return "cancelled"
+  return "active"
 }
 
 function toolDurationLabel(part: ToolActivityItem): string {
@@ -546,6 +564,215 @@ const ToolSection: Component<{ title: string; children: import("solid-js").JSX.E
     {props.children}
   </section>
 )
+
+const FileChangePart: Component<ItemProps<FileChangeItem>> = (props) => {
+  const openKey = `file-change:${props.part.id}`
+  const [open, setOpen] = createCardOpenState(
+    openKey,
+    props.part.status === "in_progress" || props.part.status === "failed",
+    () => props.part.status === "in_progress",
+  )
+  const kind = () => traceKindForPart(props.part)
+  const status = () => traceStatusForPart(props.part)
+  const selected = () => Boolean(props.part.traceNodeId && props.part.traceNodeId === props.selectedTraceNodeId)
+  const title = () => props.part.path || fileChangePrimaryPath(props.part) || t("tool.fileChange")
+  const diff = () => props.part.diff || props.part.patchPreview || ""
+  const delta = () => fileChangeDeltaLabel(props.part)
+
+  return (
+    <div
+      class="tool-card"
+      classList={{
+        "tool-card--selected": selected(),
+        "tool-card--awaiting": props.part.status === "in_progress",
+        "tool-card--error": props.part.status === "failed",
+        "tool-card--cancelled": props.part.status === "declined" || props.part.status === "cancelled",
+      }}
+      data-trace-node-id={props.part.traceNodeId}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <button
+        type="button"
+        class="tool-card__header"
+        onClick={(event) => {
+          event.stopPropagation()
+          setOpen((value) => {
+            const next = !value
+            CARD_OPEN_STATE.set(openKey, next)
+            return next
+          })
+        }}
+      >
+        <span class="tool-card__icon">
+          <span class="codicon codicon-diff-modified" aria-hidden="true" />
+        </span>
+        <span class="tool-card__body">
+          <span class="tool-card__title">{t("tool.fileChange")}</span>
+          <span class="tool-card__subtitle">{title()}</span>
+        </span>
+        <Show when={delta()}>
+          <span class="tool-card__duration">{delta()}</span>
+        </Show>
+        <span class={markerClass(kind(), status(), selected())} title={getTraceStatusLabel(status())} />
+        <span class="tool-card__status">{fileChangeStatusLabel(props.part.status)}</span>
+        <span class={`codicon codicon-chevron-${open() ? "down" : "right"}`} aria-hidden="true" />
+      </button>
+      <Show when={open()}>
+        <div class="tool-card__preview">
+          <Show when={props.part.approvalId}>
+            <ToolSection title={t("tool.section.approval")}>
+              <div class="tool-card__approval">
+                <div class="tool-card__approval-main">
+                  <span>{props.part.approvalReason || t("tool.approval.needsApproval")}</span>
+                  <strong>{approvalDecisionLabel(props.part.approvalDecision, props.part.status)}</strong>
+                </div>
+                <Show when={props.part.approvalResultReason}>
+                  <div class="tool-card__approval-result">{props.part.approvalResultReason}</div>
+                </Show>
+              </div>
+            </ToolSection>
+          </Show>
+          <Show when={diff()}>
+            <ToolSection title={t("tool.section.diff")}>
+              <pre class="tool-card__code tool-card__preview-block">{diff()}</pre>
+            </ToolSection>
+          </Show>
+          <Show when={props.part.error}>
+            <ToolSection title={t("tool.section.result")}>
+              <div class="shell-card__truncation-note">{props.part.error}</div>
+            </ToolSection>
+          </Show>
+          <RawAuditRefs
+            part={props.part}
+            rawAuditEvents={props.rawAuditEvents}
+            onLoadRawAuditEvents={props.onLoadRawAuditEvents}
+          />
+          <div class="tool-card__footer">
+            <div class="message-action-row tool-card__actions">
+              <Show when={canForkPart(props.part)}>
+                <IconButton
+                  icon="git-branch"
+                  title={t("chat.forkFromHere")}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    props.onForkPart?.(props.part)
+                  }}
+                />
+              </Show>
+            </div>
+          </div>
+        </div>
+      </Show>
+    </div>
+  )
+}
+
+const DocumentDraftPart: Component<ItemProps<DocumentDraftItem>> = (props) => {
+  const openKey = `document-draft:${props.part.id}`
+  const [open, setOpen] = createCardOpenState(
+    openKey,
+    props.part.status === "streaming" || props.part.status === "committing" || props.part.status === "failed",
+    () => props.part.status === "streaming" || props.part.status === "committing",
+  )
+  const kind = () => traceKindForPart(props.part)
+  const status = () => traceStatusForPart(props.part)
+  const selected = () => Boolean(props.part.traceNodeId && props.part.traceNodeId === props.selectedTraceNodeId)
+  const target = () => props.part.targetPath || props.part.title || t("tool.documentDraft")
+
+  return (
+    <div
+      class="tool-card"
+      classList={{
+        "tool-card--selected": selected(),
+        "tool-card--awaiting": props.part.status === "streaming" || props.part.status === "committing",
+        "tool-card--error": props.part.status === "failed",
+        "tool-card--cancelled": props.part.status === "cancelled",
+      }}
+      data-trace-node-id={props.part.traceNodeId}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <button
+        type="button"
+        class="tool-card__header"
+        onClick={(event) => {
+          event.stopPropagation()
+          setOpen((value) => {
+            const next = !value
+            CARD_OPEN_STATE.set(openKey, next)
+            return next
+          })
+        }}
+      >
+        <span class="tool-card__icon">
+          <span class="codicon codicon-file-text" aria-hidden="true" />
+        </span>
+        <span class="tool-card__body">
+          <span class="tool-card__title">{t("tool.documentDraft")}</span>
+          <span class="tool-card__subtitle">{target()}</span>
+        </span>
+        <span class={markerClass(kind(), status(), selected())} title={getTraceStatusLabel(status())} />
+        <span class="tool-card__status">{documentDraftStatusLabel(props.part.status)}</span>
+        <span class={`codicon codicon-chevron-${open() ? "down" : "right"}`} aria-hidden="true" />
+      </button>
+      <Show when={open()}>
+        <div class="tool-card__preview">
+          <ToolSection title={t("tool.section.details")}>
+            <pre class="tool-card__code tool-card__preview-block">{formatJson({
+              draft_id: props.part.draftId,
+              target_path: props.part.targetPath,
+              title: props.part.title,
+              format: props.part.format,
+              item_id: props.part.itemId,
+              approval_id: props.part.approvalId,
+            })}</pre>
+          </ToolSection>
+          <Show when={props.part.error || props.part.reason}>
+            <ToolSection title={t("tool.section.result")}>
+              <div class="shell-card__truncation-note">{props.part.error || props.part.reason}</div>
+            </ToolSection>
+          </Show>
+          <RawAuditRefs
+            part={props.part}
+            rawAuditEvents={props.rawAuditEvents}
+            onLoadRawAuditEvents={props.onLoadRawAuditEvents}
+          />
+        </div>
+      </Show>
+    </div>
+  )
+}
+
+function fileChangePrimaryPath(part: FileChangeItem): string {
+  for (const change of part.changes || []) {
+    const path = change.move_path || change.movePath || change.path
+    if (typeof path === "string" && path.trim()) return path.trim()
+  }
+  return ""
+}
+
+function fileChangeDeltaLabel(part: FileChangeItem): string {
+  const added = Math.max(0, part.addedLines || 0)
+  const removed = Math.max(0, part.removedLines || 0)
+  if (!added && !removed) return ""
+  return `+${added} / -${removed}`
+}
+
+function fileChangeStatusLabel(status: FileChangeItem["status"]): string {
+  if (status === "completed") return t("tool.fileChange.completed")
+  if (status === "failed") return t("tool.fileChange.failed")
+  if (status === "declined") return t("tool.fileChange.declined")
+  if (status === "cancelled") return t("tool.fileChange.cancelled")
+  return t("tool.fileChange.inProgress")
+}
+
+function documentDraftStatusLabel(status: DocumentDraftItem["status"]): string {
+  if (status === "committed") return t("tool.documentDraft.committed")
+  if (status === "committing") return t("tool.documentDraft.committing")
+  if (status === "failed") return t("tool.documentDraft.failed")
+  if (status === "cancelled") return t("tool.documentDraft.cancelled")
+  if (status === "declared") return t("tool.documentDraft.declared")
+  return t("tool.documentDraft.streaming")
+}
 
 const RawAuditRefs: Component<{
   part: TranscriptItem
@@ -2035,6 +2262,12 @@ const TranscriptItemView: Component<PartProps> = (props) => {
       </Match>
       <Match when={props.part.type === "reasoning"}>
         <ReasoningPart {...props} part={props.part as ReasoningItem} />
+      </Match>
+      <Match when={props.part.type === "file_change"}>
+        <FileChangePart {...props} part={props.part as FileChangeItem} />
+      </Match>
+      <Match when={props.part.type === "document_draft"}>
+        <DocumentDraftPart {...props} part={props.part as DocumentDraftItem} />
       </Match>
       <Match when={props.part.type === "tool" && isShellToolName((props.part as ToolActivityItem).tool, (props.part as ToolActivityItem).source)}>
         <ShellToolPart {...props} part={props.part as ToolActivityItem} />
