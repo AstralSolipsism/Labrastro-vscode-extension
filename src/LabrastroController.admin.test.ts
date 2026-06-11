@@ -192,6 +192,80 @@ describe("LabrastroController admin state errors", () => {
     expect(settingsPost).not.toHaveBeenCalledWith({ type: "connection.state", payload })
   })
 
+  it("starts and stops the capability package local peer runner with authenticated peer connectivity", () => {
+    const controller = new LabrastroController(context())
+    const runner = {
+      start: vi.fn(),
+      stop: vi.fn(),
+      dispose: vi.fn(),
+    }
+    ;(controller as unknown as { capabilityPackageLocalPeerRunner: typeof runner }).capabilityPackageLocalPeerRunner = runner
+    const update = (controller as unknown as {
+      updateCapabilityPackageLocalPeerRunner: (state: Record<string, unknown>) => void
+    }).updateCapabilityPackageLocalPeerRunner.bind(controller)
+
+    update({
+      authenticated: true,
+      status: "ready",
+      peerConnected: true,
+      hostUrl: "http://127.0.0.1:8765",
+      username: "alice",
+      peerId: "peer-1",
+    })
+    update({
+      authenticated: true,
+      status: "ready",
+      peerConnected: false,
+      hostUrl: "http://127.0.0.1:8765",
+      username: "alice",
+      peerId: "peer-1",
+    })
+
+    expect(runner.start).toHaveBeenCalledTimes(1)
+    expect(runner.stop).toHaveBeenCalledTimes(1)
+  })
+
+  it("gates the capability package local peer runner on authenticated ready state", () => {
+    const controller = new LabrastroController(context())
+    const runner = {
+      start: vi.fn(),
+      stop: vi.fn(),
+      dispose: vi.fn(),
+    }
+    ;(controller as unknown as { capabilityPackageLocalPeerRunner: typeof runner }).capabilityPackageLocalPeerRunner = runner
+    const update = (controller as unknown as {
+      updateCapabilityPackageLocalPeerRunner: (state: Record<string, unknown>) => void
+    }).updateCapabilityPackageLocalPeerRunner.bind(controller)
+
+    update({
+      peerConnected: true,
+      authenticated: false,
+      status: "login-required",
+      hostUrl: "http://127.0.0.1:8765",
+      username: "alice",
+      peerId: "peer-1",
+    })
+    update({
+      peerConnected: true,
+      authenticated: true,
+      status: "ready",
+      hostUrl: "http://127.0.0.1:8765",
+      username: "alice",
+      peerId: "peer-1",
+    })
+    update({
+      peerConnected: true,
+      authenticated: true,
+      status: "ready",
+      hostUrl: "http://127.0.0.1:8765",
+      username: "bob",
+      peerId: "peer-1",
+    })
+
+    expect(runner.start).toHaveBeenCalledTimes(2)
+    expect(runner.stop).toHaveBeenCalledTimes(2)
+  })
+
   it("emits adminState-scoped admin errors when admin state loading fails", async () => {
     const controller = new LabrastroController(context())
     const adminStatus = vi.fn(async () => {

@@ -17,6 +17,7 @@ import { EnvironmentCoordinator } from "./coordinators/EnvironmentCoordinator"
 import { SessionCoordinator } from "./coordinators/SessionCoordinator"
 import { normalizeChatLocale, resolveChatLocalePreference } from "./chatLocale"
 import { RemoteStateStore, type RemoteStateKey, type RemoteStateSlice } from "./RemoteStateStore"
+import { CapabilityPackageLocalPeerRunner } from "./CapabilityPackageLocalPeerRunner"
 
 type EnvironmentRunMode = "check" | "configure"
 type EnvironmentEntryKind = "environment_requirement" | "mcp"
@@ -120,6 +121,8 @@ export class LabrastroController implements vscode.Disposable {
   private readonly sessionRunCoordinator: SessionRunCoordinator
   private readonly environmentCoordinator: EnvironmentCoordinator
   private readonly sessionCoordinator: SessionCoordinator
+  private readonly capabilityPackageLocalPeerRunner: CapabilityPackageLocalPeerRunner
+  private capabilityPackageLocalPeerRunnerKey: string | undefined
   private backendFeatures: BackendFeatures | null | undefined
   private readonly webviewBus = new WebviewBus()
   private readonly remoteState = new RemoteStateStore()
@@ -131,6 +134,10 @@ export class LabrastroController implements vscode.Disposable {
   constructor(private readonly context: vscode.ExtensionContext) {
     this.client = new LabrastroRemoteClient(context)
     this.client.setPeerPreparationListener((state) => this.applyPeerPreparationState(state))
+    this.capabilityPackageLocalPeerRunner = new CapabilityPackageLocalPeerRunner({
+      client: this.client,
+      storageRoot: this.context.globalStorageUri.fsPath,
+    })
     this.approvalDocuments = new ApprovalDocumentProvider()
     this.adminCoordinator = new AdminCoordinator({
       client: this.client,
@@ -623,14 +630,16 @@ export class LabrastroController implements vscode.Disposable {
   }
 
   async postConnectionState(post: PostMessage): Promise<void> {
-    await this.postBroadcastRemoteState(post, "connection", async () => ({
+    const state = await this.postBroadcastRemoteState(post, "connection", async () => ({
       ...(await this.client.connectionState()),
     }))
+    if (state) this.updateCapabilityPackageLocalPeerRunner(state)
   }
 
   private setConnectionState(post: PostMessage, state: ConnectionState): void {
     const slice = this.remoteState.setReady("connection", { ...state })
     this.emitRemoteStatePatch(post, "connection", slice)
+    this.updateCapabilityPackageLocalPeerRunner(state)
   }
 
   private applyPeerPreparationState(state: PeerPreparationState): void {
@@ -643,6 +652,31 @@ export class LabrastroController implements vscode.Disposable {
     }
     const slice = this.remoteState.setReady("connection", next)
     this.emitRemoteStatePatch(undefined, "connection", slice)
+    this.updateCapabilityPackageLocalPeerRunner(next)
+  }
+
+  private updateCapabilityPackageLocalPeerRunner(state: {
+    authenticated?: boolean
+    deviceId?: string
+    hostUrl?: string
+    peerConnected?: boolean
+    peerId?: string
+    status?: string
+    username?: string
+  }): void {
+    const runnerKey = capabilityPackageLocalPeerRunnerKey(state)
+    if (runnerKey) {
+      if (this.capabilityPackageLocalPeerRunnerKey !== runnerKey) {
+        if (this.capabilityPackageLocalPeerRunnerKey) {
+          this.capabilityPackageLocalPeerRunner.stop()
+        }
+        this.capabilityPackageLocalPeerRunnerKey = runnerKey
+        this.capabilityPackageLocalPeerRunner.start()
+      }
+      return
+    }
+    this.capabilityPackageLocalPeerRunnerKey = undefined
+    this.capabilityPackageLocalPeerRunner.stop()
   }
 
   private async broadcastConnectionState(): Promise<void> {
@@ -1869,6 +1903,7 @@ export class LabrastroController implements vscode.Disposable {
 
   dispose(): void {
     this.disposed = true
+    this.capabilityPackageLocalPeerRunner.dispose()
     this.sessionCoordinator.dispose()
     void this.client.stopPeer("controller.dispose")
   }
@@ -1876,6 +1911,30 @@ export class LabrastroController implements vscode.Disposable {
 
 function contextVersion(context: vscode.ExtensionContext): string {
   return String(context.extension.packageJSON?.version || "0.1.0")
+}
+
+function capabilityPackageLocalPeerRunnerKey(state: {
+  authenticated?: boolean
+  deviceId?: string
+  hostUrl?: string
+  peerConnected?: boolean
+  peerId?: string
+  status?: string
+  username?: string
+}): string {
+  if (
+    state.peerConnected !== true ||
+    state.authenticated !== true ||
+    state.status !== "ready"
+  ) {
+    return ""
+  }
+  return [
+    state.hostUrl || "",
+    state.username || "",
+    state.deviceId || "",
+    state.peerId || "",
+  ].join("|")
 }
 
 function stringValue(value: unknown): string | undefined {
