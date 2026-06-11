@@ -12,7 +12,7 @@ Webview 安全与 VS Code 运行机制细则见：
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **Labrastro-vscode-extension-capability-package-ecosystem** (5151 symbols, 16129 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **Labrastro-vscode-extension** (5233 symbols, 16436 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 
@@ -35,10 +35,10 @@ This project is indexed by GitNexus as **Labrastro-vscode-extension-capability-p
 
 | Resource | Use for |
 |----------|---------|
-| `gitnexus://repo/Labrastro-vscode-extension-capability-package-ecosystem/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/Labrastro-vscode-extension-capability-package-ecosystem/clusters` | All functional areas |
-| `gitnexus://repo/Labrastro-vscode-extension-capability-package-ecosystem/processes` | All execution flows |
-| `gitnexus://repo/Labrastro-vscode-extension-capability-package-ecosystem/process/{name}` | Step-by-step execution trace |
+| `gitnexus://repo/Labrastro-vscode-extension/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/Labrastro-vscode-extension/clusters` | All functional areas |
+| `gitnexus://repo/Labrastro-vscode-extension/processes` | All execution flows |
+| `gitnexus://repo/Labrastro-vscode-extension/process/{name}` | Step-by-step execution trace |
 
 ## CLI
 
