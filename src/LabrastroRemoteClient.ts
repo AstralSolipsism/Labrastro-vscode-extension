@@ -537,6 +537,19 @@ export class LabrastroRemoteClient {
     }))
   }
 
+  async capabilityPackageInstallPlan(): Promise<JsonObject> {
+    return this.postPeerJson("/remote/capability-packages/install/plan", (peer) => ({
+      peer_token: peer.peer_token,
+    }))
+  }
+
+  async capabilityPackageInstallResult(result: JsonObject): Promise<JsonObject> {
+    return this.postPeerJson("/remote/capability-packages/install/result", (peer) => ({
+      peer_token: peer.peer_token,
+      result,
+    }))
+  }
+
   async capabilityPackageDelete(payload: JsonObject): Promise<JsonObject> {
     return this.authenticatedPost("/remote/admin/capability-packages/delete", payload)
   }

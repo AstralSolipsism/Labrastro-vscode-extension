@@ -333,10 +333,19 @@ function remoteContractFixtures(): Array<{
     "protocol",
     "contracts.json"
   )
+  const explicitServerRoot = process.env.LABRASTRO_SERVER_REPO
+  const worktreeParent = path.resolve(__dirname, "..", "..", "..")
+  const siblingCandidates = fsSync.existsSync(worktreeParent)
+    ? fsSync.readdirSync(worktreeParent, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => path.join(worktreeParent, entry.name, relativeContractPath))
+    : []
   const candidates = [
+    ...(explicitServerRoot ? [path.resolve(explicitServerRoot, relativeContractPath)] : []),
     path.resolve(__dirname, "..", "..", relativeContractPath),
     path.resolve(__dirname, "..", "..", "Labrastro", relativeContractPath),
     path.resolve(__dirname, "..", "..", "ReuleauxCoder", relativeContractPath),
+    ...siblingCandidates,
   ]
   const contractPath = candidates.find((candidate) => fsSync.existsSync(candidate))
   if (!contractPath) {
@@ -1303,6 +1312,80 @@ describe("LabrastroRemoteClient session run start", () => {
       peer_token: "peer-token-1",
       session_id: "session-cap",
       source: { type: "github_repo", url: "https://github.com/acme/tool" },
+    })
+  })
+
+  it("sends and receives capability package local peer install records", async () => {
+    vscodeMock.labrastroValue = "http://127.0.0.1:8765"
+    const context = {
+      secrets: {
+        get: vi.fn(async () => undefined),
+      },
+    }
+    const requests: Array<{ path: string; body: Record<string, unknown> }> = []
+    const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
+      const path = new URL(String(input)).pathname
+      const body = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>
+      requests.push({ path, body })
+      if (path.endsWith("/plan")) {
+        return new Response(JSON.stringify({
+          type: "capabilityPackage.installPlan",
+          plan: {
+            plan_id: "plan-waza",
+            actions: [{
+              id: "install-waza-python",
+              package_id: "waza",
+              component_id: "skill:waza/read",
+              target: "local_peer",
+            }],
+          },
+        }), { headers: { "Content-Type": "application/json" } })
+      }
+      return new Response(JSON.stringify({
+        type: "capabilityPackage.installResult",
+        peer_status: {
+          actions: {
+            "install-waza-python": { check_state: "passed", install_state: "installed" },
+          },
+        },
+      }), { headers: { "Content-Type": "application/json" } })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    const client = new LabrastroRemoteClient(context as never)
+    attachPeer(client, "peer-token-1")
+
+    await expect(client.capabilityPackageInstallPlan()).resolves.toMatchObject({
+      type: "capabilityPackage.installPlan",
+      plan: { plan_id: "plan-waza" },
+    })
+    await expect(client.capabilityPackageInstallResult({
+      plan_id: "plan-waza",
+      action_id: "install-waza-python",
+      package_id: "waza",
+      component_id: "skill:waza/read",
+      target: "local_peer",
+      status: "passed",
+      version: "1.0.0",
+      content_hash: "sha256:abc",
+      message: "installed",
+      timestamp: "2026-06-11T00:00:00Z",
+    })).resolves.toMatchObject({
+      type: "capabilityPackage.installResult",
+    })
+
+    expect(requests[0]).toMatchObject({
+      path: "/remote/capability-packages/install/plan",
+      body: { peer_token: "peer-token-1" },
+    })
+    expect(requests[1]).toMatchObject({
+      path: "/remote/capability-packages/install/result",
+      body: {
+        peer_token: "peer-token-1",
+        result: expect.objectContaining({
+          target: "local_peer",
+          action_id: "install-waza-python",
+        }),
+      },
     })
   })
 
