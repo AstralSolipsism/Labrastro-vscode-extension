@@ -127,7 +127,7 @@ describe("settings utils", () => {
       argsText: "--approval-mode full-auto\n--model gpt-5.2",
       envText: "OPENAI_BASE_URL=https://example.test",
       mcpServersText: "github\ncontext7",
-      allowedToolsText: "read_file, write_file",
+      allowedToolsText: "read_file, apply_patch",
       deniedToolsText: "delete_file",
       homePolicy: "shared",
       approvalMode: "manual",
@@ -143,7 +143,7 @@ describe("settings utils", () => {
       args: ["--approval-mode full-auto", "--model gpt-5.2"],
       env: { OPENAI_BASE_URL: "https://example.test" },
       mcp: { servers: ["github", "context7"] },
-      allowed_tools: ["read_file", "write_file"],
+      allowed_tools: ["read_file", "apply_patch"],
       denied_tools: ["delete_file"],
       credential_refs: ["OPENAI_API_KEY"],
     })
