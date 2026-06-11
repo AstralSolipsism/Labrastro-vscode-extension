@@ -30,6 +30,7 @@ const zhCN: Record<string, string> = {
   "chat.capabilityPackage.dependencies": "所需依赖/环境",
   "chat.capabilityPackage.runtime": "运行责任",
   "chat.capabilityPackage.installPlan": "安装影响",
+  "chat.capabilityPackage.installChecks": "安装后检查",
   "chat.capabilityPackage.usage": "使用方式",
   "chat.capabilityPackage.evidence": "证据",
   "chat.capabilityPackage.credentials": "凭据",

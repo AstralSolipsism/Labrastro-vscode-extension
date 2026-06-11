@@ -113,6 +113,48 @@ describe("SessionTurn source order", () => {
     expect(html).not.toContain("private raw prompt")
   })
 
+  it("renders capability package install decisions as package-level install confirmation", async () => {
+    const turn: MockTurn = {
+      userMessage: {
+        id: "user-capability-install",
+        role: "user",
+        text: "install this capability package",
+        parts: [],
+        timestamp: 0,
+      },
+      assistantMessages: [{
+        id: "assistant-capability-install",
+        role: "assistant",
+        text: "",
+        timestamp: 1,
+        parts: [{
+          id: "decision-1",
+          type: "workflow_decision",
+          workflow: "capability_package_ingest",
+          lane: "primary",
+          decisionType: "capability_package_install",
+          status: "pending",
+          summary: "确认后会安装能力包，安装完成后仍需单独启用能力。",
+          review: {
+            package_id: "waza",
+            install_plan: ["写入 Skill 文件闭包", "登记 MCP 配置"],
+            hooks: [{ display_name: "Waza prompt hook" }],
+            manual_steps: [{ category: "manual_command_review_required" }],
+            runtime_footprint: { runs_on: "server" },
+          },
+        }],
+      }],
+    }
+
+    const html = await renderSessionTurnToString(turn)
+
+    expect(html).toContain("确认安装能力")
+    expect(html).toContain("包含 hooks")
+    expect(html).toContain("需要确认命令")
+    expect(html).toContain("完成后重新检查")
+    expect(html).not.toContain("逐个批准 hook")
+  })
+
   it("keeps user and assistant message actions after their content", () => {
     const sessionTurnStart = source.indexOf("export const SessionTurn")
     const userSectionStart = source.indexOf('class="user-message"', sessionTurnStart)

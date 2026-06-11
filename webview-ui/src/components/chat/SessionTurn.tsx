@@ -16,6 +16,7 @@ import type {
 } from "./transcript-model"
 import {
   groupCapabilityPackageComponents,
+  manualStepUserActionLabel,
   runtimeFootprintLabel,
   type CapabilityComponentView,
 } from "../../settings/capabilityPackageView"
@@ -1375,6 +1376,20 @@ const CapabilityPackageInstallDecisionPart: Component<ItemProps<WorkflowDecision
   })
   const review = () => props.part.review || {}
   const packageId = () => stringPayload(review().package_id) || stringPayload(review().id)
+  const reviewHooks = () => [
+    ...arrayRecordPayload(review().hooks),
+    ...arrayRecordPayload(review().hook_views),
+  ]
+  const manualSteps = () => arrayRecordPayload(review().manual_steps || review().manualSteps)
+  const installCheckItems = () => [
+    reviewHooks().length
+      ? `包含 hooks：${reviewHooks().length} 个，启用能力后随能力默认启用`
+      : "",
+    ...manualSteps().map((item) =>
+      manualStepUserActionLabel(stringPayload(item.category) || stringPayload(item.type))
+    ),
+    "完成后重新检查",
+  ].filter(Boolean)
   const meta = () => [
     packageId(),
     workflowStatusLabel(props.part.status),
@@ -1414,6 +1429,7 @@ const CapabilityPackageInstallDecisionPart: Component<ItemProps<WorkflowDecision
             <CapabilityTextList title={t("chat.capabilityPackage.installPlan")} items={stringArrayPayload(review().install_plan)} />
             <CapabilityTextList title={t("chat.capabilityPackage.risks")} items={stringArrayPayload(review().risks)} />
             <CapabilityTextList title={t("chat.capabilityPackage.credentials")} items={stringArrayPayload(review().credentials)} />
+            <CapabilityTextList title={t("chat.capabilityPackage.installChecks")} items={installCheckItems()} />
             <CapabilityReviewSection title={t("chat.capabilityPackage.runtime")} empty={runtimeFootprintLabel(review().runtime_footprint)}>
               <p>{runtimeFootprintLabel(review().runtime_footprint)}</p>
             </CapabilityReviewSection>
