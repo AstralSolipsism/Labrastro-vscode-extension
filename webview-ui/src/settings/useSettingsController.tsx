@@ -81,6 +81,7 @@ import {
 } from "../components/chat/ApprovalDetailsDialog"
 import {
   capabilityViewsFromSources,
+  credentialRequirementViews,
   groupCapabilityPackageComponents,
   normalizeLifecycleHookViews,
   normalizeRuntimeFootprint,
@@ -460,6 +461,7 @@ interface CapabilityPackageView {
   effectiveCapabilities: string[]
   evidence: Array<Record<string, string>>
   credentials: string[]
+  credentialRequirements: ReturnType<typeof credentialRequirementViews>
   riskLevel: string
   runtimeFootprint: ReturnType<typeof normalizeRuntimeFootprint>
   hooks: CapabilityHookView[]
@@ -1522,6 +1524,7 @@ function capabilityPackageValue(id: string, value: unknown): CapabilityPackageVi
     effectiveCapabilities: stringArray(item.effective_capabilities),
     evidence: normalizeEvidence(item.evidence),
     credentials: stringArray(item.credentials),
+    credentialRequirements: credentialRequirementViews(item.credential_requirements),
     riskLevel: stringValue(item.risk_level),
     runtimeFootprint: normalizeRuntimeFootprint(item.runtime_footprint),
     hooks: normalizeLifecycleHookViews(item.hook_views),
