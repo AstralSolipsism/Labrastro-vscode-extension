@@ -29,7 +29,7 @@ describe("LabrastroController session run event batching", () => {
     expect(source).toContain('type: batch.live ? "sessionRun.stream" : "sessionRun.events"')
   })
 
-  it("routes draft preview through editor provider", () => {
+  it("routes draft preview and resolved approvals through editor providers", () => {
     const batchFunction = sourceSection(
       "private async applySessionRunEventsBatch",
       "private async recoverSessionRun",
@@ -37,6 +37,7 @@ describe("LabrastroController session run event batching", () => {
 
     expect(source).toContain("DraftDocumentProvider")
     expect(batchFunction).toContain("this.draftDocuments.applySessionRunEvents")
+    expect(batchFunction).toContain("this.approvalDocuments.close")
   })
 
   it("uses SSE session run events as the only run transport", () => {

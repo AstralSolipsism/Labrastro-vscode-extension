@@ -1762,6 +1762,14 @@ export class LabrastroController implements vscode.Disposable {
       for (const event of events) {
         if (event && event.type === "approval_request") {
           await this.approvalDocuments.store(objectValue(event.payload))
+        } else if (
+          event &&
+          (event.type === "approval_resolved" || event.type === "file_change_approval_resolved")
+        ) {
+          const approvalId = stringValue(objectValue(event.payload).approval_id)
+          if (approvalId) {
+            await this.approvalDocuments.close(approvalId)
+          }
         }
       }
       await this.draftDocuments.applySessionRunEvents(sessionRunId, events)

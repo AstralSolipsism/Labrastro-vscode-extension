@@ -43,6 +43,7 @@ function coordinator() {
     },
     approvalDocuments: {
       open: vi.fn(),
+      close: vi.fn(),
     },
     startSessionRun: vi.fn(),
     cancelSessionRun: vi.fn(),
@@ -254,6 +255,7 @@ describe("SessionRunCoordinator", () => {
         state: "already_resolved",
       },
     })
+    expect(options.approvalDocuments.close).toHaveBeenCalledWith("approval-1")
   })
 
   it("reports approval reply failures without converting the session run to a fatal run error", async () => {
@@ -283,6 +285,7 @@ describe("SessionRunCoordinator", () => {
       message: "fetch failed",
     })
     expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "sessionRun.error" }))
+    expect(options.approvalDocuments.close).not.toHaveBeenCalled()
     expect(subject.activeRun?.sessionRunId).toBe("active-run")
   })
 

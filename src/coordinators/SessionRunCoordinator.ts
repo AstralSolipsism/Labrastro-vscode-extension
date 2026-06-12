@@ -261,6 +261,7 @@ export class SessionRunCoordinator {
             decision,
             payload,
           })
+          await this.options.approvalDocuments.close(approvalId)
         } catch (error) {
           const resolvedError = chatErrorMessage(error)
           post({

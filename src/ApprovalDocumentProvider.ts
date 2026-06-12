@@ -72,6 +72,21 @@ export class ApprovalDocumentProvider implements vscode.TextDocumentContentProvi
     })
   }
 
+  async close(approvalId: string): Promise<void> {
+    if (!approvalId) return
+    const matchingTabs: vscode.Tab[] = []
+    for (const group of vscode.window.tabGroups.all) {
+      for (const tab of group.tabs) {
+        if (approvalTabMatches(tab, approvalId)) {
+          matchingTabs.push(tab)
+        }
+      }
+    }
+    if (matchingTabs.length) {
+      await vscode.window.tabGroups.close(matchingTabs, true)
+    }
+  }
+
   private putDocument(path: string, content: string): vscode.Uri {
     const uri = vscode.Uri.from({
       scheme: ApprovalDocumentProvider.scheme,
@@ -124,6 +139,27 @@ export class ApprovalDocumentProvider implements vscode.TextDocumentContentProvi
         : undefined,
     }
   }
+}
+
+function approvalTabMatches(tab: vscode.Tab, approvalId: string): boolean {
+  const input = tab.input as unknown
+  if (!input || typeof input !== "object") return false
+  const record = input as Record<string, unknown>
+  return (
+    approvalUriMatches(record.uri, approvalId) ||
+    approvalUriMatches(record.original, approvalId) ||
+    approvalUriMatches(record.modified, approvalId)
+  )
+}
+
+function approvalUriMatches(value: unknown, approvalId: string): boolean {
+  if (!value || typeof value !== "object") return false
+  const record = value as Record<string, unknown>
+  return (
+    record.scheme === ApprovalDocumentProvider.scheme &&
+    typeof record.path === "string" &&
+    record.path.startsWith(`/${approvalId}/`)
+  )
 }
 
 function stringValue(value: unknown): string {

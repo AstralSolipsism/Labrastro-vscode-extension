@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const vscodeMock = vi.hoisted(() => ({
   executeCommand: vi.fn(),
@@ -6,6 +6,8 @@ const vscodeMock = vi.hoisted(() => ({
   openTextDocument: vi.fn(),
   showTextDocument: vi.fn(),
   setTextDocumentLanguage: vi.fn(),
+  closeTabs: vi.fn(),
+  tabGroups: { all: [] as Array<{ tabs: unknown[] }> },
 }))
 
 vi.mock("vscode", () => ({
@@ -26,6 +28,12 @@ vi.mock("vscode", () => ({
   },
   window: {
     activeTextEditor: undefined,
+    tabGroups: {
+      get all() {
+        return vscodeMock.tabGroups.all
+      },
+      close: vscodeMock.closeTabs,
+    },
     showTextDocument: vscodeMock.showTextDocument,
     showWarningMessage: vscodeMock.showWarningMessage,
   },
@@ -54,6 +62,16 @@ function approvalPayload() {
 }
 
 describe("ApprovalDocumentProvider", () => {
+  beforeEach(() => {
+    vscodeMock.executeCommand.mockReset()
+    vscodeMock.showWarningMessage.mockReset()
+    vscodeMock.openTextDocument.mockReset()
+    vscodeMock.showTextDocument.mockReset()
+    vscodeMock.setTextDocumentLanguage.mockReset()
+    vscodeMock.closeTabs.mockReset()
+    vscodeMock.tabGroups.all = []
+  })
+
   it("can cache restored status approvals without auto-opening their diff", async () => {
     const provider = new ApprovalDocumentProvider()
 
@@ -71,5 +89,40 @@ describe("ApprovalDocumentProvider", () => {
       "Labrastro Approval: apply_patch example.ts",
       { preview: false, viewColumn: 1 },
     )
+  })
+
+  it("closes only tabs that belong to the resolved approval", async () => {
+    const provider = new ApprovalDocumentProvider()
+    const matchingTab = {
+      input: {
+        original: { scheme: "labrastro-approval", path: "/approval-1/original/example.ts" },
+        modified: { scheme: "labrastro-approval", path: "/approval-1/modified/example.ts" },
+      },
+    }
+    const otherApprovalTab = {
+      input: {
+        original: { scheme: "labrastro-approval", path: "/approval-2/original/example.ts" },
+        modified: { scheme: "labrastro-approval", path: "/approval-2/modified/example.ts" },
+      },
+    }
+    const normalTab = {
+      input: {
+        uri: { scheme: "file", path: "/approval-1/original/example.ts" },
+      },
+    }
+    vscodeMock.tabGroups.all = [{ tabs: [matchingTab, otherApprovalTab, normalTab] }]
+
+    await provider.close("approval-1")
+
+    expect(vscodeMock.closeTabs).toHaveBeenCalledWith([matchingTab], true)
+  })
+
+  it("treats close as a no-op when no approval tab is open", async () => {
+    const provider = new ApprovalDocumentProvider()
+    vscodeMock.tabGroups.all = [{ tabs: [] }]
+
+    await provider.close("approval-1")
+
+    expect(vscodeMock.closeTabs).not.toHaveBeenCalled()
   })
 })
