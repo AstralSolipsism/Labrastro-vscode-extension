@@ -103,6 +103,7 @@ export const SESSION_RUN_TRANSCRIPT_EVENT_TYPES = new Set([
   "file_change_completed",
   "turn_diff_updated",
   "document_draft_started",
+  "document_draft_delta",
   "document_draft_commit_requested",
   "document_draft_committed",
   "document_draft_failed",
@@ -361,6 +362,7 @@ function applySessionRunTranscriptEventToBundle(
     markChanged()
   } else if (
     type === "document_draft_started" ||
+    type === "document_draft_delta" ||
     type === "document_draft_commit_requested" ||
     type === "document_draft_committed" ||
     type === "document_draft_failed" ||
@@ -1157,6 +1159,9 @@ function upsertDocumentDraft(
       status: documentDraftStatus(payload, eventType, existing?.status),
       itemId: stringValue(payload.item_id) || stringValue(payload.itemId) || existing?.itemId,
       approvalId: stringValue(payload.approval_id) || stringValue(payload.approvalId) || existing?.approvalId,
+      contentLength: eventType === "document_draft_delta"
+        ? (existing?.contentLength || 0) + String(payload.content || "").length
+        : existing?.contentLength,
       error: stringValue(payload.error) || existing?.error,
       reason: stringValue(payload.reason) || existing?.reason,
       rawEventRefs: rawEventRefsFromPayload(payload),
@@ -1196,6 +1201,7 @@ function documentDraftStatus(
   }
   const mapped: Record<string, DocumentDraftItem["status"]> = {
     document_draft_started: "streaming",
+    document_draft_delta: "streaming",
     document_draft_commit_requested: "committing",
     document_draft_committed: "committed",
     document_draft_failed: "failed",

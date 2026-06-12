@@ -117,6 +117,7 @@ export interface DocumentDraftItem extends TranscriptMeta {
   status: DocumentDraftStatus
   itemId?: string
   approvalId?: string
+  contentLength?: number
   error?: string
   reason?: string
 }

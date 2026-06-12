@@ -218,6 +218,7 @@ const LIVE_TRANSCRIPT_EVENT_TYPES = new Set([
   "file_change_completed",
   "turn_diff_updated",
   "document_draft_started",
+  "document_draft_delta",
   "document_draft_commit_requested",
   "document_draft_committed",
   "document_draft_failed",

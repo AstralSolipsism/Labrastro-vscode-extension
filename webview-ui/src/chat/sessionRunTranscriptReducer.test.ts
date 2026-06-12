@@ -360,6 +360,38 @@ describe("sessionRunTranscriptReducer", () => {
     })
   })
 
+  it("projects document draft deltas as length without creating assistant text", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "write docs" }, 1)
+    current = reduce(current, "document_draft_started", {
+      draft_id: "draft-1",
+      target_path: "docs/a.md",
+      title: "ADR",
+      format: "markdown",
+    }, 2)
+    current = reduce(current, "document_draft_delta", {
+      draft_id: "draft-1",
+      target_path: "docs/a.md",
+      content: "# ADR\n",
+    }, 3)
+    current = reduce(current, "document_draft_delta", {
+      draft_id: "draft-1",
+      target_path: "docs/a.md",
+      content: "\nBody\n",
+    }, 4)
+
+    const message = current.turns[0].assistantMessages[0]
+    expect(message.text).toBe("")
+    expect(message.parts).toHaveLength(1)
+    expect(message.parts[0]).toMatchObject({
+      type: "document_draft",
+      draftId: "draft-1",
+      contentLength: "# ADR\n\nBody\n".length,
+    })
+    expect(JSON.stringify(message.parts[0])).not.toContain("# ADR")
+    expect(JSON.stringify(message.parts[0])).not.toContain("Body")
+  })
+
   it("renders lifecycle hook audit events as process context instead of dropping them", () => {
     let current = bundle()
     current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
