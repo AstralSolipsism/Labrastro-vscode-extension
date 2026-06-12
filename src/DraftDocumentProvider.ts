@@ -1,5 +1,7 @@
 import * as vscode from "vscode"
 
+import { DraftDocumentBuffer } from "./DraftDocumentBuffer"
+
 interface DraftDocument {
   sessionRunId: string
   draftId: string
@@ -7,7 +9,7 @@ interface DraftDocument {
   title: string
   format: string
   status: string
-  content: string
+  buffer: DraftDocumentBuffer
   uri: vscode.Uri
 }
 
@@ -21,7 +23,7 @@ export class DraftDocumentProvider implements vscode.TextDocumentContentProvider
   provideTextDocumentContent(uri: vscode.Uri): string {
     for (const draft of this.drafts.values()) {
       if (draft.uri.toString() === uri.toString()) {
-        return draft.content
+        return draft.buffer.content
       }
     }
     return ""
@@ -39,8 +41,10 @@ export class DraftDocumentProvider implements vscode.TextDocumentContentProvider
       if (type === "document_draft_started") {
         const draft = this.start(sessionRunId, payload)
         await this.open(draft.draftId)
-      } else if (type === "document_draft_delta") {
-        this.append(sessionRunId, payload)
+      } else if (type === "document_draft_preview_chunk") {
+        this.appendPreviewChunk(sessionRunId, payload)
+      } else if (type === "document_draft_snapshot") {
+        this.applySnapshot(sessionRunId, payload)
       } else if (
         type === "document_draft_committed" ||
         type === "document_draft_failed" ||
@@ -71,7 +75,7 @@ export class DraftDocumentProvider implements vscode.TextDocumentContentProvider
       title: rawString(payload.title) || existing?.title || targetPath,
       format: rawString(payload.format) || existing?.format || "markdown",
       status: rawString(payload.status) || "streaming",
-      content: existing?.content || "",
+      buffer: existing?.buffer || new DraftDocumentBuffer(),
       uri: existing?.uri || draftUri(sessionRunId, draftId, targetPath),
     }
     this.drafts.set(draftId, draft)
@@ -79,12 +83,24 @@ export class DraftDocumentProvider implements vscode.TextDocumentContentProvider
     return draft
   }
 
-  private append(sessionRunId: string, payload: Record<string, unknown>): void {
+  private appendPreviewChunk(sessionRunId: string, payload: Record<string, unknown>): void {
     const draftId = draftIdFromPayload(payload)
     const draft = this.drafts.get(draftId) || this.start(sessionRunId, payload)
-    draft.content += rawString(payload.content)
     draft.status = rawString(payload.status) || draft.status || "streaming"
-    this.emitter.fire(draft.uri)
+    const result = draft.buffer.applyPreviewChunk(payload)
+    if (result.changed) {
+      this.emitter.fire(draft.uri)
+    }
+  }
+
+  private applySnapshot(sessionRunId: string, payload: Record<string, unknown>): void {
+    const draftId = draftIdFromPayload(payload)
+    const draft = this.drafts.get(draftId) || this.start(sessionRunId, payload)
+    draft.status = rawString(payload.status) || draft.status || "streaming"
+    const result = draft.buffer.applySnapshot(payload)
+    if (result.changed) {
+      this.emitter.fire(draft.uri)
+    }
   }
 
   private finish(

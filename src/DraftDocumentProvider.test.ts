@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import { createHash } from "crypto"
 
 const vscodeMock = vi.hoisted(() => ({
   executeCommand: vi.fn(),
@@ -30,8 +31,10 @@ describe("DraftDocumentProvider", () => {
     vscodeMock.fire.mockReset()
   })
 
-  it("opens a rendered markdown preview and streams draft deltas into a virtual document", async () => {
+  it("opens a rendered markdown preview and streams preview chunks into a virtual document", async () => {
     const provider = new DraftDocumentProvider()
+    const firstChunk = "# Architecture\n"
+    const secondChunk = "\nBody\n"
 
     await provider.applySessionRunEvents("run-1", [
       {
@@ -44,19 +47,27 @@ describe("DraftDocumentProvider", () => {
         },
       },
       {
-        type: "document_draft_delta",
+        type: "document_draft_preview_chunk",
         payload: {
           draft_id: "draft-1",
           target_path: "docs/architecture.md",
-          content: "# Architecture\n",
+          chunk_seq: 1,
+          start_offset: 0,
+          end_offset: firstChunk.length,
+          content: firstChunk,
+          content_sha256: sha256(firstChunk),
         },
       },
       {
-        type: "document_draft_delta",
+        type: "document_draft_preview_chunk",
         payload: {
           draft_id: "draft-1",
           target_path: "docs/architecture.md",
-          content: "\nBody\n",
+          chunk_seq: 2,
+          start_offset: firstChunk.length,
+          end_offset: firstChunk.length + secondChunk.length,
+          content: secondChunk,
+          content_sha256: sha256(secondChunk),
         },
       },
     ])
@@ -85,11 +96,15 @@ describe("DraftDocumentProvider", () => {
         },
       },
       {
-        type: "document_draft_delta",
+        type: "document_draft_preview_chunk",
         payload: {
           draft_id: "draft-1",
           target_path: "docs/architecture.md",
+          chunk_seq: 1,
+          start_offset: 0,
+          end_offset: "# Architecture\n".length,
           content: "# Architecture\n",
+          content_sha256: sha256("# Architecture\n"),
         },
       },
       {
@@ -106,4 +121,52 @@ describe("DraftDocumentProvider", () => {
     await provider.open("draft-1")
     expect(vscodeMock.executeCommand).toHaveBeenCalledTimes(2)
   })
+
+  it("uses final snapshots to catch up a stale preview", async () => {
+    const provider = new DraftDocumentProvider()
+    const partial = "# Architecture\n\n| A | B |\n| - | - |\n| one |"
+    const final = "# Architecture\n\n| A | B |\n| - | - |\n| one | two |\n| three | four |\n"
+    await provider.applySessionRunEvents("run-1", [
+      {
+        type: "document_draft_started",
+        payload: {
+          draft_id: "draft-1",
+          target_path: "docs/architecture.md",
+          title: "Architecture",
+        },
+      },
+      {
+        type: "document_draft_preview_chunk",
+        payload: {
+          draft_id: "draft-1",
+          target_path: "docs/architecture.md",
+          chunk_seq: 1,
+          start_offset: 0,
+          end_offset: partial.length,
+          content: partial,
+          content_sha256: sha256(partial),
+        },
+      },
+      {
+        type: "document_draft_snapshot",
+        payload: {
+          draft_id: "draft-1",
+          target_path: "docs/architecture.md",
+          content: final,
+          content_sha256: sha256(final),
+          last_chunk_seq: 2,
+          final: true,
+        },
+      },
+    ])
+
+    const uri = vscodeMock.executeCommand.mock.calls[0][1]
+    expect(provider.provideTextDocumentContent(uri)).toBe(
+      "# Architecture\n\n| A | B |\n| - | - |\n| one | two |\n| three | four |\n",
+    )
+  })
 })
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex")
+}
