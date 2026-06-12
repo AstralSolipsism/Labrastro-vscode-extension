@@ -1942,8 +1942,11 @@ const ChatView: Component<ChatViewProps> = (props) => {
         "provider_stream_interrupted.recovering",
         t("chat.streamRecovery.interruptedRecovering"),
       )
+      const recovery = objectValue(payload.recovery)
+      const recoveryFailed = recovery.failed === true || stringValue(recovery.failed) === "true"
+      const canContinue = recoveryFailed || stringValue(payload.message_key) === "provider_stream.interrupted_can_continue"
       setStreamRecoveryMessage(message)
-      setWorkingText(t("chat.streamRecovery.recovering"))
+      setWorkingText(canContinue ? message : t("chat.streamRecovery.recovering"))
       trace.patchStats({ runStatus: "running" })
       if (!canonicalTranscriptEvent) {
         appendNotice("warning", message, "stream-recovery", { meta: eventMeta })
