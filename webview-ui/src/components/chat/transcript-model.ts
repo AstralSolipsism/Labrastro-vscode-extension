@@ -118,6 +118,10 @@ export interface DocumentDraftItem extends TranscriptMeta {
   itemId?: string
   approvalId?: string
   contentLength?: number
+  contentSha256?: string
+  lastChunkSeq?: number
+  snapshotKind?: string
+  snapshotFinal?: boolean
   error?: string
   reason?: string
 }

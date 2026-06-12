@@ -103,7 +103,8 @@ export const SESSION_RUN_TRANSCRIPT_EVENT_TYPES = new Set([
   "file_change_completed",
   "turn_diff_updated",
   "document_draft_started",
-  "document_draft_delta",
+  "document_draft_progress",
+  "document_draft_snapshot",
   "document_draft_commit_requested",
   "document_draft_committed",
   "document_draft_failed",
@@ -362,7 +363,8 @@ function applySessionRunTranscriptEventToBundle(
     markChanged()
   } else if (
     type === "document_draft_started" ||
-    type === "document_draft_delta" ||
+    type === "document_draft_progress" ||
+    type === "document_draft_snapshot" ||
     type === "document_draft_commit_requested" ||
     type === "document_draft_committed" ||
     type === "document_draft_failed" ||
@@ -1159,9 +1161,13 @@ function upsertDocumentDraft(
       status: documentDraftStatus(payload, eventType, existing?.status),
       itemId: stringValue(payload.item_id) || stringValue(payload.itemId) || existing?.itemId,
       approvalId: stringValue(payload.approval_id) || stringValue(payload.approvalId) || existing?.approvalId,
-      contentLength: eventType === "document_draft_delta"
-        ? (existing?.contentLength || 0) + String(payload.content || "").length
-        : existing?.contentLength,
+      contentLength: documentDraftContentLength(payload, existing?.contentLength),
+      contentSha256: stringValue(payload.content_sha256) || stringValue(payload.contentSha256) || existing?.contentSha256,
+      lastChunkSeq: numberValue(payload.last_chunk_seq) ?? numberValue(payload.lastChunkSeq) ?? existing?.lastChunkSeq,
+      snapshotKind: stringValue(payload.snapshot_kind) || stringValue(payload.snapshotKind) || existing?.snapshotKind,
+      snapshotFinal: Object.prototype.hasOwnProperty.call(payload, "final")
+        ? Boolean(payload.final)
+        : existing?.snapshotFinal,
       error: stringValue(payload.error) || existing?.error,
       reason: stringValue(payload.reason) || existing?.reason,
       rawEventRefs: rawEventRefsFromPayload(payload),
@@ -1201,13 +1207,23 @@ function documentDraftStatus(
   }
   const mapped: Record<string, DocumentDraftItem["status"]> = {
     document_draft_started: "streaming",
-    document_draft_delta: "streaming",
+    document_draft_progress: "streaming",
+    document_draft_snapshot: "streaming",
     document_draft_commit_requested: "committing",
     document_draft_committed: "committed",
     document_draft_failed: "failed",
     document_draft_cancelled: "cancelled",
   }
   return mapped[eventType] || fallback || "streaming"
+}
+
+function documentDraftContentLength(
+  payload: Record<string, unknown>,
+  fallback?: number,
+): number | undefined {
+  const explicit = numberValue(payload.content_length) ?? numberValue(payload.contentLength)
+  if (explicit !== undefined) return explicit
+  return fallback
 }
 
 function appendToolStream(

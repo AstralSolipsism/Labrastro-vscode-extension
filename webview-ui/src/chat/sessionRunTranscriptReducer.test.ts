@@ -360,7 +360,7 @@ describe("sessionRunTranscriptReducer", () => {
     })
   })
 
-  it("projects document draft deltas as length without creating assistant text", () => {
+  it("projects document draft progress and snapshot metadata without assistant text", () => {
     let current = bundle()
     current = reduce(current, "session_run_start", { prompt: "write docs" }, 1)
     current = reduce(current, "document_draft_started", {
@@ -369,16 +369,31 @@ describe("sessionRunTranscriptReducer", () => {
       title: "ADR",
       format: "markdown",
     }, 2)
-    current = reduce(current, "document_draft_delta", {
+    current = reduce(current, "document_draft_preview_chunk", {
       draft_id: "draft-1",
       target_path: "docs/a.md",
+      chunk_seq: 1,
+      start_offset: 0,
+      end_offset: "# ADR\n".length,
       content: "# ADR\n",
     }, 3)
-    current = reduce(current, "document_draft_delta", {
+    current = reduce(current, "document_draft_progress", {
       draft_id: "draft-1",
       target_path: "docs/a.md",
-      content: "\nBody\n",
+      content_length: "# ADR\n".length,
+      content_sha256: "progress-sha",
+      last_chunk_seq: 1,
     }, 4)
+    current = reduce(current, "document_draft_snapshot", {
+      draft_id: "draft-1",
+      target_path: "docs/a.md",
+      content: "# ADR\n\nBody\n",
+      content_length: "# ADR\n\nBody\n".length,
+      content_sha256: "snapshot-sha",
+      snapshot_kind: "final",
+      final: true,
+      last_chunk_seq: 2,
+    }, 5)
 
     const message = current.turns[0].assistantMessages[0]
     expect(message.text).toBe("")
@@ -387,6 +402,10 @@ describe("sessionRunTranscriptReducer", () => {
       type: "document_draft",
       draftId: "draft-1",
       contentLength: "# ADR\n\nBody\n".length,
+      contentSha256: "snapshot-sha",
+      lastChunkSeq: 2,
+      snapshotKind: "final",
+      snapshotFinal: true,
     })
     expect(JSON.stringify(message.parts[0])).not.toContain("# ADR")
     expect(JSON.stringify(message.parts[0])).not.toContain("Body")
@@ -950,6 +969,32 @@ describe("sessionRunTranscriptReducer", () => {
       type: "notice",
       level: "warning",
       text: "stream recovering",
+    })
+  })
+
+  it("renders failed provider recovery as interrupted and continueable", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
+    current = applySessionRunTranscriptEvent(current, {
+      type: "provider_stream_interrupted",
+      payload: {
+        message_key: "provider_stream.interrupted_can_continue",
+        recovery: { attempted: true, failed: true },
+      },
+      session_run_id: "run-1",
+      seq: 2,
+    }, {
+      labels: {
+        providerStreamInterrupted: "stream recovering",
+        streamInterruptedCanContinue: "stream interrupted, continue",
+      },
+    }).bundle
+
+    const parts = current.turns[0].assistantMessages[0].parts
+    expect(parts[0]).toMatchObject({
+      type: "notice",
+      level: "warning",
+      text: "stream interrupted, continue",
     })
   })
 
