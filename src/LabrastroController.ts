@@ -19,6 +19,7 @@ import { SessionCoordinator } from "./coordinators/SessionCoordinator"
 import { normalizeChatLocale, resolveChatLocalePreference } from "./chatLocale"
 import { RemoteStateStore, type RemoteStateKey, type RemoteStateSlice } from "./RemoteStateStore"
 import { CapabilityPackageLocalPeerRunner } from "./CapabilityPackageLocalPeerRunner"
+import { chatSessionRunEvents } from "./sessionRunEventViews"
 
 type EnvironmentRunMode = "check" | "configure"
 type EnvironmentEntryKind = "environment_requirement" | "mcp"
@@ -1773,7 +1774,8 @@ export class LabrastroController implements vscode.Disposable {
         }
       }
       await this.draftDocuments.applySessionRunEvents(sessionRunId, events)
-      for (const batch of splitSessionRunEventBatches(events)) {
+      const chatEvents = chatSessionRunEvents(events)
+      for (const batch of splitSessionRunEventBatches(chatEvents)) {
         this.emitChatMessage(
           { type: batch.live ? "sessionRun.stream" : "sessionRun.events", sessionRunId, events: batch.events },
           post
@@ -2411,7 +2413,7 @@ function filterManifestItems(
 
 const LIVE_SESSION_RUN_EVENT_TYPES = new Set([
   "assistant_delta",
-  "document_draft_delta",
+  "document_draft_preview_chunk",
   "reasoning_delta",
   "tool_call_delta",
   "tool_call_stream",
