@@ -816,6 +816,7 @@ const en: Record<string, string> = {
   "tool.documentDraft.committed": "Committed",
   "tool.documentDraft.failed": "Failed",
   "tool.documentDraft.cancelled": "Cancelled",
+  "tool.documentDraft.generatedChars": "{count} characters generated",
   "tool.installCapabilityPackage": "Install Capability",
   "tool.preparingCall": "Preparing to call {tool}",
   "tool.preparingGeneric": "Preparing to call tool",

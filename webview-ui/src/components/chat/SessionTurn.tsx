@@ -717,14 +717,12 @@ const DocumentDraftPart: Component<ItemProps<DocumentDraftItem>> = (props) => {
       <Show when={open()}>
         <div class="tool-card__preview">
           <ToolSection title={t("tool.section.details")}>
-            <pre class="tool-card__code tool-card__preview-block">{formatJson({
-              draft_id: props.part.draftId,
-              target_path: props.part.targetPath,
-              title: props.part.title,
-              format: props.part.format,
-              item_id: props.part.itemId,
-              approval_id: props.part.approvalId,
-            })}</pre>
+            <div class="tool-card__summary">
+              <div>{target()}</div>
+              <Show when={typeof props.part.contentLength === "number"}>
+                <div>{t("tool.documentDraft.generatedChars", { count: props.part.contentLength || 0 })}</div>
+              </Show>
+            </div>
           </ToolSection>
           <Show when={props.part.error || props.part.reason}>
             <ToolSection title={t("tool.section.result")}>

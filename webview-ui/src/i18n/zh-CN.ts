@@ -817,6 +817,7 @@ const zhCN: Record<string, string> = {
   "tool.documentDraft.committed": "已提交",
   "tool.documentDraft.failed": "失败",
   "tool.documentDraft.cancelled": "已取消",
+  "tool.documentDraft.generatedChars": "已生成 {count} 个字符",
   "tool.installCapabilityPackage": "安装能力",
   "tool.preparingCall": "正在准备调用 {tool}",
   "tool.preparingGeneric": "正在准备调用工具",

@@ -1686,6 +1686,14 @@
   overflow: auto;
 }
 
+.tool-card__summary {
+  display: grid;
+  gap: 4px;
+  color: var(--ez-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .tool-card__markdown.tool-card__preview-block {
   padding: 8px;
   border: 1px solid var(--ez-border);
