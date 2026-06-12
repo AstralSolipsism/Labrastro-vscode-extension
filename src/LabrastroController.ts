@@ -2,6 +2,7 @@ import * as vscode from "vscode"
 import * as fs from "fs"
 import * as path from "path"
 import { ApprovalDocumentProvider } from "./ApprovalDocumentProvider"
+import { DraftDocumentProvider } from "./DraftDocumentProvider"
 import {
   BackendFeatures,
   LabrastroRemoteClient,
@@ -117,6 +118,7 @@ type AdminErrorScope = "adminState" | "adminAction" | "peerDiagnostics"
 export class LabrastroController implements vscode.Disposable {
   private readonly client: LabrastroRemoteClient
   private readonly approvalDocuments: ApprovalDocumentProvider
+  private readonly draftDocuments: DraftDocumentProvider
   private readonly adminCoordinator: AdminCoordinator
   private readonly sessionRunCoordinator: SessionRunCoordinator
   private readonly environmentCoordinator: EnvironmentCoordinator
@@ -139,6 +141,7 @@ export class LabrastroController implements vscode.Disposable {
       storageRoot: this.context.globalStorageUri.fsPath,
     })
     this.approvalDocuments = new ApprovalDocumentProvider()
+    this.draftDocuments = new DraftDocumentProvider()
     this.adminCoordinator = new AdminCoordinator({
       client: this.client,
       context: this.context,
@@ -198,6 +201,12 @@ export class LabrastroController implements vscode.Disposable {
       vscode.workspace.registerTextDocumentContentProvider(
         ApprovalDocumentProvider.scheme,
         this.approvalDocuments
+      )
+    )
+    this.context.subscriptions.push(
+      vscode.workspace.registerTextDocumentContentProvider(
+        DraftDocumentProvider.scheme,
+        this.draftDocuments
       )
     )
     const workspaceFileWatcher = vscode.workspace.createFileSystemWatcher("**/*")
@@ -1755,6 +1764,7 @@ export class LabrastroController implements vscode.Disposable {
           await this.approvalDocuments.store(objectValue(event.payload))
         }
       }
+      await this.draftDocuments.applySessionRunEvents(sessionRunId, events)
       for (const batch of splitSessionRunEventBatches(events)) {
         this.emitChatMessage(
           { type: batch.live ? "sessionRun.stream" : "sessionRun.events", sessionRunId, events: batch.events },
@@ -2393,6 +2403,7 @@ function filterManifestItems(
 
 const LIVE_SESSION_RUN_EVENT_TYPES = new Set([
   "assistant_delta",
+  "document_draft_delta",
   "reasoning_delta",
   "tool_call_delta",
   "tool_call_stream",

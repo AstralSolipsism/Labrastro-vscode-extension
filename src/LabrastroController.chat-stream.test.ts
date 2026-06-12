@@ -22,10 +22,21 @@ describe("LabrastroController session run event batching", () => {
   it("splits live stream deltas from replayable session run events", () => {
     expect(source).toContain("LIVE_SESSION_RUN_EVENT_TYPES")
     expect(source).toContain('"assistant_delta"')
+    expect(source).toContain('"document_draft_delta"')
     expect(source).toContain('"reasoning_delta"')
     expect(source).toContain('"tool_call_stream"')
     expect(source).toContain("splitSessionRunEventBatches(events)")
     expect(source).toContain('type: batch.live ? "sessionRun.stream" : "sessionRun.events"')
+  })
+
+  it("routes draft preview through editor provider", () => {
+    const batchFunction = sourceSection(
+      "private async applySessionRunEventsBatch",
+      "private async recoverSessionRun",
+    )
+
+    expect(source).toContain("DraftDocumentProvider")
+    expect(batchFunction).toContain("this.draftDocuments.applySessionRunEvents")
   })
 
   it("uses SSE session run events as the only run transport", () => {
