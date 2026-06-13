@@ -30,6 +30,7 @@ import {
   reconcileShellFinalOutput,
   shellChunksFromText,
 } from "../utils/shell-tool-output"
+import { isLifecycleHookPayload, lifecycleDisplayTitle } from "./lifecycle-display"
 
 export interface SessionRunTranscriptLabels {
   thinking: string
@@ -70,6 +71,7 @@ type EventRenderMeta = { eventKey?: string; sessionEventSeq?: number }
 
 export const SESSION_RUN_TRANSCRIPT_EVENT_TYPES = new Set([
   "session_run_start",
+  "stream_observability",
   "reasoning_delta",
   "reasoning_message",
   "assistant_delta",
@@ -102,6 +104,9 @@ export const SESSION_RUN_TRANSCRIPT_EVENT_TYPES = new Set([
   "file_change_approval_resolved",
   "file_change_completed",
   "turn_diff_updated",
+  "mutation_previewing",
+  "mutation_preview_ready",
+  "mutation_preview_failed",
   "document_draft_started",
   "document_draft_progress",
   "document_draft_snapshot",
@@ -109,7 +114,12 @@ export const SESSION_RUN_TRANSCRIPT_EVENT_TYPES = new Set([
   "document_draft_committed",
   "document_draft_failed",
   "document_draft_cancelled",
+  "draft_body_stalled",
+  "draft_interrupted_recoverable",
   "tool_call_delta",
+  "tool_arguments_complete",
+  "tool_arguments_valid",
+  "tool_arguments_invalid",
   "tool_call_stream",
   "tool_call_start",
   "tool_call_protocol_error",
@@ -276,6 +286,9 @@ function applySessionRunTranscriptEventToBundle(
       state: "streaming",
     }
     markChanged()
+  } else if (type === "stream_observability") {
+    applyStreamObservability(next, payload, context)
+    markChanged()
   } else if (type === "reasoning_delta") {
     upsertReasoningThinking(next, String(payload.content || ""), payload, meta, context, labels)
     markChanged()
@@ -357,9 +370,13 @@ function applySessionRunTranscriptEventToBundle(
     type === "file_change_approval_requested" ||
     type === "file_change_approval_resolved" ||
     type === "file_change_completed" ||
-    type === "turn_diff_updated"
+    type === "turn_diff_updated" ||
+    type === "mutation_preview_ready"
   ) {
     upsertFileChange(next, type, payload, meta, context)
+    markChanged()
+  } else if (type === "mutation_preview_failed") {
+    appendMutationPreviewFailed(next, payload, meta, context)
     markChanged()
   } else if (
     type === "document_draft_started" ||
@@ -368,12 +385,21 @@ function applySessionRunTranscriptEventToBundle(
     type === "document_draft_commit_requested" ||
     type === "document_draft_committed" ||
     type === "document_draft_failed" ||
-    type === "document_draft_cancelled"
+    type === "document_draft_cancelled" ||
+    type === "draft_body_stalled" ||
+    type === "draft_interrupted_recoverable"
   ) {
     upsertDocumentDraft(next, type, payload, meta, context)
     markChanged()
   } else if (type === "tool_call_delta") {
     appendToolCallDelta(next, payload, meta, context)
+    markChanged()
+  } else if (
+    type === "tool_arguments_complete" ||
+    type === "tool_arguments_valid" ||
+    type === "tool_arguments_invalid"
+  ) {
+    appendToolArgumentState(next, type, payload, meta, context)
     markChanged()
   } else if (type === "tool_call_stream") {
     appendToolStream(next, payload, meta, context)
@@ -812,7 +838,7 @@ function appendContextEvent(
       withEventMeta({
         id: stablePartId("context", meta, now, nextParts.length),
         type: "context_event",
-        title: String(payload.message || payload.phase || labels.contextEvent),
+        title: contextEventTitle(payload, labels),
         payload,
         rawEventRefs: rawEventRefsFromPayload(payload),
       }, meta),
@@ -828,14 +854,7 @@ function appendLifecycleHookEvent(
   labels: SessionRunTranscriptLabels,
   now: number,
 ): void {
-  const title =
-    stringValue(payload.title) ||
-    stringValue(payload.message) ||
-    stringValue(payload.display_name) ||
-    stringValue(payload.event_name) ||
-    stringValue(payload.event_type) ||
-    stringValue(payload.hook_id) ||
-    labels.contextEvent
+  const title = lifecycleDisplayTitle(payload)
   updateAssistantItems(bundle, (parts) => {
     const nextParts = closeTrailingInlineStream(parts)
     return [
@@ -1107,6 +1126,7 @@ function fileChangeStatus(
   if (eventType === "file_change_approval_resolved") {
     return stringValue(payload.decision) === "allow_once" ? "in_progress" : "declined"
   }
+  if (eventType === "mutation_preview_ready") return "in_progress"
   if (eventType === "file_change_completed") return "completed"
   return fallback || "in_progress"
 }
@@ -1201,7 +1221,9 @@ function documentDraftStatus(
     status === "committing" ||
     status === "committed" ||
     status === "cancelled" ||
-    status === "failed"
+    status === "failed" ||
+    status === "stalled" ||
+    status === "recoverable"
   ) {
     return status
   }
@@ -1213,6 +1235,8 @@ function documentDraftStatus(
     document_draft_committed: "committed",
     document_draft_failed: "failed",
     document_draft_cancelled: "cancelled",
+    draft_body_stalled: "stalled",
+    draft_interrupted_recoverable: "recoverable",
   }
   return mapped[eventType] || fallback || "streaming"
 }
@@ -1312,6 +1336,77 @@ function appendToolCallDelta(
   }, context)
 }
 
+function contextEventTitle(payload: Record<string, unknown>, labels: SessionRunTranscriptLabels): string {
+  if (isLifecycleHookPayload(payload)) return lifecycleDisplayTitle(payload)
+  return String(payload.message || payload.phase || labels.contextEvent)
+}
+
+function appendToolArgumentState(
+  bundle: MockSessionBundle,
+  eventType: string,
+  payload: Record<string, unknown>,
+  meta: EventRenderMeta,
+  context: SessionRunTranscriptContext,
+): void {
+  const toolName = String(payload.tool_name || "tool")
+  const realToolCallId = requiredToolCallId(payload)
+  const toolCallId = realToolCallId || preparingToolCallId(payload, context)
+  const preparingIndex = numberValue(payload.index) ?? 0
+  const argumentStatus = stringValue(payload.status) ||
+    (eventType === "tool_arguments_invalid" ? "invalid" : "complete")
+  const message = stringValue(payload.message)
+  const retryHint = stringValue(payload.retry_hint)
+  updateAssistantItems(bundle, (parts) =>
+    upsertToolPartWithPreparing(parts, toolName, {
+      status: eventType === "tool_arguments_invalid" ? "protocol_error" : "preparing",
+      toolCallId,
+      source: stringValue(payload.tool_source),
+      preparingIndex,
+      output: eventType === "tool_arguments_invalid" ? message : undefined,
+      outputFormat: eventType === "tool_arguments_invalid" ? "plain" : undefined,
+      resultMeta: {
+        argument_status: argumentStatus,
+        ...(message ? { message } : {}),
+        ...(retryHint ? { retry_hint: retryHint } : {}),
+      },
+      rawEventRefs: rawEventRefsFromPayload(payload),
+    }, toolCallId, { meta, preparingIndex }),
+  context)
+}
+
+function appendMutationPreviewFailed(
+  bundle: MockSessionBundle,
+  payload: Record<string, unknown>,
+  meta: EventRenderMeta,
+  context: SessionRunTranscriptContext,
+): void {
+  const toolName = String(payload.tool_name || "tool")
+  const realToolCallId = requiredToolCallId(payload)
+  const toolCallId = realToolCallId || preparingToolCallId(payload, context)
+  const preparingIndex = numberValue(payload.index) ?? 0
+  const error = stringValue(payload.error) || "Mutation preview failed"
+  const failureCode = stringValue(payload.failure_code)
+  const retryHint = stringValue(payload.retry_hint)
+  updateAssistantItems(bundle, (parts) =>
+    upsertToolPartWithPreparing(parts, toolName, {
+      status: "protocol_error",
+      toolCallId,
+      source: stringValue(payload.tool_source),
+      preparingIndex,
+      output: error,
+      outputFormat: "plain",
+      resultMeta: {
+        argument_status: "valid",
+        preview_status: "failed",
+        ...(failureCode ? { failure_code: failureCode } : {}),
+        error,
+        ...(retryHint ? { retry_hint: retryHint } : {}),
+      },
+      rawEventRefs: rawEventRefsFromPayload(payload),
+    }, toolCallId, { meta, preparingIndex }),
+  context)
+}
+
 function appendToolStart(
   bundle: MockSessionBundle,
   payload: Record<string, unknown>,
@@ -1345,7 +1440,7 @@ function appendToolProtocolError(
   const toolCallId = requiredToolCallId(payload)
   if (!toolCallId) return
   const code = stringValue(payload.code)
-  const message = String(payload.message || code || "Remote tool protocol error")
+  const message = String(payload.message || payload.error || code || "Remote tool protocol error")
   const output = code ? `[${code}] ${message}` : message
   const resultMeta: Record<string, unknown> = {}
   if (code) resultMeta.code = code
@@ -1386,22 +1481,31 @@ function appendToolEnd(
     const reconciledShellOutput = isShell
       ? reconcileShellFinalOutput(existing?.output, finalOutput, existing?.outputChunks)
       : finalOutput
+    const permissionStatus = statusAfterPermissionResult(resultMeta.permission)
+    const nextStatus = permissionStatus || statusAfterToolReturn(existing?.status)
+    const preserveTerminalDetails =
+      existing?.status === "protocol_error" ||
+      existing?.status === "denied" ||
+      existing?.status === "cancelled"
     const shellChunks = isShell
       ? existing?.outputChunks?.length
         ? existing.outputChunks
         : shellChunksFromText(reconciledShellOutput)
       : existing?.outputChunks
-    const permissionStatus = statusAfterPermissionResult(resultMeta.permission)
     const patch: Partial<ToolActivityItem> = {
-      status: permissionStatus || statusAfterToolReturn(existing?.status),
+      status: nextStatus,
       toolCallId,
       source: resolvedToolSource,
       endedAt: numberValue(payload.ended_at),
-      output: reconciledShellOutput,
+      output: preserveTerminalDetails
+        ? existing?.output || reconciledShellOutput
+        : reconciledShellOutput,
       outputFormat: inferToolOutputFormat(toolName, resolvedToolSource, outputFormat),
       outputChunks: shellChunks,
       finalOutput: isShell ? finalOutput : undefined,
-      resultMeta,
+      resultMeta: preserveTerminalDetails
+        ? { ...resultMeta, ...objectValue(existing?.resultMeta) }
+        : resultMeta,
       rawEventRefs: rawEventRefsFromPayload(payload),
     }
     return upsertToolPartWithPreparing(parts, toolName, patch, toolCallId, { matchReturn: true, meta })
@@ -1681,6 +1785,31 @@ function patchRunStatus(bundle: MockSessionBundle, status: MockTaskStats["runSta
   bundle.stats = {
     ...bundle.stats,
     runStatus: status,
+  }
+}
+
+function applyStreamObservability(
+  bundle: MockSessionBundle,
+  payload: Record<string, unknown>,
+  context: SessionRunTranscriptContext,
+): void {
+  const appliedAtMs = context.now ?? Date.now()
+  const serverEnqueuedAt =
+    numberValue(payload.server_enqueued_at) ??
+    numberValue(payload.serverEnqueuedAt)
+  const extensionApplyLatencyMs = serverEnqueuedAt === undefined
+    ? undefined
+    : Math.max(0, Math.round(appliedAtMs - serverEnqueuedAt * 1000))
+  bundle.stats = {
+    ...bundle.stats,
+    observability: {
+      ...objectValue(bundle.stats.observability),
+      ...payload,
+      extension_applied_at_ms: appliedAtMs,
+      ...(extensionApplyLatencyMs === undefined
+        ? {}
+        : { extension_apply_latency_ms: extensionApplyLatencyMs }),
+    },
   }
 }
 

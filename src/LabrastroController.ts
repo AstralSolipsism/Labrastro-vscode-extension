@@ -2414,8 +2414,16 @@ function filterManifestItems(
 const LIVE_SESSION_RUN_EVENT_TYPES = new Set([
   "assistant_delta",
   "document_draft_preview_chunk",
+  "draft_body_stalled",
+  "draft_interrupted_recoverable",
   "reasoning_delta",
   "tool_call_delta",
+  "tool_arguments_complete",
+  "tool_arguments_valid",
+  "tool_arguments_invalid",
+  "mutation_previewing",
+  "mutation_preview_ready",
+  "mutation_preview_failed",
   "tool_call_stream",
 ])
 

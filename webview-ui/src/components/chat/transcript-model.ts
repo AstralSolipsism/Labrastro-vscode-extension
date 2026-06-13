@@ -106,7 +106,15 @@ export interface FileChangeItem extends TranscriptMeta {
   error?: string
 }
 
-export type DocumentDraftStatus = "declared" | "streaming" | "committing" | "committed" | "cancelled" | "failed"
+export type DocumentDraftStatus =
+  | "declared"
+  | "streaming"
+  | "stalled"
+  | "recoverable"
+  | "committing"
+  | "committed"
+  | "cancelled"
+  | "failed"
 
 export interface DocumentDraftItem extends TranscriptMeta {
   type: "document_draft"

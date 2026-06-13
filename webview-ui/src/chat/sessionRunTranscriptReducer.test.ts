@@ -5,6 +5,13 @@ import {
   applySessionRunTranscriptEvents,
   isSessionRunTranscriptEventType,
 } from "./sessionRunTranscriptReducer"
+import {
+  applyPatchArgumentDeltaPreparingEvents,
+  applyPatchPreviewReadyEvents,
+  applyPatchPreviewFailedEvents,
+  invalidApplyPatchNoFileChangeEvents,
+  recoverableDraftInterruptionEvents,
+} from "./tool-contract-events.fixture"
 
 function bundle(): MockSessionBundle {
   return {
@@ -114,6 +121,36 @@ describe("sessionRunTranscriptReducer", () => {
       "session:session-1:6",
     ])
     expect(batch.changed).toBe(true)
+  })
+
+  it("stores stream observability metrics in stats without rendering transcript parts", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
+
+    current = reduce(current, "stream_observability", {
+      schema: "stream_observability.v1",
+      provider_output_count: 2,
+      provider_reasoning_count: 1,
+      provider_tool_delta_count: 1,
+      last_body_chunk_at: 1.25,
+      server_enqueued_at: 0.5,
+      server_enqueue_latency_ms: 25,
+      patch_syntax_error_count: 1,
+      patch_syntax_error_codes: { preflight_failed: 1 },
+    }, 2)
+
+    expect(current.turns[0].assistantMessages).toHaveLength(0)
+    expect(current.stats.observability).toMatchObject({
+      schema: "stream_observability.v1",
+      provider_output_count: 2,
+      provider_reasoning_count: 1,
+      provider_tool_delta_count: 1,
+      last_body_chunk_at: 1.25,
+      server_enqueue_latency_ms: 25,
+      extension_apply_latency_ms: 502,
+      patch_syntax_error_count: 1,
+      patch_syntax_error_codes: { preflight_failed: 1 },
+    })
   })
 
   it("does not replay batch events whose event keys are already in the transcript", () => {
@@ -324,6 +361,205 @@ describe("sessionRunTranscriptReducer", () => {
     })
   })
 
+  it("keeps invalid apply_patch protocol failures out of file change cards", () => {
+    const context = {
+      activeSessionRunId: "run-1",
+      currentSessionId: "session-1",
+      isWorking: true,
+      now: 1000,
+      labels: { thinking: "正在思考" },
+    }
+
+    const result = applySessionRunTranscriptEvents(
+      bundle(),
+      invalidApplyPatchNoFileChangeEvents as unknown as Record<string, unknown>[],
+      context,
+    )
+    const parts = result.bundle.turns.flatMap((turn) =>
+      turn.assistantMessages.flatMap((message) => message.parts)
+    )
+
+    expect(parts.some((part) => part.type === "file_change")).toBe(false)
+    expect(parts.some((part) =>
+      part.type === "tool" &&
+      part.tool === "apply_patch" &&
+      part.status === "protocol_error" &&
+      String(part.output || "").includes("*** File: src/app.py")
+    )).toBe(true)
+  })
+
+  it("keeps apply_patch argument deltas in tool preparing state", () => {
+    const context = {
+      activeSessionRunId: "run-1",
+      currentSessionId: "session-1",
+      isWorking: true,
+      now: 1000,
+      labels: { thinking: "正在思考" },
+    }
+
+    const result = applySessionRunTranscriptEvents(
+      bundle(),
+      applyPatchArgumentDeltaPreparingEvents as unknown as Record<string, unknown>[],
+      context,
+    )
+    const parts = result.bundle.turns.flatMap((turn) =>
+      turn.assistantMessages.flatMap((message) => message.parts)
+    )
+
+    expect(parts.some((part) => part.type === "file_change")).toBe(false)
+    expect(parts).toContainEqual(expect.objectContaining({
+      type: "tool",
+      tool: "apply_patch",
+      toolCallId: "tool-1",
+      status: "preparing",
+    }))
+  })
+
+  it("creates apply_patch file cards from mutation preview ready state", () => {
+    const context = {
+      activeSessionRunId: "run-1",
+      currentSessionId: "session-1",
+      isWorking: true,
+      now: 1000,
+      labels: { thinking: "正在思考" },
+    }
+
+    const result = applySessionRunTranscriptEvents(
+      bundle(),
+      applyPatchPreviewReadyEvents as unknown as Record<string, unknown>[],
+      context,
+    )
+    const parts = result.bundle.turns.flatMap((turn) =>
+      turn.assistantMessages.flatMap((message) => message.parts)
+    )
+
+    expect(parts).toContainEqual(expect.objectContaining({
+      type: "tool",
+      tool: "apply_patch",
+      toolCallId: "tool-1",
+      status: "preparing",
+      resultMeta: expect.objectContaining({ argument_status: "valid" }),
+    }))
+    expect(parts).toContainEqual(expect.objectContaining({
+      type: "file_change",
+      itemId: "file-change:tool-1",
+      toolCallId: "tool-1",
+      status: "in_progress",
+      path: "src/app.py",
+      addedLines: 1,
+    }))
+  })
+
+  it("keeps semantic preview failures out of file change cards", () => {
+    const context = {
+      activeSessionRunId: "run-1",
+      currentSessionId: "session-1",
+      isWorking: true,
+      now: 1000,
+      labels: { thinking: "正在思考" },
+    }
+
+    const result = applySessionRunTranscriptEvents(
+      bundle(),
+      applyPatchPreviewFailedEvents as unknown as Record<string, unknown>[],
+      context,
+    )
+    const parts = result.bundle.turns.flatMap((turn) =>
+      turn.assistantMessages.flatMap((message) => message.parts)
+    )
+
+    expect(parts.some((part) => part.type === "file_change")).toBe(false)
+    expect(parts).toContainEqual(expect.objectContaining({
+      type: "tool",
+      tool: "apply_patch",
+      toolCallId: "tool-1",
+      status: "protocol_error",
+      output: expect.stringContaining("file does not exist: missing.py"),
+      resultMeta: expect.objectContaining({
+        argument_status: "valid",
+        preview_status: "failed",
+      }),
+    }))
+  })
+
+  it("does not let late tool_call_end overwrite mutation preview failure details", () => {
+    const context = {
+      activeSessionRunId: "run-1",
+      currentSessionId: "session-1",
+      isWorking: true,
+      now: 1000,
+      labels: { thinking: "正在思考" },
+    }
+    const events = [
+      ...applyPatchPreviewFailedEvents,
+      {
+        type: "tool_call_end",
+        session_run_id: "run-1",
+        seq: 5,
+        session_event_seq: 5,
+        payload: {
+          index: 0,
+          tool_call_id: "tool-1",
+          tool_name: "apply_patch",
+          status: "completed",
+          tool_result: "Applied patch",
+        },
+      },
+    ]
+
+    const result = applySessionRunTranscriptEvents(
+      bundle(),
+      events as unknown as Record<string, unknown>[],
+      context,
+    )
+    const parts = result.bundle.turns.flatMap((turn) =>
+      turn.assistantMessages.flatMap((message) => message.parts)
+    )
+    const tool = parts.find((part) =>
+      part.type === "tool" && part.tool === "apply_patch"
+    )
+
+    expect(tool).toMatchObject({
+      type: "tool",
+      status: "protocol_error",
+      output: expect.stringContaining("file does not exist: missing.py"),
+      resultMeta: expect.objectContaining({
+        preview_status: "failed",
+        failure_code: "semantic_preview_failed",
+      }),
+    })
+  })
+
+  it("keeps interrupted document drafts recoverable", () => {
+    const context = {
+      activeSessionRunId: "run-1",
+      currentSessionId: "session-1",
+      isWorking: true,
+      now: 1000,
+      labels: { thinking: "正在思考" },
+    }
+
+    const result = applySessionRunTranscriptEvents(
+      bundle(),
+      recoverableDraftInterruptionEvents as unknown as Record<string, unknown>[],
+      context,
+    )
+    const parts = result.bundle.turns.flatMap((turn) =>
+      turn.assistantMessages.flatMap((message) => message.parts)
+    )
+
+    expect(parts).toContainEqual(expect.objectContaining({
+      type: "document_draft",
+      draftId: "draft-1",
+      targetPath: "docs/a.md",
+      status: "recoverable",
+      contentLength: 12,
+      contentSha256: "abc",
+      lastChunkSeq: 2,
+      reason: "provider stream interrupted",
+    }))
+  })
+
   it("projects document draft lifecycle events into one stable transcript item", () => {
     let current = bundle()
     current = reduce(current, "session_run_start", { prompt: "write docs" }, 1)
@@ -411,7 +647,7 @@ describe("sessionRunTranscriptReducer", () => {
     expect(JSON.stringify(message.parts[0])).not.toContain("Body")
   })
 
-  it("renders lifecycle hook audit events as process context instead of dropping them", () => {
+  it("renders lifecycle hook audit events with product titles and folded raw details", () => {
     let current = bundle()
     current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
 
@@ -433,7 +669,7 @@ describe("sessionRunTranscriptReducer", () => {
     expect(parts).toHaveLength(1)
     expect(parts[0]).toMatchObject({
       type: "context_event",
-      title: "PreToolUse hook denied",
+      title: "工具调用已被策略拦截",
       payload: {
         event_name: "PreToolUse",
         hook_id: "guard/pretool",
@@ -446,10 +682,11 @@ describe("sessionRunTranscriptReducer", () => {
       },
       rawEventRefs: [{ agent_run_id: "agent-run-1", seq: 42, type: "lifecycle_hook" }],
     })
+    expect(String((parts[0] as { title?: string }).title || "")).not.toContain("PreToolUse")
     expect(parts[0]).not.toHaveProperty("markdown")
   })
 
-  it("renders StopFailure lifecycle recovery as process context instead of answer text", () => {
+  it("renders StopFailure lifecycle recovery with product title instead of raw hook title", () => {
     let current = bundle()
     current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
 
@@ -467,7 +704,7 @@ describe("sessionRunTranscriptReducer", () => {
     expect(parts).toHaveLength(1)
     expect(parts[0]).toMatchObject({
       type: "context_event",
-      title: "StopFailure hook recorded recovery guidance",
+      title: "运行恢复信息",
       payload: {
         event_name: "StopFailure",
         hook_id: "guard/stop-failure",
@@ -477,10 +714,11 @@ describe("sessionRunTranscriptReducer", () => {
       },
       rawEventRefs: [{ agent_run_id: "agent-run-1", seq: 44, type: "lifecycle_hook" }],
     })
+    expect(String((parts[0] as { title?: string }).title || "")).not.toContain("StopFailure")
     expect(parts[0]).not.toHaveProperty("markdown")
   })
 
-  it("renders MCP elicitation lifecycle request and result as process context", () => {
+  it("renders MCP elicitation lifecycle request and result with product titles", () => {
     let current = bundle()
     current = reduce(current, "session_run_start", { prompt: "use docs mcp" }, 1)
     current = reduce(current, "lifecycle_hook", {
@@ -509,7 +747,7 @@ describe("sessionRunTranscriptReducer", () => {
     expect(parts).toHaveLength(2)
     expect(parts[0]).toMatchObject({
       type: "context_event",
-      title: "Elicitation",
+      title: "MCP 交互请求",
       payload: {
         event_name: "Elicitation",
         phase: "request",
@@ -520,14 +758,38 @@ describe("sessionRunTranscriptReducer", () => {
     })
     expect(parts[1]).toMatchObject({
       type: "context_event",
-      title: "ElicitationResult",
+      title: "MCP 交互结果",
       payload: {
         event_name: "ElicitationResult",
         phase: "result",
         result_action: "accept",
       },
     })
+    expect(parts.map((part) => String((part as { title?: string }).title || "")).join(" ")).not.toContain("Elicitation")
     expect(parts.some((part) => "markdown" in part)).toBe(false)
+  })
+
+  it("sanitizes lifecycle_hook.v1 context_event titles before they reach the main transcript", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
+
+    current = reduce(current, "context_event", {
+      schema: "lifecycle_hook.v1",
+      title: "PostToolUse raw lifecycle event",
+      message: "PostToolUse raw lifecycle event",
+      event_name: "PostToolUse",
+      hook_id: "guard/posttool",
+      raw_event_refs: [{ agent_run_id: "agent-run-1", seq: 47, type: "lifecycle_hook" }],
+    }, 2)
+
+    const parts = current.turns[0].assistantMessages[0].parts
+    expect(parts).toHaveLength(1)
+    expect(parts[0]).toMatchObject({
+      type: "context_event",
+      title: "工具结果已记录",
+      rawEventRefs: [{ agent_run_id: "agent-run-1", seq: 47, type: "lifecycle_hook" }],
+    })
+    expect(String((parts[0] as { title?: string }).title || "")).not.toContain("PostToolUse")
   })
 
   it("continues the same reasoning stream across tool, view, and context cards", () => {

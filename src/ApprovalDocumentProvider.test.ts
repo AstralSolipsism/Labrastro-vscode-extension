@@ -125,4 +125,30 @@ describe("ApprovalDocumentProvider", () => {
 
     expect(vscodeMock.closeTabs).not.toHaveBeenCalled()
   })
+
+  it("builds fallback approval markdown without dumping raw tool payload JSON", async () => {
+    const provider = new ApprovalDocumentProvider()
+
+    await provider.store({
+      approval_id: "approval-raw",
+      tool_name: "apply_patch",
+      reason: "Needs approval",
+      tool_args: {
+        patch: "*** Begin Patch\n*** Add File: secret.txt\n+private\n*** End Patch",
+      },
+      lifecycle_hook: {
+        event_name: "PreToolUse",
+        hook_id: "guard/pretool",
+      },
+    }, { openDiff: false })
+    await provider.open("approval-raw")
+
+    const uri = vscodeMock.openTextDocument.mock.calls[0]?.[0]
+    const markdown = provider.provideTextDocumentContent(uri)
+    expect(markdown).toContain("## Approval required: apply_patch")
+    expect(markdown).toContain("Needs approval")
+    expect(markdown).not.toContain("tool_args")
+    expect(markdown).not.toContain("*** Begin Patch")
+    expect(markdown).not.toContain("PreToolUse")
+  })
 })

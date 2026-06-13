@@ -37,6 +37,7 @@ import { IconButton } from "../common/IconButton"
 import { MarkdownBlock } from "../common/MarkdownBlock"
 import { ApprovalDetailsBody, approvalFromPayload } from "./ApprovalDetailsDialog"
 import { canEditForkMessage, canForkMessage, canForkPart } from "../../chat/conversationInteractions"
+import { isLifecycleHookPayload, lifecycleDisplayMeta, lifecycleDisplayTitle } from "../../chat/lifecycle-display"
 import { rawAuditEventKey, type RawAuditEventSnapshot } from "../../chat/raw-audit"
 import {
   extractShellCommand,
@@ -192,6 +193,7 @@ function documentDraftTraceStatus(part: DocumentDraftItem): TraceNodeStatus {
   if (part.status === "committed") return "success"
   if (part.status === "failed") return "error"
   if (part.status === "cancelled") return "cancelled"
+  if (part.status === "stalled" || part.status === "recoverable") return "returned"
   return "active"
 }
 
@@ -671,8 +673,16 @@ const DocumentDraftPart: Component<ItemProps<DocumentDraftItem>> = (props) => {
   const openKey = `document-draft:${props.part.id}`
   const [open, setOpen] = createCardOpenState(
     openKey,
-    props.part.status === "streaming" || props.part.status === "committing" || props.part.status === "failed",
-    () => props.part.status === "streaming" || props.part.status === "committing",
+    props.part.status === "streaming" ||
+      props.part.status === "stalled" ||
+      props.part.status === "recoverable" ||
+      props.part.status === "committing" ||
+      props.part.status === "failed",
+    () =>
+      props.part.status === "streaming" ||
+      props.part.status === "stalled" ||
+      props.part.status === "recoverable" ||
+      props.part.status === "committing",
   )
   const kind = () => traceKindForPart(props.part)
   const status = () => traceStatusForPart(props.part)
@@ -684,7 +694,9 @@ const DocumentDraftPart: Component<ItemProps<DocumentDraftItem>> = (props) => {
       class="tool-card"
       classList={{
         "tool-card--selected": selected(),
-        "tool-card--awaiting": props.part.status === "streaming" || props.part.status === "committing",
+        "tool-card--awaiting":
+          props.part.status === "streaming" ||
+          props.part.status === "committing",
         "tool-card--error": props.part.status === "failed",
         "tool-card--cancelled": props.part.status === "cancelled",
       }}
@@ -766,10 +778,25 @@ function fileChangeStatusLabel(status: FileChangeItem["status"]): string {
 function documentDraftStatusLabel(status: DocumentDraftItem["status"]): string {
   if (status === "committed") return t("tool.documentDraft.committed")
   if (status === "committing") return t("tool.documentDraft.committing")
+  if (status === "stalled") return t("tool.documentDraft.stalled")
+  if (status === "recoverable") return t("tool.documentDraft.recoverable")
   if (status === "failed") return t("tool.documentDraft.failed")
   if (status === "cancelled") return t("tool.documentDraft.cancelled")
   if (status === "declared") return t("tool.documentDraft.declared")
   return t("tool.documentDraft.streaming")
+}
+
+function lifecycleLabels() {
+  return {
+    defaultTitle: t("tool.lifecycle.default"),
+    toolCheck: t("tool.lifecycle.toolCheck"),
+    toolBlocked: t("tool.lifecycle.toolBlocked"),
+    toolResult: t("tool.lifecycle.toolResult"),
+    promptReview: t("tool.lifecycle.promptReview"),
+    recovery: t("tool.lifecycle.recovery"),
+    elicitation: t("tool.lifecycle.elicitation"),
+    elicitationResult: t("tool.lifecycle.elicitationResult"),
+  }
 }
 
 const RawAuditRefs: Component<{
@@ -1362,7 +1389,14 @@ const ContextEventPart: Component<ItemProps<Extract<TranscriptItem, { type: "con
   createEffect(() => {
     CARD_OPEN_STATE.set(props.part.id, open())
   })
-  const summary = () => markdownSummary(props.part.payload || {})
+  const isLifecycle = () => isLifecycleHookPayload(props.part.payload)
+  const summary = () => isLifecycle() ? "" : markdownSummary(props.part.payload || {})
+  const title = () => isLifecycle()
+    ? lifecycleDisplayTitle(props.part.payload, lifecycleLabels())
+    : props.part.title || t("tool.context.default")
+  const meta = () => isLifecycle()
+    ? lifecycleDisplayMeta(props.part.payload)
+    : String(props.part.payload?.phase || props.part.payload?.strategy || "")
   return (
     <div class="context-event-card" onClick={(event) => event.stopPropagation()}>
       <button
@@ -1379,8 +1413,8 @@ const ContextEventPart: Component<ItemProps<Extract<TranscriptItem, { type: "con
       >
         <span class="codicon codicon-file-submodule" aria-hidden="true" />
         <span class="context-event-card__body">
-          <span class="context-event-card__title">{props.part.title || t("tool.context.default")}</span>
-          <span class="context-event-card__meta">{String(props.part.payload?.phase || props.part.payload?.strategy || "")}</span>
+          <span class="context-event-card__title">{title()}</span>
+          <span class="context-event-card__meta">{meta()}</span>
         </span>
         <span class={`codicon codicon-chevron-${open() ? "down" : "right"}`} aria-hidden="true" />
       </button>
@@ -1389,7 +1423,9 @@ const ContextEventPart: Component<ItemProps<Extract<TranscriptItem, { type: "con
           <Show when={summary()}>
             <MarkdownBlock text={summary()} class="structured-card__markdown" />
           </Show>
-          <pre class="structured-card__json">{formatJson(props.part.payload || {})}</pre>
+          <Show when={!isLifecycle()}>
+            <pre class="structured-card__json">{formatJson(props.part.payload || {})}</pre>
+          </Show>
           <RawAuditRefs
             part={props.part}
             rawAuditEvents={props.rawAuditEvents}

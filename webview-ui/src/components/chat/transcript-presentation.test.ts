@@ -4,6 +4,7 @@ import type { MockMessage } from "./mock-data"
 import {
   buildTranscriptPresentation,
   getToolActionLabel,
+  isMessageRunning,
   processTimelineItemKey,
   transcriptPresentationItemKey,
 } from "./transcript-presentation"
@@ -122,7 +123,7 @@ describe("transcript presentation", () => {
     expect(presentation.find((item) => item.type === "final_answer")).toBeUndefined()
   })
 
-  it("keeps lifecycle hook context in process summary before the final answer", () => {
+  it("keeps lifecycle hook context in process summary with product labels before the final answer", () => {
     const parts: TranscriptItem[] = [
       {
         id: "hook-1",
@@ -148,8 +149,9 @@ describe("transcript presentation", () => {
     expect(processSummary(presentation)).toMatchObject({
       count: 1,
       state: "completed",
-      currentLabel: "PreToolUse hook denied",
+      currentLabel: "工具调用已被策略拦截",
     })
+    expect(processSummary(presentation)?.currentLabel).not.toContain("PreToolUse")
     expect(presentation[1]).toMatchObject({ type: "final_answer", parts: [{ id: "text-1" }] })
   })
 
@@ -175,7 +177,7 @@ describe("transcript presentation", () => {
     expect(groups(presentation)).toHaveLength(1)
     expect(groups(presentation)[0]).toMatchObject({
       count: 1,
-      currentLabel: "StopFailure hook recorded recovery guidance",
+      currentLabel: "运行恢复信息",
     })
     expect(groups(presentation)[0].items[0]).toMatchObject({
       type: "context_event",
@@ -231,7 +233,7 @@ describe("transcript presentation", () => {
     expect(processSummary(presentation)).toMatchObject({
       count: 2,
       state: "completed",
-      currentLabel: "ElicitationResult",
+      currentLabel: "MCP 交互结果",
     })
     expect(presentation[1]).toMatchObject({ type: "final_answer", parts: [{ id: "text-1" }] })
   })
@@ -675,6 +677,26 @@ describe("transcript presentation", () => {
       state: "running",
       currentLabel: "正在准备调用 grep",
     })
+  })
+
+  it("treats recoverable and stalled document drafts as paused instead of running", () => {
+    for (const status of ["stalled", "recoverable"] as const) {
+      const parts: TranscriptItem[] = [
+        {
+          id: `draft-${status}`,
+          type: "document_draft",
+          draftId: `draft-${status}`,
+          targetPath: "docs/a.md",
+          status,
+          contentLength: 12,
+        },
+      ]
+
+      expect(isMessageRunning(parts)).toBe(false)
+      expect(groups(buildTranscriptPresentation(parts, assistant(parts)))[0]).toMatchObject({
+        state: "completed",
+      })
+    }
   })
 
   it("groups MCP and Skill tools by server or skill name", () => {

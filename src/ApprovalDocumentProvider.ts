@@ -121,15 +121,7 @@ export class ApprovalDocumentProvider implements vscode.TextDocumentContentProvi
       fileName,
       markdown:
         stringValue(payload.content) ||
-        [
-          `## Approval required: ${toolName}`,
-          stringValue(payload.reason),
-          "```json",
-          JSON.stringify(payload, null, 2),
-          "```",
-        ]
-          .filter(Boolean)
-          .join("\n\n"),
+        fallbackApprovalMarkdown(approvalId, toolName, stringValue(payload.reason)),
       rawPayload: payload,
       diff: diffSection
         ? {
@@ -169,4 +161,18 @@ function stringValue(value: unknown): string {
 function sanitizeFileName(value: string): string {
   const clean = value.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").trim()
   return clean || "approval.txt"
+}
+
+function fallbackApprovalMarkdown(
+  approvalId: string,
+  toolName: string,
+  reason: string,
+): string {
+  return [
+    `## Approval required: ${toolName}`,
+    reason,
+    approvalId ? `Approval ID: ${approvalId}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n")
 }

@@ -1,4 +1,5 @@
 import { t } from "../../i18n"
+import { isLifecycleHookPayload, lifecycleDisplayTitle } from "../../chat/lifecycle-display"
 import type { MockMessage } from "./mock-data"
 import type { AssistantTextItem, FileChangeItem, NoticeItem, ToolActivityItem, TranscriptItem } from "./transcript-model"
 
@@ -680,9 +681,25 @@ function processItemCurrentLabel(item: TranscriptItem): string {
   if (item.type === "terminal") return item.title || t("process.group.run")
   if (item.type === "workflow_step") return item.title || workflowStageLabel(item.stage)
   if (item.type === "session") return item.title || item.sessionId || t("process.group.context")
+  if (item.type === "context_event" && isLifecycleHookPayload(item.payload)) {
+    return lifecycleDisplayTitle(item.payload, lifecycleLabels())
+  }
   if ("title" in item && item.title) return item.title
   if (item.type === "notice") return item.text
   return processGroupInfoForPart(item).label
+}
+
+function lifecycleLabels() {
+  return {
+    defaultTitle: t("tool.lifecycle.default"),
+    toolCheck: t("tool.lifecycle.toolCheck"),
+    toolBlocked: t("tool.lifecycle.toolBlocked"),
+    toolResult: t("tool.lifecycle.toolResult"),
+    promptReview: t("tool.lifecycle.promptReview"),
+    recovery: t("tool.lifecycle.recovery"),
+    elicitation: t("tool.lifecycle.elicitation"),
+    elicitationResult: t("tool.lifecycle.elicitationResult"),
+  }
 }
 
 function fileChangeTarget(item: FileChangeItem): string {
@@ -762,7 +779,9 @@ export function isMessageRunning(
     if (part.type === "workflow_step") return part.status === "running"
     if (part.type === "workflow_decision") return part.status === "pending"
     if (part.type === "file_change") return part.status === "in_progress"
-    if (part.type === "document_draft") return part.status === "streaming" || part.status === "committing"
+    if (part.type === "document_draft") {
+      return ["streaming", "committing"].includes(part.status)
+    }
     if (part.type !== "tool") return false
     return isRunningTool(part)
   })
@@ -795,7 +814,9 @@ function isRunningProcessItem(part: TranscriptItem): boolean {
   if (part.type === "workflow_step") return part.status === "running"
   if (part.type === "workflow_decision") return part.status === "pending"
   if (part.type === "file_change") return part.status === "in_progress"
-  if (part.type === "document_draft") return part.status === "streaming" || part.status === "committing"
+  if (part.type === "document_draft") {
+    return ["streaming", "committing"].includes(part.status)
+  }
   if (part.type === "tool") return isRunningTool(part)
   if (part.traceNodeStatus === "active" || part.traceNodeStatus === "streaming") return true
   if (part.type === "session") return part.state === "active" || part.state === "streaming"

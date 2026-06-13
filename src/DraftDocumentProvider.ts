@@ -48,7 +48,9 @@ export class DraftDocumentProvider implements vscode.TextDocumentContentProvider
       } else if (
         type === "document_draft_committed" ||
         type === "document_draft_failed" ||
-        type === "document_draft_cancelled"
+        type === "document_draft_cancelled" ||
+        type === "draft_body_stalled" ||
+        type === "draft_interrupted_recoverable"
       ) {
         this.finish(sessionRunId, payload, type)
       }
@@ -131,6 +133,8 @@ function statusFromEvent(eventType: string): string {
   if (eventType === "document_draft_committed") return "committed"
   if (eventType === "document_draft_failed") return "failed"
   if (eventType === "document_draft_cancelled") return "cancelled"
+  if (eventType === "draft_body_stalled") return "stalled"
+  if (eventType === "draft_interrupted_recoverable") return "recoverable"
   return "streaming"
 }
 

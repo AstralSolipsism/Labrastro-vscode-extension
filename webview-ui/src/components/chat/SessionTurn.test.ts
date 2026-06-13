@@ -44,7 +44,7 @@ async function renderSessionTurnToString(
 }
 
 describe("SessionTurn source order", () => {
-  it("renders lifecycle approval cards with user-visible hook context before raw details", async () => {
+  it("renders lifecycle approval cards with product context before folded raw details", async () => {
     const turn: MockTurn = {
       userMessage: {
         id: "user-1",
@@ -105,12 +105,53 @@ describe("SessionTurn source order", () => {
 
     const html = await renderSessionTurnToString(turn)
 
-    expect(html).toContain("UserPromptSubmit hook asked for confirmation")
+    expect(html).toContain("提交前确认")
     expect(html).toContain("Prompt review")
     expect(html).toContain("Review prompt before continuing.")
     expect(html).toContain("等待批准")
     expect(html).toContain("Lifecycle hook is waiting for approval.")
+    expect(html).not.toContain("UserPromptSubmit hook asked for confirmation")
     expect(html).not.toContain("private raw prompt")
+  })
+
+  it("does not render PreToolUse raw hook titles in the default main view", async () => {
+    const turn: MockTurn = {
+      userMessage: {
+        id: "user-1",
+        role: "user",
+        text: "run command",
+        parts: [],
+        timestamp: 0,
+      },
+      assistantMessages: [{
+        id: "assistant-1",
+        role: "assistant",
+        text: "",
+        timestamp: 1,
+        parts: [
+          {
+            id: "hook-1",
+            type: "context_event",
+            title: "PreToolUse hook denied",
+            payload: {
+              schema: "lifecycle_hook.v1",
+              event_name: "PreToolUse",
+              hook_id: "guard/pretool",
+              decision: "deny",
+              continue_flow: false,
+              raw_args: { command: "secret command" },
+            },
+          },
+        ],
+        traceNodeStatus: "success",
+      }],
+    }
+
+    const html = await renderSessionTurnToString(turn)
+
+    expect(html).toContain("工具调用已被策略拦截")
+    expect(html).not.toContain("PreToolUse")
+    expect(html).not.toContain("secret command")
   })
 
   it("renders capability package install decisions as package-level install confirmation", async () => {

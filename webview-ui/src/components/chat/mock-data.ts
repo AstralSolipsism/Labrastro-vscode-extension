@@ -62,6 +62,7 @@ export interface MockTaskStats {
   model?: string
   mode?: string
   runStatus?: "idle" | "running" | "stopping" | "cancelled" | "done" | "error" | "interrupted"
+  observability?: Record<string, unknown>
 }
 
 export interface MockSessionBundle {

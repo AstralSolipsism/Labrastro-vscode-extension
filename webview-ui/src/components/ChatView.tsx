@@ -113,6 +113,7 @@ import {
   rawAuditEventKey,
   type RawAuditEventSnapshot,
 } from "../chat/raw-audit"
+import { isLifecycleHookPayload, lifecycleDisplayTitle } from "../chat/lifecycle-display"
 import { isSessionRunTranscriptEventType } from "../chat/sessionRunTranscriptReducer"
 import {
   approvalDecisionAfterResolution,
@@ -1374,7 +1375,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
       withEventMeta({
         id: `context-${Date.now()}-${parts.length}`,
         type: "context_event",
-        title: String(payload.message || payload.phase || "上下文事件"),
+        title: isLifecycleHookPayload(payload)
+          ? lifecycleDisplayTitle(payload)
+          : String(payload.message || payload.phase || "上下文事件"),
         payload,
       }, meta),
     ])

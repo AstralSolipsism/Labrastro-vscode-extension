@@ -165,6 +165,50 @@ describe("DraftDocumentProvider", () => {
       "# Architecture\n\n| A | B |\n| - | - |\n| one | two |\n| three | four |\n",
     )
   })
+
+  it("keeps preview content available across stalled and recoverable draft states", async () => {
+    const provider = new DraftDocumentProvider()
+    await provider.applySessionRunEvents("run-1", [
+      {
+        type: "document_draft_started",
+        payload: {
+          draft_id: "draft-1",
+          target_path: "docs/architecture.md",
+          title: "Architecture",
+        },
+      },
+      {
+        type: "document_draft_preview_chunk",
+        payload: {
+          draft_id: "draft-1",
+          target_path: "docs/architecture.md",
+          chunk_seq: 1,
+          start_offset: 0,
+          end_offset: "# Architecture\n".length,
+          content: "# Architecture\n",
+          content_sha256: sha256("# Architecture\n"),
+        },
+      },
+      {
+        type: "draft_body_stalled",
+        payload: {
+          draft_id: "draft-1",
+          target_path: "docs/architecture.md",
+        },
+      },
+      {
+        type: "draft_interrupted_recoverable",
+        payload: {
+          draft_id: "draft-1",
+          target_path: "docs/architecture.md",
+        },
+      },
+    ])
+
+    const uri = vscodeMock.executeCommand.mock.calls[0][1]
+    expect(provider.provideTextDocumentContent(uri)).toBe("# Architecture\n")
+    expect(vscodeMock.fire).toHaveBeenCalledWith(uri)
+  })
 })
 
 function sha256(value: string): string {
