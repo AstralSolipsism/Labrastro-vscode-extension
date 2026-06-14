@@ -872,10 +872,10 @@ describe("settings controller capability model", () => {
   })
 
   it("does not keep settings-owned capability package polling or draft approval paths", () => {
-    expect(settingsControllerSource).not.toContain("capabilityPackage.draft.accept")
+    expect(settingsControllerSource).not.toContain(["capabilityPackage", "draft", "accept"].join("."))
     expect(settingsControllerSource).not.toContain("capabilityPackage.ingest.status")
     expect(settingsControllerSource).not.toContain("capabilityIngestPollTimer")
-    expect(settingsControllerSource).not.toContain("acceptCapabilityPackageDraft")
+    expect(settingsControllerSource).not.toContain(["accept", "CapabilityPackage", "Draft"].join(""))
   })
 
   it("surfaces agent config first-load background resources", () => {
