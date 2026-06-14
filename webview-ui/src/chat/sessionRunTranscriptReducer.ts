@@ -21,6 +21,8 @@ import {
   resolveActiveToolPartIndex,
   resolveToolPartIndexForReturn,
   statusAfterToolReturn,
+  toolSpecPatch,
+  toolTracePatch,
   upsertToolPartInParts,
 } from "./tool-event-parts"
 import {
@@ -1277,6 +1279,7 @@ function appendToolStream(
       status: "running",
       toolCallId,
       source: resolvedToolSource,
+      ...toolSpecPatch(payload),
       stream,
       outputFormat: inferToolOutputFormat(toolName, resolvedToolSource, outputFormat),
       output: shellOutput
@@ -1328,6 +1331,7 @@ function appendToolCallDelta(
       status: "preparing",
       toolCallId,
       source: stringValue(payload.tool_source),
+      ...toolSpecPatch(payload),
       startedAt: numberValue(payload.started_at),
       input: argumentsPreview ? { arguments_preview: argumentsPreview } : undefined,
       preparingIndex,
@@ -1361,6 +1365,7 @@ function appendToolArgumentState(
       status: eventType === "tool_arguments_invalid" ? "protocol_error" : "preparing",
       toolCallId,
       source: stringValue(payload.tool_source),
+      ...toolSpecPatch(payload),
       preparingIndex,
       output: eventType === "tool_arguments_invalid" ? message : undefined,
       outputFormat: eventType === "tool_arguments_invalid" ? "plain" : undefined,
@@ -1392,6 +1397,7 @@ function appendMutationPreviewFailed(
       status: "protocol_error",
       toolCallId,
       source: stringValue(payload.tool_source),
+      ...toolSpecPatch(payload),
       preparingIndex,
       output: error,
       outputFormat: "plain",
@@ -1421,6 +1427,7 @@ function appendToolStart(
       status: "running",
       toolCallId,
       source: stringValue(payload.tool_source),
+      ...toolSpecPatch(payload),
       startedAt: numberValue(payload.started_at),
       input: objectValue(payload.tool_args),
       resultMeta: {},
@@ -1449,6 +1456,7 @@ function appendToolProtocolError(
     upsertToolPartWithPreparing(parts, toolName, {
       status: "protocol_error",
       toolCallId,
+      ...toolSpecPatch(payload),
       output,
       outputFormat: "plain",
       resultMeta,
@@ -1473,6 +1481,7 @@ function appendToolEnd(
   const toolSource = stringValue(payload.tool_source)
   const finalOutput = String(payload.tool_result || "")
   const resultMeta = objectValue(payload.meta)
+  const tracePatch = toolTracePatch(resultMeta)
   updateAssistantItems(bundle, (parts) => {
     const existingIndex = resolveToolPartIndex(parts, toolName, toolCallId, true)
     const existing = existingIndex >= 0 ? parts[existingIndex] as ToolActivityItem : undefined
@@ -1496,6 +1505,8 @@ function appendToolEnd(
       status: nextStatus,
       toolCallId,
       source: resolvedToolSource,
+      ...toolSpecPatch(payload),
+      ...tracePatch,
       endedAt: numberValue(payload.ended_at),
       output: preserveTerminalDetails
         ? existing?.output || reconciledShellOutput
@@ -1543,6 +1554,7 @@ function appendApprovalRequest(
       status: decision === "allow" ? "approved" : decision === "deny" ? "denied" : "awaiting_approval",
       toolCallId,
       source: stringValue(payload.tool_source),
+      ...toolSpecPatch(payload),
       input: objectValue(payload.tool_args),
       approvalId: stringValue(payload.approval_id),
       approvalReason: context.approvalReason || stringValue(payload.reason),
@@ -1611,6 +1623,7 @@ function appendApprovalResolved(
         if (!toolCallId && part.approvalId !== approvalId) return part
         return withEventMeta({
           ...part,
+          ...toolSpecPatch(payload),
           approvalDecision: approvalDecisionAfterResolution(part.approvalDecision, decision),
           approvalResultReason: reason || part.approvalResultReason,
           status: approvalStatusAfterResolution(decision, part.status),

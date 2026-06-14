@@ -56,6 +56,10 @@ export interface ToolActivityItem extends TranscriptMeta {
   title?: string
   subtitle?: string
   toolCallId?: string
+  toolId?: string
+  risk?: string
+  exposure?: string
+  capabilityName?: string
   source?: string
   input?: Record<string, unknown>
   output?: string
@@ -65,6 +69,8 @@ export interface ToolActivityItem extends TranscriptMeta {
   finalOutput?: string
   outputTruncated?: boolean
   resultMeta?: Record<string, unknown>
+  searchTrace?: Record<string, unknown>
+  executeTrace?: Record<string, unknown>
   preparingIndex?: number
   startedAt?: number
   endedAt?: number

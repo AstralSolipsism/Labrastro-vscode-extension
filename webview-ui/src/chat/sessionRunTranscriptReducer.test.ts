@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { MockSessionBundle } from "../components/chat/mock-data"
+import type { ToolActivityItem } from "../components/chat/transcript-model"
 import {
   applySessionRunTranscriptEvent,
   applySessionRunTranscriptEvents,
@@ -888,17 +889,27 @@ describe("sessionRunTranscriptReducer", () => {
     current = reduce(current, "tool_call_delta", {
       index: 0,
       tool_name: "shell",
+      toolId: "builtin:shell",
+      risk: "command_execution",
+      exposure: "direct",
+      capabilityName: "terminal",
       arguments_preview: "{\"command\":\"npm test\"}",
     }, 2)
     current = reduce(current, "tool_call_start", {
       index: 0,
       tool_call_id: "tool-1",
       tool_name: "shell",
+      tool_id: "builtin:shell",
+      risk: "command_execution",
+      exposure: "direct",
       tool_args: { command: "npm test" },
     }, 3)
     current = reduce(current, "tool_call_stream", {
       tool_call_id: "tool-1",
       tool_name: "shell",
+      tool_id: "builtin:shell",
+      risk: "command_execution",
+      exposure: "direct",
       stream: "stdout",
       content: "ok",
     }, 4)
@@ -906,18 +917,33 @@ describe("sessionRunTranscriptReducer", () => {
       approval_id: "approval-1",
       tool_call_id: "tool-1",
       tool_name: "shell",
+      tool_id: "builtin:shell",
+      risk: "command_execution",
+      exposure: "direct",
       reason: "需要执行",
       tool_args: { command: "npm test" },
     }, 5)
     current = reduce(current, "approval_resolved", {
       approval_id: "approval-1",
       tool_call_id: "tool-1",
+      tool_id: "builtin:shell",
+      risk: "command_execution",
+      exposure: "direct",
       decision: "allow_once",
     }, 6)
     current = reduce(current, "tool_call_end", {
       tool_call_id: "tool-1",
       tool_name: "shell",
+      tool_id: "builtin:shell",
+      risk: "command_execution",
+      exposure: "direct",
       tool_result: "ok\n",
+      meta: {
+        executeTrace: {
+          tool_id: "builtin:shell",
+          target_exposure: "direct",
+        },
+      },
     }, 7)
 
     const parts = current.turns[0].assistantMessages[0].parts
@@ -927,11 +953,70 @@ describe("sessionRunTranscriptReducer", () => {
       type: "tool",
       tool: "shell",
       toolCallId: "tool-1",
+      toolId: "builtin:shell",
+      risk: "command_execution",
+      exposure: "direct",
+      capabilityName: "terminal",
       status: "returned",
       output: "ok",
       outputChunks: [{ stream: "stdout", content: "ok" }],
       finalOutput: "ok\n",
+      executeTrace: {
+        tool_id: "builtin:shell",
+        target_exposure: "direct",
+      },
       approvalDecision: "allow_once",
+    })
+  })
+
+  it("projects canonical tool spec metadata and gateway traces onto tool cards", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
+    current = reduce(current, "tool_call_start", {
+      tool_call_id: "search-1",
+      tool_name: "tool_search",
+      tool_id: "builtin:tool_search",
+      risk: "read_only",
+      exposure: "direct",
+      tool_args: { query: "docs" },
+    }, 2)
+    current = reduce(current, "tool_call_end", {
+      tool_call_id: "search-1",
+      tool_name: "tool_search",
+      tool_id: "builtin:tool_search",
+      risk: "read_only",
+      exposure: "direct",
+      tool_result: "{\"results\":[]}",
+      meta: {
+        search_trace: {
+          query: "docs",
+          result_count: 1,
+          tool_ids: ["capability:docs:lookup"],
+        },
+      },
+    }, 3)
+
+    const parts = current.turns[0].assistantMessages[0].parts
+    expect(parts).toHaveLength(1)
+    const tool = parts[0] as ToolActivityItem
+    expect(tool).toMatchObject({
+      type: "tool",
+      tool: "tool_search",
+      toolId: "builtin:tool_search",
+      risk: "read_only",
+      exposure: "direct",
+      searchTrace: {
+        query: "docs",
+        result_count: 1,
+        tool_ids: ["capability:docs:lookup"],
+      },
+      resultMeta: {
+        search_trace: {
+          query: "docs",
+          result_count: 1,
+          tool_ids: ["capability:docs:lookup"],
+        },
+      },
     })
   })
 
@@ -1283,13 +1368,13 @@ describe("sessionRunTranscriptReducer", () => {
     })
   })
 
-  it("stores capability package drafts as workflow artifacts", () => {
+  it("stores capability install candidates as workflow artifacts", () => {
     let current = bundle()
     current = reduce(current, "session_run_start", { prompt: "package" }, 1)
     current = reduce(current, "workflow_artifact", {
       workflow: "capability_package_ingest",
-      artifact_type: "capability_package_draft",
-      title: "能力草案 review 已生成",
+      artifact_type: "capability_install_candidate",
+      title: "能力安装候选 review 已生成",
       artifact: {
         package_id: "review",
         description: "Review package",
@@ -1310,8 +1395,8 @@ describe("sessionRunTranscriptReducer", () => {
       type: "workflow_artifact",
       lane: "primary",
       workflow: "capability_package_ingest",
-      artifactType: "capability_package_draft",
-      title: "能力草案 review 已生成",
+      artifactType: "capability_install_candidate",
+      title: "能力安装候选 review 已生成",
       artifact: {
         package_id: "review",
       },

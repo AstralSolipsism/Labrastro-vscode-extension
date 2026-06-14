@@ -6,6 +6,8 @@ import {
   requiredToolCallId,
   resolveToolPartIndexForReturn,
   statusAfterToolReturn,
+  toolSpecPatch,
+  toolTracePatch,
   upsertToolPartInParts,
 } from "./tool-event-parts"
 
@@ -121,5 +123,40 @@ describe("tool event part state helpers", () => {
     expect(approvalStatusAfterResolution("allow_once", "awaiting_approval")).toBe("approved")
     expect(approvalStatusAfterResolution("deny_once", "awaiting_approval")).toBe("denied")
     expect(approvalStatusAfterResolution("", "running")).toBe("running")
+  })
+
+  it("normalizes tool spec metadata from snake_case and camelCase payloads", () => {
+    expect(toolSpecPatch({
+      tool_id: "builtin:tool_search",
+      risk: "read_only",
+      exposure: "direct",
+      capability_name: "docs",
+    })).toEqual({
+      toolId: "builtin:tool_search",
+      risk: "read_only",
+      exposure: "direct",
+      capabilityName: "docs",
+    })
+    expect(toolSpecPatch({
+      toolId: "mcp:docs:search",
+      risk: "capability",
+      exposure: "deferred",
+      capabilityName: "docs",
+    })).toEqual({
+      toolId: "mcp:docs:search",
+      risk: "capability",
+      exposure: "deferred",
+      capabilityName: "docs",
+    })
+  })
+
+  it("normalizes search and execute trace metadata from result meta", () => {
+    expect(toolTracePatch({
+      search_trace: { query: "docs", tool_ids: ["mcp:docs:search"] },
+      executeTrace: { tool_id: "mcp:docs:search" },
+    })).toEqual({
+      searchTrace: { query: "docs", tool_ids: ["mcp:docs:search"] },
+      executeTrace: { tool_id: "mcp:docs:search" },
+    })
   })
 })

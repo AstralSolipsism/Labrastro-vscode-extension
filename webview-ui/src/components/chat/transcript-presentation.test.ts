@@ -106,8 +106,8 @@ describe("transcript presentation", () => {
         type: "workflow_artifact",
         lane: "primary",
         workflow: "capability_package_ingest",
-        artifactType: "capability_package_draft",
-        title: "能力草案 review 已生成",
+        artifactType: "capability_install_candidate",
+        title: "能力安装候选 review 已生成",
         artifact: { package_id: "review" },
       },
     ]
@@ -153,6 +153,44 @@ describe("transcript presentation", () => {
     })
     expect(processSummary(presentation)?.currentLabel).not.toContain("PreToolUse")
     expect(presentation[1]).toMatchObject({ type: "final_answer", parts: [{ id: "text-1" }] })
+  })
+
+  it("keeps internal mutation envelopes out of the ordinary process summary label", () => {
+    const parts: TranscriptItem[] = [
+      {
+        id: "tool-1",
+        type: "tool",
+        tool: "capability_execute",
+        toolId: "builtin:capability_execute",
+        risk: "capability",
+        exposure: "direct",
+        status: "returned",
+        input: {
+          tool_id: "capability:docs:apply_patch",
+          arguments: {
+            preview_identity: { candidate_hash: "hash-1" },
+            approved_save_candidate: { operations: [{ kind: "add", path: "a.md" }] },
+          },
+        },
+        resultMeta: {
+          execute_trace: {
+            tool_id: "capability:docs:apply_patch",
+            target_tool_name: "apply_patch",
+          },
+        },
+      },
+    ]
+
+    const presentation = buildTranscriptPresentation(parts, assistant(parts, "success"))
+    const group = groups(presentation)[0]
+    const ordinaryText = `${group?.label || ""} ${group?.currentLabel || ""}`
+
+    expect(group).toMatchObject({
+      count: 1,
+      state: "completed",
+    })
+    expect(ordinaryText).not.toContain("approved_save_candidate")
+    expect(ordinaryText).not.toContain("preview_identity")
   })
 
   it("keeps StopFailure recovery lifecycle context in process timeline instead of the final answer", () => {
@@ -254,7 +292,7 @@ describe("transcript presentation", () => {
         type: "workflow_artifact",
         lane: "primary",
         workflow: "capability_package_ingest",
-        artifactType: "capability_package_draft",
+        artifactType: "capability_install_candidate",
         artifact: { package_id: "gsap" },
       },
     ]
@@ -297,7 +335,7 @@ describe("transcript presentation", () => {
         type: "workflow_artifact",
         lane: "primary",
         workflow: "capability_package_ingest",
-        artifactType: "capability_package_draft",
+        artifactType: "capability_install_candidate",
         artifact: { package_id: "gsap" },
       },
     ]
@@ -448,7 +486,7 @@ describe("transcript presentation", () => {
         type: "workflow_artifact",
         lane: "primary",
         workflow: "capability_package_ingest",
-        artifactType: "capability_package_draft",
+        artifactType: "capability_install_candidate",
         artifact: { package_id: "gsap" },
       },
     ]
@@ -505,7 +543,7 @@ describe("transcript presentation", () => {
         type: "workflow_artifact",
         lane: "primary",
         workflow: "capability_package_ingest",
-        artifactType: "capability_package_draft",
+        artifactType: "capability_install_candidate",
         artifact: { package_id: "gsap" },
       },
     ]

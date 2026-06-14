@@ -122,6 +122,8 @@ import {
   resolveActiveToolPartIndex,
   resolveToolPartIndexForReturn,
   statusAfterToolReturn,
+  toolSpecPatch,
+  toolTracePatch,
   upsertToolPartInParts,
 } from "../chat/tool-event-parts"
 import {
@@ -1288,6 +1290,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         status: "running",
         toolCallId,
         source: resolvedToolSource,
+        ...toolSpecPatch(payload),
         stream,
         outputFormat: inferToolOutputFormat(toolName, resolvedToolSource, outputFormat),
         output: shellOutput
@@ -1331,6 +1334,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       status: "preparing",
       toolCallId,
       source: stringValue(payload.tool_source),
+      ...toolSpecPatch(payload),
       startedAt: numberValue(payload.started_at),
       input: argumentsPreview ? { arguments_preview: argumentsPreview } : undefined,
       preparingIndex,
@@ -1998,6 +2002,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
           status: "running",
           toolCallId,
           source: stringValue(payload.tool_source),
+          ...toolSpecPatch(payload),
           startedAt: numberValue(payload.started_at),
           input: (payload.tool_args || {}) as Record<string, unknown>,
           resultMeta: {},
@@ -2019,6 +2024,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         upsertToolPart(toolName, {
           status: "protocol_error",
           toolCallId,
+          ...toolSpecPatch(payload),
           output,
           outputFormat: "plain",
           resultMeta,
@@ -2033,6 +2039,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
         const outputFormat = stringValue(payload.format) || stringValue(payload.output_format) || stringValue(payload.tool_output_format) || stringValue(payload.tool_result_format)
         const toolSource = stringValue(payload.tool_source)
         const finalOutput = String(payload.tool_result || "")
+        const resultMeta = objectValue(payload.meta)
+        const tracePatch = toolTracePatch(resultMeta)
         const parts = ensureAssistantMessage().parts
         const existingIndex = resolveToolPartIndex(parts, toolName, toolCallId, true)
         const existing = existingIndex >= 0 ? parts[existingIndex] as ToolActivityItem : undefined
@@ -2049,12 +2057,14 @@ const ChatView: Component<ChatViewProps> = (props) => {
         const patch: Partial<ToolActivityItem> = {
           status: statusAfterToolReturn(existing?.status),
           source: resolvedToolSource,
+          ...toolSpecPatch(payload),
+          ...tracePatch,
           endedAt: numberValue(payload.ended_at),
           output: reconciledShellOutput,
           outputFormat: inferToolOutputFormat(toolName, resolvedToolSource, outputFormat),
           outputChunks: shellChunks,
           finalOutput: isShell ? finalOutput : undefined,
-          resultMeta: objectValue(payload.meta),
+          resultMeta,
         }
         if (toolCallId) patch.toolCallId = toolCallId
         upsertToolPart(toolName, patch, toolCallId, { matchReturn: true, meta: eventMeta })
@@ -2083,6 +2093,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
           status: autoDecision.decision === "allow" ? "approved" : autoDecision.decision === "deny" ? "denied" : "awaiting_approval",
           toolCallId: next.toolCallId,
           source: next.toolSource,
+          ...toolSpecPatch(payload),
           input: next.toolArgs,
           approvalId: next.approvalId,
           approvalReason: autoDecision.reason || next.reason,
@@ -2120,13 +2131,13 @@ const ChatView: Component<ChatViewProps> = (props) => {
             if (part.type !== "tool") return part
             if (toolCallId && part.toolCallId !== toolCallId) return part
             if (!toolCallId && part.approvalId !== approvalId) return part
-            return {
+            return withEventMeta({
               ...part,
-              ...withEventMeta(part, eventMeta),
+              ...toolSpecPatch(payload),
               approvalDecision: approvalDecisionAfterResolution(part.approvalDecision, decision),
               approvalResultReason: reason || part.approvalResultReason,
               status: approvalStatusAfterResolution(decision, part.status),
-            }
+            }, eventMeta)
           })
         )
       }

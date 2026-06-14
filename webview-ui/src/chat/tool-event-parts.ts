@@ -74,6 +74,28 @@ export function upsertToolPartInParts(
   return updated
 }
 
+export function toolSpecPatch(payload: Record<string, unknown>): Partial<ToolActivityItem> {
+  const toolId = stringValue(payload.tool_id) || stringValue(payload.toolId)
+  const risk = stringValue(payload.risk)
+  const exposure = stringValue(payload.exposure)
+  const capabilityName = stringValue(payload.capability_name) || stringValue(payload.capabilityName)
+  return {
+    ...(toolId ? { toolId } : {}),
+    ...(risk ? { risk } : {}),
+    ...(exposure ? { exposure } : {}),
+    ...(capabilityName ? { capabilityName } : {}),
+  }
+}
+
+export function toolTracePatch(resultMeta: Record<string, unknown>): Partial<ToolActivityItem> {
+  const searchTrace = objectValue(resultMeta.search_trace ?? resultMeta.searchTrace)
+  const executeTrace = objectValue(resultMeta.execute_trace ?? resultMeta.executeTrace)
+  return {
+    ...(Object.keys(searchTrace).length > 0 ? { searchTrace } : {}),
+    ...(Object.keys(executeTrace).length > 0 ? { executeTrace } : {}),
+  }
+}
+
 function mergeRawEventRefs(
   current: ToolActivityItem["rawEventRefs"],
   incoming: ToolActivityItem["rawEventRefs"],
@@ -120,4 +142,14 @@ export function approvalStatusAfterResolution(
   if (decision === "allow_once") return "approved"
   if (decision === "deny_once") return "denied"
   return currentStatus
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value ? value : undefined
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
 }
