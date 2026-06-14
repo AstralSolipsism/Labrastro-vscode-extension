@@ -23,7 +23,7 @@ const zhCN: Record<string, string> = {
   "chat.streamRecovery.action.retry": "重新请求",
   "chat.streamRecovery.action.dismiss": "结束本轮",
   "chat.capabilityPackage.sessionFailed": "能力流程执行失败。",
-  "chat.capabilityPackage.draft": "能力草案",
+  "chat.capabilityPackage.candidate": "能力安装候选",
   "chat.capabilityPackage.components": "组件",
   "chat.capabilityPackage.validationFailed": "校验失败",
   "chat.capabilityPackage.capabilities": "将新增的能力",

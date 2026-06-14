@@ -253,7 +253,7 @@ describe("SessionTurn source order", () => {
     expect(source).toContain("const FinalAnswerPart")
     expect(source).toContain("const WorkflowArtifactPart")
     expect(source).toContain("const WorkflowDecisionPart")
-    expect(source).toContain("const CapabilityPackageDraftReviewPart")
+    expect(source).toContain("const CapabilityPackageCandidateReviewPart")
     expect(source).toContain("const RawAuditRefs")
     expect(source).toContain("rawAuditRefsForPart")
     expect(source).toContain('class="process-group-card"')
@@ -401,8 +401,8 @@ describe("SessionTurn source order", () => {
     const memoryStart = source.indexOf("const MemoryContextPart", workflowStart)
     const workflowSource = source.slice(workflowStart, memoryStart)
     expect(workflowSource).toContain("<RawAuditRefs")
-    expect(workflowSource).toContain("CapabilityPackageDraftReviewPart")
-    expect(workflowSource).not.toContain("capability_package_draft-card__json")
+    expect(workflowSource).toContain("CapabilityPackageCandidateReviewPart")
+    expect(workflowSource).toContain("candidate_hash")
   })
 
   it("renders reasoning details as preserved plain text instead of streaming markdown", () => {

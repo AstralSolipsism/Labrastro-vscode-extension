@@ -1497,13 +1497,13 @@ const WorkflowStepPart: Component<ItemProps<WorkflowStepItem>> = (props) => {
 
 const WorkflowArtifactPart: Component<ItemProps<WorkflowArtifactItem>> = (props) => (
   <Switch fallback={<WorkflowGenericPrimaryPart {...props} part={props.part} icon="package" />}>
-    <Match when={props.part.artifactType === "capability_package_draft"}>
-      <CapabilityPackageDraftReviewPart {...props} part={props.part} />
+    <Match when={props.part.artifactType === "capability_install_candidate"}>
+      <CapabilityPackageCandidateReviewPart {...props} part={props.part} />
     </Match>
   </Switch>
 )
 
-const CapabilityPackageDraftReviewPart: Component<ItemProps<WorkflowArtifactItem>> = (props) => {
+const CapabilityPackageCandidateReviewPart: Component<ItemProps<WorkflowArtifactItem>> = (props) => {
   const [open, setOpen] = createSignal(initialCardOpenState(props.part.id, true))
   const [detailsOpen, setDetailsOpen] = createSignal(initialCardDetailsOpenState(`${props.part.id}:details`, false))
   createEffect(() => {
@@ -1551,7 +1551,7 @@ const CapabilityPackageDraftReviewPart: Component<ItemProps<WorkflowArtifactItem
       >
         <span class="codicon codicon-package" aria-hidden="true" />
         <span class="view-card__body">
-          <span class="view-card__title">{props.part.title || stringPayload(artifact().name) || t("chat.capabilityPackage.draft")}</span>
+          <span class="view-card__title">{props.part.title || stringPayload(artifact().name) || t("chat.capabilityPackage.candidate")}</span>
           <span class="view-card__meta">{meta()}</span>
         </span>
         <span class={`codicon codicon-chevron-${open() ? "down" : "right"}`} aria-hidden="true" />
@@ -1603,7 +1603,12 @@ const CapabilityPackageDraftReviewPart: Component<ItemProps<WorkflowArtifactItem
           <Show when={detailsOpen()}>
             <div class="tool-card__details">
               <ToolSection title={t("tool.section.metadata")}>
-                <pre class="structured-card__json">{formatJson(props.part.payload || props.part.artifact || {})}</pre>
+                <pre class="structured-card__json">{formatJson({
+                  candidate_id: stringPayload(artifact().candidate_id),
+                  candidate_hash: stringPayload(artifact().candidate_hash),
+                  operation: stringPayload(artifact().operation),
+                  diagnostic_ref: stringPayload(artifact().diagnostic_ref),
+                })}</pre>
               </ToolSection>
             </div>
           </Show>
@@ -1713,7 +1718,12 @@ const CapabilityPackageInstallDecisionPart: Component<ItemProps<WorkflowDecision
           <Show when={detailsOpen()}>
             <div class="tool-card__details">
               <ToolSection title={t("tool.section.approval")}>
-                <pre class="structured-card__json">{formatJson(props.part.payload || props.part.review || {})}</pre>
+                <pre class="structured-card__json">{formatJson({
+                  candidate_id: stringPayload(review().candidate_id),
+                  candidate_hash: stringPayload(review().candidate_hash),
+                  operation: stringPayload(review().operation),
+                  package_id: packageId(),
+                })}</pre>
               </ToolSection>
             </div>
           </Show>

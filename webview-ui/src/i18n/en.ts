@@ -23,7 +23,7 @@ const en: Record<string, string> = {
   "chat.streamRecovery.action.retry": "Retry request",
   "chat.streamRecovery.action.dismiss": "End this run",
   "chat.capabilityPackage.sessionFailed": "Capability workflow failed.",
-  "chat.capabilityPackage.draft": "Capability draft",
+  "chat.capabilityPackage.candidate": "Capability install candidate",
   "chat.capabilityPackage.components": "components",
   "chat.capabilityPackage.validationFailed": "Validation failed",
   "chat.capabilityPackage.capabilities": "New capabilities",
