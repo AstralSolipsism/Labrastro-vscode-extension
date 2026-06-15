@@ -439,7 +439,10 @@ describe("sessionRunTranscriptReducer", () => {
       tool: "apply_patch",
       toolCallId: "tool-1",
       status: "preparing",
-      resultMeta: expect.objectContaining({ argument_status: "valid" }),
+      resultMeta: expect.objectContaining({
+        argument_status: "valid",
+        preview_status: "previewing",
+      }),
     }))
     expect(parts).toContainEqual(expect.objectContaining({
       type: "file_change",
@@ -448,6 +451,40 @@ describe("sessionRunTranscriptReducer", () => {
       status: "in_progress",
       path: "src/app.py",
       addedLines: 1,
+    }))
+  })
+
+  it("updates only the tool card while a mutation preview is running", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "patch file" }, 1)
+    current = reduce(current, "tool_arguments_valid", {
+      index: 0,
+      tool_call_id: "tool-1",
+      tool_name: "apply_patch",
+      status: "valid",
+    }, 2)
+    current = reduce(current, "mutation_previewing", {
+      index: 0,
+      item_id: "file-change:tool-1",
+      tool_call_id: "tool-1",
+      tool_name: "apply_patch",
+      status: "previewing",
+    }, 3)
+
+    const parts = current.turns.flatMap((turn) =>
+      turn.assistantMessages.flatMap((message) => message.parts)
+    )
+
+    expect(parts.some((part) => part.type === "file_change")).toBe(false)
+    expect(parts).toContainEqual(expect.objectContaining({
+      type: "tool",
+      tool: "apply_patch",
+      toolCallId: "tool-1",
+      status: "preparing",
+      resultMeta: expect.objectContaining({
+        argument_status: "valid",
+        preview_status: "previewing",
+      }),
     }))
   })
 
@@ -496,8 +533,8 @@ describe("sessionRunTranscriptReducer", () => {
       {
         type: "tool_call_end",
         session_run_id: "run-1",
-        seq: 5,
-        session_event_seq: 5,
+        seq: 6,
+        session_event_seq: 6,
         payload: {
           index: 0,
           tool_call_id: "tool-1",

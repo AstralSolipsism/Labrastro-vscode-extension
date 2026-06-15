@@ -377,6 +377,9 @@ function applySessionRunTranscriptEventToBundle(
   ) {
     upsertFileChange(next, type, payload, meta, context)
     markChanged()
+  } else if (type === "mutation_previewing") {
+    appendMutationPreviewing(next, payload, meta, context)
+    markChanged()
   } else if (type === "mutation_preview_failed") {
     appendMutationPreviewFailed(next, payload, meta, context)
     markChanged()
@@ -1407,6 +1410,32 @@ function appendMutationPreviewFailed(
         ...(failureCode ? { failure_code: failureCode } : {}),
         error,
         ...(retryHint ? { retry_hint: retryHint } : {}),
+      },
+      rawEventRefs: rawEventRefsFromPayload(payload),
+    }, toolCallId, { meta, preparingIndex }),
+  context)
+}
+
+function appendMutationPreviewing(
+  bundle: MockSessionBundle,
+  payload: Record<string, unknown>,
+  meta: EventRenderMeta,
+  context: SessionRunTranscriptContext,
+): void {
+  const toolName = String(payload.tool_name || "tool")
+  const realToolCallId = requiredToolCallId(payload)
+  const toolCallId = realToolCallId || preparingToolCallId(payload, context)
+  const preparingIndex = numberValue(payload.index) ?? 0
+  updateAssistantItems(bundle, (parts) =>
+    upsertToolPartWithPreparing(parts, toolName, {
+      status: "preparing",
+      toolCallId,
+      source: stringValue(payload.tool_source),
+      ...toolSpecPatch(payload),
+      preparingIndex,
+      resultMeta: {
+        argument_status: "valid",
+        preview_status: "previewing",
       },
       rawEventRefs: rawEventRefsFromPayload(payload),
     }, toolCallId, { meta, preparingIndex }),

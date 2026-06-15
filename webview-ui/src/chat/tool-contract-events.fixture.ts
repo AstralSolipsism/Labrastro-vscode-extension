@@ -101,10 +101,23 @@ export const applyPatchPreviewReadyEvents = [
     },
   },
   {
-    type: "mutation_preview_ready",
+    type: "mutation_previewing",
     session_run_id: "run-1",
     seq: 4,
     session_event_seq: 4,
+    payload: {
+      index: 0,
+      item_id: "file-change:tool-1",
+      tool_call_id: "tool-1",
+      tool_name: "apply_patch",
+      status: "previewing",
+    },
+  },
+  {
+    type: "mutation_preview_ready",
+    session_run_id: "run-1",
+    seq: 5,
+    session_event_seq: 5,
     payload: {
       index: 0,
       item_id: "file-change:tool-1",
@@ -153,10 +166,23 @@ export const applyPatchPreviewFailedEvents = [
     },
   },
   {
-    type: "mutation_preview_failed",
+    type: "mutation_previewing",
     session_run_id: "run-1",
     seq: 4,
     session_event_seq: 4,
+    payload: {
+      index: 0,
+      item_id: "file-change:tool-1",
+      tool_call_id: "tool-1",
+      tool_name: "apply_patch",
+      status: "previewing",
+    },
+  },
+  {
+    type: "mutation_preview_failed",
+    session_run_id: "run-1",
+    seq: 5,
+    session_event_seq: 5,
     payload: {
       index: 0,
       item_id: "file-change:tool-1",
