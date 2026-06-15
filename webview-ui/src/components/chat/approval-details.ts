@@ -28,6 +28,7 @@ export interface ApprovalDetails {
   sections: ApprovalSection[]
   previewUnavailable?: boolean
   previewError?: string
+  approvedSaveCandidate?: Record<string, unknown>
   rawPayload?: Record<string, unknown>
 }
 
@@ -62,6 +63,9 @@ export function approvalFromPayload(
     sections,
     previewUnavailable: payload.preview_unavailable === true || fallback.previewUnavailable,
     previewError: stringValue(payload.preview_error) || fallback.previewError,
+    approvedSaveCandidate: objectWithKeys(payload.approved_save_candidate) ||
+      objectWithKeys(payload.approvedSaveCandidate) ||
+      fallback.approvedSaveCandidate,
     rawPayload: Object.keys(payload).length ? payload : fallback.rawPayload,
   }
 }
@@ -226,6 +230,11 @@ export function approvalFilePath(approval: ApprovalDetails): string {
 
 export function objectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function objectWithKeys(value: unknown): Record<string, unknown> | undefined {
+  const record = objectValue(value)
+  return Object.keys(record).length ? record : undefined
 }
 
 export function stringValue(value: unknown): string {
