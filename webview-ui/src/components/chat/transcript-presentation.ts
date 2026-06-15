@@ -238,6 +238,11 @@ function buildTimelineItems(
 ): ProcessTimelineItem[] {
   const items: ProcessTimelineItem[] = []
   let currentProcess: { key: string; info: ProcessGroupInfo; items: TranscriptItem[] } | undefined
+  const hiddenCapabilityGatewayIds = new Set(
+    parts
+      .filter((part): part is ToolActivityItem => part.type === "tool" && isPairedCapabilityGateway(part, parts))
+      .map((part) => part.id),
+  )
 
   const flushProcess = () => {
     if (!currentProcess?.items.length) {
@@ -272,6 +277,7 @@ function buildTimelineItems(
   }
 
   for (const part of parts) {
+    if (hiddenCapabilityGatewayIds.has(part.id)) continue
     if (part.type === "assistant_text") {
       flushProcess()
       items.push({ type: "timeline_text", part })
@@ -597,7 +603,7 @@ function processGroupInfoForPart(part: TranscriptItem): ProcessGroupInfo {
 }
 
 function toolGroupInfo(part: ToolActivityItem): ProcessGroupInfo {
-  const toolName = (part.tool || "").trim()
+  const toolName = toolDisplayName(part)
   if (isMcpTool(part)) {
     const server = toolSourceName(part, ["mcp_server", "server", "server_name", "namespace"])
     return {
@@ -641,13 +647,13 @@ function isProcessItem(part: TranscriptItem): boolean {
 }
 
 function isMcpTool(part: ToolActivityItem): boolean {
-  const tool = (part.tool || "").toLowerCase()
+  const tool = toolDisplayName(part).toLowerCase()
   const source = (part.source || "").toLowerCase()
   return source.includes("mcp") || tool === "mcp" || tool === "use_mcp_server" || tool.startsWith("mcp_") || tool.includes("mcp")
 }
 
 function isSkillTool(part: ToolActivityItem): boolean {
-  const tool = (part.tool || "").toLowerCase()
+  const tool = toolDisplayName(part).toLowerCase()
   const source = (part.source || "").toLowerCase()
   return source.includes("skill") || tool === "skill" || tool === "use_skill" || tool.startsWith("skill_") || tool.includes("skill")
 }
@@ -666,11 +672,11 @@ function toolSourceName(part: ToolActivityItem, inputKeys: string[]): string {
 function processItemCurrentLabel(item: TranscriptItem): string {
   if (item.type === "tool") {
     if (item.status === "preparing") {
-      const toolName = (item.tool || "").trim()
+      const toolName = toolDisplayName(item)
       if (!toolName || toolName === "tool") return t("tool.preparingGeneric")
       return t("tool.preparingCall", { tool: toolName })
     }
-    return [getToolActionLabel(item.tool), processItemTarget(item)].filter(Boolean).join(" ")
+    return [getToolActionLabel(toolDisplayName(item)), processItemTarget(item)].filter(Boolean).join(" ")
   }
   if (item.type === "file_change") {
     return [t("tool.fileChange"), compactLabel(fileChangeTarget(item))].filter(Boolean).join(" ")
@@ -712,12 +718,36 @@ function fileChangeTarget(item: FileChangeItem): string {
 }
 
 function processItemTarget(item: ToolActivityItem): string {
-  const input = item.input || {}
+  const input = item.capabilityTarget?.targetArguments || item.input || {}
   for (const key of ["path", "file", "pattern", "query", "command", "cmd"]) {
     const value = input[key]
     if (typeof value === "string" && value.trim()) return compactLabel(value.trim())
   }
   return ""
+}
+
+function toolDisplayName(item: ToolActivityItem): string {
+  return (item.capabilityTarget?.targetToolName || item.tool || "").trim()
+}
+
+function isPairedCapabilityGateway(gateway: ToolActivityItem, parts: TranscriptItem[]): boolean {
+  if (gateway.capabilityRole !== "gateway") return false
+  const targetToolCallId = stringFromMaybeRecord(gateway.executeTrace, "target_tool_call_id", "targetToolCallId")
+  return parts.some((part) => {
+    if (part.type !== "tool" || part.capabilityRole !== "target") return false
+    const target = part.capabilityTarget
+    if (!target) return false
+    if (gateway.toolCallId && target.parentToolCallId === gateway.toolCallId) return true
+    if (targetToolCallId && (part.toolCallId === targetToolCallId || target.targetToolCallId === targetToolCallId)) return true
+    return false
+  })
+}
+
+function stringFromMaybeRecord(value: unknown, snakeKey: string, camelKey: string): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return ""
+  const record = value as Record<string, unknown>
+  const raw = record[snakeKey] ?? record[camelKey]
+  return typeof raw === "string" ? raw.trim() : ""
 }
 
 function compactLabel(value: string): string {

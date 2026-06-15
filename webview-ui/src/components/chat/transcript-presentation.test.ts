@@ -166,7 +166,7 @@ describe("transcript presentation", () => {
         exposure: "direct",
         status: "returned",
         input: {
-          tool_id: "capability:docs:apply_patch",
+          tool_id: "capability:docs:workspace_patch",
           arguments: {
             preview_identity: { candidate_hash: "hash-1" },
             approved_save_candidate: { operations: [{ kind: "add", path: "a.md" }] },
@@ -174,7 +174,7 @@ describe("transcript presentation", () => {
         },
         resultMeta: {
           execute_trace: {
-            tool_id: "capability:docs:apply_patch",
+            tool_id: "capability:docs:workspace_patch",
             target_tool_name: "apply_patch",
           },
         },
@@ -191,6 +191,105 @@ describe("transcript presentation", () => {
     })
     expect(ordinaryText).not.toContain("approved_save_candidate")
     expect(ordinaryText).not.toContain("preview_identity")
+  })
+
+  it("shows capability target tool instead of capability_execute", () => {
+    const parts: TranscriptItem[] = [
+      {
+        id: "tool-target",
+        type: "tool",
+        tool: "capability_execute",
+        status: "returned",
+        input: { tool_id: "capability:docs:lookup", arguments: { query: "cache" } },
+        capabilityRole: "target",
+        capabilityTarget: {
+          gatewayToolName: "capability_execute",
+          parentToolCallId: "exec-target",
+          targetToolCallId: "exec-target:capability:docs:lookup",
+          targetToolId: "capability:docs:lookup",
+          targetToolName: "docs_lookup",
+          targetArguments: { query: "cache" },
+          targetExposure: "deferred",
+          targetRisk: "read_only",
+          targetPermissionPolicy: "read_only",
+        },
+      },
+    ]
+
+    const presentation = buildTranscriptPresentation(parts, assistant(parts, "success"))
+    const group = groups(presentation)[0]
+    const visibleText = `${group?.label || ""} ${group?.currentLabel || ""}`
+
+    expect(visibleText).toContain("docs_lookup")
+    expect(visibleText).not.toContain("capability_execute")
+  })
+
+  it("hides paired capability_execute gateway from ordinary process summary", () => {
+    const parts: TranscriptItem[] = [
+      {
+        id: "tool-gateway",
+        type: "tool",
+        tool: "capability_execute",
+        toolCallId: "exec-target",
+        status: "returned",
+        capabilityRole: "gateway",
+        executeTrace: {
+          target_tool_call_id: "exec-target:capability:docs:lookup",
+          target_tool_id: "capability:docs:lookup",
+          target_tool_name: "docs_lookup",
+        },
+      },
+      {
+        id: "tool-target",
+        type: "tool",
+        tool: "docs_lookup",
+        toolCallId: "exec-target:capability:docs:lookup",
+        status: "returned",
+        capabilityRole: "target",
+        capabilityTarget: {
+          gatewayToolName: "capability_execute",
+          parentToolCallId: "exec-target",
+          targetToolCallId: "exec-target:capability:docs:lookup",
+          targetToolId: "capability:docs:lookup",
+          targetToolName: "docs_lookup",
+          targetArguments: { query: "cache" },
+          targetExposure: "deferred",
+          targetRisk: "read_only",
+          targetPermissionPolicy: "read_only",
+        },
+      },
+      { id: "text-1", type: "assistant_text", markdown: "Done.", format: "markdown", streamKey: "assistant-message" },
+    ]
+
+    const presentation = buildTranscriptPresentation(parts, assistant(parts, "success"))
+    const summary = processSummary(presentation)
+
+    expect(summary).toMatchObject({ count: 1 })
+    expect(summary?.items.flatMap((item) => item.type === "timeline_process_group" ? item.group.items : [])).toEqual([
+      expect.objectContaining({ id: "tool-target" }),
+    ])
+    expect(`${summary?.currentLabel || ""}`).not.toContain("capability_execute")
+  })
+
+  it("keeps gateway-level capability_execute error as the primary process card", () => {
+    const parts: TranscriptItem[] = [
+      {
+        id: "tool-gateway",
+        type: "tool",
+        tool: "capability_execute",
+        toolCallId: "exec-target",
+        status: "denied",
+        output: "Error: capability tool_id is not available",
+        capabilityRole: "gateway",
+      },
+    ]
+
+    const presentation = buildTranscriptPresentation(parts, assistant(parts, "error"))
+    const group = groups(presentation)[0]
+    const visibleText = `${group?.label || ""} ${group?.currentLabel || ""}`
+
+    expect(visibleText).toContain("capability_execute")
+    expect(group).toMatchObject({ count: 1 })
   })
 
   it("keeps StopFailure recovery lifecycle context in process timeline instead of the final answer", () => {
