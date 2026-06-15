@@ -3,6 +3,7 @@ import type { ToolActivityItem, TranscriptItem } from "../components/chat/transc
 import {
   approvalDecisionAfterResolution,
   approvalStatusAfterResolution,
+  capabilityTargetPatch,
   requiredToolCallId,
   resolveToolPartIndexForReturn,
   statusAfterToolReturn,
@@ -147,6 +148,41 @@ describe("tool event part state helpers", () => {
       risk: "capability",
       exposure: "deferred",
       capabilityName: "docs",
+    })
+  })
+
+  it("extracts capability_target metadata as stable target patch", () => {
+    expect(capabilityTargetPatch({
+      tool_id: "builtin:capability_execute",
+      risk: "capability",
+      exposure: "direct",
+      capability_target: {
+        gateway_tool_name: "capability_execute",
+        parent_tool_call_id: "exec-target",
+        target_tool_call_id: "exec-target:capability:docs:lookup",
+        target_tool_id: "capability:docs:lookup",
+        target_tool_name: "docs_lookup",
+        target_arguments: { query: "cache" },
+        target_exposure: "deferred",
+        target_risk: "read_only",
+        target_permission_policy: "read_only",
+      },
+    })).toEqual({
+      capabilityRole: "target",
+      capabilityTarget: {
+        gatewayToolName: "capability_execute",
+        parentToolCallId: "exec-target",
+        targetToolCallId: "exec-target:capability:docs:lookup",
+        targetToolId: "capability:docs:lookup",
+        targetToolName: "docs_lookup",
+        targetArguments: { query: "cache" },
+        targetExposure: "deferred",
+        targetRisk: "read_only",
+        targetPermissionPolicy: "read_only",
+      },
+      toolId: "capability:docs:lookup",
+      risk: "read_only",
+      exposure: "deferred",
     })
   })
 

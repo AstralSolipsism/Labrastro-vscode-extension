@@ -1,4 +1,4 @@
-import type { ToolActivityItem, TranscriptItem } from "../components/chat/transcript-model"
+import type { CapabilityTarget, ToolActivityItem, TranscriptItem } from "../components/chat/transcript-model"
 import type { ToolExecutionStatus } from "../types/trace"
 
 const PRESERVED_AFTER_RETURN = new Set(["denied", "cancelled", "protocol_error"])
@@ -87,13 +87,66 @@ export function toolSpecPatch(payload: Record<string, unknown>): Partial<ToolAct
   }
 }
 
+export function capabilityTargetPatch(payload: Record<string, unknown>): Partial<ToolActivityItem> {
+  const capabilityTarget = capabilityTargetFromPayload(payload)
+  if (!capabilityTarget) return {}
+  return {
+    capabilityRole: "target",
+    capabilityTarget,
+    ...(capabilityTarget.targetToolId ? { toolId: capabilityTarget.targetToolId } : {}),
+    ...(capabilityTarget.targetRisk ? { risk: capabilityTarget.targetRisk } : {}),
+    ...(capabilityTarget.targetExposure ? { exposure: capabilityTarget.targetExposure } : {}),
+  }
+}
+
 export function toolTracePatch(resultMeta: Record<string, unknown>): Partial<ToolActivityItem> {
   const searchTrace = objectValue(resultMeta.search_trace ?? resultMeta.searchTrace)
   const executeTrace = objectValue(resultMeta.execute_trace ?? resultMeta.executeTrace)
+  const targetToolId = stringValue(executeTrace.target_tool_id) || stringValue(executeTrace.targetToolId)
+  const targetToolName = stringValue(executeTrace.target_tool_name) || stringValue(executeTrace.targetToolName)
   return {
     ...(Object.keys(searchTrace).length > 0 ? { searchTrace } : {}),
     ...(Object.keys(executeTrace).length > 0 ? { executeTrace } : {}),
+    ...(targetToolId || targetToolName ? { capabilityRole: "gateway" as const } : {}),
   }
+}
+
+export function capabilityTargetToolName(payload: Record<string, unknown>, fallback = "tool"): string {
+  return capabilityTargetFromPayload(payload)?.targetToolName || String(payload.tool_name || fallback)
+}
+
+export function capabilityTargetToolCallId(payload: Record<string, unknown>): string | undefined {
+  return capabilityTargetFromPayload(payload)?.targetToolCallId || requiredToolCallId(payload)
+}
+
+export function capabilityTargetArguments(payload: Record<string, unknown>): Record<string, unknown> {
+  return capabilityTargetFromPayload(payload)?.targetArguments || objectValue(payload.tool_args)
+}
+
+function capabilityTargetFromPayload(payload: Record<string, unknown>): CapabilityTarget | undefined {
+  const direct = objectValue(payload.capability_target ?? payload.capabilityTarget)
+  const meta = objectValue(payload.meta)
+  const nested = objectValue(meta.capability_target ?? meta.capabilityTarget)
+  const raw = Object.keys(direct).length > 0 ? direct : nested
+  if (!Object.keys(raw).length) return undefined
+  const target: CapabilityTarget = {
+    parentToolCallId: stringValue(raw.parent_tool_call_id) || stringValue(raw.parentToolCallId),
+    gatewayToolName: stringValue(raw.gateway_tool_name) || stringValue(raw.gatewayToolName),
+    targetToolCallId: stringValue(raw.target_tool_call_id) || stringValue(raw.targetToolCallId),
+    targetToolId: stringValue(raw.target_tool_id) || stringValue(raw.targetToolId),
+    targetToolName: stringValue(raw.target_tool_name) || stringValue(raw.targetToolName),
+    targetArguments: objectValue(raw.target_arguments ?? raw.targetArguments),
+    targetExposure: stringValue(raw.target_exposure) || stringValue(raw.targetExposure),
+    targetRisk: stringValue(raw.target_risk) || stringValue(raw.targetRisk),
+    targetPermissionPolicy: stringValue(raw.target_permission_policy) || stringValue(raw.targetPermissionPolicy),
+  }
+  return Object.fromEntries(
+    Object.entries(target).filter(([, value]) => {
+      if (value === undefined) return false
+      if (typeof value === "object" && !Array.isArray(value)) return Object.keys(value).length > 0
+      return true
+    }),
+  ) as CapabilityTarget
 }
 
 function mergeRawEventRefs(

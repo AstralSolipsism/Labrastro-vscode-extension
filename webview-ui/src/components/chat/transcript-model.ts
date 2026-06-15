@@ -60,6 +60,8 @@ export interface ToolActivityItem extends TranscriptMeta {
   risk?: string
   exposure?: string
   capabilityName?: string
+  capabilityRole?: "target" | "gateway"
+  capabilityTarget?: CapabilityTarget
   source?: string
   input?: Record<string, unknown>
   output?: string
@@ -81,6 +83,18 @@ export interface ToolActivityItem extends TranscriptMeta {
   approvalDecision?: string
   approvalSections?: Record<string, unknown>[]
   approvalContent?: string
+}
+
+export interface CapabilityTarget {
+  parentToolCallId?: string
+  gatewayToolName?: string
+  targetToolCallId?: string
+  targetToolId?: string
+  targetToolName?: string
+  targetArguments?: Record<string, unknown>
+  targetExposure?: string
+  targetRisk?: string
+  targetPermissionPolicy?: string
 }
 
 export type FileChangeStatus = "in_progress" | "completed" | "failed" | "declined" | "cancelled"
