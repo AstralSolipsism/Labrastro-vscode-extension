@@ -44,6 +44,7 @@ function coordinator() {
     approvalDocuments: {
       open: vi.fn(),
       close: vi.fn(),
+      approvedSaveCandidateFor: vi.fn(),
     },
     startSessionRun: vi.fn(),
     cancelSessionRun: vi.fn(),
@@ -221,6 +222,142 @@ describe("SessionRunCoordinator", () => {
       decision: "allow_once",
       reason: "ok",
     })
+  })
+
+  it("uses the current stored candidate before stale explicit approval reply candidates", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    const staleExplicitCandidate = {
+      tool_name: "apply_patch",
+      operations: [{ kind: "update", path: "src/app.ts", new_content: "stale" }],
+    }
+    const currentStoredCandidate = {
+      tool_name: "apply_patch",
+      operations: [{ kind: "update", path: "src/app.ts", new_content: "edited" }],
+    }
+    options.approvalDocuments.approvedSaveCandidateFor.mockReturnValueOnce(currentStoredCandidate)
+    subject.setActiveRun({
+      sessionRunId: "active-run",
+      cursor: 0,
+      status: "running",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reconnectAttempts: 0,
+    })
+
+    await subject.handleMessage({
+      type: "approval.reply",
+      approvalId: "approval-1",
+      decision: "allow_once",
+      reason: "ok",
+      approved_save_candidate: staleExplicitCandidate,
+    }, post)
+
+    expect(options.client.approvalReply).toHaveBeenCalledWith({
+      session_run_id: "active-run",
+      approval_id: "approval-1",
+      decision: "allow_once",
+      reason: "ok",
+      approved_save_candidate: currentStoredCandidate,
+    })
+  })
+
+  it("uses the current stored candidate for allow approval replies when the webview omits one", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    const approvedSaveCandidate = {
+      tool_name: "apply_patch",
+      operations: [{ kind: "update", path: "src/app.ts", new_content: "edited" }],
+    }
+    options.approvalDocuments.approvedSaveCandidateFor.mockReturnValueOnce(approvedSaveCandidate)
+    subject.setActiveRun({
+      sessionRunId: "active-run",
+      cursor: 0,
+      status: "running",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reconnectAttempts: 0,
+    })
+
+    await subject.handleMessage({
+      type: "approval.reply",
+      approvalId: "approval-1",
+      decision: "allow_once",
+      reason: "ok",
+    }, post)
+
+    expect(options.client.approvalReply).toHaveBeenCalledWith({
+      session_run_id: "active-run",
+      approval_id: "approval-1",
+      decision: "allow_once",
+      reason: "ok",
+      approved_save_candidate: approvedSaveCandidate,
+    })
+  })
+
+  it("falls back to explicit approved save candidates when no stored candidate exists", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    const approvedSaveCandidate = {
+      tool_name: "apply_patch",
+      operations: [{ kind: "update", path: "src/app.ts", new_content: "explicit" }],
+    }
+    subject.setActiveRun({
+      sessionRunId: "active-run",
+      cursor: 0,
+      status: "running",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reconnectAttempts: 0,
+    })
+
+    await subject.handleMessage({
+      type: "approval.reply",
+      approvalId: "approval-1",
+      decision: "allow_once",
+      reason: "ok",
+      approved_save_candidate: approvedSaveCandidate,
+    }, post)
+
+    expect(options.client.approvalReply).toHaveBeenCalledWith({
+      session_run_id: "active-run",
+      approval_id: "approval-1",
+      decision: "allow_once",
+      reason: "ok",
+      approved_save_candidate: approvedSaveCandidate,
+    })
+  })
+
+  it("does not send approved save candidates for denied approval replies", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    options.approvalDocuments.approvedSaveCandidateFor.mockReturnValueOnce({
+      tool_name: "apply_patch",
+      operations: [{ kind: "update", path: "src/app.ts", new_content: "stored" }],
+    })
+    subject.setActiveRun({
+      sessionRunId: "active-run",
+      cursor: 0,
+      status: "running",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reconnectAttempts: 0,
+    })
+
+    await subject.handleMessage({
+      type: "approval.reply",
+      approvalId: "approval-1",
+      decision: "deny_once",
+      reason: "no",
+      approved_save_candidate: {
+        tool_name: "apply_patch",
+        operations: [{ kind: "update", path: "src/app.ts", new_content: "explicit" }],
+      },
+    }, post)
+
+    expect(options.client.approvalReply).toHaveBeenCalledWith({
+      session_run_id: "active-run",
+      approval_id: "approval-1",
+      decision: "deny_once",
+      reason: "no",
+    })
+    expect(options.approvalDocuments.approvedSaveCandidateFor).not.toHaveBeenCalled()
   })
 
   it("reports approval reply success with the backend resolution state", async () => {

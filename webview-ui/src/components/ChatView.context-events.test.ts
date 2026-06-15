@@ -248,6 +248,16 @@ describe("ChatView context events", () => {
     expect(source).toContain("setSelectedApproval(undefined)")
   })
 
+  it("does not send stale approval candidates from the webview approval reply", () => {
+    const sendApprovalStart = source.indexOf("const sendApprovalDecision =")
+    const pendingUserInputStart = source.indexOf("const pendingUserInputContent =", sendApprovalStart)
+    const sendApprovalSource = source.slice(sendApprovalStart, pendingUserInputStart)
+
+    expect(sendApprovalSource).toContain('type: "approval.reply"')
+    expect(sendApprovalSource).not.toContain("approvedSaveCandidate")
+    expect(sendApprovalSource).not.toContain("approved_save_candidate")
+  })
+
   it("routes auto approval through the same recoverable pending approval path", () => {
     expect(source).toContain("setPendingApprovals((items) => upsertPendingApproval(items, pendingApproval))")
     expect(source).toContain('replyApproval(pendingApproval, "allow_once", autoDecision.replyReason)')

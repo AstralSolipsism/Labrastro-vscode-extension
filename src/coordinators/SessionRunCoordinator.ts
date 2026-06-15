@@ -248,11 +248,30 @@ export class SessionRunCoordinator {
         const approvalId = stringValue(message.approvalId) || ""
         const decision = stringValue(message.decision) || "deny_once"
         try {
-          const payload = await this.options.client.approvalReply({
+          const explicitCandidate = objectValue(
+            message.approved_save_candidate || message.approvedSaveCandidate
+          )
+          const storedCandidate =
+            decision === "allow_once"
+              ? this.options.approvalDocuments.approvedSaveCandidateFor(approvalId)
+              : undefined
+          const approvedSaveCandidate =
+            decision === "allow_once"
+              ? storedCandidate && Object.keys(storedCandidate).length
+                ? storedCandidate
+                : explicitCandidate
+              : undefined
+          const request: Record<string, unknown> = {
             session_run_id: sessionRunId,
             approval_id: approvalId,
             decision,
             reason: stringValue(message.reason),
+          }
+          if (approvedSaveCandidate && Object.keys(approvedSaveCandidate).length) {
+            request.approved_save_candidate = approvedSaveCandidate
+          }
+          const payload = await this.options.client.approvalReply({
+            ...request,
           })
           post({
             type: "approval.reply.ok",
