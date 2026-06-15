@@ -17,6 +17,10 @@ import type {
 import {
   approvalDecisionAfterResolution,
   approvalStatusAfterResolution,
+  capabilityTargetArguments,
+  capabilityTargetPatch,
+  capabilityTargetToolCallId,
+  capabilityTargetToolName,
   requiredToolCallId,
   resolveActiveToolPartIndex,
   resolveToolPartIndexForReturn,
@@ -1448,8 +1452,9 @@ function appendToolStart(
   meta: EventRenderMeta,
   context: SessionRunTranscriptContext,
 ): void {
-  const toolName = String(payload.tool_name || "tool")
-  const toolCallId = requiredToolCallId(payload)
+  const targetPatch = capabilityTargetPatch(payload)
+  const toolName = capabilityTargetToolName(payload)
+  const toolCallId = capabilityTargetToolCallId(payload)
   if (!toolCallId) return
   updateAssistantItems(bundle, (parts) =>
     upsertToolPartWithPreparing(parts, toolName, {
@@ -1457,8 +1462,9 @@ function appendToolStart(
       toolCallId,
       source: stringValue(payload.tool_source),
       ...toolSpecPatch(payload),
+      ...targetPatch,
       startedAt: numberValue(payload.started_at),
-      input: objectValue(payload.tool_args),
+      input: capabilityTargetArguments(payload),
       resultMeta: {},
       preparingIndex: numberValue(payload.index),
       rawEventRefs: rawEventRefsFromPayload(payload),
@@ -1500,8 +1506,9 @@ function appendToolEnd(
   meta: EventRenderMeta,
   context: SessionRunTranscriptContext,
 ): void {
-  const toolName = String(payload.tool_name || "tool")
-  const toolCallId = requiredToolCallId(payload)
+  const targetPatch = capabilityTargetPatch(payload)
+  const toolName = capabilityTargetToolName(payload)
+  const toolCallId = capabilityTargetToolCallId(payload)
   if (!toolCallId) return
   const outputFormat = stringValue(payload.format) ||
     stringValue(payload.output_format) ||
@@ -1536,6 +1543,7 @@ function appendToolEnd(
       source: resolvedToolSource,
       ...toolSpecPatch(payload),
       ...tracePatch,
+      ...targetPatch,
       endedAt: numberValue(payload.ended_at),
       output: preserveTerminalDetails
         ? existing?.output || reconciledShellOutput
@@ -1575,8 +1583,9 @@ function appendApprovalRequest(
   meta: EventRenderMeta,
   context: SessionRunTranscriptContext,
 ): void {
-  const toolName = String(payload.tool_name || "tool")
-  const toolCallId = requiredToolCallId(payload)
+  const targetPatch = capabilityTargetPatch(payload)
+  const toolName = capabilityTargetToolName(payload)
+  const toolCallId = capabilityTargetToolCallId(payload)
   const decision = context.approvalDecision
   updateAssistantItems(bundle, (parts) =>
     upsertToolPartWithPreparing(parts, toolName, {
@@ -1584,7 +1593,8 @@ function appendApprovalRequest(
       toolCallId,
       source: stringValue(payload.tool_source),
       ...toolSpecPatch(payload),
-      input: objectValue(payload.tool_args),
+      ...targetPatch,
+      input: capabilityTargetArguments(payload),
       approvalId: stringValue(payload.approval_id),
       approvalReason: context.approvalReason || stringValue(payload.reason),
       approvalIntent: stringValue(payload.intent),

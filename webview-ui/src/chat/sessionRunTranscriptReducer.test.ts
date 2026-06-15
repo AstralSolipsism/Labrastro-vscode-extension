@@ -1085,6 +1085,97 @@ describe("sessionRunTranscriptReducer", () => {
     })
   })
 
+  it("promotes target tool identity for capability target events", () => {
+    const capabilityTarget = {
+      gateway_tool_name: "capability_execute",
+      parent_tool_call_id: "exec-target",
+      target_tool_call_id: "exec-target:capability:docs:lookup",
+      target_tool_id: "capability:docs:lookup",
+      target_tool_name: "docs_lookup",
+      target_arguments: { query: "cache" },
+      target_exposure: "deferred",
+      target_risk: "read_only",
+      target_permission_policy: "read_only",
+    }
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
+    current = reduce(current, "tool_call_start", {
+      tool_call_id: "exec-target:capability:docs:lookup",
+      tool_name: "capability_execute",
+      tool_args: { query: "cache" },
+      tool_id: "builtin:capability_execute",
+      risk: "capability",
+      exposure: "direct",
+      capability_target: capabilityTarget,
+    }, 2)
+    current = reduce(current, "tool_call_end", {
+      tool_call_id: "exec-target:capability:docs:lookup",
+      tool_name: "capability_execute",
+      tool_result: "docs_lookup:cache",
+      tool_id: "builtin:capability_execute",
+      risk: "capability",
+      exposure: "direct",
+      capability_target: capabilityTarget,
+      meta: { capability_target: capabilityTarget },
+    }, 3)
+
+    const part = current.turns[0].assistantMessages[0].parts[0] as ToolActivityItem
+    expect(part).toMatchObject({
+      type: "tool",
+      tool: "docs_lookup",
+      toolCallId: "exec-target:capability:docs:lookup",
+      toolId: "capability:docs:lookup",
+      risk: "read_only",
+      exposure: "deferred",
+      capabilityRole: "target",
+      capabilityTarget: {
+        gatewayToolName: "capability_execute",
+        parentToolCallId: "exec-target",
+        targetToolCallId: "exec-target:capability:docs:lookup",
+        targetToolId: "capability:docs:lookup",
+        targetToolName: "docs_lookup",
+        targetArguments: { query: "cache" },
+        targetExposure: "deferred",
+        targetRisk: "read_only",
+        targetPermissionPolicy: "read_only",
+      },
+      output: "docs_lookup:cache",
+    })
+  })
+
+  it("shows target tool name on deferred target approval requests", () => {
+    const capabilityTarget = {
+      gateway_tool_name: "capability_execute",
+      parent_tool_call_id: "exec-target",
+      target_tool_call_id: "exec-target:capability:docs:workspace_patch",
+      target_tool_id: "capability:docs:workspace_patch",
+      target_tool_name: "apply_patch",
+      target_arguments: { patch: "*** Begin Patch\n*** End Patch" },
+      target_exposure: "deferred",
+      target_risk: "file_mutation",
+      target_permission_policy: "workspace_write",
+    }
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
+    current = reduce(current, "approval_request", {
+      approval_id: "approval-1",
+      tool_call_id: "exec-target:capability:docs:workspace_patch",
+      tool_name: "capability_execute",
+      tool_args: { patch: "*** Begin Patch\n*** End Patch" },
+      reason: "review target patch",
+      capability_target: capabilityTarget,
+    }, 2)
+
+    const part = current.turns[0].assistantMessages[0].parts[0] as ToolActivityItem
+    expect(part.tool).toBe("apply_patch")
+    expect(part.capabilityRole).toBe("target")
+    expect(part.capabilityTarget?.targetToolName).toBe("apply_patch")
+    expect(part.toolId).toBe("capability:docs:workspace_patch")
+    expect(part.risk).toBe("file_mutation")
+    expect(part.exposure).toBe("deferred")
+    expect(part.approvalReason).toBe("review target patch")
+  })
+
   it("projects final PermissionRequest decisions onto tool card status and audit metadata", () => {
     let current = bundle()
     current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
