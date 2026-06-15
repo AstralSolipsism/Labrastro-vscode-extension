@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const vscodeMock = vi.hoisted(() => ({
   executeCommand: vi.fn(),
+  fireFileChange: vi.fn(),
   showWarningMessage: vi.fn(),
+  showErrorMessage: vi.fn(),
+  showQuickPick: vi.fn(),
   openTextDocument: vi.fn(),
   showTextDocument: vi.fn(),
   setTextDocumentLanguage: vi.fn(),
@@ -16,6 +19,25 @@ vi.mock("vscode", () => ({
       ...value,
       toString: () => `${value.scheme}:${value.path}`,
     }),
+    parse: (value: string) => {
+      const index = value.indexOf(":")
+      return {
+        scheme: index >= 0 ? value.slice(0, index) : "",
+        path: index >= 0 ? value.slice(index + 1) : value,
+        toString: () => value,
+      }
+    },
+  },
+  EventEmitter: class {
+    event = vi.fn()
+    fire = vscodeMock.fireFileChange
+  },
+  FileChangeType: {
+    Changed: 2,
+  },
+  FileType: {
+    File: 1,
+    Directory: 2,
   },
   ViewColumn: {
     Active: 1,
@@ -34,6 +56,8 @@ vi.mock("vscode", () => ({
       },
       close: vscodeMock.closeTabs,
     },
+    showErrorMessage: vscodeMock.showErrorMessage,
+    showQuickPick: vscodeMock.showQuickPick,
     showTextDocument: vscodeMock.showTextDocument,
     showWarningMessage: vscodeMock.showWarningMessage,
   },
@@ -64,7 +88,10 @@ function approvalPayload() {
 describe("ApprovalDocumentProvider", () => {
   beforeEach(() => {
     vscodeMock.executeCommand.mockReset()
+    vscodeMock.fireFileChange.mockReset()
     vscodeMock.showWarningMessage.mockReset()
+    vscodeMock.showErrorMessage.mockReset()
+    vscodeMock.showQuickPick.mockReset()
     vscodeMock.openTextDocument.mockReset()
     vscodeMock.showTextDocument.mockReset()
     vscodeMock.setTextDocumentLanguage.mockReset()
@@ -84,11 +111,156 @@ describe("ApprovalDocumentProvider", () => {
     expect(vscodeMock.showWarningMessage).not.toHaveBeenCalled()
     expect(vscodeMock.executeCommand).toHaveBeenCalledWith(
       "vscode.diff",
-      expect.objectContaining({ path: "/approval-1/original/example.ts" }),
-      expect.objectContaining({ path: "/approval-1/modified/example.ts" }),
+      expect.objectContaining({ path: "/approval-1/original/0/example.ts" }),
+      expect.objectContaining({ path: "/approval-1/modified/0/example.ts" }),
       "Labrastro Approval: apply_patch example.ts",
       { preview: false, viewColumn: 1 },
     )
+  })
+
+  it("keeps original and modified documents distinct for multi-file approvals with matching basenames", async () => {
+    const provider = new ApprovalDocumentProvider()
+    vscodeMock.showQuickPick.mockImplementationOnce(async (items: Array<{ index: number }>) => items[0])
+    await provider.store({
+      approval_id: "approval-1",
+      tool_name: "apply_patch",
+      sections: [
+        {
+          kind: "diff",
+          path: "src/index.ts",
+          original_text: "old src index",
+          modified_text: "new src index",
+        },
+        {
+          kind: "diff",
+          path: "tests/index.ts",
+          original_text: "old tests index",
+          modified_text: "new tests index",
+        },
+      ],
+    })
+
+    vscodeMock.showQuickPick.mockImplementationOnce(async (items: Array<{ index: number }>) => items[1])
+    await provider.open("approval-1")
+
+    const firstOriginalUri = vscodeMock.executeCommand.mock.calls[0]?.[1]
+    const firstModifiedUri = vscodeMock.executeCommand.mock.calls[0]?.[2]
+    const secondOriginalUri = vscodeMock.executeCommand.mock.calls[1]?.[1]
+    const secondModifiedUri = vscodeMock.executeCommand.mock.calls[1]?.[2]
+
+    expect(firstOriginalUri.toString()).not.toBe(secondOriginalUri.toString())
+    expect(firstModifiedUri.toString()).not.toBe(secondModifiedUri.toString())
+    expect(provider.provideTextDocumentContent(firstOriginalUri)).toBe("old src index")
+    expect(provider.provideTextDocumentContent(firstModifiedUri)).toBe("new src index")
+    expect(provider.provideTextDocumentContent(secondOriginalUri)).toBe("old tests index")
+    expect(provider.provideTextDocumentContent(secondModifiedUri)).toBe("new tests index")
+  })
+
+  it("auto-approves a single editable candidate file with the saved content", async () => {
+    const onCandidateSave = vi.fn()
+    const provider = new ApprovalDocumentProvider(onCandidateSave)
+    await provider.store({
+      ...approvalPayload(),
+      session_run_id: "run-1",
+      approved_save_candidate: {
+        tool_name: "apply_patch",
+        preview_identity: { plan_id: "plan-1" },
+        operations: [{ kind: "update", path: "src/example.ts", new_content: "new" }],
+      },
+    })
+    const candidateUri = vscodeMock.executeCommand.mock.calls[0]?.[2]
+
+    await provider.writeFile(candidateUri, Buffer.from("new edited", "utf8"))
+
+    expect(onCandidateSave).toHaveBeenCalledWith({
+      approvalId: "approval-1",
+      sessionRunId: "run-1",
+      approvedSaveCandidate: {
+        tool_name: "apply_patch",
+        preview_identity: { plan_id: "plan-1" },
+        operations: [{ kind: "update", path: "src/example.ts", new_content: "new edited" }],
+      },
+    })
+  })
+
+  it("keeps candidate file stat timestamps stable until content is written", async () => {
+    const dateNow = vi.spyOn(Date, "now")
+    let timestamp = 1000
+    dateNow.mockImplementation(() => timestamp++)
+    try {
+      const provider = new ApprovalDocumentProvider()
+      await provider.store({
+        ...approvalPayload(),
+        approved_save_candidate: {
+          tool_name: "apply_patch",
+          operations: [{ kind: "update", path: "src/example.ts", new_content: "new" }],
+        },
+      })
+      const candidateUri = vscodeMock.executeCommand.mock.calls[0]?.[2]
+
+      const firstStat = provider.stat(candidateUri)
+      const secondStat = provider.stat(candidateUri)
+
+      expect(secondStat.ctime).toBe(firstStat.ctime)
+      expect(secondStat.mtime).toBe(firstStat.mtime)
+
+      await provider.writeFile(candidateUri, Buffer.from("new edited", "utf8"))
+      const writtenStat = provider.stat(candidateUri)
+
+      expect(writtenStat.ctime).toBe(firstStat.ctime)
+      expect(writtenStat.mtime).toBeGreaterThan(firstStat.mtime)
+    } finally {
+      dateNow.mockRestore()
+    }
+  })
+
+  it("does not approve a multi-file candidate when one candidate document is saved", async () => {
+    const onCandidateSave = vi.fn()
+    const provider = new ApprovalDocumentProvider(onCandidateSave)
+    vscodeMock.showQuickPick.mockImplementationOnce(async (items: Array<{ index: number }>) => items[0])
+    await provider.store({
+      approval_id: "approval-1",
+      session_run_id: "run-1",
+      tool_name: "apply_patch",
+      sections: [
+        {
+          kind: "diff",
+          path: "src/a.ts",
+          original_text: "old a",
+          modified_text: "new a",
+        },
+        {
+          kind: "diff",
+          path: "src/b.ts",
+          original_text: "old b",
+          modified_text: "new b",
+        },
+      ],
+      approved_save_candidate: {
+        tool_name: "apply_patch",
+        preview_identity: { plan_id: "plan-1" },
+        operations: [
+          { kind: "update", path: "src/a.ts", new_content: "new a" },
+          { kind: "update", path: "src/b.ts", new_content: "new b" },
+        ],
+      },
+    })
+    const candidateUri = vscodeMock.executeCommand.mock.calls[0]?.[2]
+
+    await provider.writeFile(candidateUri, Buffer.from("new a edited", "utf8"))
+
+    vscodeMock.showQuickPick.mockImplementationOnce(async (items: Array<{ index: number }>) => items[1])
+    await provider.open("approval-1")
+    vscodeMock.showQuickPick.mockImplementationOnce(async (items: Array<{ index: number }>) => items[0])
+    await provider.open("approval-1")
+
+    expect(onCandidateSave).not.toHaveBeenCalled()
+    expect(provider.approvedSaveCandidateFor("approval-1")).toMatchObject({
+      operations: [
+        { path: "src/a.ts", new_content: "new a edited" },
+        { path: "src/b.ts", new_content: "new b" },
+      ],
+    })
   })
 
   it("closes only tabs that belong to the resolved approval", async () => {
