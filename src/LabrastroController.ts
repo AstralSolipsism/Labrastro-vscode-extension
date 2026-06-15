@@ -1,7 +1,7 @@
 import * as vscode from "vscode"
 import * as fs from "fs"
 import * as path from "path"
-import { ApprovalDocumentProvider } from "./ApprovalDocumentProvider"
+import { ApprovalDocumentProvider, type ApprovalCandidateSaveRequest } from "./ApprovalDocumentProvider"
 import { DraftDocumentProvider } from "./DraftDocumentProvider"
 import {
   BackendFeatures,
@@ -141,7 +141,9 @@ export class LabrastroController implements vscode.Disposable {
       client: this.client,
       storageRoot: this.context.globalStorageUri.fsPath,
     })
-    this.approvalDocuments = new ApprovalDocumentProvider()
+    this.approvalDocuments = new ApprovalDocumentProvider((request) =>
+      this.approveCandidateDocumentSave(request)
+    )
     this.draftDocuments = new DraftDocumentProvider()
     this.adminCoordinator = new AdminCoordinator({
       client: this.client,
@@ -204,6 +206,15 @@ export class LabrastroController implements vscode.Disposable {
         this.approvalDocuments
       )
     )
+    if (typeof vscode.workspace.registerFileSystemProvider === "function") {
+      this.context.subscriptions.push(
+        vscode.workspace.registerFileSystemProvider(
+          ApprovalDocumentProvider.candidateScheme,
+          this.approvalDocuments,
+          { isReadonly: false },
+        )
+      )
+    }
     this.context.subscriptions.push(
       vscode.workspace.registerTextDocumentContentProvider(
         DraftDocumentProvider.scheme,
@@ -393,6 +404,28 @@ export class LabrastroController implements vscode.Disposable {
       if (payload.state && payload.state !== "requested") continue
       await this.approvalDocuments.store(payload, { openDiff: false })
     }
+  }
+
+  private async approveCandidateDocumentSave(request: ApprovalCandidateSaveRequest): Promise<void> {
+    const sessionRunId = request.sessionRunId || this.sessionRunCoordinator.activeSessionRunId || ""
+    if (!sessionRunId) {
+      throw new Error("当前没有正在运行的审批会话。")
+    }
+    const payload = await this.client.approvalReply({
+      session_run_id: sessionRunId,
+      approval_id: request.approvalId,
+      decision: "allow_once",
+      reason: "approved_candidate_save",
+      approved_save_candidate: request.approvedSaveCandidate,
+    })
+    this.emitChatMessage({
+      type: "approval.reply.ok",
+      sessionRunId,
+      approvalId: request.approvalId,
+      decision: "allow_once",
+      payload,
+    })
+    await this.approvalDocuments.close(request.approvalId)
   }
 
   private async refreshInitialStateInBackground(
@@ -1762,7 +1795,10 @@ export class LabrastroController implements vscode.Disposable {
       }
       for (const event of events) {
         if (event && event.type === "approval_request") {
-          await this.approvalDocuments.store(objectValue(event.payload))
+          await this.approvalDocuments.store({
+            ...objectValue(event.payload),
+            session_run_id: sessionRunId,
+          })
         } else if (
           event &&
           (event.type === "approval_resolved" || event.type === "file_change_approval_resolved")
