@@ -83,6 +83,10 @@ export interface SessionRunEventsOptions {
   signal?: AbortSignal
 }
 
+export interface SessionRunEventsBatchOptions extends SessionRunEventsOptions {
+  timeoutMs?: number
+}
+
 export type SessionRunEventsHandler = (batch: JsonObject) => void | Promise<void>
 
 export interface AgentRunFeatures {
@@ -489,6 +493,28 @@ export class LabrastroRemoteClient {
     return this.authenticatedPost("/remote/admin/agent-runs/retry", payload)
   }
 
+  async branchAgentRun(payload: {
+    sourceAgentRunId: string
+    baseSessionItemId: string
+    runtimeRoot: string
+    prompt: string
+    agentRunId?: string
+    branchBindingId?: string
+    selectBranch?: boolean
+    metadata?: JsonObject
+  }): Promise<JsonObject> {
+    return this.authenticatedPost("/remote/admin/agent-runs/branch", {
+      source_agent_run_id: payload.sourceAgentRunId,
+      base_session_item_id: payload.baseSessionItemId,
+      runtime_root: payload.runtimeRoot,
+      prompt: payload.prompt,
+      ...(payload.agentRunId ? { agent_run_id: payload.agentRunId } : {}),
+      ...(payload.branchBindingId ? { branch_binding_id: payload.branchBindingId } : {}),
+      select_branch: payload.selectBranch !== false,
+      ...(payload.metadata && Object.keys(payload.metadata).length ? { metadata: payload.metadata } : {}),
+    })
+  }
+
   async features(): Promise<BackendFeatures> {
     const payload = await this.getJson("/remote/features")
     return normalizeBackendFeatures(payload)
@@ -725,6 +751,24 @@ export class LabrastroRemoteClient {
       ...(providerId && modelId && parameters ? { parameters } : {}),
       ...(locale ? { locale } : {}),
       ...(options.mentions?.length ? { mentions: options.mentions } : {}),
+    }))
+  }
+
+  async continueSessionRun(payload: {
+    sessionRunId: string
+    prompt: string
+    clientRequestId?: string
+    locale?: string
+    mentions?: JsonObject[]
+  }): Promise<JsonObject> {
+    const locale = payload.locale?.trim()
+    return this.postPeerJson("/remote/session-runs/continue", (peer) => ({
+      peer_token: peer.peer_token,
+      session_run_id: payload.sessionRunId,
+      prompt: payload.prompt,
+      client_request_id: payload.clientRequestId || `session-run-continue-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      ...(locale ? { locale } : {}),
+      ...(payload.mentions?.length ? { mentions: payload.mentions } : {}),
     }))
   }
 
@@ -1009,11 +1053,39 @@ export class LabrastroRemoteClient {
     )
   }
 
+  async fetchSessionRunEventsBatch(
+    sessionRunId: string,
+    cursor: number,
+    options: SessionRunEventsBatchOptions = {}
+  ): Promise<JsonObject> {
+    let peer = await this.ensurePeer()
+    return retryInvalidPeerTokenOnce(
+      () => this.openSessionRunEventsBatch(peer, sessionRunId, cursor, options),
+      async () => {
+        await this.stopPeer("invalid_peer_token_retry")
+        peer = await this.ensurePeer()
+      }
+    )
+  }
+
   async sessionRunStatus(sessionRunId: string, cursor?: number): Promise<JsonObject> {
     return this.postPeerJson("/remote/session-runs/status", (peer) => ({
       peer_token: peer.peer_token,
       session_run_id: sessionRunId,
       ...(typeof cursor === "number" ? { cursor } : {}),
+    }))
+  }
+
+  async selectSessionRunBranch(payload: {
+    sessionRunId: string
+    branchBindingId: string
+    cursor?: number
+  }): Promise<JsonObject> {
+    return this.postPeerJson("/remote/session-runs/branches/select", (peer) => ({
+      peer_token: peer.peer_token,
+      session_run_id: payload.sessionRunId,
+      branch_binding_id: payload.branchBindingId,
+      ...(typeof payload.cursor === "number" ? { cursor: payload.cursor } : {}),
     }))
   }
 
@@ -1025,33 +1097,31 @@ export class LabrastroRemoteClient {
     }))
   }
 
-  async followUpSessionRun(payload: {
+  async steerAgentRun(payload: {
+    agentRunId: string
     sessionRunId: string
     text: string
-    followupId?: string
-    clientRequestId?: string
+    activationId?: string
+    branchBindingId?: string
+    clientSteerId?: string
+    idempotencyKey?: string
   }): Promise<JsonObject> {
-    return this.postPeerJson("/remote/session-runs/follow-up", (peer) => ({
+    const agentRunId = encodeURIComponent(payload.agentRunId)
+    return this.postPeerJson(`/remote/agent-runs/${agentRunId}/steer`, (peer) => ({
       peer_token: peer.peer_token,
       session_run_id: payload.sessionRunId,
-      text: payload.text,
-      ...(payload.followupId ? { followup_id: payload.followupId } : {}),
-      ...(payload.clientRequestId ? { client_request_id: payload.clientRequestId } : {}),
+      ...(payload.branchBindingId ? { branch_binding_id: payload.branchBindingId } : {}),
+      ...(payload.activationId ? { activation_id: payload.activationId } : {}),
+      source: "user",
+      payload: {
+        type: "user_text",
+        text: payload.text,
+      },
+      idempotency_key: payload.idempotencyKey || payload.clientSteerId || `activation-steer-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      ...(payload.clientSteerId ? { client_steer_id: payload.clientSteerId } : {}),
     }))
   }
 
-  async cancelSessionRunFollowUp(payload: {
-    sessionRunId: string
-    followupId: string
-    reason?: string
-  }): Promise<JsonObject> {
-    return this.postPeerJson("/remote/session-runs/follow-up/cancel", (peer) => ({
-      peer_token: peer.peer_token,
-      session_run_id: payload.sessionRunId,
-      followup_id: payload.followupId,
-      reason: payload.reason || "user_changed_to_queue",
-    }))
-  }
 
   async recoverSessionRun(payload: {
     sessionRunId: string
@@ -1444,6 +1514,69 @@ export class LabrastroRemoteClient {
         throw new RemoteTransportError(errorMessage(error), "transient_network", error)
       }
       throw error
+    }
+  }
+
+  private async openSessionRunEventsBatch(
+    peer: PeerInfo,
+    sessionRunId: string,
+    cursor: number,
+    options: SessionRunEventsBatchOptions
+  ): Promise<JsonObject> {
+    const pathname = "/remote/session-runs/events"
+    const abortController = new AbortController()
+    const abortFromParent = () => abortController.abort()
+    if (options.signal?.aborted) {
+      abortController.abort()
+    } else {
+      options.signal?.addEventListener("abort", abortFromParent, { once: true })
+    }
+    const timer = setTimeout(
+      () => abortController.abort(),
+      Math.max(1, options.timeoutMs ?? 2_000)
+    )
+    let firstBatch: JsonObject | undefined
+    try {
+      const response = await fetchStreaming(this.hostUrl + pathname, {
+        method: "POST",
+        headers: {
+          "Accept": "text/event-stream",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          peer_token: peer.peer_token,
+          session_run_id: sessionRunId,
+          cursor,
+          timeout_sec: options.timeoutSec ?? 1,
+        }),
+        signal: abortController.signal,
+      })
+      if (!response.ok) {
+        await parseJsonResponse(response)
+        return {}
+      }
+      if (!response.body) {
+        throw new RemoteTransportError(
+          "Session run event stream response did not include a readable body.",
+          "transient_network"
+        )
+      }
+      await readSseStream(response.body, async (frame) => {
+        if (frame.event !== "session_run" && frame.event !== "message" && frame.event !== "done") {
+          return
+        }
+        firstBatch = parseSseJson(frame.data)
+        abortController.abort()
+      })
+      return firstBatch || {}
+    } catch (error) {
+      if (firstBatch || abortController.signal.aborted) {
+        return firstBatch || {}
+      }
+      throw error
+    } finally {
+      clearTimeout(timer)
+      options.signal?.removeEventListener("abort", abortFromParent)
     }
   }
 

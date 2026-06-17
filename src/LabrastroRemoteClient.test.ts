@@ -652,6 +652,25 @@ describe("LabrastroRemoteClient runtime admin API", () => {
     await expect(client.agentRunRetry({ agent_run_id: "task-1" })).resolves.toMatchObject({
       path: "/remote/admin/agent-runs/retry",
     })
+    await expect(client.branchAgentRun({
+      sourceAgentRunId: "agent-run-1",
+      baseSessionItemId: "session-item-2",
+      runtimeRoot: "D:/AboutDEV/Labrastro/Labrastro",
+      prompt: "edited prompt",
+      branchBindingId: "branch-edit-1",
+      metadata: { source: "chat_edit" },
+    })).resolves.toMatchObject({
+      path: "/remote/admin/agent-runs/branch",
+      body: {
+        source_agent_run_id: "agent-run-1",
+        base_session_item_id: "session-item-2",
+        runtime_root: "D:/AboutDEV/Labrastro/Labrastro",
+        prompt: "edited prompt",
+        branch_binding_id: "branch-edit-1",
+        select_branch: true,
+        metadata: { source: "chat_edit" },
+      },
+    })
   })
 
   it("posts model capability catalog actions through admin endpoints", async () => {
@@ -1527,17 +1546,25 @@ describe("LabrastroRemoteClient session run start", () => {
     await client.listSessions(5, "etag-1")
     await client.forkSession("session-1", 2)
     await client.sessionRunStatus("run-1", 8)
+    await client.selectSessionRunBranch({
+      sessionRunId: "run-1",
+      branchBindingId: "branch-2",
+      cursor: 0,
+    })
     await client.cancelSessionRun("run-1", "user_stop")
-    await client.followUpSessionRun({
+    await client.continueSessionRun({
+      sessionRunId: "run-1",
+      prompt: "next turn",
+      clientRequestId: "continue-1",
+      locale: "zh-CN",
+    })
+    await client.steerAgentRun({
+      agentRunId: "agent-run-1",
       sessionRunId: "run-1",
       text: "guide this turn",
-      followupId: "follow-1",
-      clientRequestId: "req-1",
-    })
-    await client.cancelSessionRunFollowUp({
-      sessionRunId: "run-1",
-      followupId: "follow-1",
-      reason: "user_changed_to_queue",
+      activationId: "activation-1",
+      branchBindingId: "main",
+      clientSteerId: "steer-1",
     })
     await client.recoverSessionRun({
       sessionRunId: "run-1",
@@ -1575,6 +1602,15 @@ describe("LabrastroRemoteClient session run start", () => {
         },
       },
       {
+        pathname: "/remote/session-runs/branches/select",
+        body: {
+          peer_token: "peer-token-1",
+          session_run_id: "run-1",
+          branch_binding_id: "branch-2",
+          cursor: 0,
+        },
+      },
+      {
         pathname: "/remote/session-runs/cancel",
         body: {
           peer_token: "peer-token-1",
@@ -1583,22 +1619,29 @@ describe("LabrastroRemoteClient session run start", () => {
         },
       },
       {
-        pathname: "/remote/session-runs/follow-up",
+        pathname: "/remote/session-runs/continue",
         body: {
           peer_token: "peer-token-1",
           session_run_id: "run-1",
-          text: "guide this turn",
-          followup_id: "follow-1",
-          client_request_id: "req-1",
+          prompt: "next turn",
+          client_request_id: "continue-1",
+          locale: "zh-CN",
         },
       },
       {
-        pathname: "/remote/session-runs/follow-up/cancel",
+        pathname: "/remote/agent-runs/agent-run-1/steer",
         body: {
           peer_token: "peer-token-1",
           session_run_id: "run-1",
-          followup_id: "follow-1",
-          reason: "user_changed_to_queue",
+          branch_binding_id: "main",
+          activation_id: "activation-1",
+          source: "user",
+          payload: {
+            type: "user_text",
+            text: "guide this turn",
+          },
+          idempotency_key: "steer-1",
+          client_steer_id: "steer-1",
         },
       },
       {

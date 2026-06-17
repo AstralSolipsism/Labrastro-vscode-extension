@@ -45,7 +45,6 @@ export type HostToWebviewMessageType =
   | "capabilityPackage.installPlan"
   | "capabilityPackage.installResult"
   | "capabilityPackage.peerStatus"
-  | "chat.sendDuringRunMode.state"
   | "chatConfig.error"
   | "chatConfig.state"
   | "connection.result"
@@ -91,6 +90,9 @@ export type HostToWebviewMessageType =
   | "session.state"
   | "session.syncStatus"
   | "sessionRun.cancelled"
+  | "sessionRun.branches"
+  | "sessionRun.branch.selected"
+  | "sessionRun.branch.started"
   | "sessionRun.done"
   | "sessionRun.error"
   | "sessionRun.events"
@@ -146,8 +148,6 @@ export type WebviewToHostMessageType =
   | "chat.command.dispatch"
   | "chatConfig.read"
   | "chat.send"
-  | "chat.sendDuringRunMode.get"
-  | "chat.sendDuringRunMode.update"
   | "closePanel"
   | "connection.host.save"
   | "connection.login"
@@ -204,8 +204,8 @@ export type WebviewToHostMessageType =
   | "session.new"
   | "session.openInChat"
   | "sessionRun.cancel"
-  | "sessionRun.followup"
-  | "sessionRun.followup.cancel"
+  | "sessionRun.branch"
+  | "sessionRun.branch.select"
   | "sessionRun.userInput.reply"
   | "sessionRun.recover"
   | "settingsTabChanged"
@@ -260,7 +260,6 @@ const HOST_TO_WEBVIEW_TYPES = new Set<HostToWebviewMessageType>([
   "capabilityPackage.installPlan",
   "capabilityPackage.installResult",
   "capabilityPackage.peerStatus",
-  "chat.sendDuringRunMode.state",
   "chatConfig.error",
   "chatConfig.state",
   "connection.result",
@@ -306,6 +305,9 @@ const HOST_TO_WEBVIEW_TYPES = new Set<HostToWebviewMessageType>([
   "session.state",
   "session.syncStatus",
   "sessionRun.cancelled",
+  "sessionRun.branches",
+  "sessionRun.branch.selected",
+  "sessionRun.branch.started",
   "sessionRun.done",
   "sessionRun.error",
   "sessionRun.events",
@@ -356,8 +358,6 @@ const WEBVIEW_TO_HOST_TYPES = new Set<WebviewToHostMessageType>([
   "chat.command.dispatch",
   "chatConfig.read",
   "chat.send",
-  "chat.sendDuringRunMode.get",
-  "chat.sendDuringRunMode.update",
   "closePanel",
   "connection.host.save",
   "connection.login",
@@ -414,8 +414,8 @@ const WEBVIEW_TO_HOST_TYPES = new Set<WebviewToHostMessageType>([
   "session.new",
   "session.openInChat",
   "sessionRun.cancel",
-  "sessionRun.followup",
-  "sessionRun.followup.cancel",
+  "sessionRun.branch",
+  "sessionRun.branch.select",
   "sessionRun.userInput.reply",
   "sessionRun.recover",
   "settingsTabChanged",
