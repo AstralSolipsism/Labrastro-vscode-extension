@@ -12,13 +12,26 @@ export interface ActiveSessionRun {
   cursor: number
   sessionId?: string
   draftSessionId?: string
-  status: "running" | "reconnecting"
+  status: "idle" | "running" | "reconnecting"
+  agentRunId?: string
+  activationId?: string
+  branchBindingId?: string
   startedAt: string
   reconnectAttempts: number
   reconnectStartedAt?: number
   lastError?: string
   lastStreamAt?: string
   nextRetryAt?: number
+  pendingNextTurn?: PendingNextTurn
+  branches?: Record<string, unknown>[]
+}
+
+export interface PendingNextTurn {
+  text: string
+  clientRequestId?: string
+  locale?: string
+  mentions?: Record<string, unknown>[]
+  queuedAt: string
 }
 
 export interface SessionRunCoordinatorOptions {
@@ -41,6 +54,42 @@ export interface SessionRunCoordinatorOptions {
       parameters?: Record<string, unknown>
       mentions?: Record<string, unknown>[]
     }
+  ) => Promise<void>
+  continueSessionRun: (
+    text: string,
+    post: PostMessage,
+    options: {
+      clientRequestId?: string
+      locale?: string
+      mentions?: Record<string, unknown>[]
+    }
+  ) => Promise<void>
+  steerAgentRun: (
+    text: string,
+    post: PostMessage,
+    options: {
+      clientSteerId?: string
+      locale?: string
+      mentions?: Record<string, unknown>[]
+    }
+  ) => Promise<void>
+  branchSessionRun: (
+    request: {
+      baseSessionItemId: string
+      prompt: string
+      branchBindingId?: string
+      sourceLabel?: string
+      sourceMessageId?: string
+      sourceNodeId?: string
+      composeMode?: "edit" | "fork"
+    },
+    post: PostMessage
+  ) => Promise<void>
+  selectSessionRunBranch: (
+    request: {
+      branchBindingId: string
+    },
+    post: PostMessage
   ) => Promise<void>
   cancelSessionRun: (sessionRunId: string | undefined, post: PostMessage) => Promise<void>
   recoverSessionRun: (
@@ -151,6 +200,62 @@ export class SessionRunCoordinator {
       }
       case "chat.send":
         if (typeof message.text === "string") {
+          const text = message.text
+          const mentions = arrayValue(message.mentions).filter(
+            (item): item is Record<string, unknown> =>
+              Boolean(item && typeof item === "object" && !Array.isArray(item))
+          )
+          const clientRequestId =
+            stringValue(message.clientRequestId) ||
+            stringValue(message.client_request_id) ||
+            stringValue(message.requestId) ||
+            stringValue(message.request_id)
+          const locale = stringValue(message.locale)
+          const activeRun = this.activeRun
+          if (activeRun?.sessionRunId) {
+            const intent = stringValue(message.intent) || stringValue(message.input_intent)
+            if (intent === "steer" || intent === "current_activation") {
+              if (activeSessionRunIsExecuting(activeRun)) {
+                void this.options.steerAgentRun(text, post, {
+                  ...(clientRequestId ? { clientSteerId: clientRequestId } : {}),
+                  ...(locale ? { locale } : {}),
+                  ...(mentions.length ? { mentions } : {}),
+                })
+              } else {
+                void this.options.continueSessionRun(text, post, {
+                  ...(clientRequestId ? { clientRequestId } : {}),
+                  ...(locale ? { locale } : {}),
+                  ...(mentions.length ? { mentions } : {}),
+                })
+              }
+              return true
+            }
+            if (activeSessionRunIsExecuting(activeRun)) {
+              const pendingNextTurn: PendingNextTurn = {
+                text,
+                ...(clientRequestId ? { clientRequestId } : {}),
+                ...(locale ? { locale } : {}),
+                ...(mentions.length ? { mentions } : {}),
+                queuedAt: new Date().toISOString(),
+              }
+              this.patchActiveRun({ pendingNextTurn })
+              post({
+                type: "sessionRun.pendingNextTurn",
+                sessionRunId: activeRun.sessionRunId,
+                branchBindingId: activeRun.branchBindingId,
+                branch_binding_id: activeRun.branchBindingId,
+                pendingNextTurn,
+                pending_next_turn: pendingNextTurn,
+              })
+              return true
+            }
+            void this.options.continueSessionRun(text, post, {
+              ...(clientRequestId ? { clientRequestId } : {}),
+              ...(locale ? { locale } : {}),
+              ...(mentions.length ? { mentions } : {}),
+            })
+            return true
+          }
           const providerId = stringValue(message.providerId) || stringValue(message.provider_id)
           const modelId = stringValue(message.modelId) || stringValue(message.model_id)
           if (!providerId || !modelId) {
@@ -162,21 +267,13 @@ export class SessionRunCoordinator {
             })
             return true
           }
-          const mentions = arrayValue(message.mentions).filter(
-            (item): item is Record<string, unknown> =>
-              Boolean(item && typeof item === "object" && !Array.isArray(item))
-          )
           void this.options.startSessionRun(message.text, stringValue(message.sessionId), post, {
             mode: stringValue(message.mode),
             workflowMode: stringValue(message.workflowMode) || stringValue(message.workflow_mode),
             taskflowId: stringValue(message.taskflowId) || stringValue(message.taskflow_id),
             draftSessionId: stringValue(message.draftSessionId) || stringValue(message.draft_session_id),
-            locale: stringValue(message.locale),
-            clientRequestId:
-              stringValue(message.clientRequestId) ||
-              stringValue(message.client_request_id) ||
-              stringValue(message.requestId) ||
-              stringValue(message.request_id),
+            locale,
+            clientRequestId,
             providerId,
             modelId,
             parameters: message.parameters && typeof message.parameters === "object"
@@ -192,51 +289,30 @@ export class SessionRunCoordinator {
           post
         )
         return true
+      case "sessionRun.branch":
+        await this.options.branchSessionRun({
+          baseSessionItemId: stringValue(message.baseSessionItemId) || stringValue(message.base_session_item_id) || "",
+          prompt: stringValue(message.prompt) || "",
+          branchBindingId: stringValue(message.branchBindingId) || stringValue(message.branch_binding_id),
+          sourceLabel: stringValue(message.sourceLabel) || stringValue(message.source_label),
+          sourceMessageId: stringValue(message.sourceMessageId) || stringValue(message.source_message_id),
+          sourceNodeId: stringValue(message.sourceNodeId) || stringValue(message.source_node_id),
+          composeMode: stringValue(message.composeMode) === "edit" || stringValue(message.compose_mode) === "edit"
+            ? "edit"
+            : "fork",
+        }, post)
+        return true
+      case "sessionRun.branch.select":
+        await this.options.selectSessionRunBranch({
+          branchBindingId: stringValue(message.branchBindingId) || stringValue(message.branch_binding_id) || "",
+        }, post)
+        return true
       case "sessionRun.recover": {
         const sessionRunId = stringValue(message.sessionRunId) || stringValue(message.session_run_id) || this.activeSessionRunId || ""
         const rawAction = stringValue(message.action) || "continue"
         const action = rawAction === "retry" ? "retry" : "continue"
         if (!sessionRunId) return true
         await this.options.recoverSessionRun(sessionRunId, action, post)
-        return true
-      }
-      case "sessionRun.followup": {
-        const sessionRunId = stringValue(message.sessionRunId) || stringValue(message.session_run_id) || this.activeSessionRunId || ""
-        const text = stringValue(message.text) || ""
-        if (!sessionRunId || !text.trim()) return true
-        const followupId = stringValue(message.followupId) || stringValue(message.followup_id)
-        const clientRequestId =
-          stringValue(message.clientRequestId) ||
-          stringValue(message.client_request_id) ||
-          stringValue(message.requestId) ||
-          stringValue(message.request_id)
-        try {
-          await this.options.client.followUpSessionRun({
-            sessionRunId,
-            text,
-            ...(followupId ? { followupId } : {}),
-            ...(clientRequestId ? { clientRequestId } : {}),
-          })
-        } catch (error) {
-          post({ type: "sessionRun.error", message: chatErrorMessage(error) })
-          await this.options.postConnectionStateIfAuthRequired(error, post)
-        }
-        return true
-      }
-      case "sessionRun.followup.cancel": {
-        const sessionRunId = stringValue(message.sessionRunId) || stringValue(message.session_run_id) || this.activeSessionRunId || ""
-        const followupId = stringValue(message.followupId) || stringValue(message.followup_id)
-        if (!sessionRunId || !followupId) return true
-        try {
-          await this.options.client.cancelSessionRunFollowUp({
-            sessionRunId,
-            followupId,
-            reason: stringValue(message.reason) || "user_changed_to_queue",
-          })
-        } catch (error) {
-          post({ type: "sessionRun.error", message: chatErrorMessage(error) })
-          await this.options.postConnectionStateIfAuthRequired(error, post)
-        }
         return true
       }
       case "approval.reply": {
@@ -534,6 +610,12 @@ export function activeSessionRunPayload(run: ActiveSessionRun): Record<string, u
     session_id: run.sessionId,
     draftSessionId: run.draftSessionId,
     draft_session_id: run.draftSessionId,
+    agentRunId: run.agentRunId,
+    agent_run_id: run.agentRunId,
+    activationId: run.activationId,
+    activation_id: run.activationId,
+    branchBindingId: run.branchBindingId,
+    branch_binding_id: run.branchBindingId,
     status: run.status,
     startedAt: run.startedAt,
     started_at: run.startedAt,
@@ -547,6 +629,9 @@ export function activeSessionRunPayload(run: ActiveSessionRun): Record<string, u
     last_stream_at: run.lastStreamAt,
     nextRetryAt: run.nextRetryAt,
     next_retry_at: run.nextRetryAt,
+    pendingNextTurn: run.pendingNextTurn,
+    pending_next_turn: run.pendingNextTurn,
+    branches: run.branches,
   }
 }
 
@@ -566,12 +651,21 @@ export function activeSessionRunFromPayload(payload: unknown): ActiveSessionRun 
     numberValue(value.nextRetryAt) ??
     numberValue(value.next_retry_at)
   const statusValue = stringValue(value.status)
-  const status: ActiveSessionRun["status"] = statusValue === "reconnecting" ? "reconnecting" : "running"
+  const status: ActiveSessionRun["status"] =
+    statusValue === "reconnecting" ? "reconnecting" : statusValue === "idle" ? "idle" : "running"
+  const camelPendingNextTurn = objectValue(value.pendingNextTurn)
+  const pendingNextTurnValue = Object.keys(camelPendingNextTurn).length
+    ? camelPendingNextTurn
+    : objectValue(value.pending_next_turn)
+  const pendingNextTurn = pendingNextTurnFromPayload(pendingNextTurnValue)
   return {
     sessionRunId,
     cursor,
     sessionId: stringValue(value.sessionId) || stringValue(value.session_id),
     draftSessionId: stringValue(value.draftSessionId) || stringValue(value.draft_session_id),
+    agentRunId: stringValue(value.agentRunId) || stringValue(value.agent_run_id),
+    activationId: stringValue(value.activationId) || stringValue(value.activation_id),
+    branchBindingId: stringValue(value.branchBindingId) || stringValue(value.branch_binding_id),
     status,
     startedAt:
       stringValue(value.startedAt) ||
@@ -582,6 +676,33 @@ export function activeSessionRunFromPayload(payload: unknown): ActiveSessionRun 
     lastError: stringValue(value.lastError) || stringValue(value.last_error),
     lastStreamAt: stringValue(value.lastStreamAt) || stringValue(value.last_stream_at),
     nextRetryAt,
+    ...(pendingNextTurn ? { pendingNextTurn } : {}),
+    branches: arrayValue(value.branches).filter(
+      (item): item is Record<string, unknown> =>
+        Boolean(item && typeof item === "object" && !Array.isArray(item))
+    ),
+  }
+}
+
+function activeSessionRunIsExecuting(run: ActiveSessionRun): boolean {
+  return run.status === "running" || run.status === "reconnecting"
+}
+
+function pendingNextTurnFromPayload(value: Record<string, unknown>): PendingNextTurn | undefined {
+  const text = stringValue(value.text)
+  if (!text) return undefined
+  const clientRequestId = stringValue(value.clientRequestId) || stringValue(value.client_request_id)
+  const locale = stringValue(value.locale)
+  const mentions = arrayValue(value.mentions).filter(
+    (item): item is Record<string, unknown> =>
+      Boolean(item && typeof item === "object" && !Array.isArray(item))
+  )
+  return {
+    text,
+    ...(clientRequestId ? { clientRequestId } : {}),
+    ...(locale ? { locale } : {}),
+    ...(mentions.length ? { mentions } : {}),
+    queuedAt: stringValue(value.queuedAt) || stringValue(value.queued_at) || new Date().toISOString(),
   }
 }
 

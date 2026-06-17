@@ -5,8 +5,6 @@ function coordinatorWithStoredSessionRun(stored: unknown) {
   const options = {
     client: {
       approvalReply: vi.fn(),
-      followUpSessionRun: vi.fn(),
-      cancelSessionRunFollowUp: vi.fn(),
       recoverSessionRun: vi.fn(),
     },
     context: {
@@ -17,6 +15,10 @@ function coordinatorWithStoredSessionRun(stored: unknown) {
     },
     approvalDocuments: { open: vi.fn() },
     startSessionRun: vi.fn(),
+    continueSessionRun: vi.fn(),
+    steerAgentRun: vi.fn(),
+    branchSessionRun: vi.fn(),
+    selectSessionRunBranch: vi.fn(),
     cancelSessionRun: vi.fn(),
     recoverSessionRun: vi.fn(),
     postConnectionStateIfAuthRequired: vi.fn(),

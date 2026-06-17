@@ -2,6 +2,27 @@ import type * as vscode from "vscode"
 import { describe, expect, it, vi } from "vitest"
 
 const vscodeMock = vi.hoisted(() => ({
+  EventEmitter: class MockVscodeEventEmitter<T> {
+    private readonly listeners: Array<(event: T) => unknown> = []
+
+    readonly event = (listener: (event: T) => unknown) => {
+      this.listeners.push(listener)
+      return {
+        dispose: () => {
+          const index = this.listeners.indexOf(listener)
+          if (index >= 0) this.listeners.splice(index, 1)
+        },
+      }
+    }
+
+    fire(event: T): void {
+      for (const listener of [...this.listeners]) listener(event)
+    }
+
+    dispose(): void {
+      this.listeners.length = 0
+    }
+  },
   registerTextDocumentContentProvider: vi.fn(() => ({ dispose: vi.fn() })),
   createFileSystemWatcher: vi.fn(() => ({
     onDidChange: vi.fn(),
@@ -13,6 +34,7 @@ const vscodeMock = vi.hoisted(() => ({
 }))
 
 vi.mock("vscode", () => ({
+  EventEmitter: vscodeMock.EventEmitter,
   workspace: {
     registerTextDocumentContentProvider: vscodeMock.registerTextDocumentContentProvider,
     createFileSystemWatcher: vscodeMock.createFileSystemWatcher,

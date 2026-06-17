@@ -6,8 +6,6 @@ function coordinator() {
     client: {
       approvalReply: vi.fn(),
       sessionRunUserInputReply: vi.fn(async (): Promise<Record<string, unknown>> => ({ ok: true })),
-      followUpSessionRun: vi.fn(async () => ({ ok: true })),
-      cancelSessionRunFollowUp: vi.fn(async () => ({ ok: true })),
       recoverSessionRun: vi.fn(async () => ({ ok: true })),
       dispatchChatCommand: vi.fn(async () => ({
         ok: true,
@@ -47,6 +45,10 @@ function coordinator() {
       approvedSaveCandidateFor: vi.fn(),
     },
     startSessionRun: vi.fn(),
+    continueSessionRun: vi.fn(),
+    steerAgentRun: vi.fn(),
+    branchSessionRun: vi.fn(),
+    selectSessionRunBranch: vi.fn(),
     cancelSessionRun: vi.fn(),
     recoverSessionRun: vi.fn(),
     postConnectionStateIfAuthRequired: vi.fn(),
@@ -480,39 +482,165 @@ describe("SessionRunCoordinator", () => {
     expect(options.cancelSessionRun).toHaveBeenCalledWith("snake-run", post)
   })
 
-  it("routes session run follow-ups to the active run and supports cancellation", async () => {
+  it("routes sessionRun.branch with snake_case branch payload", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+
+    await subject.handleMessage({
+      type: "sessionRun.branch",
+      base_session_item_id: "msg-2",
+      prompt: "edited prompt",
+      branch_binding_id: "branch-edit-1",
+      source_label: "original prompt",
+      source_message_id: "message-1",
+      source_node_id: "node-1",
+      compose_mode: "edit",
+    }, post)
+
+    expect(options.branchSessionRun).toHaveBeenCalledWith({
+      baseSessionItemId: "msg-2",
+      prompt: "edited prompt",
+      branchBindingId: "branch-edit-1",
+      sourceLabel: "original prompt",
+      sourceMessageId: "message-1",
+      sourceNodeId: "node-1",
+      composeMode: "edit",
+    }, post)
+  })
+
+  it("routes sessionRun.branch.select with snake_case branch binding", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+
+    await subject.handleMessage({
+      type: "sessionRun.branch.select",
+      branch_binding_id: "branch-2",
+    }, post)
+
+    expect(options.selectSessionRunBranch).toHaveBeenCalledWith({
+      branchBindingId: "branch-2",
+    }, post)
+  })
+
+  it("routes idle active chat.send to session run continue", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    subject.setActiveRun({
+      sessionRunId: "active-run",
+      cursor: 0,
+      status: "idle",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reconnectAttempts: 0,
+    })
+
+    await subject.handleMessage({
+      type: "chat.send",
+      text: "continue here",
+      requestId: "req-1",
+      locale: "zh-CN",
+      mentions: [{ kind: "file", path: "README.md" }],
+    }, post)
+
+    expect(options.continueSessionRun).toHaveBeenCalledWith("continue here", post, {
+      clientRequestId: "req-1",
+      locale: "zh-CN",
+      mentions: [{ kind: "file", path: "README.md" }],
+    })
+    expect(options.startSessionRun).not.toHaveBeenCalled()
+  })
+
+  it("routes explicit current-activation input to continue when the active run is idle", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    subject.setActiveRun({
+      sessionRunId: "active-run",
+      cursor: 3,
+      status: "idle",
+      agentRunId: "agent-run-1",
+      activationId: "old-activation",
+      branchBindingId: "main",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reconnectAttempts: 0,
+    })
+
+    await subject.handleMessage({
+      type: "chat.send",
+      text: "continue after the previous activation ended",
+      intent: "current_activation",
+      requestId: "next-1",
+      locale: "zh-CN",
+    }, post)
+
+    expect(options.continueSessionRun).toHaveBeenCalledWith(
+      "continue after the previous activation ended",
+      post,
+      {
+        clientRequestId: "next-1",
+        locale: "zh-CN",
+      }
+    )
+    expect(options.steerAgentRun).not.toHaveBeenCalled()
+  })
+
+  it("queues ordinary chat.send as branch-local pending next turn while active run is executing", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
     subject.setActiveRun({
       sessionRunId: "active-run",
       cursor: 0,
       status: "running",
+      branchBindingId: "main",
       startedAt: "2026-01-01T00:00:00.000Z",
       reconnectAttempts: 0,
     })
 
     await subject.handleMessage({
-      type: "sessionRun.followup",
-      text: "use this extra constraint",
-      followupId: "follow-1",
-      requestId: "req-1",
-    }, post)
-    await subject.handleMessage({
-      type: "sessionRun.followup.cancel",
-      followupId: "follow-1",
-      reason: "user_changed_to_queue",
+      type: "chat.send",
+      text: "next turn after this finishes",
+      requestId: "req-2",
+      locale: "zh-CN",
+      mentions: [{ kind: "file", path: "README.md" }],
     }, post)
 
-    expect(options.client.followUpSessionRun).toHaveBeenCalledWith({
+    expect(options.continueSessionRun).not.toHaveBeenCalled()
+    expect(options.steerAgentRun).not.toHaveBeenCalled()
+    expect(subject.activeRun?.pendingNextTurn?.text).toBe("next turn after this finishes")
+    expect(subject.activeRun?.pendingNextTurn?.locale).toBe("zh-CN")
+    expect(subject.activeRun?.pendingNextTurn?.mentions).toEqual([{ kind: "file", path: "README.md" }])
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: "sessionRun.pendingNextTurn",
       sessionRunId: "active-run",
-      text: "use this extra constraint",
-      followupId: "follow-1",
-      clientRequestId: "req-1",
+      branchBindingId: "main",
+    }))
+  })
+
+  it("routes explicit current-activation guidance to AgentRun steer", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    subject.setActiveRun({
+      sessionRunId: "active-run",
+      cursor: 0,
+      status: "running",
+      agentRunId: "agent-run-1",
+      activationId: "activation-1",
+      branchBindingId: "main",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reconnectAttempts: 0,
     })
-    expect(options.client.cancelSessionRunFollowUp).toHaveBeenCalledWith({
-      sessionRunId: "active-run",
-      followupId: "follow-1",
-      reason: "user_changed_to_queue",
+
+    await subject.handleMessage({
+      type: "chat.send",
+      text: "apply this to the current run",
+      intent: "steer",
+      requestId: "steer-1",
+      locale: "zh-CN",
+      mentions: [{ kind: "file", path: "README.md" }],
+    }, post)
+
+    expect(options.steerAgentRun).toHaveBeenCalledWith("apply this to the current run", post, {
+      clientSteerId: "steer-1",
+      locale: "zh-CN",
+      mentions: [{ kind: "file", path: "README.md" }],
     })
   })
 

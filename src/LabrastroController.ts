@@ -196,6 +196,10 @@ export class LabrastroController implements vscode.Disposable {
       context: this.context,
       approvalDocuments: this.approvalDocuments,
       startSessionRun: this.startSessionRun.bind(this),
+      continueSessionRun: this.continueSessionRun.bind(this),
+      steerAgentRun: this.steerAgentRun.bind(this),
+      branchSessionRun: this.branchSessionRun.bind(this),
+      selectSessionRunBranch: this.selectSessionRunBranch.bind(this),
       cancelSessionRun: this.cancelSessionRun.bind(this),
       recoverSessionRun: this.recoverSessionRun.bind(this),
       postConnectionStateIfAuthRequired: this.postConnectionStateIfAuthRequired.bind(this),
@@ -317,7 +321,6 @@ export class LabrastroController implements vscode.Disposable {
     if (includeAdminState) {
       post({ type: "autoApproval.state", payload: this.adminCoordinator.getAutoApprovalState() })
       post({ type: "reasoningDisplay.state", payload: this.adminCoordinator.getReasoningDisplayState() })
-      post({ type: "chat.sendDuringRunMode.state", payload: this.adminCoordinator.getSendDuringRunModeState() })
       post({ type: "peerDiagnosticsLogging.state", payload: this.client.peerDiagnosticsLoggingState() })
       post({ type: "executorType.state", payload: this.getExecutorType() })
       post({ type: "locale.state", locale: this.context.workspaceState.get<string>("labrastro.locale") || vscode.env.language })
@@ -1549,12 +1552,18 @@ export class LabrastroController implements vscode.Disposable {
       if (!sessionRunId) {
         throw new Error("session run start failed: empty session run id")
       }
+      const agentRunId = stringValue(start.agent_run_id)
+      const activationId = stringValue(start.activation_id)
+      const branchBindingId = stringValue(start.branch_binding_id)
       this.sessionRunCoordinator.setActiveRun({
         sessionRunId,
         cursor: 0,
         sessionId,
         draftSessionId: options.draftSessionId,
         status: "running",
+        ...(agentRunId ? { agentRunId } : {}),
+        ...(activationId ? { activationId } : {}),
+        ...(branchBindingId ? { branchBindingId } : {}),
         startedAt: new Date().toISOString(),
         reconnectAttempts: 0,
         lastStreamAt: new Date().toISOString(),
@@ -1565,6 +1574,289 @@ export class LabrastroController implements vscode.Disposable {
       this.emitChatMessage({ type: "sessionRun.error", message: chatErrorMessage(error) }, post)
       await this.postConnectionStateIfAuthRequired(error, post)
       this.sessionRunCoordinator.clearActiveRun()
+    }
+  }
+
+  private async continueSessionRun(
+    text: string,
+    post: PostMessage,
+    options: {
+      clientRequestId?: string
+      locale?: string
+      mentions?: Record<string, unknown>[]
+    } = {}
+  ): Promise<void> {
+    const activeRun = this.sessionRunCoordinator.activeRun
+    const sessionRunId = activeRun?.sessionRunId || ""
+    if (!sessionRunId) {
+      this.emitChatMessage({ type: "sessionRun.error", message: "没有可继续的会话运行。" }, post)
+      return
+    }
+    try {
+      this.emitChatMessage({ type: "sessionRun.continued", text, sessionRunId }, post)
+      const result = await this.client.continueSessionRun({
+        sessionRunId,
+        prompt: text,
+        clientRequestId: options.clientRequestId,
+        locale: this.currentChatLocale(options.locale),
+        mentions: options.mentions,
+      })
+      const agentRunId = stringValue(result.agent_run_id) || activeRun?.agentRunId
+      const activationId = stringValue(result.activation_id)
+      this.sessionRunCoordinator.patchActiveRun({
+        status: "running",
+        cursor: activeRun?.cursor ?? 0,
+        ...(agentRunId ? { agentRunId } : {}),
+        ...(activationId ? { activationId } : {}),
+        pendingNextTurn: undefined,
+        reconnectAttempts: 0,
+        lastStreamAt: new Date().toISOString(),
+      })
+      this.ensureSessionRunEventStream(sessionRunId, activeRun?.sessionId || "", post)
+    } catch (error) {
+      this.emitChatMessage({ type: "sessionRun.error", message: chatErrorMessage(error) }, post)
+      await this.postConnectionStateIfAuthRequired(error, post)
+    }
+  }
+
+  private async steerAgentRun(
+    text: string,
+    post: PostMessage,
+    options: {
+      clientSteerId?: string
+      locale?: string
+      mentions?: Record<string, unknown>[]
+    } = {}
+  ): Promise<void> {
+    const activeRun = this.sessionRunCoordinator.activeRun
+    const agentRunId = activeRun?.agentRunId || ""
+    const sessionRunId = activeRun?.sessionRunId || ""
+    const pendingNextTurn = () => ({
+      text,
+      ...(options.clientSteerId ? { clientRequestId: options.clientSteerId } : {}),
+      ...(options.locale ? { locale: this.currentChatLocale(options.locale) } : {}),
+      ...(options.mentions?.length ? { mentions: options.mentions } : {}),
+      queuedAt: new Date().toISOString(),
+    })
+    if (!activeRun || !agentRunId || !sessionRunId || !activeRun.activationId) {
+      const nextTurn = pendingNextTurn()
+      this.emitChatMessage({
+        type: "sessionRun.pendingNextTurn",
+        sessionRunId,
+        branchBindingId: activeRun?.branchBindingId,
+        branch_binding_id: activeRun?.branchBindingId,
+        pendingNextTurn: nextTurn,
+        pending_next_turn: nextTurn,
+      }, post)
+      this.sessionRunCoordinator.patchActiveRun({
+        pendingNextTurn: nextTurn,
+      })
+      return
+    }
+    try {
+      const result = await this.client.steerAgentRun({
+        agentRunId,
+        sessionRunId,
+        text,
+        activationId: activeRun.activationId,
+        branchBindingId: activeRun.branchBindingId,
+        clientSteerId: options.clientSteerId,
+      })
+      this.emitChatMessage({
+        type: "sessionRun.steer",
+        sessionRunId,
+        agentRunId,
+        agent_run_id: agentRunId,
+        status: stringValue(result.status) || "accepted",
+        payload: result,
+      }, post)
+    } catch (error) {
+      if (remoteErrorCode(error) === "agent_run_not_steerable") {
+        const nextTurn = pendingNextTurn()
+        this.sessionRunCoordinator.patchActiveRun({ pendingNextTurn: nextTurn })
+        this.emitChatMessage({
+          type: "sessionRun.pendingNextTurn",
+          sessionRunId,
+          branchBindingId: activeRun.branchBindingId,
+          branch_binding_id: activeRun.branchBindingId,
+          pendingNextTurn: nextTurn,
+          pending_next_turn: nextTurn,
+        }, post)
+        return
+      }
+      this.emitChatMessage({ type: "sessionRun.error", message: chatErrorMessage(error) }, post)
+      await this.postConnectionStateIfAuthRequired(error, post)
+    }
+  }
+
+  private async branchSessionRun(
+    request: {
+      baseSessionItemId: string
+      prompt: string
+      branchBindingId?: string
+      sourceLabel?: string
+      sourceMessageId?: string
+      sourceNodeId?: string
+      composeMode?: "edit" | "fork"
+    },
+    post: PostMessage
+  ): Promise<void> {
+    const activeRun = this.sessionRunCoordinator.activeRun
+    const sessionRunId = activeRun?.sessionRunId || ""
+    const sessionId = activeRun?.sessionId || ""
+    const sourceAgentRunId = activeRun?.agentRunId || ""
+    const baseSessionItemId = request.baseSessionItemId.trim()
+    const prompt = request.prompt.trim()
+    const runtimeRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || ""
+    if (!activeRun || !sessionRunId || !sourceAgentRunId) {
+      this.emitChatMessage({ type: "sessionRun.error", message: "当前会话没有可分支的 AgentRun mainline。" }, post)
+      return
+    }
+    if (!baseSessionItemId) {
+      this.emitChatMessage({ type: "sessionRun.error", message: "缺少分支基准消息，无法创建会话分支。" }, post)
+      return
+    }
+    if (!prompt) {
+      this.emitChatMessage({ type: "sessionRun.error", message: "分支需要新的用户输入。" }, post)
+      return
+    }
+    if (!runtimeRoot) {
+      this.emitChatMessage({ type: "sessionRun.error", message: "没有可用工作区，无法创建 AgentRun 分支。" }, post)
+      return
+    }
+    const branchBindingId =
+      request.branchBindingId?.trim() ||
+      `branch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    try {
+      const result = await this.client.branchAgentRun({
+        sourceAgentRunId,
+        baseSessionItemId,
+        runtimeRoot,
+        prompt,
+        branchBindingId,
+        selectBranch: true,
+        metadata: {
+          source: request.composeMode === "edit" ? "chat_message_edit" : "chat_fork_from_here",
+          ...(request.sourceLabel ? { source_label: request.sourceLabel } : {}),
+          ...(request.sourceMessageId ? { source_message_id: request.sourceMessageId } : {}),
+          ...(request.sourceNodeId ? { source_node_id: request.sourceNodeId } : {}),
+        },
+      })
+      const agentRun = objectValue(result.agent_run)
+      const agentRunId = stringValue(agentRun.id) || stringValue(result.agent_run_id)
+      if (!agentRunId) {
+        throw new Error("AgentRun branch failed: empty target agent run id")
+      }
+      const activationId =
+        stringValue(agentRun.current_activation_id) ||
+        stringValue(agentRun.currentActivationId) ||
+        stringValue(result.activation_id) ||
+        stringValue(result.activationId)
+      this.sessionRunCoordinator.patchActiveRun({
+        status: "running",
+        agentRunId,
+        activationId: activationId || undefined,
+        branchBindingId,
+        cursor: 0,
+        pendingNextTurn: undefined,
+        reconnectAttempts: 0,
+        lastStreamAt: new Date().toISOString(),
+      })
+      this.emitChatMessage({
+        type: "sessionRun.branch.started",
+        sessionRunId,
+        sessionId,
+        agentRunId,
+        agent_run_id: agentRunId,
+        activationId,
+        activation_id: activationId,
+        branchBindingId,
+        branch_binding_id: branchBindingId,
+        baseSessionItemId,
+        base_session_item_id: baseSessionItemId,
+        prompt,
+        payload: result,
+      }, post)
+      this.ensureSessionRunEventStreamSoon(sessionRunId, sessionId, post)
+    } catch (error) {
+      this.emitChatMessage({ type: "sessionRun.error", message: chatErrorMessage(error) }, post)
+      await this.postConnectionStateIfAuthRequired(error, post)
+    }
+  }
+
+  private async selectSessionRunBranch(
+    request: { branchBindingId: string },
+    post: PostMessage
+  ): Promise<void> {
+    const activeRun = this.sessionRunCoordinator.activeRun
+    const sessionRunId = activeRun?.sessionRunId || ""
+    const branchBindingId = request.branchBindingId.trim()
+    if (!activeRun || !sessionRunId || !branchBindingId) {
+      this.emitChatMessage({ type: "sessionRun.error", message: "缺少可切换的会话分支。" }, post)
+      return
+    }
+    if (activeRun.branchBindingId === branchBindingId) return
+    try {
+      const status = await this.client.selectSessionRunBranch({
+        sessionRunId,
+        branchBindingId,
+        cursor: 0,
+      })
+      const runtimeState = objectValue(status.runtime_state || status.runtimeState)
+      const sessionId = stringValue(status.session_id) || stringValue(status.sessionId) || activeRun.sessionId || ""
+      const agentRunId =
+        stringValue(status.agent_run_id) ||
+        stringValue(status.agentRunId) ||
+        stringValue(runtimeState.agent_run_id) ||
+        stringValue(runtimeState.agentRunId)
+      const activationId =
+        stringValue(status.activation_id) ||
+        stringValue(status.activationId) ||
+        stringValue(runtimeState.activation_id) ||
+        stringValue(runtimeState.activationId)
+      const branches = arrayOfRecords(status.branches)
+      const running = status.running === true || stringValue(status.status) === "running"
+      this.sessionRunCoordinator.patchActiveRun({
+        sessionId,
+        status: running ? "running" : "idle",
+        cursor: 0,
+        branchBindingId,
+        agentRunId,
+        activationId,
+        ...(branches.length ? { branches } : {}),
+        pendingNextTurn: undefined,
+        reconnectAttempts: 0,
+        lastStreamAt: new Date().toISOString(),
+      })
+      this.emitChatMessage({
+        type: "sessionRun.branch.selected",
+        sessionRunId,
+        sessionId,
+        branchBindingId,
+        branch_binding_id: branchBindingId,
+        running,
+        status: running ? "running" : "idle",
+        branches,
+        payload: status,
+      }, post)
+      if (branches.length) {
+        this.emitChatMessage({
+          type: "sessionRun.branches",
+          sessionRunId,
+          branches,
+        }, post)
+      }
+      const batch = await this.client.fetchSessionRunEventsBatch(sessionRunId, 0, {
+        timeoutSec: 1,
+        timeoutMs: 2_500,
+      })
+      if (Object.keys(batch).length) {
+        await this.applySessionRunEventsBatch(sessionRunId, sessionId, 0, batch, post)
+      }
+      this.ensureSessionRunEventStreamSoon(sessionRunId, sessionId, post)
+    } catch (error) {
+      this.emitChatMessage({ type: "sessionRun.error", message: chatErrorMessage(error) }, post)
+      await this.postConnectionStateIfAuthRequired(error, post)
     }
   }
 
@@ -1605,6 +1897,9 @@ export class LabrastroController implements vscode.Disposable {
         cursor: 0,
         sessionId: resolvedSessionId,
         status: "running",
+        ...(stringValue(start.agent_run_id) ? { agentRunId: stringValue(start.agent_run_id) } : {}),
+        ...(stringValue(start.activation_id) ? { activationId: stringValue(start.activation_id) } : {}),
+        ...(stringValue(start.branch_binding_id) ? { branchBindingId: stringValue(start.branch_binding_id) } : {}),
         startedAt: new Date().toISOString(),
         reconnectAttempts: 0,
         lastStreamAt: new Date().toISOString(),
@@ -1638,6 +1933,25 @@ export class LabrastroController implements vscode.Disposable {
     })
   }
 
+  private ensureSessionRunEventStreamSoon(
+    sessionRunId: string,
+    sessionId: string,
+    post: PostMessage,
+    attempts = 8
+  ): void {
+    if (!sessionRunId || this.disposed) return
+    if (!this.activeSessionRunEventStreams.has(sessionRunId)) {
+      this.ensureSessionRunEventStream(sessionRunId, sessionId, post)
+      return
+    }
+    if (attempts <= 0) return
+    setTimeout(() => {
+      const activeRun = this.sessionRunCoordinator.activeRun
+      if (activeRun?.sessionRunId !== sessionRunId) return
+      this.ensureSessionRunEventStreamSoon(sessionRunId, sessionId, post, attempts - 1)
+    }, 100)
+  }
+
   private async consumeSessionRunEventStream(
     sessionRunId: string,
     initialSessionId: string,
@@ -1648,11 +1962,12 @@ export class LabrastroController implements vscode.Disposable {
     try {
       let sessionId = initialSessionId
       let cursor = this.sessionRunCoordinator.activeRun?.cursor ?? 0
-      while (!this.disposed && this.sessionRunCoordinator.activeRun?.sessionRunId === sessionRunId) {
+      const branchBindingId = this.sessionRunCoordinator.activeRun?.branchBindingId || ""
+      while (!this.disposed && this.sessionRunEventStreamMatches(sessionRunId, branchBindingId)) {
         const abortController = new AbortController()
         let completed = false
         const abortInactiveStream = setInterval(() => {
-          if (this.disposed || this.sessionRunCoordinator.activeRun?.sessionRunId !== sessionRunId) {
+          if (this.disposed || !this.sessionRunEventStreamMatches(sessionRunId, branchBindingId)) {
             abortController.abort()
           }
         }, 250)
@@ -1661,6 +1976,10 @@ export class LabrastroController implements vscode.Disposable {
             sessionRunId,
             cursor,
             async (stream) => {
+              if (!this.sessionRunEventStreamMatches(sessionRunId, branchBindingId)) {
+                abortController.abort()
+                return
+              }
               this.markSessionRunEventsConnected(sessionRunId, post)
               const result = await this.applySessionRunEventsBatch(
                 sessionRunId,
@@ -1672,7 +1991,7 @@ export class LabrastroController implements vscode.Disposable {
               sessionId = result.sessionId
               cursor = result.cursor
               completed = result.done
-              if (!result.active) {
+              if (!result.active || !this.sessionRunEventStreamMatches(sessionRunId, branchBindingId)) {
                 abortController.abort()
               }
             },
@@ -1680,7 +1999,7 @@ export class LabrastroController implements vscode.Disposable {
           )
           break
         } catch (error) {
-          if (completed || (abortController.signal.aborted && this.sessionRunCoordinator.activeRun?.sessionRunId !== sessionRunId)) {
+          if (completed || (abortController.signal.aborted && !this.sessionRunEventStreamMatches(sessionRunId, branchBindingId))) {
             break
           }
           if (await this.retrySessionRunEventsAfterError(sessionRunId, error, post)) {
@@ -1694,6 +2013,13 @@ export class LabrastroController implements vscode.Disposable {
     } finally {
       this.activeSessionRunEventStreams.delete(sessionRunId)
     }
+  }
+
+  private sessionRunEventStreamMatches(sessionRunId: string, branchBindingId: string): boolean {
+    const activeRun = this.sessionRunCoordinator.activeRun
+    if (!activeRun || activeRun.sessionRunId !== sessionRunId) return false
+    if (!branchBindingId || !activeRun.branchBindingId) return true
+    return activeRun.branchBindingId === branchBindingId
   }
 
   private markSessionRunEventsConnected(sessionRunId: string, post: PostMessage): void {
@@ -1794,9 +2120,20 @@ export class LabrastroController implements vscode.Disposable {
         }
       }
       for (const event of events) {
+        const payload = objectValue((event as Record<string, unknown>).payload)
+        const agentRunId = stringValue(payload.agent_run_id)
+        const activationId = stringValue(payload.activation_id)
+        const branchBindingId = stringValue(payload.branch_binding_id)
+        if (agentRunId || activationId || branchBindingId) {
+          this.sessionRunCoordinator.patchActiveRun({
+            ...(agentRunId ? { agentRunId } : {}),
+            ...(activationId ? { activationId } : {}),
+            ...(branchBindingId ? { branchBindingId } : {}),
+          })
+        }
         if (event && event.type === "approval_request") {
           await this.approvalDocuments.store({
-            ...objectValue(event.payload),
+            ...payload,
             session_run_id: sessionRunId,
           })
         } else if (
@@ -1819,18 +2156,49 @@ export class LabrastroController implements vscode.Disposable {
       }
     }
     cursor = nextCursor
+    const branches = arrayOfRecords(stream.branches)
     this.sessionRunCoordinator.patchActiveRun({
       cursor,
       lastStreamAt: new Date().toISOString(),
+      ...(branches.length ? { branches } : {}),
     })
+    if (branches.length) {
+      this.emitChatMessage({
+        type: "sessionRun.branches",
+        sessionRunId,
+        branches,
+      }, post)
+    }
     if (stream.done) {
       await this.sessionCoordinator.refreshSessionListAfterSessionRunDone(post)
       this.emitChatMessage({ type: "sessionRun.done", sessionRunId }, post)
-      if (this.sessionRunCoordinator.activeRun?.sessionRunId === sessionRunId) {
-        this.sessionRunCoordinator.setActiveRun(undefined)
+      const activeRun = this.sessionRunCoordinator.activeRun
+      const pendingNextTurn = activeRun?.sessionRunId === sessionRunId
+        ? activeRun.pendingNextTurn
+        : undefined
+      if (pendingNextTurn) {
+        this.sessionRunCoordinator.patchActiveRun({
+          status: "idle",
+          pendingNextTurn: undefined,
+        })
+        setTimeout(() => {
+          void this.continueSessionRun(pendingNextTurn.text, post, {
+            clientRequestId: pendingNextTurn.clientRequestId,
+            locale: pendingNextTurn.locale,
+            mentions: pendingNextTurn.mentions,
+          })
+        }, 0)
+        this.sessionRunCoordinator.clearActiveDraftSessionId()
+        return { sessionId, cursor, done: true, active: true }
+      }
+      if (activeRun?.sessionRunId === sessionRunId) {
+        this.sessionRunCoordinator.patchActiveRun({
+          status: "idle",
+          pendingNextTurn: undefined,
+        })
       }
       this.sessionRunCoordinator.clearActiveDraftSessionId()
-      return { sessionId, cursor, done: true, active: false }
+      return { sessionId, cursor, done: true, active: true }
     }
     return {
       sessionId,
@@ -2238,6 +2606,17 @@ function chatErrorMessage(error: unknown): string {
     return "登录已失效，请重新登录。"
   }
   return errorMessage(error)
+}
+
+function remoteErrorCode(error: unknown): string {
+  if (isRemoteError(error)) {
+    return String(error.code || "")
+  }
+  const body = error && typeof error === "object" ? (error as Record<string, unknown>).body : undefined
+  if (body && typeof body === "object" && !Array.isArray(body)) {
+    return stringValue((body as Record<string, unknown>).error) || stringValue((body as Record<string, unknown>).code) || ""
+  }
+  return ""
 }
 
 function adminErrorPayload(error: unknown, scope?: AdminErrorScope): Record<string, unknown> {
