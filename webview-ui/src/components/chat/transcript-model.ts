@@ -10,6 +10,7 @@ export interface TranscriptMeta {
   id: string
   eventKey?: string
   sessionEventSeq?: number
+  sessionItemId?: string
   historyCutIndex?: number
   traceNodeId?: string
   traceNodeKind?: TraceNodeKind

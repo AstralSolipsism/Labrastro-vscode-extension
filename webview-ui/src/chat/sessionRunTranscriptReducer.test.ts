@@ -124,6 +124,64 @@ describe("sessionRunTranscriptReducer", () => {
     expect(batch.changed).toBe(true)
   })
 
+  it("preserves session item ids on transcript nodes used as branch anchors", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", {
+      prompt: "original question",
+      session_item_id: "session-item-user-1",
+    }, 1)
+    current = reduce(current, "assistant_message", {
+      content: "source branch answer",
+      session_item_id: "session-item-assistant-1",
+    }, 2)
+
+    expect(current.turns[0].userMessage.sessionItemId).toBe("session-item-user-1")
+    expect(current.turns[0].assistantMessages[0].parts[0].sessionItemId).toBe("session-item-assistant-1")
+  })
+
+  it("renders branch-local and continued user messages from canonical session events", () => {
+    let current = bundle()
+    current = reduce(current, "user_message", {
+      content: "edited branch question",
+      session_item_id: "branch-user-1",
+    }, 1)
+    current = reduce(current, "session_run_continue", {
+      prompt: "continue on selected branch",
+      session_item_id: "continue-user-1",
+    }, 2)
+
+    expect(isSessionRunTranscriptEventType("user_message")).toBe(true)
+    expect(isSessionRunTranscriptEventType("session_run_continue")).toBe(true)
+    expect(current.turns.map((turn) => turn.userMessage.text)).toEqual([
+      "edited branch question",
+      "continue on selected branch",
+    ])
+    expect(current.turns[0].userMessage.sessionItemId).toBe("branch-user-1")
+    expect(current.turns[1].userMessage.sessionItemId).toBe("continue-user-1")
+  })
+
+  it("does not duplicate branch-local user message already previewed by the UI", () => {
+    const current = bundle()
+    current.turns.push({
+      userMessage: {
+        id: "local-branch-user",
+        role: "user",
+        text: "edited branch question",
+        parts: [],
+        timestamp: 1000,
+      },
+      assistantMessages: [],
+    })
+
+    const replayed = reduce(current, "user_message", {
+      content: "edited branch question",
+      session_item_id: "branch-user-1",
+    }, 1)
+
+    expect(replayed.turns).toHaveLength(1)
+    expect(replayed.turns[0].userMessage.text).toBe("edited branch question")
+  })
+
   it("stores stream observability metrics in stats without rendering transcript parts", () => {
     let current = bundle()
     current = reduce(current, "session_run_start", { prompt: "hi" }, 1)

@@ -73,10 +73,12 @@ export interface SessionRunTranscriptReduction {
   sessionEventSeqs?: number[]
 }
 
-type EventRenderMeta = { eventKey?: string; sessionEventSeq?: number }
+type EventRenderMeta = { eventKey?: string; sessionEventSeq?: number; sessionItemId?: string }
 
 export const SESSION_RUN_TRANSCRIPT_EVENT_TYPES = new Set([
   "session_run_start",
+  "session_run_continue",
+  "user_message",
   "stream_observability",
   "reasoning_delta",
   "reasoning_message",
@@ -264,9 +266,9 @@ function applySessionRunTranscriptEventToBundle(
     markChanged()
   }
 
-  if (type === "session_run_start") {
-    const prompt = stringValue(payload.prompt) || ""
-    if (prompt && !next.turns.some((turn) => turn.userMessage.text === prompt && !turn.assistantMessages.length)) {
+  if (type === "session_run_start" || type === "session_run_continue" || type === "user_message") {
+    const prompt = userMessageTextFromPayload(payload)
+    if (prompt && !hasRenderedUserMessage(next, prompt, meta)) {
       next.turns.push({
         userMessage: {
           id: `u-${meta.sessionEventSeq ?? now}`,
@@ -276,6 +278,7 @@ function applySessionRunTranscriptEventToBundle(
           timestamp: now,
           ...(meta.eventKey ? { eventKey: meta.eventKey } : {}),
           ...(meta.sessionEventSeq !== undefined ? { sessionEventSeq: meta.sessionEventSeq } : {}),
+          ...(meta.sessionItemId ? { sessionItemId: meta.sessionItemId } : {}),
         },
         assistantMessages: [],
       })
@@ -463,6 +466,31 @@ function applySessionRunTranscriptEventToBundle(
   return { bundle: next, changed, ...meta }
 }
 
+function userMessageTextFromPayload(payload: Record<string, unknown>): string {
+  return (
+    stringValue(payload.content) ||
+    stringValue(payload.text) ||
+    stringValue(payload.prompt) ||
+    ""
+  )
+}
+
+function hasRenderedUserMessage(
+  bundle: MockSessionBundle,
+  prompt: string,
+  meta: EventRenderMeta,
+): boolean {
+  return bundle.turns.some((turn) => {
+    if (meta.sessionItemId && turn.userMessage.sessionItemId === meta.sessionItemId) {
+      return true
+    }
+    if (meta.eventKey && turn.userMessage.eventKey === meta.eventKey) {
+      return true
+    }
+    return turn.userMessage.text === prompt && !turn.assistantMessages.length
+  })
+}
+
 function cloneBundle(bundle: MockSessionBundle): MockSessionBundle {
   return JSON.parse(JSON.stringify(bundle)) as MockSessionBundle
 }
@@ -483,12 +511,19 @@ function eventRenderMeta(
     context.currentSessionId ||
     bundle.session.id
   const toolCallId = stringValue(payload.tool_call_id)
+  const sessionItemId =
+    stringValue(payload.session_item_id) ||
+    stringValue(payload.item_id) ||
+    stringValue(payload.event_id) ||
+    stringValue(event.session_item_id) ||
+    stringValue(event.item_id) ||
+    stringValue(event.event_id)
   const eventKey = sessionEventSeq !== undefined
     ? `session:${eventSessionId || "unknown"}:${sessionEventSeq}`
     : sessionRunId && sessionRunSeq !== undefined
       ? `session-run:${sessionRunId}:${sessionRunSeq}:${type}${toolCallId ? `:${toolCallId}` : ""}`
       : undefined
-  return { eventKey, sessionEventSeq }
+  return { eventKey, sessionEventSeq, sessionItemId }
 }
 
 function bundleHasEventKey(bundle: MockSessionBundle, eventKey: string): boolean {
@@ -505,6 +540,7 @@ function withEventMeta<T extends TranscriptItem>(item: T, meta?: EventRenderMeta
     ...item,
     ...(meta?.eventKey ? { eventKey: meta.eventKey } : {}),
     ...(meta?.sessionEventSeq !== undefined ? { sessionEventSeq: meta.sessionEventSeq } : {}),
+    ...(meta?.sessionItemId ? { sessionItemId: meta.sessionItemId } : {}),
   }
 }
 

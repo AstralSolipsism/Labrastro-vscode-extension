@@ -266,12 +266,20 @@ function normalizeTranscriptMeta(
   }
   const eventKey = stringValue(payload.eventKey)
   const sessionEventSeq = numberValue(payload.sessionEventSeq)
+  const sessionItemId =
+    stringValue(payload.sessionItemId) ||
+    stringValue(payload.session_item_id) ||
+    stringValue(payload.itemId) ||
+    stringValue(payload.item_id) ||
+    stringValue(payload.eventId) ||
+    stringValue(payload.event_id)
   const historyCutIndex = numberValue(payload.historyCutIndex)
   const traceNodeId = stringValue(payload.traceNodeId)
   const traceNodeKind = stringValue(payload.traceNodeKind)
   const traceNodeStatus = stringValue(payload.traceNodeStatus)
   if (eventKey) meta.eventKey = eventKey
   if (sessionEventSeq !== undefined) meta.sessionEventSeq = sessionEventSeq
+  if (sessionItemId) meta.sessionItemId = sessionItemId
   if (historyCutIndex !== undefined) meta.historyCutIndex = historyCutIndex
   if (traceNodeId) meta.traceNodeId = traceNodeId
   if (traceNodeKind) meta.traceNodeKind = traceNodeKind
@@ -505,6 +513,13 @@ function normalizeMessage(value: unknown, fallbackId: string, fallbackRole: "use
     timestamp: numberValue(payload.timestamp) ?? Date.now(),
     historyMessageIndex: numberValue(payload.historyMessageIndex),
     historyCutIndex: numberValue(payload.historyCutIndex),
+    sessionItemId:
+      stringValue(payload.sessionItemId) ||
+      stringValue(payload.session_item_id) ||
+      stringValue(payload.itemId) ||
+      stringValue(payload.item_id) ||
+      stringValue(payload.eventId) ||
+      stringValue(payload.event_id),
     traceNodeId: stringValue(payload.traceNodeId) || undefined,
     traceNodeKind: (stringValue(payload.traceNodeKind) || undefined) as MockMessage["traceNodeKind"],
     traceNodeStatus: (stringValue(payload.traceNodeStatus) || undefined) as MockMessage["traceNodeStatus"],
@@ -804,6 +819,7 @@ interface TraceContextValue {
   createSession: () => void
   startDraftTask: (taskText: string, initialTurn?: MockTurn) => string
   appendTurn: (turn: MockTurn) => void
+  replaceCurrentTurns: (turns: MockTurn[], statsPatch?: Partial<MockTaskStats>) => void
   replaceLastAssistantMessages: (assistantMessages: MockTurn["assistantMessages"]) => void
   applySessionRunTranscriptEvent: (
     event: Record<string, unknown>,
@@ -1521,6 +1537,17 @@ export const TraceProvider: ParentComponent = (props) => {
     }))
   }
 
+  const replaceCurrentTurns = (nextTurns: MockTurn[], statsPatch: Partial<MockTaskStats> = {}) => {
+    updateCurrentBundle((bundle) => ({
+      ...bundle,
+      turns: cloneValue(nextTurns),
+      stats: {
+        ...bundle.stats,
+        ...statsPatch,
+      },
+    }))
+  }
+
   const replaceLastAssistantMessages = (assistantMessages: MockTurn["assistantMessages"]) => {
     updateCurrentBundle((bundle) => {
       if (bundle.turns.length === 0) return bundle
@@ -1753,6 +1780,7 @@ export const TraceProvider: ParentComponent = (props) => {
     createSession,
     startDraftTask,
     appendTurn,
+    replaceCurrentTurns,
     replaceLastAssistantMessages,
     applySessionRunTranscriptEvent: applyCurrentSessionRunTranscriptEvent,
     applySessionRunTranscriptEventsToSession,

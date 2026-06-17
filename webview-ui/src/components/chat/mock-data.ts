@@ -20,6 +20,7 @@ export interface MockMessage {
   timestamp: number
   historyMessageIndex?: number
   historyCutIndex?: number
+  sessionItemId?: string
   eventKey?: string
   sessionEventSeq?: number
   traceNodeId?: string
