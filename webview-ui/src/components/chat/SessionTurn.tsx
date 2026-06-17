@@ -36,7 +36,11 @@ import {
 import { IconButton } from "../common/IconButton"
 import { MarkdownBlock } from "../common/MarkdownBlock"
 import { ApprovalDetailsBody, approvalFromPayload } from "./ApprovalDetailsDialog"
-import { canEditForkMessage, canForkMessage, canForkPart } from "../../chat/conversationInteractions"
+import {
+  ROOT_BRANCH_BASE_SESSION_ITEM_ID,
+  type ChatBranchSummary,
+} from "../../chat/branchSummaries"
+import { canBranchMessage, canBranchPart, canEditBranchMessage } from "../../chat/conversationInteractions"
 import { isLifecycleHookPayload, lifecycleDisplayMeta, lifecycleDisplayTitle } from "../../chat/lifecycle-display"
 import { rawAuditEventKey, type RawAuditEventSnapshot } from "../../chat/raw-audit"
 import {
@@ -322,20 +326,40 @@ function workflowUsageMetricLabels(
 
 interface SessionTurnProps {
   turn: MockTurn
+  turnIndex?: number
   selectedTraceNodeId?: string | null
   onSelectSession?: (sessionId: string) => void
   onTraceNodeSelect?: (nodeId: string) => void
   onCopyMessage?: (message: MockMessage) => Promise<void> | void
-  onEditForkMessage?: (message: MockMessage) => void
-  onForkMessage?: (message: MockMessage) => void
+  onEditBranchMessage?: (message: MockMessage) => void
+  onBranchMessage?: (message: MockMessage) => void
+  branchSummaries?: ChatBranchSummary[]
+  onSelectBranch?: (branchBindingId: string) => void
   onCopyToolCommand?: (part: ToolActivityItem) => Promise<void> | void
   onCopyToolOutput?: (part: ToolActivityItem) => Promise<void> | void
-  onForkPart?: (part: TranscriptItem) => void
+  onBranchPart?: (part: TranscriptItem) => void
   onLoadRawAuditEvents?: (refs: RawEventRef[]) => void
   rawAuditEvents?: Record<string, RawAuditEventSnapshot>
   defaultReasoningOpen?: boolean
   runningProcessLabel?: string
   usageSnapshot?: WorkflowUsageSnapshot
+}
+
+function branchAlternativesForUserMessage(
+  branches: ChatBranchSummary[] | undefined,
+  message: MockMessage,
+  turnIndex: number
+): ChatBranchSummary[] {
+  const anchor = message.sessionItemId || ""
+  return (branches || [])
+    .filter((branch) =>
+      branch.totalSiblingCount > 1 &&
+      (
+        (anchor && branch.baseSessionItemId === anchor) ||
+        (branch.baseSessionItemId === ROOT_BRANCH_BASE_SESSION_ITEM_ID && turnIndex === 0)
+      )
+    )
+    .sort((left, right) => left.currentIndex - right.currentIndex)
 }
 
 interface MessageMarkerProps {
@@ -361,7 +385,7 @@ interface PartProps {
   onTraceNodeSelect?: (nodeId: string) => void
   onCopyToolCommand?: (part: ToolActivityItem) => Promise<void> | void
   onCopyToolOutput?: (part: ToolActivityItem) => Promise<void> | void
-  onForkPart?: (part: TranscriptItem) => void
+  onBranchPart?: (part: TranscriptItem) => void
   onLoadRawAuditEvents?: (refs: RawEventRef[]) => void
   rawAuditEvents?: Record<string, RawAuditEventSnapshot>
   defaultReasoningOpen?: boolean
@@ -543,13 +567,13 @@ const ToolPart: Component<ItemProps<ToolActivityItem>> = (props) => {
                 }}
               />
             </Show>
-            <Show when={canForkPart(props.part)}>
+            <Show when={canBranchPart(props.part)}>
               <IconButton
                 icon="git-branch"
-                title={t("chat.forkFromHere")}
+                title={t("chat.branchFromHere")}
                 onClick={(event) => {
                   event.stopPropagation()
-                  props.onForkPart?.(props.part)
+                  props.onBranchPart?.(props.part)
                 }}
               />
             </Show>
@@ -651,13 +675,13 @@ const FileChangePart: Component<ItemProps<FileChangeItem>> = (props) => {
           />
           <div class="tool-card__footer">
             <div class="message-action-row tool-card__actions">
-              <Show when={canForkPart(props.part)}>
+              <Show when={canBranchPart(props.part)}>
                 <IconButton
                   icon="git-branch"
-                  title={t("chat.forkFromHere")}
+                  title={t("chat.branchFromHere")}
                   onClick={(event) => {
                     event.stopPropagation()
-                    props.onForkPart?.(props.part)
+                    props.onBranchPart?.(props.part)
                   }}
                 />
               </Show>
@@ -1100,13 +1124,13 @@ const ShellToolPart: Component<ItemProps<ToolActivityItem>> = (props) => {
               }}
             />
           </Show>
-          <Show when={canForkPart(props.part)}>
+          <Show when={canBranchPart(props.part)}>
             <IconButton
               icon="git-branch"
-              title={t("chat.forkFromHere")}
+              title={t("chat.branchFromHere")}
               onClick={(event) => {
                 event.stopPropagation()
-                props.onForkPart?.(props.part)
+                props.onBranchPart?.(props.part)
               }}
             />
           </Show>
@@ -2127,7 +2151,7 @@ const TimelineProcessGroupPart: Component<TimelineProcessGroupPartProps> = (prop
                 onTraceNodeSelect={props.onTraceNodeSelect}
                 onCopyToolCommand={props.onCopyToolCommand}
                 onCopyToolOutput={props.onCopyToolOutput}
-                onForkPart={props.onForkPart}
+                onBranchPart={props.onBranchPart}
                 onLoadRawAuditEvents={props.onLoadRawAuditEvents}
                 rawAuditEvents={props.rawAuditEvents}
                 defaultReasoningOpen={props.defaultReasoningOpen}
@@ -2205,7 +2229,7 @@ const ProcessSummaryPart: Component<ProcessSummaryPartProps> = (props) => {
             onTraceNodeSelect={props.onTraceNodeSelect}
             onCopyToolCommand={props.onCopyToolCommand}
             onCopyToolOutput={props.onCopyToolOutput}
-            onForkPart={props.onForkPart}
+            onBranchPart={props.onBranchPart}
             onLoadRawAuditEvents={props.onLoadRawAuditEvents}
             rawAuditEvents={props.rawAuditEvents}
             defaultReasoningOpen={props.defaultReasoningOpen}
@@ -2239,7 +2263,7 @@ const ProcessTimeline: Component<ProcessTimelineProps> = (props) => (
             onTraceNodeSelect={props.onTraceNodeSelect}
             onCopyToolCommand={props.onCopyToolCommand}
             onCopyToolOutput={props.onCopyToolOutput}
-            onForkPart={props.onForkPart}
+            onBranchPart={props.onBranchPart}
             onLoadRawAuditEvents={props.onLoadRawAuditEvents}
             rawAuditEvents={props.rawAuditEvents}
             defaultReasoningOpen={props.defaultReasoningOpen}
@@ -2258,7 +2282,7 @@ const ProcessTimeline: Component<ProcessTimelineProps> = (props) => (
             onTraceNodeSelect={props.onTraceNodeSelect}
             onCopyToolCommand={props.onCopyToolCommand}
             onCopyToolOutput={props.onCopyToolOutput}
-            onForkPart={props.onForkPart}
+            onBranchPart={props.onBranchPart}
             onLoadRawAuditEvents={props.onLoadRawAuditEvents}
             rawAuditEvents={props.rawAuditEvents}
             defaultReasoningOpen={props.defaultReasoningOpen}
@@ -2284,7 +2308,7 @@ const TranscriptItemView: Component<PartProps> = (props) => {
                 onTraceNodeSelect={props.onTraceNodeSelect}
                 onCopyToolCommand={props.onCopyToolCommand}
                 onCopyToolOutput={props.onCopyToolOutput}
-                onForkPart={props.onForkPart}
+                onBranchPart={props.onBranchPart}
                 onLoadRawAuditEvents={props.onLoadRawAuditEvents}
                 rawAuditEvents={props.rawAuditEvents}
                 defaultReasoningOpen={props.defaultReasoningOpen}
@@ -2362,6 +2386,29 @@ const TranscriptItemView: Component<PartProps> = (props) => {
 export const SessionTurn: Component<SessionTurnProps> = (props) => {
   const userSelected = () =>
     Boolean(props.turn.userMessage.traceNodeId && props.turn.userMessage.traceNodeId === props.selectedTraceNodeId)
+  const branchAlternatives = createMemo(() =>
+    branchAlternativesForUserMessage(
+      props.branchSummaries,
+      props.turn.userMessage,
+      props.turnIndex ?? 0
+    )
+  )
+  const selectedBranchAlternative = () =>
+    branchAlternatives().find((branch) => branch.selected) || branchAlternatives()[0]
+  const previousBranchAlternative = () => {
+    const branches = branchAlternatives()
+    const selected = selectedBranchAlternative()
+    if (!selected) return undefined
+    const index = branches.findIndex((branch) => branch.branchBindingId === selected.branchBindingId)
+    return index > 0 ? branches[index - 1] : undefined
+  }
+  const nextBranchAlternative = () => {
+    const branches = branchAlternatives()
+    const selected = selectedBranchAlternative()
+    if (!selected) return undefined
+    const index = branches.findIndex((branch) => branch.branchBindingId === selected.branchBindingId)
+    return index >= 0 && index < branches.length - 1 ? branches[index + 1] : undefined
+  }
 
   return (
     <article class="session-turn" data-message={props.turn.userMessage.id}>
@@ -2385,15 +2432,48 @@ export const SessionTurn: Component<SessionTurnProps> = (props) => {
                 }}
               />
             </Show>
-            <Show when={canEditForkMessage(props.turn.userMessage)}>
+            <Show when={canEditBranchMessage(props.turn.userMessage)}>
               <IconButton
                 icon="edit"
-                title={t("chat.editAndFork")}
+                title={t("chat.editAndBranch")}
                 onClick={(event) => {
                   event.stopPropagation()
-                  props.onEditForkMessage?.(props.turn.userMessage)
+                  props.onEditBranchMessage?.(props.turn.userMessage)
                 }}
               />
+            </Show>
+            <Show when={branchAlternatives().length > 1}>
+              <div
+                class="branch-alternatives"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <IconButton
+                  icon="chevron-left"
+                  title={t("chat.previousBranch")}
+                  disabled={!previousBranchAlternative()}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    const branch = previousBranchAlternative()
+                    if (branch) props.onSelectBranch?.(branch.branchBindingId)
+                  }}
+                />
+                <span
+                  class="branch-alternatives__count"
+                  title={t("chat.branchAlternatives")}
+                >
+                  {selectedBranchAlternative()?.currentIndex || 1}/{selectedBranchAlternative()?.totalSiblingCount || branchAlternatives().length}
+                </span>
+                <IconButton
+                  icon="chevron-right"
+                  title={t("chat.nextBranch")}
+                  disabled={!nextBranchAlternative()}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    const branch = nextBranchAlternative()
+                    if (branch) props.onSelectBranch?.(branch.branchBindingId)
+                  }}
+                />
+              </div>
             </Show>
           </div>
         </div>
@@ -2436,7 +2516,7 @@ export const SessionTurn: Component<SessionTurnProps> = (props) => {
                           onTraceNodeSelect={props.onTraceNodeSelect}
                           onCopyToolCommand={props.onCopyToolCommand}
                           onCopyToolOutput={props.onCopyToolOutput}
-                          onForkPart={props.onForkPart}
+                          onBranchPart={props.onBranchPart}
                           onLoadRawAuditEvents={props.onLoadRawAuditEvents}
                           rawAuditEvents={props.rawAuditEvents}
                           defaultReasoningOpen={props.defaultReasoningOpen}
@@ -2456,7 +2536,7 @@ export const SessionTurn: Component<SessionTurnProps> = (props) => {
                           onTraceNodeSelect={props.onTraceNodeSelect}
                           onCopyToolCommand={props.onCopyToolCommand}
                           onCopyToolOutput={props.onCopyToolOutput}
-                          onForkPart={props.onForkPart}
+                          onBranchPart={props.onBranchPart}
                           onLoadRawAuditEvents={props.onLoadRawAuditEvents}
                           rawAuditEvents={props.rawAuditEvents}
                           defaultReasoningOpen={props.defaultReasoningOpen}
@@ -2482,7 +2562,7 @@ export const SessionTurn: Component<SessionTurnProps> = (props) => {
                           onTraceNodeSelect={props.onTraceNodeSelect}
                           onCopyToolCommand={props.onCopyToolCommand}
                           onCopyToolOutput={props.onCopyToolOutput}
-                          onForkPart={props.onForkPart}
+                          onBranchPart={props.onBranchPart}
                           onLoadRawAuditEvents={props.onLoadRawAuditEvents}
                           rawAuditEvents={props.rawAuditEvents}
                           defaultReasoningOpen={props.defaultReasoningOpen}
@@ -2496,7 +2576,7 @@ export const SessionTurn: Component<SessionTurnProps> = (props) => {
                           onTraceNodeSelect={props.onTraceNodeSelect}
                           onCopyToolCommand={props.onCopyToolCommand}
                           onCopyToolOutput={props.onCopyToolOutput}
-                          onForkPart={props.onForkPart}
+                          onBranchPart={props.onBranchPart}
                           onLoadRawAuditEvents={props.onLoadRawAuditEvents}
                           rawAuditEvents={props.rawAuditEvents}
                           defaultReasoningOpen={props.defaultReasoningOpen}
@@ -2516,13 +2596,13 @@ export const SessionTurn: Component<SessionTurnProps> = (props) => {
                       }}
                     />
                   </Show>
-                  <Show when={canForkMessage(message())}>
+                  <Show when={canBranchMessage(message())}>
                     <IconButton
                       icon="git-branch"
-                      title={t("chat.forkFromHere")}
+                      title={t("chat.branchFromHere")}
                       onClick={(event) => {
                         event.stopPropagation()
-                        props.onForkMessage?.(message())
+                        props.onBranchMessage?.(message())
                       }}
                     />
                   </Show>

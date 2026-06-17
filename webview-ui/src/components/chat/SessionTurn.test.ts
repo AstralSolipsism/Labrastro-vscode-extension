@@ -212,6 +212,23 @@ describe("SessionTurn source order", () => {
     expect(assistantPartsIndex).toBeLessThan(assistantActionIndex)
   })
 
+  it("renders branch selector controls from branch binding summaries near user messages", () => {
+    const helperStart = source.indexOf("function branchAlternativesForUserMessage")
+    const markerStart = source.indexOf("interface MessageMarkerProps", helperStart)
+    const helperSource = source.slice(helperStart, markerStart)
+    const sessionTurnStart = source.indexOf("export const SessionTurn")
+    const userActionStart = source.indexOf('<div class="message-action-row">', sessionTurnStart)
+    const assistantLoopStart = source.indexOf("<Index each={props.turn.assistantMessages}>", userActionStart)
+    const userActionSource = source.slice(userActionStart, assistantLoopStart)
+
+    expect(helperSource).toContain("branch.totalSiblingCount > 1")
+    expect(helperSource).toContain("branch.baseSessionItemId === anchor")
+    expect(helperSource).toContain("ROOT_BRANCH_BASE_SESSION_ITEM_ID")
+    expect(source).toContain('class="branch-alternatives"')
+    expect(source).toContain("props.onSelectBranch?.(branch.branchBindingId)")
+    expect(userActionSource).toContain("branchAlternatives().length > 1")
+  })
+
   it("keeps tool and shell card actions after their output content", () => {
     const toolPartStart = source.indexOf("const ToolPart")
     const toolOutputIndex = source.indexOf("<ToolOutput part={props.part} preview />", toolPartStart)

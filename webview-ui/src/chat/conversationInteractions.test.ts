@@ -2,15 +2,15 @@ import { describe, expect, it } from "vitest"
 import type { MockMessage, MockTurn } from "../components/chat/mock-data"
 import type { ToolActivityItem, TranscriptItem } from "../components/chat/transcript-model"
 import {
-  canEditForkMessage,
-  canForkMessage,
-  canForkPart,
+  canBranchMessage,
+  canBranchPart,
+  canEditBranchMessage,
   copyTextForMessage,
   copyTextForToolCommand,
   copyTextForToolOutput,
   copyTextForTranscript,
-  keepThroughIndexForMessageFork,
-  keepThroughIndexForPartFork,
+  keepThroughIndexForMessageBranch,
+  keepThroughIndexForPartBranch,
   keepThroughIndexForUserEdit,
 } from "./conversationInteractions"
 
@@ -27,8 +27,8 @@ function assistant(parts: TranscriptItem[]): MockMessage {
 }
 
 describe("conversation interactions", () => {
-  it("exposes edit-and-fork only for persisted user messages", () => {
-    expect(canEditForkMessage({
+  it("exposes edit-and-branch only for persisted user messages", () => {
+    expect(canEditBranchMessage({
       id: "user-1",
       role: "user",
       text: "hello",
@@ -36,7 +36,7 @@ describe("conversation interactions", () => {
       timestamp: 0,
       historyMessageIndex: 3,
     })).toBe(true)
-    expect(canEditForkMessage({
+    expect(canEditBranchMessage({
       id: "user-2",
       role: "user",
       text: "draft",
@@ -45,7 +45,7 @@ describe("conversation interactions", () => {
     })).toBe(false)
   })
 
-  it("computes fork cut indexes for user, assistant, and tool records", () => {
+  it("computes branch cut indexes for user, assistant, and tool records", () => {
     expect(keepThroughIndexForUserEdit({
       id: "user-1",
       role: "user",
@@ -54,10 +54,10 @@ describe("conversation interactions", () => {
       timestamp: 0,
       historyMessageIndex: 4,
     })).toBe(3)
-    expect(canForkMessage(assistant([]))).toBe(true)
-    expect(keepThroughIndexForMessageFork(assistant([]))).toBe(2)
-    expect(canForkPart({ id: "tool-1", type: "tool", tool: "shell", historyCutIndex: 5 })).toBe(true)
-    expect(keepThroughIndexForPartFork({ id: "tool-1", type: "tool", tool: "shell", historyCutIndex: 5 })).toBe(5)
+    expect(canBranchMessage(assistant([]))).toBe(true)
+    expect(keepThroughIndexForMessageBranch(assistant([]))).toBe(2)
+    expect(canBranchPart({ id: "tool-1", type: "tool", tool: "shell", historyCutIndex: 5 })).toBe(true)
+    expect(keepThroughIndexForPartBranch({ id: "tool-1", type: "tool", tool: "shell", historyCutIndex: 5 })).toBe(5)
   })
 
   it("serializes assistant messages and shell cards for copying", () => {

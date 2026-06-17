@@ -9,6 +9,7 @@ import type { MockTurn, MockSession, MockMessage } from "./mock-data"
 import type { RawEventRef, ToolActivityItem, TranscriptItem } from "./transcript-model"
 import type { RawAuditEventSnapshot } from "../../chat/raw-audit"
 import type { SessionListState } from "../../context/trace"
+import type { ChatBranchSummary } from "../../chat/branchSummaries"
 
 const LAYOUT_TOGGLE_SELECTOR = [
   ".tool-card__header",
@@ -37,11 +38,13 @@ interface MessageListProps {
   onSelectSession?: (id: string) => void
   onTraceNodeSelect?: (nodeId: string) => void
   onCopyMessage?: (message: MockMessage) => Promise<void> | void
-  onEditForkMessage?: (message: MockMessage) => void
-  onForkMessage?: (message: MockMessage) => void
+  onEditBranchMessage?: (message: MockMessage) => void
+  onBranchMessage?: (message: MockMessage) => void
+  branchSummaries?: ChatBranchSummary[]
+  onSelectBranch?: (branchBindingId: string) => void
   onCopyToolCommand?: (part: ToolActivityItem) => Promise<void> | void
   onCopyToolOutput?: (part: ToolActivityItem) => Promise<void> | void
-  onForkPart?: (part: TranscriptItem) => void
+  onBranchPart?: (part: TranscriptItem) => void
   onLoadRawAuditEvents?: (refs: RawEventRef[]) => void
   rawAuditEvents?: Record<string, RawAuditEventSnapshot>
 }
@@ -98,11 +101,13 @@ export const MessageList: Component<MessageListProps> = (props) => {
                     onSelectSession={props.onSelectSession}
                     onTraceNodeSelect={props.onTraceNodeSelect}
                     onCopyMessage={props.onCopyMessage}
-                    onEditForkMessage={props.onEditForkMessage}
-                    onForkMessage={props.onForkMessage}
+                    onEditBranchMessage={props.onEditBranchMessage}
+                    onBranchMessage={props.onBranchMessage}
+                    branchSummaries={props.branchSummaries}
+                    onSelectBranch={props.onSelectBranch}
                     onCopyToolCommand={props.onCopyToolCommand}
                     onCopyToolOutput={props.onCopyToolOutput}
-                    onForkPart={props.onForkPart}
+                    onBranchPart={props.onBranchPart}
                     onLoadRawAuditEvents={props.onLoadRawAuditEvents}
                     rawAuditEvents={props.rawAuditEvents}
                     defaultReasoningOpen={props.defaultReasoningOpen}
@@ -158,15 +163,18 @@ const VirtualMessageRow: Component<VirtualMessageRowProps> = (props) => {
     >
       <SessionTurn
         turn={props.item().turn}
+        turnIndex={props.item().index}
         selectedTraceNodeId={props.selectedTraceNodeId}
         onSelectSession={props.onSelectSession}
         onTraceNodeSelect={props.onTraceNodeSelect}
         onCopyMessage={props.onCopyMessage}
-        onEditForkMessage={props.onEditForkMessage}
-        onForkMessage={props.onForkMessage}
+        onEditBranchMessage={props.onEditBranchMessage}
+        onBranchMessage={props.onBranchMessage}
+        branchSummaries={props.branchSummaries}
+        onSelectBranch={props.onSelectBranch}
         onCopyToolCommand={props.onCopyToolCommand}
         onCopyToolOutput={props.onCopyToolOutput}
-        onForkPart={props.onForkPart}
+        onBranchPart={props.onBranchPart}
         onLoadRawAuditEvents={props.onLoadRawAuditEvents}
         rawAuditEvents={props.rawAuditEvents}
         defaultReasoningOpen={props.defaultReasoningOpen}

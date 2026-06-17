@@ -303,24 +303,57 @@ describe("ChatView context events", () => {
     expect(source).toContain("当前运行中不能执行该指令")
   })
 
-  it("routes capability package draft revision text through the main input follow-up path", () => {
+  it("queues running-session input for the next turn without using follow-up", () => {
     const handleSendStart = source.indexOf("const handleSend =")
     const handleSubmitStart = source.indexOf("const canSubmitComposerAction =", handleSendStart)
     const handleSendSource = source.slice(handleSendStart, handleSubmitStart)
 
-    expect(source).toContain("const shouldRouteCapabilityPackageRevisionInput =")
-    expect(source).toContain('approval.toolName === "install_capability_package"')
-    expect(source).toContain('mode === "capability_package"')
-    expect(source).toContain('workflow === "capability_package_ingest"')
-    expect(handleSendSource).toContain("shouldRouteCapabilityPackageRevisionInput()")
-    expect(handleSendSource).toContain('? "guide"')
-    expect(handleSendSource).toContain("enqueuePrompt(current, rawText, mode")
-    const revisionRouteIndex = handleSendSource.indexOf("shouldRouteCapabilityPackageRevisionInput()")
+    expect(handleSendSource).toContain("if (isWorking())")
+    expect(handleSendSource).toContain("enqueuePrompt(current, rawText, {")
     const chatSendIndex = handleSendSource.indexOf("sendChatText(rawText")
-    expect(revisionRouteIndex).toBeGreaterThanOrEqual(0)
-    expect(chatSendIndex).toBeGreaterThan(revisionRouteIndex)
-    expect(handleSendSource.slice(revisionRouteIndex, chatSendIndex)).toContain("return")
-    expect(source).toContain("chatMessages.followUp(vscode")
+    const queueIndex = handleSendSource.indexOf("enqueuePrompt(current, rawText, {")
+    expect(chatSendIndex).toBeGreaterThan(queueIndex)
+    expect(handleSendSource.slice(queueIndex, chatSendIndex)).toContain("return")
+    expect(source).not.toContain("chatMessages.followUp(vscode")
+  })
+
+  it("routes history edit and branch actions through AgentRun branch compose, not Session fork execution", () => {
+    const requestBranchStart = source.indexOf("const requestAgentRunBranchCompose =")
+    const editStart = source.indexOf("const editMessageAndBranch =", requestBranchStart)
+    const branchComposeSource = source.slice(requestBranchStart, editStart)
+    const anchorStart = source.indexOf("const sessionItemIdForHistoryIndex =")
+    const prefixStart = source.indexOf("const branchPrefixTurns =", anchorStart)
+    const anchorSource = source.slice(anchorStart, prefixStart)
+    const startBranchStart = source.indexOf("const startAgentRunBranchFromCompose =")
+    const pendingInputStart = source.indexOf("const pendingUserInputContent =", startBranchStart)
+    const startBranchSource = source.slice(startBranchStart, pendingInputStart)
+
+    expect(anchorSource).toContain("ROOT_BRANCH_BASE_SESSION_ITEM_ID")
+    expect(branchComposeSource).toContain("baseSessionItemId")
+    expect(branchComposeSource).toContain("setBranchCompose({")
+    expect(branchComposeSource).not.toContain("session.fork")
+    expect(branchComposeSource).not.toContain("chatMessages.fork")
+    expect(startBranchSource).toContain("trace.replaceCurrentTurns([...prefixTurns, createUserTurn(prompt)]")
+    expect(startBranchSource).toContain("chatMessages.branch(vscode")
+    expect(startBranchSource).toContain("baseSessionItemId: compose.baseSessionItemId")
+    expect(startBranchSource).not.toContain("session.fork")
+  })
+
+  it("switches selected AgentRun branch through branch binding projection", () => {
+    const selectBranchStart = source.indexOf("const selectBranch =")
+    const sendChatStart = source.indexOf("const sendChatText =", selectBranchStart)
+    const selectBranchSource = source.slice(selectBranchStart, sendChatStart)
+    const selectedHandlerStart = source.indexOf('if (msg.type === "sessionRun.branch.selected")')
+    const adoptedHandlerStart = source.indexOf('if (msg.type === "session.adopted"', selectedHandlerStart)
+    const selectedHandlerSource = source.slice(selectedHandlerStart, adoptedHandlerStart)
+
+    expect(selectBranchSource).toContain("chatMessages.selectBranch(vscode")
+    expect(selectedHandlerSource).toContain("normalizeBranchSummaries")
+    expect(selectedHandlerSource).toContain("trace.replaceCurrentTurns([], { runStatus: nextStatus })")
+    expect(selectedHandlerSource).toContain("setBranchSummaries(branches)")
+    expect(source).toContain('if (msg.type === "sessionRun.branches")')
+    expect(source).toContain("branchSummaries={branchSummaries()}")
+    expect(source).toContain("onSelectBranch={selectBranch}")
   })
 
   it("restores capability package runtime state from resumed session runs", () => {
@@ -330,6 +363,7 @@ describe("ChatView context events", () => {
 
     expect(resumeSource).toContain("sessionRuntimeStateFromMessage(msg as Record<string, unknown>, payload)")
     expect(resumeSource).toContain("setSessionRuntimeState(runtime)")
+    expect(resumeSource).toContain("setBranchSummaries(normalizeBranchSummaries(payload.branches))")
   })
 
   it("preserves raw non-command text so leading-space slash input stays chat text", () => {

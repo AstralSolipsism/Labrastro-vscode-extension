@@ -90,6 +90,21 @@ describe("chat messages", () => {
     ])
   })
 
+  it("posts branch selection by branch binding id", () => {
+    const messages: Record<string, unknown>[] = []
+
+    chatMessages.selectBranch({ postMessage: (message) => messages.push(message) }, {
+      branchBindingId: " branch-2 ",
+    })
+
+    expect(messages).toEqual([
+      {
+        type: "sessionRun.branch.select",
+        branch_binding_id: "branch-2",
+      },
+    ])
+  })
+
   it("maps the frontend mode selector to the backend chat route", () => {
     expect(routeSelectedChatMode("coder")).toEqual({ mode: "coder" })
     expect(routeSelectedChatMode("planner")).toEqual({ mode: "planner" })

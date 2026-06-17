@@ -38,16 +38,23 @@ export interface SessionModelSwitchInput {
   parameters?: Record<string, unknown>
 }
 
-export interface ChatFollowUpInput {
-  sessionRunId: string
-  text: string
-  followupId: string
-  requestId?: string
-}
-
 export interface ChatRecoverInput {
   sessionRunId: string
   action: "continue" | "retry"
+}
+
+export interface ChatBranchInput {
+  baseSessionItemId: string
+  prompt: string
+  branchBindingId?: string
+  sourceLabel?: string
+  sourceMessageId?: string
+  sourceNodeId?: string
+  composeMode?: "edit" | "fork"
+}
+
+export interface ChatBranchSelectInput {
+  branchBindingId: string
 }
 
 export function routeSelectedChatMode(
@@ -127,22 +134,25 @@ export const chatMessages = {
     })
   },
 
-  followUp(port: ChatMessagePort, input: ChatFollowUpInput): void {
+  branch(port: ChatMessagePort, input: ChatBranchInput): void {
     port.postMessage({
-      type: "sessionRun.followup",
-      sessionRunId: input.sessionRunId,
-      text: input.text,
-      followupId: input.followupId,
-      ...(input.requestId ? { requestId: input.requestId } : {}),
+      type: "sessionRun.branch",
+      base_session_item_id: input.baseSessionItemId,
+      prompt: input.prompt,
+      ...(input.branchBindingId ? { branch_binding_id: input.branchBindingId } : {}),
+      ...(input.sourceLabel ? { source_label: input.sourceLabel } : {}),
+      ...(input.sourceMessageId ? { source_message_id: input.sourceMessageId } : {}),
+      ...(input.sourceNodeId ? { source_node_id: input.sourceNodeId } : {}),
+      ...(input.composeMode ? { compose_mode: input.composeMode } : {}),
     })
   },
 
-  cancelFollowUp(port: ChatMessagePort, sessionRunId: string, followupId: string, reason = "user_changed_to_queue"): void {
+  selectBranch(port: ChatMessagePort, input: ChatBranchSelectInput): void {
+    const branchBindingId = input.branchBindingId.trim()
+    if (!branchBindingId) return
     port.postMessage({
-      type: "sessionRun.followup.cancel",
-      sessionRunId,
-      followupId,
-      reason,
+      type: "sessionRun.branch.select",
+      branch_binding_id: branchBindingId,
     })
   },
 

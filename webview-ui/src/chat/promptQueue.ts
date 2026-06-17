@@ -1,14 +1,11 @@
-export type PendingPromptMode = "guide" | "queue"
-export type PendingPromptState = "pending" | "submitted"
+export type PendingPromptState = "pending"
 
 export interface PendingPromptItem {
   id: string
   text: string
-  mode: PendingPromptMode
   state: PendingPromptState
   createdAt: number
   requestId?: string
-  followupId?: string
   mentions?: Record<string, unknown>[]
   error?: string
 }
@@ -28,7 +25,6 @@ export interface EnqueuePromptOptions {
   id?: string
   createdAt?: number
   requestId?: string
-  followupId?: string
   mentions?: Record<string, unknown>[]
 }
 
@@ -41,7 +37,6 @@ export function createPromptQueueState(): PromptQueueState {
 
 export function createPendingPromptItem(
   text: string,
-  mode: PendingPromptMode = "queue",
   options: EnqueuePromptOptions = {}
 ): PendingPromptItem | undefined {
   const next = text.trim()
@@ -50,11 +45,9 @@ export function createPendingPromptItem(
   return {
     id,
     text: next,
-    mode,
     state: "pending",
     createdAt: options.createdAt ?? Date.now(),
     ...(options.requestId ? { requestId: options.requestId } : {}),
-    ...(options.followupId ? { followupId: options.followupId } : {}),
     ...(options.mentions?.length ? { mentions: options.mentions } : {}),
   }
 }
@@ -62,10 +55,9 @@ export function createPendingPromptItem(
 export function enqueuePrompt(
   state: PromptQueueState,
   text: string,
-  mode: PendingPromptMode = "queue",
   options: EnqueuePromptOptions = {}
 ): PromptQueueState {
-  const item = createPendingPromptItem(text, mode, options)
+  const item = createPendingPromptItem(text, options)
   if (!item) return state
   return {
     items: [...state.items, item],
@@ -77,19 +69,18 @@ export function resolvePromptQueueAfterChat(
   state: PromptQueueState,
   status: "done" | "error" | "cancelled" | "interrupted"
 ): PromptQueueResolution {
-  const finalized = finalizeGuidanceAfterChat(state)
-  const hasQueueItems = finalized.items.some(isRunnableQueueItem)
-  if (status !== "done" || finalized.paused || !hasQueueItems) {
+  const hasQueueItems = state.items.some(isRunnableQueueItem)
+  if (status !== "done" || state.paused || !hasQueueItems) {
     return {
       state: {
-        ...finalized,
-        paused: status === "done" ? finalized.paused : hasQueueItems,
+        ...state,
+        paused: status === "done" ? state.paused : hasQueueItems,
       },
     }
   }
-  const next = popNextQueueItem(finalized.items)
+  const next = popNextQueueItem(state.items)
   if (!next.item) {
-    return { state: finalized }
+    return { state }
   }
   return {
     nextPrompt: next.item.text,
@@ -120,72 +111,6 @@ export function clearPromptQueue(): PromptQueueState {
   return createPromptQueueState()
 }
 
-export function switchPromptMode(
-  state: PromptQueueState,
-  itemId: string,
-  mode: PendingPromptMode
-): PromptQueueState {
-  return {
-    ...state,
-    items: state.items.map((item) =>
-      item.id === itemId && (item.state === "pending" || (item.mode === "guide" && mode === "queue"))
-        ? {
-            ...item,
-            mode,
-            state: "pending",
-            error: undefined,
-          }
-        : item
-    ),
-  }
-}
-
-export function markPromptSubmitted(
-  state: PromptQueueState,
-  itemId: string,
-  followupId: string
-): PromptQueueState {
-  return {
-    ...state,
-    items: state.items.map((item) =>
-      item.id === itemId
-        ? { ...item, mode: "guide", state: "submitted", followupId, error: undefined }
-        : item
-    ),
-  }
-}
-
-export function markPromptConsumed(
-  state: PromptQueueState,
-  followupId: string
-): PromptQueueState {
-  return {
-    ...state,
-    items: state.items.filter((item) => item.followupId !== followupId),
-  }
-}
-
-export function markPromptUnconsumed(
-  state: PromptQueueState,
-  followupId: string,
-  error?: string
-): PromptQueueState {
-  return {
-    ...state,
-    items: state.items.map((item) =>
-      item.followupId === followupId
-        ? {
-            ...item,
-            mode: "queue",
-            state: "pending",
-            followupId: undefined,
-            error,
-          }
-        : item
-    ),
-  }
-}
-
 export function removePromptItem(
   state: PromptQueueState,
   itemId: string
@@ -198,32 +123,11 @@ export function removePromptItem(
 }
 
 export function queuedPromptCount(state: PromptQueueState): number {
-  return state.items.filter((item) => item.mode === "queue").length
-}
-
-export function guidePromptCount(state: PromptQueueState): number {
-  return state.items.filter((item) => item.mode === "guide").length
-}
-
-function finalizeGuidanceAfterChat(state: PromptQueueState): PromptQueueState {
-  return {
-    ...state,
-    items: state.items.map((item) =>
-      item.mode === "guide"
-        ? {
-            ...item,
-            mode: "queue",
-            state: "pending",
-            followupId: undefined,
-            error: item.error || "当前回复未出现可注入点，已转为排队。",
-          }
-        : item
-    ),
-  }
+  return state.items.filter(isRunnableQueueItem).length
 }
 
 function isRunnableQueueItem(item: PendingPromptItem): boolean {
-  return item.mode === "queue" && item.state === "pending"
+  return item.state === "pending"
 }
 
 function popNextQueueItem(items: PendingPromptItem[]): {

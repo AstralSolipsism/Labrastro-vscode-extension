@@ -902,7 +902,26 @@
   min-height: 0;
   display: flex;
   justify-content: flex-end;
+  align-items: center;
   gap: 6px;
+}
+
+.branch-alternatives {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 24px;
+}
+
+.branch-alternatives__count {
+  min-width: 30px;
+  padding: 0 2px;
+  color: var(--ez-muted);
+  font-size: 11px;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .tool-card__actions {
@@ -913,7 +932,7 @@
   padding: 0 8px 8px;
 }
 
-.fork-compose-banner,
+.branch-compose-banner,
 .stream-recovery-banner,
 .prompt-queue-banner {
   display: flex;
@@ -927,7 +946,7 @@
   font-size: 12px;
 }
 
-.fork-compose-banner strong,
+.branch-compose-banner strong,
 .stream-recovery-banner strong,
 .prompt-queue-banner strong {
   color: var(--ez-fg);

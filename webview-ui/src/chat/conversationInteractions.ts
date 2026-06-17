@@ -10,15 +10,15 @@ function nonEmpty(values: Array<string | undefined>): string[] {
   return values.map((value) => (value || "").trim()).filter(Boolean)
 }
 
-export function canEditForkMessage(message: MockMessage): boolean {
+export function canEditBranchMessage(message: MockMessage): boolean {
   return message.role === "user" && toNumber(message.historyMessageIndex) !== undefined
 }
 
-export function canForkMessage(message: MockMessage): boolean {
+export function canBranchMessage(message: MockMessage): boolean {
   return message.role === "assistant" && toNumber(message.historyCutIndex) !== undefined
 }
 
-export function canForkPart(part: TranscriptItem): boolean {
+export function canBranchPart(part: TranscriptItem): boolean {
   return toNumber(part.historyCutIndex) !== undefined
 }
 
@@ -28,11 +28,11 @@ export function keepThroughIndexForUserEdit(message: MockMessage): number | unde
   return historyMessageIndex - 1
 }
 
-export function keepThroughIndexForMessageFork(message: MockMessage): number | undefined {
+export function keepThroughIndexForMessageBranch(message: MockMessage): number | undefined {
   return toNumber(message.historyCutIndex)
 }
 
-export function keepThroughIndexForPartFork(part: TranscriptItem): number | undefined {
+export function keepThroughIndexForPartBranch(part: TranscriptItem): number | undefined {
   return toNumber(part.historyCutIndex)
 }
 

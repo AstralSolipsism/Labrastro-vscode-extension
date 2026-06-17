@@ -200,9 +200,8 @@ describe("ChatView lifecycle transcript rendering", () => {
     const html = await renderChatViewLifecycleTranscriptToString()
 
     expect(html).toContain("上下文")
-    expect(html).toContain("当前：Internal hook recorded audit result")
     expect(html).toContain("6 项")
-    expect(html).toContain("Internal hook recorded audit result")
+    expect(html).toContain("当前：生命周期事件 · 6 项")
 
     expect(html).not.toContain("RAW_PROMPT_SECRET")
     expect(html).not.toContain("RAW_COMPLETION_SECRET")
