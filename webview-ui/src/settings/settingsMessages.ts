@@ -44,14 +44,6 @@ export const settingsMessages = {
     port.postMessage({ type: "reasoningDisplay.save", defaultOpen })
   },
 
-  getChatSendDuringRunMode(port: SettingsMessagePort): void {
-    port.postMessage({ type: "chat.sendDuringRunMode.get" })
-  },
-
-  updateChatSendDuringRunMode(port: SettingsMessagePort, mode: "guide" | "queue"): void {
-    port.postMessage({ type: "chat.sendDuringRunMode.update", mode })
-  },
-
   getPeerDiagnosticsLogging(port: SettingsMessagePort): void {
     port.postMessage({ type: "peerDiagnosticsLogging.get" })
   },

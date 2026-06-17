@@ -11,7 +11,6 @@ export type SettingsOperationKey =
   | "serverSettings"
   | "autoApproval"
   | "reasoningDisplay"
-  | "chatSendDuringRunMode"
   | "peerDiagnosticsLogging"
   | "toolDiagnostics"
   | "modelCapabilities"
@@ -119,7 +118,6 @@ export const SETTINGS_OPERATION_KEYS: SettingsOperationKey[] = [
   "serverSettings",
   "autoApproval",
   "reasoningDisplay",
-  "chatSendDuringRunMode",
   "peerDiagnosticsLogging",
   "toolDiagnostics",
   "modelCapabilities",
@@ -161,7 +159,7 @@ export const SETTINGS_PAGE_RESOURCES: Record<SettingsTab, SettingsOperationKey[]
   providers: ["providers", "modelProfiles"],
   memory: ["serverSettings"],
   capabilities: ["serverSettings", "capabilities"],
-  conversation: ["chatConfig", "serverSettings", "reasoningDisplay", "chatSendDuringRunMode"],
+  conversation: ["chatConfig", "serverSettings", "reasoningDisplay"],
   sessionPolicy: ["serverSettings"],
   serverSettings: ["serverSettings"],
   agentConfig: ["serverSettings", "chatConfig", "modelProfiles"],

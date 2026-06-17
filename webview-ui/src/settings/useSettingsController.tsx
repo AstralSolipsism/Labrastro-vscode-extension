@@ -123,7 +123,6 @@ const SETTINGS_RESOURCE_LABELS: Partial<Record<SettingsOperationKey, string>> = 
   serverSettings: "服务器设置",
   autoApproval: "自动审批",
   reasoningDisplay: "推理展示设置",
-  chatSendDuringRunMode: "运行中发送策略",
   peerDiagnosticsLogging: "诊断日志设置",
   toolDiagnostics: "工具诊断",
   modelCapabilities: "模型能力表",
@@ -3399,7 +3398,6 @@ export function createSettingsController(props: SettingsViewProps) {
       }
       if (msg.type === "autoApproval.state") settleRefreshSuccess("autoApproval")
       if (msg.type === "reasoningDisplay.state") settleRefreshSuccess("reasoningDisplay")
-      if (msg.type === "chat.sendDuringRunMode.state") settleRefreshSuccess("chatSendDuringRunMode")
       if (msg.type === "peerDiagnosticsLogging.state") settleRefreshSuccess("peerDiagnosticsLogging")
       if (msg.type === "diagnostics.toolDiagnostics.state") settleRefreshSuccess("toolDiagnostics")
       if (msg.type === "diagnostics.toolDiagnostics.error") settleRefreshError("toolDiagnostics", message)
@@ -3918,9 +3916,6 @@ export function createSettingsController(props: SettingsViewProps) {
         return
       case "reasoningDisplay":
         settingsMessages.getReasoningDisplay(vscode)
-        return
-      case "chatSendDuringRunMode":
-        settingsMessages.getChatSendDuringRunMode(vscode)
         return
       case "peerDiagnosticsLogging":
         settingsMessages.getPeerDiagnosticsLogging(vscode)
@@ -4611,10 +4606,6 @@ export function createSettingsController(props: SettingsViewProps) {
     markOperationStarted("reasoningDisplay", "saving")
     settingsMessages.saveReasoningDisplay(vscode, defaultOpen)
   }
-  const updateChatSendDuringRunMode = (mode: "guide" | "queue") => {
-    markOperationStarted("chatSendDuringRunMode", "saving")
-    settingsMessages.updateChatSendDuringRunMode(vscode, mode)
-  }
   const savePeerDiagnosticsLogging = (payload: Record<string, unknown>) => {
     markOperationStarted("peerDiagnosticsLogging", "saving")
     settingsMessages.savePeerDiagnosticsLogging(vscode, payload)
@@ -4967,7 +4958,6 @@ export function createSettingsController(props: SettingsViewProps) {
     saveDiagnosticsSettings,
     saveCapabilitySyncSettings,
     saveReasoningDisplay,
-    updateChatSendDuringRunMode,
     savePeerDiagnosticsLogging,
     openPeerDiagnosticsLog,
     clearPeerDiagnosticsLog,

@@ -48,7 +48,6 @@ export const ConversationTab: Component<TabProps> = (props) => {
     refreshPage,
     saveConversationSettings: saveConversationSettingsRequest,
     saveReasoningDisplay,
-    updateChatSendDuringRunMode,
     setConversationLocale,
     registeredToolOptions,
     server,
@@ -72,9 +71,6 @@ export const ConversationTab: Component<TabProps> = (props) => {
     return id ? modeDrafts()[id] : undefined
   })
   const reasoningDefaultOpen = createMemo(() => server.reasoningDisplayState().defaultOpen === true)
-  const sendDuringRunMode = createMemo(() =>
-    stringValue(server.chatSendDuringRunModeState().mode) === "queue" ? "queue" : "guide"
-  )
 
   const markDirty = () => {
     setDirty(true)
@@ -114,10 +110,6 @@ export const ConversationTab: Component<TabProps> = (props) => {
 
   const updateReasoningDefaultOpen = (defaultOpen: boolean) => {
     saveReasoningDisplay(defaultOpen)
-  }
-
-  const updateSendDuringRunMode = (mode: "guide" | "queue") => {
-    updateChatSendDuringRunMode(mode)
   }
 
   const updateMode = (patch: Partial<ModeDraft>) => {
@@ -251,30 +243,6 @@ export const ConversationTab: Component<TabProps> = (props) => {
           </For>
         </div>
         <p class="settings-empty-note">{t("conversation.languageDesc")}</p>
-      </section>
-
-      <section class="settings-section settings-section--plain send-during-run-section">
-        <div class="settings-section-heading">
-          <span class="codicon codicon-comment-discussion" aria-hidden="true" />
-          <span>{t("conversation.sendDuringRun.title")}</span>
-        </div>
-        <div class="provider-segmented-list" role="group" aria-label={t("conversation.sendDuringRun.title")}>
-          <button
-            type="button"
-            class={`provider-segmented-choice ${sendDuringRunMode() === "guide" ? "provider-segmented-choice--active" : ""}`}
-            onClick={() => updateSendDuringRunMode("guide")}
-          >
-            {t("conversation.sendDuringRun.guide")}
-          </button>
-          <button
-            type="button"
-            class={`provider-segmented-choice ${sendDuringRunMode() === "queue" ? "provider-segmented-choice--active" : ""}`}
-            onClick={() => updateSendDuringRunMode("queue")}
-          >
-            {t("conversation.sendDuringRun.queue")}
-          </button>
-        </div>
-        <p class="settings-empty-note">{t("conversation.sendDuringRun.desc")}</p>
       </section>
 
       <section class="settings-section settings-section--plain reasoning-display-section">

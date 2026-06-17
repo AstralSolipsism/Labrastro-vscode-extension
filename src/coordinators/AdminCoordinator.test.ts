@@ -240,30 +240,6 @@ describe("AdminCoordinator", () => {
     })
   })
 
-  it("persists the output-time send mode in workspace state", async () => {
-    const { options, coordinator: subject } = coordinator()
-    const post = vi.fn()
-    options.context.workspaceState.get.mockImplementation((key?: string) =>
-      key === "labrastro.chat.sendDuringRunMode" ? "queue" : {}
-    )
-
-    await expect(subject.handleMessage({ type: "chat.sendDuringRunMode.get" }, post)).resolves.toBe(true)
-    await expect(subject.handleMessage({ type: "chat.sendDuringRunMode.update", mode: "queue" }, post)).resolves.toBe(true)
-
-    expect(post).toHaveBeenCalledWith({
-      type: "chat.sendDuringRunMode.state",
-      payload: { mode: "queue" },
-    })
-    expect(options.context.workspaceState.update).toHaveBeenCalledWith(
-      "labrastro.chat.sendDuringRunMode",
-      "queue"
-    )
-    expect(options.broadcastState).toHaveBeenCalledWith({
-      type: "chat.sendDuringRunMode.state",
-      payload: { mode: "queue" },
-    })
-  })
-
   it("returns peer diagnostics logging defaults as enabled", async () => {
     const { coordinator: subject } = coordinator()
     const post = vi.fn()

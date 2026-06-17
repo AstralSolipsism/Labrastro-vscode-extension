@@ -35,7 +35,6 @@ describe("settings operations", () => {
       "chatConfig",
       "serverSettings",
       "reasoningDisplay",
-      "chatSendDuringRunMode",
     ])
   })
 

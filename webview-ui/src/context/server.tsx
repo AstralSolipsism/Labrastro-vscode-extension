@@ -71,7 +71,6 @@ interface ServerContextValue {
   environmentSnapshot: () => Record<string, unknown>
   environmentError: () => string | undefined
   reasoningDisplayState: () => Record<string, unknown>
-  chatSendDuringRunModeState: () => Record<string, unknown>
   peerDiagnosticsLoggingState: () => Record<string, unknown>
   /** 主执行器类型（位置 + 引擎） */
   executorType: () => { location: string; engine: string }
@@ -157,7 +156,6 @@ export const ServerProvider: ParentComponent = (props) => {
   const [environmentSnapshot, setEnvironmentSnapshot] = createSignal<Record<string, unknown>>({})
   const [environmentError, setEnvironmentError] = createSignal<string | undefined>()
   const [reasoningDisplayState, setReasoningDisplayState] = createSignal<Record<string, unknown>>({ defaultOpen: false })
-  const [chatSendDuringRunModeState, setChatSendDuringRunModeState] = createSignal<Record<string, unknown>>({ mode: "guide" })
   const [peerDiagnosticsLoggingState, setPeerDiagnosticsLoggingState] = createSignal<Record<string, unknown>>({
     enabled: true,
     lifecycle: true,
@@ -445,9 +443,6 @@ export const ServerProvider: ParentComponent = (props) => {
       if (msg.type === "reasoningDisplay.state" && typeof msg.payload === "object" && msg.payload) {
         setReasoningDisplayState(msg.payload as Record<string, unknown>)
       }
-      if (msg.type === "chat.sendDuringRunMode.state" && typeof msg.payload === "object" && msg.payload) {
-        setChatSendDuringRunModeState(msg.payload as Record<string, unknown>)
-      }
       if (msg.type === "peerDiagnosticsLogging.state" && typeof msg.payload === "object" && msg.payload) {
         setPeerDiagnosticsLoggingState(msg.payload as Record<string, unknown>)
       }
@@ -503,7 +498,6 @@ export const ServerProvider: ParentComponent = (props) => {
     environmentSnapshot,
     environmentError,
     reasoningDisplayState,
-    chatSendDuringRunModeState,
     peerDiagnosticsLoggingState,
     executorType,
   }

@@ -85,7 +85,6 @@ function makeServer(overrides: Record<string, unknown> = {}) {
     environmentSnapshot: () => ({}),
     environmentError: () => undefined,
     reasoningDisplayState: () => ({ defaultOpen: false }),
-    chatSendDuringRunModeState: () => ({ mode: "guide" }),
     peerDiagnosticsLoggingState: () => ({}),
     executorType: () => ({ location: "remote", engine: "labrastro" }),
   }
