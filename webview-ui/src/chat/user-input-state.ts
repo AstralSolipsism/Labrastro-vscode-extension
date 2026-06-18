@@ -1,6 +1,7 @@
 export interface PendingUserInputState {
   inputId: string
   sessionRunId: string
+  branchBindingId?: string
   kind: string
   message: string
   inputSchema: Record<string, unknown>
@@ -25,6 +26,7 @@ export function userInputFromPayload(
   return {
     inputId: String(payload.input_id || payload.inputId || ""),
     sessionRunId,
+    branchBindingId: stringValue(payload.branch_binding_id || payload.branchBindingId) || undefined,
     kind: String(payload.kind || "user_input"),
     message: String(payload.message || payload.title || "MCP request needs input"),
     inputSchema: objectValue(payload.input_schema || payload.inputSchema),
@@ -170,25 +172,36 @@ export function reconcileStatusUserInputs<T extends PendingUserInputState>(
   items: T[],
   statusUserInputs: unknown[],
   sessionRunId: string,
+  branchBindingId?: string,
 ): T[] {
   const restored = statusUserInputs
-    .map((item) => userInputFromPayload(objectValue(item), sessionRunId))
+    .map((item) => {
+      const restoredItem = userInputFromPayload(objectValue(item), sessionRunId)
+      return {
+        ...restoredItem,
+        branchBindingId: restoredItem.branchBindingId || branchBindingId,
+      }
+    })
     .filter((item) => item.inputId)
     .filter((item) => {
       const raw = statusUserInputs.find((candidate) => {
         const payload = objectValue(candidate)
-        return String(payload.input_id || payload.inputId || "") === item.inputId
+        return userInputStateStatusKey(payload, branchBindingId) === userInputStateKey(item, branchBindingId)
       })
       const state = String(objectValue(raw).state || "requested")
       return !state || state === "requested"
     })
-  const restoredIds = new Set(restored.map((item) => item.inputId))
+  const restoredIds = new Set(restored.map((item) => userInputStateKey(item, branchBindingId)))
   const next = items.filter((item) => {
     if (item.sessionRunId !== sessionRunId) return true
-    return restoredIds.has(item.inputId)
+    if (!userInputMatchesBranch(item, branchBindingId)) return true
+    return restoredIds.has(userInputStateKey(item, branchBindingId))
   })
   for (const restoredItem of restored) {
-    const index = next.findIndex((item) => item.inputId === restoredItem.inputId)
+    const index = next.findIndex((item) =>
+      item.sessionRunId === restoredItem.sessionRunId &&
+      userInputStateKey(item, branchBindingId) === userInputStateKey(restoredItem, branchBindingId)
+    )
     if (index < 0) {
       next.push(restoredItem as T)
     } else {
@@ -201,25 +214,120 @@ export function reconcileStatusUserInputs<T extends PendingUserInputState>(
 export function reconcileStatusUserInputValues(
   current: Record<string, UserInputDraft>,
   statusUserInputs: unknown[],
+  sessionRunId?: string,
+  branchBindingId?: string,
 ): Record<string, UserInputDraft> {
   const ids = new Set<string>()
   for (const item of statusUserInputs) {
     const payload = objectValue(item)
     const state = String(payload.state || "requested")
     const inputId = String(payload.input_id || payload.inputId || "")
-    if (inputId && (!state || state === "requested")) ids.add(inputId)
+    if (inputId && (!state || state === "requested")) {
+      ids.add(userInputStatusKey(payload, sessionRunId, branchBindingId))
+    }
   }
-  const next: Record<string, UserInputDraft> = {}
-  for (const inputId of ids) next[inputId] = current[inputId] || {}
+  const next: Record<string, UserInputDraft> =
+    sessionRunId || branchBindingId
+      ? Object.fromEntries(
+          Object.entries(current).filter(([key]) =>
+            !userInputDraftKeyMatchesTarget(key, sessionRunId, branchBindingId)
+          )
+        )
+      : {}
+  for (const inputId of ids) {
+    next[inputId] =
+      current[inputId] ||
+      current[legacyUserInputDraftKey(inputId)] ||
+      {}
+  }
   return next
+}
+
+export function userInputDraftKey(
+  input: Pick<PendingUserInputState, "inputId" | "sessionRunId" | "branchBindingId">,
+): string {
+  return userInputDraftKeyFromParts(input.inputId, input.sessionRunId, input.branchBindingId)
+}
+
+export function userInputDraftKeyFromParts(
+  inputId: string,
+  sessionRunId?: string,
+  branchBindingId?: string,
+): string {
+  const branch = branchBindingId || ""
+  const run = sessionRunId || ""
+  return branch || run ? `${run}:${branch}:${inputId}` : inputId
 }
 
 export function visiblePendingUserInputsForRun<T extends PendingUserInputState>(
   items: T[],
   sessionRunId: string | undefined,
+  branchBindingId?: string,
 ): T[] {
   if (!sessionRunId) return []
-  return items.filter((item) => item.sessionRunId === sessionRunId)
+  return items.filter((item) =>
+    item.sessionRunId === sessionRunId &&
+    (!branchBindingId || !item.branchBindingId || item.branchBindingId === branchBindingId)
+  )
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : value == null ? "" : String(value)
+}
+
+function userInputMatchesBranch(item: PendingUserInputState, branchBindingId: string | undefined): boolean {
+  if (!branchBindingId) return true
+  return !item.branchBindingId || item.branchBindingId === branchBindingId
+}
+
+function userInputStateKey(
+  item: Pick<PendingUserInputState, "inputId" | "branchBindingId">,
+  fallbackBranchBindingId?: string,
+): string {
+  const branch = item.branchBindingId || fallbackBranchBindingId || ""
+  return branch ? `${branch}:${item.inputId}` : item.inputId
+}
+
+function userInputStateStatusKey(payload: Record<string, unknown>, fallbackBranchBindingId?: string): string {
+  const branch = stringValue(payload.branch_binding_id || payload.branchBindingId) || fallbackBranchBindingId || ""
+  const inputId = stringValue(payload.input_id || payload.inputId)
+  return branch ? `${branch}:${inputId}` : inputId
+}
+
+function userInputStatusKey(
+  payload: Record<string, unknown>,
+  sessionRunId?: string,
+  fallbackBranchBindingId?: string,
+): string {
+  const branch = stringValue(payload.branch_binding_id || payload.branchBindingId) || fallbackBranchBindingId || ""
+  const inputId = stringValue(payload.input_id || payload.inputId)
+  return userInputDraftKeyFromParts(inputId, sessionRunId, branch)
+}
+
+function legacyUserInputDraftKey(key: string): string {
+  const parts = key.split(":")
+  if (parts.length >= 3) {
+    const branch = parts[parts.length - 2]
+    const inputId = parts[parts.length - 1]
+    return branch ? `${branch}:${inputId}` : inputId
+  }
+  return key
+}
+
+export function userInputDraftKeyMatchesTarget(
+  key: string,
+  sessionRunId?: string,
+  branchBindingId?: string,
+): boolean {
+  if (!sessionRunId && !branchBindingId) return true
+  if (sessionRunId) {
+    const sessionPrefix = `${sessionRunId}:`
+    if (!key.startsWith(sessionPrefix)) return false
+    if (!branchBindingId) return true
+    return key.startsWith(`${sessionRunId}:${branchBindingId}:`)
+  }
+  if (!branchBindingId) return false
+  return key.startsWith(`${branchBindingId}:`)
 }
 
 function userInputFieldSchema(

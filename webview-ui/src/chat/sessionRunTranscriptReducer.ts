@@ -268,7 +268,7 @@ function applySessionRunTranscriptEventToBundle(
 
   if (type === "session_run_start" || type === "session_run_continue" || type === "user_message") {
     const prompt = userMessageTextFromPayload(payload)
-    if (prompt && !hasRenderedUserMessage(next, prompt, meta)) {
+    if (prompt && !mergeRenderedUserMessage(next, prompt, meta)) {
       next.turns.push({
         userMessage: {
           id: `u-${meta.sessionEventSeq ?? now}`,
@@ -475,20 +475,29 @@ function userMessageTextFromPayload(payload: Record<string, unknown>): string {
   )
 }
 
-function hasRenderedUserMessage(
+function mergeRenderedUserMessage(
   bundle: MockSessionBundle,
   prompt: string,
   meta: EventRenderMeta,
 ): boolean {
-  return bundle.turns.some((turn) => {
+  for (const turn of bundle.turns) {
     if (meta.sessionItemId && turn.userMessage.sessionItemId === meta.sessionItemId) {
       return true
     }
     if (meta.eventKey && turn.userMessage.eventKey === meta.eventKey) {
       return true
     }
-    return turn.userMessage.text === prompt && !turn.assistantMessages.length
-  })
+    if (turn.userMessage.text === prompt && !turn.assistantMessages.length) {
+      turn.userMessage = {
+        ...turn.userMessage,
+        ...(meta.eventKey ? { eventKey: meta.eventKey } : {}),
+        ...(meta.sessionEventSeq !== undefined ? { sessionEventSeq: meta.sessionEventSeq } : {}),
+        ...(meta.sessionItemId ? { sessionItemId: meta.sessionItemId } : {}),
+      }
+      return true
+    }
+  }
+  return false
 }
 
 function cloneBundle(bundle: MockSessionBundle): MockSessionBundle {

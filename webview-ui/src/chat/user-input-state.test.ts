@@ -143,6 +143,68 @@ describe("session run user input state", () => {
     ).toEqual({})
   })
 
+  it("reconciles resume status only for the targeted branch", () => {
+    const branchA: PendingUserInputState = {
+      ...input(),
+      inputId: "input-a",
+      branchBindingId: "branch-a",
+    }
+    const branchB: PendingUserInputState = {
+      ...input(),
+      inputId: "input-b",
+      branchBindingId: "branch-b",
+    }
+
+    const next = reconcileStatusUserInputs(
+      [branchA, branchB],
+      [
+        {
+          input_id: "input-a",
+          branch_binding_id: "branch-a",
+          kind: "mcp_elicitation",
+          message: "Still pending on A",
+          input_schema: {},
+          state: "requested",
+        },
+      ],
+      "run-1",
+      "branch-a",
+    )
+
+    expect(next.map((item) => item.inputId).sort()).toEqual(["input-a", "input-b"])
+    expect(next.find((item) => item.inputId === "input-a")?.message).toBe("Still pending on A")
+    expect(next.find((item) => item.inputId === "input-b")?.branchBindingId).toBe("branch-b")
+  })
+
+  it("reconciles draft values only for the targeted session run branch", () => {
+    const next = reconcileStatusUserInputValues(
+      {
+        "run-1:branch-a:input-a": { repository: "draft-a" },
+        "run-1:branch-a:stale-a": { repository: "stale-a" },
+        "run-1:branch-b:input-b": { repository: "draft-b" },
+        "run-2:branch-a:input-c": { repository: "draft-c" },
+      },
+      [
+        {
+          input_id: "input-a",
+          branch_binding_id: "branch-a",
+          kind: "mcp_elicitation",
+          message: "Still pending on A",
+          input_schema: {},
+          state: "requested",
+        },
+      ],
+      "run-1",
+      "branch-a",
+    )
+
+    expect(next).toEqual({
+      "run-1:branch-a:input-a": { repository: "draft-a" },
+      "run-1:branch-b:input-b": { repository: "draft-b" },
+      "run-2:branch-a:input-c": { repository: "draft-c" },
+    })
+  })
+
   it("filters visible pending user inputs to the active session run", () => {
     const runOne = input()
     const runTwo = {

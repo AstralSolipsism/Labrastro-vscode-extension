@@ -180,6 +180,9 @@ describe("sessionRunTranscriptReducer", () => {
 
     expect(replayed.turns).toHaveLength(1)
     expect(replayed.turns[0].userMessage.text).toBe("edited branch question")
+    expect(replayed.turns[0].userMessage.sessionItemId).toBe("branch-user-1")
+    expect(replayed.turns[0].userMessage.sessionEventSeq).toBe(1)
+    expect(replayed.turns[0].userMessage.eventKey).toBe("session:session-1:1")
   })
 
   it("stores stream observability metrics in stats without rendering transcript parts", () => {
