@@ -16,6 +16,7 @@ export interface ApprovalSection {
 
 export interface ApprovalDetails {
   approvalId: string
+  branchBindingId?: string
   toolCallId?: string
   toolName: string
   toolSource?: string
@@ -51,6 +52,10 @@ export function approvalFromPayload(
     : fallback.sections || []
   return {
     approvalId: stringValue(payload.approval_id) || fallback.approvalId || "",
+    branchBindingId:
+      stringValue(payload.branch_binding_id) ||
+      stringValue(payload.branchBindingId) ||
+      fallback.branchBindingId,
     toolCallId: stringValue(payload.tool_call_id) || fallback.toolCallId,
     toolName: stringValue(payload.tool_name) || fallback.toolName || "tool",
     toolSource: stringValue(payload.tool_source) || fallback.toolSource,

@@ -162,6 +162,7 @@ describe("ApprovalDocumentProvider", () => {
     await provider.store({
       ...approvalPayload(),
       session_run_id: "run-1",
+      branch_binding_id: "branch-a",
       approved_save_candidate: {
         tool_name: "apply_patch",
         preview_identity: { plan_id: "plan-1" },
@@ -175,6 +176,7 @@ describe("ApprovalDocumentProvider", () => {
     expect(onCandidateSave).toHaveBeenCalledWith({
       approvalId: "approval-1",
       sessionRunId: "run-1",
+      branchBindingId: "branch-a",
       approvedSaveCandidate: {
         tool_name: "apply_patch",
         preview_identity: { plan_id: "plan-1" },

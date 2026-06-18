@@ -3,6 +3,7 @@ import * as vscode from "vscode"
 export interface ApprovalCandidateSaveRequest {
   approvalId: string
   sessionRunId?: string
+  branchBindingId?: string
   approvedSaveCandidate: Record<string, unknown>
 }
 
@@ -23,6 +24,7 @@ interface ApprovalDiffDetail {
 interface ApprovalDetail {
   approvalId: string
   sessionRunId?: string
+  branchBindingId?: string
   title: string
   fileName: string
   markdown: string
@@ -127,6 +129,7 @@ export class ApprovalDocumentProvider implements vscode.TextDocumentContentProvi
       await this.onCandidateSave?.({
         approvalId: candidate.approvalId,
         sessionRunId: this.approvals.get(candidate.approvalId)?.sessionRunId,
+        branchBindingId: this.approvals.get(candidate.approvalId)?.branchBindingId,
         approvedSaveCandidate,
       })
     } catch (error) {
@@ -296,6 +299,7 @@ export class ApprovalDocumentProvider implements vscode.TextDocumentContentProvi
   private toDetail(payload: Record<string, unknown>): ApprovalDetail {
     const approvalId = stringValue(payload.approval_id)
     const sessionRunId = stringValue(payload.session_run_id) || stringValue(payload.sessionRunId)
+    const branchBindingId = stringValue(payload.branch_binding_id) || stringValue(payload.branchBindingId)
     const toolName = stringValue(payload.tool_name) || "tool"
     const sections = Array.isArray(payload.sections) ? payload.sections : []
     const diffSections = sections.filter(isDiffSection)
@@ -325,6 +329,7 @@ export class ApprovalDocumentProvider implements vscode.TextDocumentContentProvi
     return {
       approvalId,
       sessionRunId,
+      branchBindingId,
       title: `Labrastro Approval: ${toolName} ${fileName}`,
       fileName,
       markdown:
