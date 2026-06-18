@@ -3,6 +3,14 @@ import { describe, expect, it } from "vitest"
 
 const source = readFileSync(new URL("./ChatView.tsx", import.meta.url), "utf8")
 
+function sourceSection(start: string, end: string): string {
+  const startIndex = source.indexOf(start)
+  const endIndex = source.indexOf(end, startIndex)
+  expect(startIndex).toBeGreaterThanOrEqual(0)
+  expect(endIndex).toBeGreaterThan(startIndex)
+  return source.slice(startIndex, endIndex)
+}
+
 describe("ChatView context events", () => {
   it("routes remote context_event payloads into context event parts", () => {
     expect(source).toContain('type: "context_event"')
@@ -238,13 +246,93 @@ describe("ChatView context events", () => {
 
   it("keeps approval reply failures recoverable in the approval UI", () => {
     expect(source).toContain('msg.type === "approval.reply.error"')
-    expect(source).toContain("markApprovalSubmitFailed(items, approvalId, message)")
-    expect(source).toContain("mergeStatusApprovals(items, statusApprovals, sessionRunId)")
+    expect(source).toContain("markApprovalSubmitFailed(items, approvalId, message, sessionRunId, branchBindingId)")
+    expect(source).toContain("mergeStatusApprovals(items, statusApprovals, sessionRunId, branchBindingId)")
+  })
+
+  it("shows reply failure notices only for the selected branch", () => {
+    const approvalErrorSource = sourceSection(
+      'if (msg.type === "approval.reply.error") {',
+      'if (msg.type === "sessionRun.userInput.reply.ok")',
+    )
+    const userInputErrorSource = sourceSection(
+      'if (msg.type === "sessionRun.userInput.reply.error") {',
+      'if (msg.type === "environment.run.error" && isWorking())',
+    )
+
+    expect(approvalErrorSource).toContain("const visibleBranch = messageTargetsCurrentRun(sessionRunId, branchBindingId)")
+    expect(approvalErrorSource).toContain("if (visibleBranch) appendNotice(")
+    expect(userInputErrorSource).toContain("const visibleBranch = messageTargetsCurrentRun(sessionRunId, branchBindingId)")
+    expect(userInputErrorSource).toContain("if (visibleBranch) appendNotice(")
+  })
+
+  it("scopes session run event batches and approval resolution to the selected branch", () => {
+    expect(source).toContain('if (msg.type === "sessionRun.events" && Array.isArray(msg.events))')
+    expect(source).toContain('if (msg.type === "sessionRun.stream" && Array.isArray(msg.events))')
+    expect(source).toContain("if (!messageTargetsCurrentRun(sessionRunId, branchBindingId)) return")
+    expect(source).toContain("pendingApprovalMatches(item, { approvalId, sessionRunId, branchBindingId })")
+  })
+
+  it("guards branch-scoped webview messages by session run and branch", () => {
+    const pendingSource = sourceSection(
+      'if (msg.type === "sessionRun.pendingNextTurn") {',
+      'if (msg.type === "sessionRun.pendingNextTurns") {',
+    )
+    const continuedSource = sourceSection(
+      'if (msg.type === "sessionRun.continued") {',
+      'if (msg.type === "sessionRun.reconnecting")',
+    )
+    const doneSource = sourceSection(
+      'if (msg.type === "sessionRun.done") {',
+      'if (msg.type === "environment.run.completed" && isWorking())',
+    )
+
+    expect(source).toContain("const messageTargetsCurrentRun =")
+    expect(pendingSource).toContain("if (!messageTargetsCurrentRun(sessionRunId, branchBindingId)) return")
+    expect(continuedSource).toContain("if (!messageTargetsCurrentRun(sessionRunId, branchBindingId)) return")
+    expect(doneSource).toContain("if (!messageTargetsCurrentRun(sessionRunId, branchBindingId)) return")
+  })
+
+  it("ignores scoped session run errors for non-selected branches", () => {
+    const errorSource = sourceSection(
+      'if (msg.type === "sessionRun.error") {',
+      "    })",
+    )
+
+    expect(errorSource).toContain("const sessionRunId = stringValue(msg.sessionRunId) || stringValue(msg.session_run_id)")
+    expect(errorSource).toContain("const branchBindingId = stringValue(msg.branchBindingId) || stringValue(msg.branch_binding_id)")
+    expect(errorSource).toContain("if (sessionRunId && activeSessionRunId() && sessionRunId !== activeSessionRunId()) return")
+    expect(errorSource).toContain("if (branchBindingId && branchBindingId !== selectedBranchBindingId()) return")
+    expect(errorSource.indexOf("if (branchBindingId && branchBindingId !== selectedBranchBindingId()) return")).toBeLessThan(
+      errorSource.indexOf('finishSessionRun("error")')
+    )
+  })
+
+  it("ignores reconnect state messages for non-selected branches", () => {
+    const reconnectingSource = sourceSection(
+      'if (msg.type === "sessionRun.reconnecting") {',
+      'if (msg.type === "sessionRun.reconnected") {',
+    )
+    const reconnectedSource = sourceSection(
+      'if (msg.type === "sessionRun.reconnected") {',
+      'if (msg.type === "sessionRun.events" && Array.isArray(msg.events))',
+    )
+
+    expect(reconnectingSource).toContain("const branchBindingId = stringValue(msg.branchBindingId) || stringValue(msg.branch_binding_id)")
+    expect(reconnectingSource).toContain("if (!messageTargetsCurrentRun(sessionRunId, branchBindingId)) return")
+    expect(reconnectingSource.indexOf("if (!messageTargetsCurrentRun(sessionRunId, branchBindingId)) return")).toBeLessThan(
+      reconnectingSource.indexOf("setIsWorking(true)")
+    )
+    expect(reconnectedSource).toContain("const branchBindingId = stringValue(msg.branchBindingId) || stringValue(msg.branch_binding_id)")
+    expect(reconnectedSource).toContain("if (!messageTargetsCurrentRun(sessionRunId, branchBindingId)) return")
+    expect(reconnectedSource.indexOf("if (!messageTargetsCurrentRun(sessionRunId, branchBindingId)) return")).toBeLessThan(
+      reconnectedSource.indexOf("setIsWorking(true)")
+    )
   })
 
   it("clears pending approvals when approval reply succeeds", () => {
     expect(source).toContain('msg.type === "approval.reply.ok"')
-    expect(source).toContain("markApprovalSubmitSucceeded(items, approvalId)")
+    expect(source).toContain("markApprovalSubmitSucceeded(items, approvalId, sessionRunId, branchBindingId)")
     expect(source).toContain("setSelectedApproval(undefined)")
   })
 
@@ -268,25 +356,55 @@ describe("ChatView context events", () => {
     expect(source).toContain('type === "user_input_request"')
     expect(source).toContain("setPendingUserInputs((items) => upsertPendingUserInput(items, userInput))")
     expect(source).toContain('type: "sessionRun.userInput.reply"')
-    expect(source).toContain("buildUserInputContent(input, pendingUserInputContent(input.inputId))")
+    expect(source).toContain("buildUserInputContent(input, pendingUserInputContent(input))")
     expect(source).toContain("content: contentResult.content")
     expect(source).toContain('type === "user_input_resolved"')
-    expect(source).toContain("setPendingUserInputs((items) => items.filter((item) => item.inputId !== inputId))")
+    expect(source).toContain("pendingUserInputMatches(item, { inputId, sessionRunId, branchBindingId })")
     expect(source).toContain('msg.type === "sessionRun.userInput.reply.error"')
   })
 
   it("restores pending MCP user inputs from session run resume status", () => {
     expect(source).toContain("const statusUserInputs = Array.isArray(payload.user_inputs) ? payload.user_inputs : []")
     expect(source).toContain("if (sessionRunId) {")
-    expect(source).toContain("reconcileStatusUserInputs(items, statusUserInputs, sessionRunId)")
-    expect(source).toContain("setPendingUserInputValues((current) => reconcileStatusUserInputValues(current, statusUserInputs))")
+    expect(source).toContain("reconcileStatusUserInputs(items, statusUserInputs, sessionRunId, branchBindingId)")
+    expect(source).toContain("reconcileStatusUserInputValues(current, statusUserInputs, sessionRunId, branchBindingId)")
   })
 
   it("scopes pending MCP user input cards to the active session run and clears terminal state", () => {
-    expect(source).toContain("visiblePendingUserInputsForRun(pendingUserInputs(), activeSessionRunId())")
-    expect(source).toContain("const clearPendingUserInputs =")
-    expect(source).toContain("clearPendingUserInputs()")
+    expect(source).toContain("visiblePendingUserInputsForRun(pendingUserInputs(), activeSessionRunId(), selectedBranchBindingId())")
+    expect(source).toContain("const clearPendingBranchInteractions =")
     expect(source).toContain('String(event.session_run_id || "") || activeSessionRunId()')
+  })
+
+  it("clears only the finished session run branch pending state", () => {
+    const finishSource = sourceSection(
+      "const finishSessionRun =",
+      "const resetSessionRunTerminalState =",
+    )
+
+    expect(finishSource).toContain("const finishedSessionRunId = activeSessionRunId()")
+    expect(finishSource).toContain("const finishedBranchBindingId = selectedBranchBindingId()")
+    expect(finishSource).toContain("clearPendingBranchInteractions(finishedSessionRunId, finishedBranchBindingId)")
+    expect(finishSource).not.toContain("setPendingApprovals([])")
+    expect(finishSource).not.toContain("clearPendingUserInputs()")
+  })
+
+  it("does not globally clear branch pending state before terminal event cleanup", () => {
+    const cancelledSource = sourceSection(
+      '} else if (type === "session_run_cancelled") {',
+      '} else if (type === "error") {',
+    )
+    const bindingMismatchSource = sourceSection(
+      'appendNotice("error", `会话绑定异常：远端返回 ${remoteSessionId}，当前会话是 ${currentSessionId}`',
+      "markRenderedEvent(eventMeta)",
+    )
+
+    expect(cancelledSource).toContain('finishSessionRun("cancelled")')
+    expect(cancelledSource).not.toContain("setPendingApprovals([])")
+    expect(cancelledSource).not.toContain("clearPendingUserInputs()")
+    expect(bindingMismatchSource).toContain("clearPendingBranchInteractions(activeSessionRunId(), selectedBranchBindingId())")
+    expect(bindingMismatchSource).not.toContain("setPendingApprovals([])")
+    expect(bindingMismatchSource).not.toContain("clearPendingUserInputs()")
   })
 
   it("renders optional boolean MCP user input as an explicit omit false true control", () => {
@@ -309,12 +427,34 @@ describe("ChatView context events", () => {
     const handleSendSource = source.slice(handleSendStart, handleSubmitStart)
 
     expect(handleSendSource).toContain("if (isWorking())")
-    expect(handleSendSource).toContain("enqueuePrompt(current, rawText, {")
+    expect(handleSendSource).toContain("sendRunningChatText(rawText, submission.mentions)")
+    expect(source).toContain("branchBindingId: selectedBranchBindingId()")
+    const runningSendIndex = handleSendSource.indexOf("sendRunningChatText(rawText")
     const chatSendIndex = handleSendSource.indexOf("sendChatText(rawText")
-    const queueIndex = handleSendSource.indexOf("enqueuePrompt(current, rawText, {")
-    expect(chatSendIndex).toBeGreaterThan(queueIndex)
-    expect(handleSendSource.slice(queueIndex, chatSendIndex)).toContain("return")
+    expect(chatSendIndex).toBeGreaterThan(runningSendIndex)
+    expect(handleSendSource.slice(runningSendIndex, chatSendIndex)).toContain("return")
+    expect(source).not.toContain("resolvePromptQueueAfterChat")
     expect(source).not.toContain("chatMessages.followUp(vscode")
+  })
+
+  it("keeps existing remote session sends on the selected branch instead of falling back to main", () => {
+    const sendChatStart = source.indexOf("const sendChatText =")
+    const sendRunningStart = source.indexOf("const sendRunningChatText =", sendChatStart)
+    const sendChatSource = source.slice(sendChatStart, sendRunningStart)
+
+    expect(sendChatSource).toContain('const targetBranchBindingId = remoteSessionId ? selectedBranchBindingId() || "main" : "main"')
+    expect(sendChatSource).not.toContain("const targetBranchBindingId = activeSessionRunId() ? selectedBranchBindingId() : \"main\"")
+  })
+
+  it("routes pending prompt remove and clear actions through the Host queue", () => {
+    const removeStart = source.indexOf("const removePendingPrompt =")
+    const modelUnavailableStart = source.indexOf("const handleModelUnavailable =", removeStart)
+    const pendingActionsSource = source.slice(removeStart, modelUnavailableStart)
+
+    expect(pendingActionsSource).toContain("chatMessages.removePendingNextTurn(vscode")
+    expect(pendingActionsSource).toContain("chatMessages.clearPendingNextTurns(vscode")
+    expect(source).toContain('msg.type === "sessionRun.pendingNextTurns"')
+    expect(source).toContain("promptQueueStateFromPendingNextTurns(")
   })
 
   it("routes history edit and branch actions through AgentRun branch compose, not Session fork execution", () => {
@@ -351,6 +491,8 @@ describe("ChatView context events", () => {
     expect(selectedHandlerSource).toContain("normalizeBranchSummaries")
     expect(selectedHandlerSource).toContain("trace.replaceCurrentTurns([], { runStatus: nextStatus })")
     expect(selectedHandlerSource).toContain("setBranchSummaries(branches)")
+    expect(selectedHandlerSource).toContain("setQueuedPrompts(clearPromptQueue())")
+    expect(selectedHandlerSource).not.toContain("clearQueuedPrompts()")
     expect(source).toContain('if (msg.type === "sessionRun.branches")')
     expect(source).toContain("branchSummaries={branchSummaries()}")
     expect(source).toContain("onSelectBranch={selectBranch}")

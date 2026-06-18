@@ -44,9 +44,6 @@ import {
   createPromptQueueState,
   enqueuePrompt,
   queuedPromptCount,
-  removePromptItem,
-  resolvePromptQueueAfterChat,
-  resumePromptQueue,
   type PendingPromptItem,
   type PromptQueueState,
 } from "../chat/promptQueue"
@@ -101,6 +98,9 @@ import {
   userInputEnumSelectedKey,
   userInputFieldKind,
   userInputFieldNames,
+  userInputDraftKey,
+  userInputDraftKeyFromParts,
+  userInputDraftKeyMatchesTarget,
   userInputFromPayload,
   visiblePendingUserInputsForRun,
   type PendingUserInputState,
@@ -249,6 +249,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const [workingText, setWorkingText] = createSignal("正在处理")
   const [workingElapsed, setWorkingElapsed] = createSignal("0:00")
   const [activeSessionRunId, setActiveSessionRunId] = createSignal<string | undefined>()
+  const [selectedBranchBindingId, setSelectedBranchBindingId] = createSignal("main")
   const [activeRunSessionId, setActiveRunSessionId] = createSignal("")
   const [sessionRunStatus, setSessionRunStatus] = createSignal<SessionRunStatus>("idle")
   const [sessionRunSawError, setSessionRunSawError] = createSignal(false)
@@ -339,9 +340,6 @@ const ChatView: Component<ChatViewProps> = (props) => {
   )
   const visibleModelError = createMemo(() =>
     modelSwitchError() || modelAvailability().message || requiredModelSelection().message
-  )
-  const queuedPromptItems = createMemo(() =>
-    queuedPrompts().items
   )
   const pendingModelLabel = createMemo(() => {
     const pending = pendingModelProfile()
@@ -561,6 +559,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
     nextStatus: "cancelled" | "done" | "error" | "interrupted",
     options: { startNextEnvironment?: boolean } = {},
   ) => {
+    const finishedSessionRunId = activeSessionRunId()
+    const finishedBranchBindingId = selectedBranchBindingId()
     settleAssistantMessageForRunEnd(nextStatus)
     setIsWorking(false)
     setActiveRunSessionId("")
@@ -570,26 +570,13 @@ const ChatView: Component<ChatViewProps> = (props) => {
       setStreamRecoveryMessage("")
     }
     setPendingCancel(false)
-    setPendingApprovals([])
-    setSelectedApproval(undefined)
-    clearPendingUserInputs()
+    clearPendingBranchInteractions(finishedSessionRunId, finishedBranchBindingId)
     setRememberingApprovalId("")
     clearActiveStreamDraft()
     trace.patchStats({ runStatus: nextStatus })
     stopTimer()
     const queuedSwitchStarted = applyQueuedModelSwitch()
     if (queuedSwitchStarted) {
-      if (nextStatus !== "done") {
-        setQueuedPrompts((current) => resolvePromptQueueAfterChat(current, nextStatus).state)
-      }
-      return
-    }
-    const promptResolution = resolvePromptQueueAfterChat(queuedPrompts(), nextStatus)
-    setQueuedPrompts(promptResolution.state)
-    if (promptResolution.nextItem) {
-      window.setTimeout(() => sendChatText(promptResolution.nextItem!.text, {
-        mentions: promptResolution.nextItem!.mentions,
-      }), 0)
       return
     }
     if (options.startNextEnvironment) {
@@ -614,17 +601,47 @@ const ChatView: Component<ChatViewProps> = (props) => {
     const runSessionId = activeRunSessionId()
     return Boolean(sessionId && runSessionId && sessionId === runSessionId)
   }
+  const messageTargetsCurrentRun = (sessionRunId?: string, branchBindingId?: string) => {
+    const currentSessionRunId = activeSessionRunId()
+    if (sessionRunId && currentSessionRunId && sessionRunId !== currentSessionRunId) return false
+    if (branchBindingId && branchBindingId !== selectedBranchBindingId()) return false
+    return true
+  }
 
   const visibleIsWorking = () => isWorking() && currentRunSessionMatches()
-  const visiblePendingApprovals = () => (currentRunSessionMatches() ? pendingApprovals() : [])
+  const visiblePendingApprovals = () => (
+    currentRunSessionMatches()
+      ? pendingApprovals().filter((item) => !item.branchBindingId || item.branchBindingId === selectedBranchBindingId())
+      : []
+  )
   const visiblePendingUserInputs = () => (
     currentRunSessionMatches()
-      ? visiblePendingUserInputsForRun(pendingUserInputs(), activeSessionRunId())
+      ? visiblePendingUserInputsForRun(pendingUserInputs(), activeSessionRunId(), selectedBranchBindingId())
       : []
   )
   const clearPendingUserInputs = () => {
     setPendingUserInputs([])
     setPendingUserInputValues({})
+  }
+  const clearPendingBranchInteractions = (sessionRunId: string | undefined, branchBindingId: string | undefined) => {
+    const targetBranchBindingId = branchBindingId || "main"
+    setPendingApprovals((items) =>
+      items.filter((item) => !pendingApprovalBelongsToTarget(item, sessionRunId, targetBranchBindingId))
+    )
+    const selected = selectedApproval()
+    if (selected && pendingApprovalBelongsToTarget(selected, sessionRunId, targetBranchBindingId)) {
+      setSelectedApproval(undefined)
+    }
+    setPendingUserInputs((items) =>
+      items.filter((item) => !pendingUserInputBelongsToTarget(item, sessionRunId, targetBranchBindingId))
+    )
+    setPendingUserInputValues((current) =>
+      Object.fromEntries(
+        Object.entries(current).filter(([key]) =>
+          !userInputDraftKeyMatchesTarget(key, sessionRunId, targetBranchBindingId)
+        )
+      )
+    )
   }
   const findLastOverlayPartIndex = (
     parts: readonly TranscriptItem[],
@@ -1845,9 +1862,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         setRunPeerState(runPeerStateFromError("session binding mismatch"))
         setIsWorking(false)
         setActiveRunSessionId("")
-        setPendingApprovals([])
-        setSelectedApproval(undefined)
-        clearPendingUserInputs()
+        clearPendingBranchInteractions(activeSessionRunId(), selectedBranchBindingId())
         stopTimer()
         markRenderedEvent(eventMeta)
         return
@@ -2039,14 +2054,18 @@ const ChatView: Component<ChatViewProps> = (props) => {
       setPendingUserInputs((items) => upsertPendingUserInput(items, userInput))
       setPendingUserInputValues((current) => ({
         ...current,
-        [userInput.inputId]: current[userInput.inputId] || {},
+        [pendingUserInputKey(userInput)]: current[pendingUserInputKey(userInput)] || {},
       }))
     } else if (type === "user_input_resolved") {
       const inputId = String(payload.input_id || "")
-      setPendingUserInputs((items) => items.filter((item) => item.inputId !== inputId))
+      const sessionRunId = String(event.session_run_id || "") || activeSessionRunId()
+      const branchBindingId = stringValue(payload.branch_binding_id || payload.branchBindingId)
+      setPendingUserInputs((items) =>
+        items.filter((item) => !pendingUserInputMatches(item, { inputId, sessionRunId, branchBindingId }))
+      )
       setPendingUserInputValues((current) => {
         const next = { ...current }
-        delete next[inputId]
+        delete next[pendingUserInputKeyFromParts(inputId, sessionRunId, branchBindingId)]
         return next
       })
     } else if ((type === "approval_request" || type === "workflow_decision") && pendingApprovalForEvent) {
@@ -2087,8 +2106,20 @@ const ChatView: Component<ChatViewProps> = (props) => {
       const toolCallId = stringValue(payload.tool_call_id)
       const decision = String(payload.decision || "")
       const reason = stringValue(payload.reason)
-      setPendingApprovals((items) => items.filter((item) => item.approvalId !== approvalId))
-      if (selectedApproval()?.approvalId === approvalId) setSelectedApproval(undefined)
+      const sessionRunId = String(event.session_run_id || "") || activeSessionRunId()
+      const branchBindingId =
+        stringValue(payload.branch_binding_id || payload.branchBindingId) ||
+        selectedBranchBindingId()
+      setPendingApprovals((items) =>
+        items.filter((item) => !pendingApprovalMatches(item, { approvalId, sessionRunId, branchBindingId }))
+      )
+      const selected = selectedApproval()
+      if (
+        selected &&
+        pendingApprovalMatches(selected, { approvalId, sessionRunId, branchBindingId })
+      ) {
+        setSelectedApproval(undefined)
+      }
       if (!canonicalTranscriptEvent) {
         updateAssistantItems((parts) =>
           parts.map((part) => {
@@ -2112,8 +2143,6 @@ const ChatView: Component<ChatViewProps> = (props) => {
     } else if (type === "session_run_cancelled") {
       setSessionRunSawTerminal(true)
       setPendingCancel(false)
-      setPendingApprovals([])
-      setSelectedApproval(undefined)
       setAgentRunState(initialAgentRunState())
       finishSessionRun("cancelled")
     } else if (type === "error") {
@@ -2283,20 +2312,26 @@ const ChatView: Component<ChatViewProps> = (props) => {
   }
 
   const removePendingPrompt = (item: PendingPromptItem) => {
-    setQueuedPrompts((current) => removePromptItem(current, item.id))
-  }
-
-  const continueQueuedPrompts = () => {
-    if (isWorking() || modelSwitching()) return
-    const resumed = resumePromptQueue(queuedPrompts())
-    setQueuedPrompts(resumed.state)
-    if (resumed.nextItem) {
-      sendChatText(resumed.nextItem.text, { mentions: resumed.nextItem.mentions })
-    }
+    const sessionRunId = activeSessionRunId()
+    const branchBindingId = selectedBranchBindingId() || "main"
+    if (!sessionRunId) return
+    chatMessages.removePendingNextTurn(vscode, {
+      sessionRunId,
+      branchBindingId,
+      clientRequestId: item.requestId || item.id,
+      queuedAt: new Date(item.createdAt).toISOString(),
+      text: item.text,
+    })
   }
 
   const clearQueuedPrompts = () => {
-    setQueuedPrompts(clearPromptQueue())
+    const sessionRunId = activeSessionRunId()
+    const branchBindingId = selectedBranchBindingId() || "main"
+    if (!sessionRunId) return
+    chatMessages.clearPendingNextTurns(vscode, {
+      sessionRunId,
+      branchBindingId,
+    })
   }
 
   const handleModelUnavailable = () => {
@@ -2473,6 +2508,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
     }
 
     const requestId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const targetBranchBindingId = remoteSessionId ? selectedBranchBindingId() || "main" : "main"
+    if (!remoteSessionId) setSelectedBranchBindingId(targetBranchBindingId)
     setIsWorking(true)
     setActiveRunSessionId(sessionId || "")
     setPendingCancel(false)
@@ -2496,11 +2533,28 @@ const ChatView: Component<ChatViewProps> = (props) => {
       draftSessionId,
       requestId,
       locale: locale(),
+      branchBindingId: targetBranchBindingId,
       providerId: activeModelOverride.providerId,
       modelId: activeModelOverride.modelId,
       parameters: activeModelOverride.parameters,
       mentions: options.mentions,
       ...route,
+    })
+  }
+
+  const sendRunningChatText = (
+    text: string,
+    mentions?: Record<string, unknown>[],
+  ) => {
+    const next = text.trim()
+    if (!next) return
+    chatMessages.send(vscode, {
+      text: next,
+      sessionId: remoteSessionIdForMutation(trace.currentSessionId()),
+      requestId: `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      locale: locale(),
+      branchBindingId: selectedBranchBindingId(),
+      ...(mentions?.length ? { mentions } : {}),
     })
   }
 
@@ -2553,12 +2607,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     const rawText = submission.text
     if (!rawText.trim()) return
     if (isWorking()) {
-      setQueuedPrompts((current) =>
-        enqueuePrompt(current, rawText, {
-          requestId: `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          mentions: submission.mentions,
-        })
-      )
+      sendRunningChatText(rawText, submission.mentions)
       return
     }
     sendChatText(rawText, { mentions: submission.mentions })
@@ -2717,7 +2766,10 @@ const ChatView: Component<ChatViewProps> = (props) => {
   }
 
   const sendCancel = (sessionRunId: string) => {
-    chatMessages.cancel(vscode, sessionRunId)
+    chatMessages.cancel(vscode, {
+      sessionRunId,
+      branchBindingId: selectedBranchBindingId(),
+    })
   }
 
   const recoverInterruptedChat = (action: "continue" | "retry") => {
@@ -2733,7 +2785,11 @@ const ChatView: Component<ChatViewProps> = (props) => {
     setStreamRecoveryMessage("")
     trace.patchStats({ runStatus: "running" })
     startTimer()
-    chatMessages.recover(vscode, { sessionRunId, action })
+    chatMessages.recover(vscode, {
+      sessionRunId,
+      branchBindingId: selectedBranchBindingId(),
+      action,
+    })
   }
 
   const dismissInterruptedChat = () => {
@@ -2747,6 +2803,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
     vscode.postMessage({
       type: "approval.reply",
       sessionRunId: approval.sessionRunId || activeSessionRunId(),
+      branchBindingId: approval.branchBindingId || selectedBranchBindingId(),
+      branch_binding_id: approval.branchBindingId || selectedBranchBindingId(),
       approvalId: approval.approvalId,
       decision,
       ...(reason ? { reason } : {}),
@@ -2768,6 +2826,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     const sessionId = trace.currentSessionId()
     if (!sessionId || sessionId !== compose.sessionId) return
     const branchBindingId = `branch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    setSelectedBranchBindingId(branchBindingId)
     trace.replaceCurrentTurns([...prefixTurns, createUserTurn(prompt)], {
       taskText: prompt,
       runStatus: "running",
@@ -2799,38 +2858,40 @@ const ChatView: Component<ChatViewProps> = (props) => {
     })
   }
 
-  const pendingUserInputContent = (inputId: string): UserInputDraft => pendingUserInputValues()[inputId] || {}
+  const pendingUserInputContent = (input: PendingUserInput): UserInputDraft => pendingUserInputValues()[pendingUserInputKey(input)] || {}
 
-  const updatePendingUserInputValue = (inputId: string, field: string, value: unknown) => {
+  const updatePendingUserInputValue = (input: PendingUserInput, field: string, value: unknown) => {
+    const key = pendingUserInputKey(input)
     setPendingUserInputValues((current) => ({
       ...current,
-      [inputId]: {
-        ...(current[inputId] || {}),
+      [key]: {
+        ...(current[key] || {}),
         [field]: value,
       },
     }))
   }
 
-  const clearPendingUserInputValue = (inputId: string, field: string) => {
+  const clearPendingUserInputValue = (input: PendingUserInput, field: string) => {
+    const key = pendingUserInputKey(input)
     setPendingUserInputValues((current) => {
-      const draft = { ...(current[inputId] || {}) }
+      const draft = { ...(current[key] || {}) }
       delete draft[field]
       return {
         ...current,
-        [inputId]: draft,
+        [key]: draft,
       }
     })
   }
 
   const replyUserInput = (input: PendingUserInput, action: "accept" | "decline" | "cancel", reason?: string) => {
     const contentResult = action === "accept"
-      ? buildUserInputContent(input, pendingUserInputContent(input.inputId))
+      ? buildUserInputContent(input, pendingUserInputContent(input))
       : { content: {}, errors: [] as string[] }
     if (contentResult.errors.length > 0) {
       const message = contentResult.errors[0]
       setPendingUserInputs((items) =>
         items.map((item) =>
-          item.inputId === input.inputId
+          pendingUserInputMatches(item, input)
             ? { ...item, submissionState: "submit_failed", submissionError: message }
             : item
         )
@@ -2839,7 +2900,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     }
     setPendingUserInputs((items) =>
       items.map((item) =>
-        item.inputId === input.inputId
+        pendingUserInputMatches(item, input)
           ? { ...item, submissionState: "submitting", submissionError: undefined }
           : item
       )
@@ -2847,6 +2908,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
     vscode.postMessage({
       type: "sessionRun.userInput.reply",
       sessionRunId: input.sessionRunId || activeSessionRunId(),
+      branchBindingId: input.branchBindingId || selectedBranchBindingId(),
+      branch_binding_id: input.branchBindingId || selectedBranchBindingId(),
       inputId: input.inputId,
       action,
       content: contentResult.content,
@@ -2859,7 +2922,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     field: string,
     submitting: boolean,
   ) => {
-    const draft = () => pendingUserInputContent(input.inputId)
+    const draft = () => pendingUserInputContent(input)
     const kind = userInputFieldKind(input, field)
     if (kind === "boolean") {
       if (userInputBooleanAllowsOmit(input, field)) {
@@ -2870,9 +2933,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
             onChange={(event) => {
               const value = userInputBooleanValueFromKey(event.currentTarget.value)
               if (value === undefined) {
-                clearPendingUserInputValue(input.inputId, field)
+                clearPendingUserInputValue(input, field)
               } else {
-                updatePendingUserInputValue(input.inputId, field, value)
+                updatePendingUserInputValue(input, field, value)
               }
             }}
           >
@@ -2887,7 +2950,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
           type="checkbox"
           checked={userInputBooleanSelectedKey(input, field, draft()) === "true"}
           disabled={submitting}
-          onChange={(event) => updatePendingUserInputValue(input.inputId, field, event.currentTarget.checked)}
+          onChange={(event) => updatePendingUserInputValue(input, field, event.currentTarget.checked)}
         />
       )
     }
@@ -2898,7 +2961,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
           disabled={submitting}
           onChange={(event) => {
             const option = userInputEnumOptions(input, field).find((item) => item.key === event.currentTarget.value)
-            updatePendingUserInputValue(input.inputId, field, option?.value ?? "")
+            updatePendingUserInputValue(input, field, option?.value ?? "")
           }}
         >
           <option value="">选择...</option>
@@ -2914,7 +2977,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
           rows={3}
           value={userInputDraftDisplayValue(draft()[field])}
           disabled={submitting}
-          onInput={(event) => updatePendingUserInputValue(input.inputId, field, event.currentTarget.value)}
+          onInput={(event) => updatePendingUserInputValue(input, field, event.currentTarget.value)}
         />
       )
     }
@@ -2924,7 +2987,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         step={kind === "integer" ? "1" : kind === "number" ? "any" : undefined}
         value={userInputDraftDisplayValue(draft()[field])}
         disabled={submitting}
-        onInput={(event) => updatePendingUserInputValue(input.inputId, field, event.currentTarget.value)}
+        onInput={(event) => updatePendingUserInputValue(input, field, event.currentTarget.value)}
       />
     )
   }
@@ -2941,6 +3004,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
         upsertPendingApproval(items, nextApproval),
         approval.approvalId,
         decision,
+        approval.sessionRunId,
+        approval.branchBindingId,
       )
     )
     if (selectedApproval()?.approvalId === approval.approvalId) {
@@ -3149,25 +3214,30 @@ const ChatView: Component<ChatViewProps> = (props) => {
       }
       if (msg.type === "sessionRun.branch.started") {
         const sessionRunId = stringValue(msg.sessionRunId) || stringValue(msg.session_run_id)
+        const branchBindingId = stringValue(msg.branchBindingId) || stringValue(msg.branch_binding_id) || selectedBranchBindingId()
         if (sessionRunId) setActiveSessionRunId(sessionRunId)
+        setSelectedBranchBindingId(branchBindingId)
         setSessionRunStatus("running")
     setBranchCompose(undefined)
       }
       if (msg.type === "sessionRun.branches") {
+        const sessionRunId = stringValue(msg.sessionRunId) || stringValue(msg.session_run_id)
+        if (sessionRunId && activeSessionRunId() && sessionRunId !== activeSessionRunId()) return
         setBranchSummaries(normalizeBranchSummaries(msg.branches))
       }
       if (msg.type === "sessionRun.branch.selected") {
         const sessionRunId = stringValue(msg.sessionRunId) || stringValue(msg.session_run_id)
         const sessionId = stringValue(msg.sessionId) || stringValue(msg.session_id)
+        const branchBindingId = stringValue(msg.branchBindingId) || stringValue(msg.branch_binding_id) || selectedBranchBindingId()
         const branches = normalizeBranchSummaries(msg.branches || objectValue(msg.payload).branches)
         const running = msg.running === true || stringValue(msg.status) === "running"
         const nextStatus = running ? "running" : (runStatusValue(msg.status) || "idle")
         if (sessionRunId) setActiveSessionRunId(sessionRunId)
+        setSelectedBranchBindingId(branchBindingId)
         if (sessionId) setActiveRunSessionId(sessionId)
         setBranchSummaries(branches)
-        setPendingApprovals([])
         setSelectedApproval(undefined)
-        clearPendingUserInputs()
+        setQueuedPrompts(clearPromptQueue())
         clearActiveStreamDraft()
         setIsWorking(running)
         setSessionRunStatus(nextStatus)
@@ -3214,9 +3284,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         setModelSwitchError("")
         setModelRollbackProfile("")
         setPendingModelProfile("")
-        if (queuedPrompts().items.length) {
-          window.setTimeout(continueQueuedPrompts, 0)
-        } else if (environmentRunQueue().length) {
+        if (environmentRunQueue().length) {
           window.setTimeout(startNextEnvironmentQueueItem, 0)
         }
       }
@@ -3224,9 +3292,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         const requestId = stringValue(msg.requestId) || stringValue(msg.request_id) || ""
         if (!shouldAcceptModelSwitchResponse(modelSwitchRequestId(), requestId)) return
         restoreModelAfterSwitchFailure(typeof msg.message === "string" ? msg.message : "模型切换失败")
-        if (queuedPrompts().items.length) {
-          window.setTimeout(continueQueuedPrompts, 0)
-        } else if (environmentRunQueue().length) {
+        if (environmentRunQueue().length) {
           window.setTimeout(startNextEnvironmentQueueItem, 0)
         }
       }
@@ -3236,12 +3302,17 @@ const ChatView: Component<ChatViewProps> = (props) => {
       if (msg.type === "sessionRun.resume" && typeof msg.payload === "object" && msg.payload) {
         const payload = objectValue(msg.payload)
         const sessionRunId = stringValue(payload.sessionRunId) || stringValue(payload.session_run_id)
+        const branchBindingId =
+          stringValue(payload.branchBindingId) ||
+          stringValue(payload.branch_binding_id) ||
+          selectedBranchBindingId()
         const sessionId =
           stringValue(payload.sessionId) ||
           stringValue(payload.session_id) ||
           stringValue(payload.draftSessionId) ||
           stringValue(payload.draft_session_id)
         if (sessionRunId) setActiveSessionRunId(sessionRunId)
+        setSelectedBranchBindingId(branchBindingId)
         if (sessionId) {
           setActiveRunSessionId(sessionId)
           if (remoteSessionIdForMutation(sessionId) && trace.currentSessionId() !== sessionId) {
@@ -3249,17 +3320,19 @@ const ChatView: Component<ChatViewProps> = (props) => {
           }
         }
         const statusApprovals = Array.isArray(payload.approvals) ? payload.approvals : []
-        if (sessionRunId && statusApprovals.length) {
+        if (sessionRunId) {
           setPendingApprovals((items) =>
-            mergeStatusApprovals(items, statusApprovals, sessionRunId)
+            mergeStatusApprovals(items, statusApprovals, sessionRunId, branchBindingId)
           )
         }
         const statusUserInputs = Array.isArray(payload.user_inputs) ? payload.user_inputs : []
         if (sessionRunId) {
           setPendingUserInputs((items) =>
-            reconcileStatusUserInputs(items, statusUserInputs, sessionRunId)
+            reconcileStatusUserInputs(items, statusUserInputs, sessionRunId, branchBindingId)
           )
-          setPendingUserInputValues((current) => reconcileStatusUserInputValues(current, statusUserInputs))
+          setPendingUserInputValues((current) =>
+            reconcileStatusUserInputValues(current, statusUserInputs, sessionRunId, branchBindingId)
+          )
         }
         const runtime = sessionRuntimeStateFromMessage(msg as Record<string, unknown>, payload)
         if (Object.keys(runtime).length) {
@@ -3278,6 +3351,11 @@ const ChatView: Component<ChatViewProps> = (props) => {
       }
       if (msg.type === "sessionRun.session" && typeof msg.sessionRunId === "string") {
         setActiveSessionRunId(msg.sessionRunId)
+        setSelectedBranchBindingId(
+          stringValue(msg.branchBindingId) ||
+          stringValue(msg.branch_binding_id) ||
+          selectedBranchBindingId()
+        )
         const sessionId = stringValue(msg.sessionId) || stringValue(msg.session_id)
         if (sessionId) setActiveRunSessionId(sessionId)
         const runtime = sessionRuntimeStateFromMessage(msg as Record<string, unknown>)
@@ -3290,9 +3368,60 @@ const ChatView: Component<ChatViewProps> = (props) => {
         }
         retryLiveTranscriptFlushSoon()
       }
+      if (msg.type === "sessionRun.pendingNextTurn") {
+        const sessionRunId = stringValue(msg.sessionRunId) || stringValue(msg.session_run_id)
+        const branchBindingId = stringValue(msg.branchBindingId) || stringValue(msg.branch_binding_id) || selectedBranchBindingId()
+        if (!messageTargetsCurrentRun(sessionRunId, branchBindingId)) return
+        const pending = objectValue(msg.pendingNextTurn || msg.pending_next_turn)
+        const text = stringValue(pending.text) || ""
+        if (!text.trim()) return
+        const queuedAt = stringValue(pending.queuedAt) || stringValue(pending.queued_at)
+        const createdAtMs = queuedAt ? Date.parse(queuedAt) : Number.NaN
+        setQueuedPrompts((current) =>
+          enqueuePrompt(current, text, {
+            id:
+              stringValue(pending.clientRequestId) ||
+              stringValue(pending.client_request_id) ||
+              queuedAt ||
+              `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            ...(Number.isFinite(createdAtMs) ? { createdAt: createdAtMs } : {}),
+            requestId: stringValue(pending.clientRequestId) || stringValue(pending.client_request_id),
+            mentions: Array.isArray(pending.mentions) ? pending.mentions as Record<string, unknown>[] : undefined,
+          })
+        )
+      }
+      if (msg.type === "sessionRun.pendingNextTurns") {
+        const sessionRunId = stringValue(msg.sessionRunId) || stringValue(msg.session_run_id)
+        const branchBindingId = stringValue(msg.branchBindingId) || stringValue(msg.branch_binding_id) || selectedBranchBindingId()
+        if (!messageTargetsCurrentRun(sessionRunId, branchBindingId)) return
+        const items = Array.isArray(msg.items) ? msg.items : []
+        setQueuedPrompts(promptQueueStateFromPendingNextTurns(items))
+      }
+      if (msg.type === "sessionRun.continued") {
+        const sessionRunId = stringValue(msg.sessionRunId) || stringValue(msg.session_run_id)
+        const branchBindingId = stringValue(msg.branchBindingId) || stringValue(msg.branch_binding_id) || selectedBranchBindingId()
+        if (!messageTargetsCurrentRun(sessionRunId, branchBindingId)) return
+        if (sessionRunId) setActiveSessionRunId(sessionRunId)
+        setIsWorking(true)
+        setSessionRunStatus("running")
+        setWorkingText("处理中")
+        trace.patchStats({ runStatus: "running" })
+        if (!timer) startTimer()
+        const text = (stringValue(msg.text) || "").trim()
+        setQueuedPrompts((current) => {
+          const index = current.items.findIndex((item) => !text || item.text === text)
+          if (index < 0) return current
+          return {
+            ...current,
+            items: [...current.items.slice(0, index), ...current.items.slice(index + 1)],
+          }
+        })
+      }
       if (msg.type === "sessionRun.reconnecting") {
         const payload = objectValue(msg.payload)
+        const branchBindingId = stringValue(msg.branchBindingId) || stringValue(msg.branch_binding_id)
         const sessionRunId = stringValue(msg.sessionRunId) || stringValue(payload.sessionRunId) || stringValue(payload.session_run_id)
+        if (!messageTargetsCurrentRun(sessionRunId, branchBindingId)) return
         const sessionId =
           stringValue(payload.sessionId) ||
           stringValue(payload.session_id) ||
@@ -3306,12 +3435,19 @@ const ChatView: Component<ChatViewProps> = (props) => {
         if (!timer) startTimer()
       }
       if (msg.type === "sessionRun.reconnected") {
+        const payload = objectValue(msg.payload)
+        const branchBindingId = stringValue(msg.branchBindingId) || stringValue(msg.branch_binding_id)
+        const sessionRunId = stringValue(msg.sessionRunId) || stringValue(payload.sessionRunId) || stringValue(payload.session_run_id)
+        if (!messageTargetsCurrentRun(sessionRunId, branchBindingId)) return
         setWorkingText(t("chat.streamRecovery.continuing"))
         setIsWorking(true)
         setSessionRunStatus("running")
         trace.patchStats({ runStatus: "running" })
       }
       if (msg.type === "sessionRun.events" && Array.isArray(msg.events)) {
+        const sessionRunId = stringValue(msg.sessionRunId) || stringValue(msg.session_run_id)
+        const branchBindingId = stringValue(msg.branchBindingId) || stringValue(msg.branch_binding_id) || selectedBranchBindingId()
+        if (!messageTargetsCurrentRun(sessionRunId, branchBindingId)) return
         for (const event of msg.events) {
           if (event && typeof event === "object") {
             handleRemoteEvent(event as Record<string, unknown>)
@@ -3319,6 +3455,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
         }
       }
       if (msg.type === "sessionRun.stream" && Array.isArray(msg.events)) {
+        const sessionRunId = stringValue(msg.sessionRunId) || stringValue(msg.session_run_id)
+        const branchBindingId = stringValue(msg.branchBindingId) || stringValue(msg.branch_binding_id) || selectedBranchBindingId()
+        if (!messageTargetsCurrentRun(sessionRunId, branchBindingId)) return
         for (const event of msg.events) {
           if (event && typeof event === "object") {
             handleLiveStreamEvent(event as Record<string, unknown>)
@@ -3360,6 +3499,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
         if (nextTaskflowId) setTaskflowId(nextTaskflowId)
       }
       if (msg.type === "sessionRun.done") {
+        const sessionRunId = stringValue(msg.sessionRunId) || stringValue(msg.session_run_id)
+        const branchBindingId = stringValue(msg.branchBindingId) || stringValue(msg.branch_binding_id) || selectedBranchBindingId()
+        if (!messageTargetsCurrentRun(sessionRunId, branchBindingId)) return
         if (sessionRunStatus() === "interrupted") return
         finishSessionRun(doneStatusFromCurrentRun(), { startNextEnvironment: true })
       }
@@ -3367,24 +3509,41 @@ const ChatView: Component<ChatViewProps> = (props) => {
         finishSessionRun(doneStatusFromCurrentRun(), { startNextEnvironment: true })
       }
       if (msg.type === "sessionRun.cancelled") {
+        const sessionRunId = stringValue(msg.sessionRunId) || stringValue(msg.session_run_id)
+        const branchBindingId = stringValue(msg.branchBindingId) || stringValue(msg.branch_binding_id) || selectedBranchBindingId()
+        if (!messageTargetsCurrentRun(sessionRunId, branchBindingId)) return
         finishSessionRun("cancelled")
       }
       if (msg.type === "approval.reply.ok") {
         const approvalId = stringValue(msg.approvalId) || stringValue(msg.approval_id)
+        const sessionRunId = stringValue(msg.sessionRunId) || stringValue(msg.session_run_id) || activeSessionRunId()
+        const branchBindingId = stringValue(msg.branchBindingId) || stringValue(msg.branch_binding_id) || selectedBranchBindingId()
         if (approvalId) {
-          setPendingApprovals((items) => markApprovalSubmitSucceeded(items, approvalId))
-          if (selectedApproval()?.approvalId === approvalId) {
+          setPendingApprovals((items) => markApprovalSubmitSucceeded(items, approvalId, sessionRunId, branchBindingId))
+          const selected = selectedApproval()
+          if (
+            selected?.approvalId === approvalId &&
+            (!sessionRunId || !selected.sessionRunId || selected.sessionRunId === sessionRunId) &&
+            (!branchBindingId || !selected.branchBindingId || selected.branchBindingId === branchBindingId)
+          ) {
             setSelectedApproval(undefined)
           }
         }
       }
       if (msg.type === "approval.reply.error") {
         const approvalId = stringValue(msg.approvalId) || stringValue(msg.approval_id)
+        const sessionRunId = stringValue(msg.sessionRunId) || stringValue(msg.session_run_id) || activeSessionRunId()
+        const branchBindingId = stringValue(msg.branchBindingId) || stringValue(msg.branch_binding_id) || selectedBranchBindingId()
+        const visibleBranch = messageTargetsCurrentRun(sessionRunId, branchBindingId)
         const message = typeof msg.message === "string" ? msg.message : "approval reply failed"
         if (approvalId) {
-          setPendingApprovals((items) => markApprovalSubmitFailed(items, approvalId, message))
+          setPendingApprovals((items) => markApprovalSubmitFailed(items, approvalId, message, sessionRunId, branchBindingId))
           const selected = selectedApproval()
-          if (selected?.approvalId === approvalId) {
+          if (
+            selected?.approvalId === approvalId &&
+            (!sessionRunId || !selected.sessionRunId || selected.sessionRunId === sessionRunId) &&
+            (!branchBindingId || !selected.branchBindingId || selected.branchBindingId === branchBindingId)
+          ) {
             setSelectedApproval({
               ...selected,
               submissionState: "submit_failed",
@@ -3392,32 +3551,39 @@ const ChatView: Component<ChatViewProps> = (props) => {
             })
           }
         }
-        appendNotice("error", `审批提交失败：${message}`, "error")
+        if (visibleBranch) appendNotice("error", `审批提交失败：${message}`, "error")
       }
       if (msg.type === "sessionRun.userInput.reply.ok") {
         const inputId = stringValue(msg.inputId) || stringValue(msg.input_id)
+        const sessionRunId = stringValue(msg.sessionRunId) || stringValue(msg.session_run_id) || activeSessionRunId()
+        const branchBindingId = stringValue(msg.branchBindingId) || stringValue(msg.branch_binding_id) || selectedBranchBindingId()
         if (inputId) {
-          setPendingUserInputs((items) => items.filter((item) => item.inputId !== inputId))
+          setPendingUserInputs((items) =>
+            items.filter((item) => !pendingUserInputMatches(item, { inputId, sessionRunId, branchBindingId }))
+          )
           setPendingUserInputValues((current) => {
             const next = { ...current }
-            delete next[inputId]
+            delete next[pendingUserInputKeyFromParts(inputId, sessionRunId, branchBindingId)]
             return next
           })
         }
       }
       if (msg.type === "sessionRun.userInput.reply.error") {
         const inputId = stringValue(msg.inputId) || stringValue(msg.input_id)
+        const sessionRunId = stringValue(msg.sessionRunId) || stringValue(msg.session_run_id) || activeSessionRunId()
+        const branchBindingId = stringValue(msg.branchBindingId) || stringValue(msg.branch_binding_id) || selectedBranchBindingId()
+        const visibleBranch = messageTargetsCurrentRun(sessionRunId, branchBindingId)
         const message = typeof msg.message === "string" ? msg.message : "user input reply failed"
         if (inputId) {
           setPendingUserInputs((items) =>
             items.map((item) =>
-              item.inputId === inputId
+              pendingUserInputMatches(item, { inputId, sessionRunId, branchBindingId })
                 ? { ...item, submissionState: "submit_failed", submissionError: message }
                 : item
-            )
+              )
           )
         }
-        appendNotice("error", `输入提交失败：${message}`, "error")
+        if (visibleBranch) appendNotice("error", `输入提交失败：${message}`, "error")
       }
       if (msg.type === "environment.run.error" && isWorking()) {
         appendNotice("error", `环境任务失败：${typeof msg.message === "string" ? msg.message : "unknown error"}`, "error")
@@ -3425,6 +3591,10 @@ const ChatView: Component<ChatViewProps> = (props) => {
         finishSessionRun("error")
       }
       if (msg.type === "sessionRun.error") {
+        const sessionRunId = stringValue(msg.sessionRunId) || stringValue(msg.session_run_id)
+        const branchBindingId = stringValue(msg.branchBindingId) || stringValue(msg.branch_binding_id)
+        if (sessionRunId && activeSessionRunId() && sessionRunId !== activeSessionRunId()) return
+        if (branchBindingId && branchBindingId !== selectedBranchBindingId()) return
         appendNotice("error", `连接错误：${typeof msg.message === "string" ? msg.message : "unknown error"}`, "error")
         setEnvironmentRunQueue([])
         finishSessionRun("error")
@@ -3487,7 +3657,6 @@ const ChatView: Component<ChatViewProps> = (props) => {
     },
     promptQueue: {
       queuedPrompts,
-      continueQueuedPrompts,
       clearQueuedPrompts,
     },
     history: {
@@ -3730,9 +3899,6 @@ const ChatView: Component<ChatViewProps> = (props) => {
               </div>
             </div>
             <div class="prompt-queue-banner__actions">
-              <Show when={!isWorking() && queuedPromptItems().length > 0}>
-                <button type="button" onClick={continueQueuedPrompts}>继续发送</button>
-              </Show>
               <button type="button" onClick={clearQueuedPrompts}>清空</button>
             </div>
           </div>
@@ -3978,6 +4144,28 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value ? value : undefined
 }
 
+function promptQueueStateFromPendingNextTurns(items: unknown[]): PromptQueueState {
+  return items.reduce<PromptQueueState>((state, raw, index) => {
+    const item = objectValue(raw)
+    const text = stringValue(item.text) || ""
+    if (!text.trim()) return state
+    const clientRequestId = stringValue(item.clientRequestId) || stringValue(item.client_request_id)
+    const queuedAt = stringValue(item.queuedAt) || stringValue(item.queued_at)
+    const createdAtMs = queuedAt ? Date.parse(queuedAt) : Number.NaN
+    const mentions = Array.isArray(item.mentions)
+      ? item.mentions.filter((mention): mention is Record<string, unknown> =>
+          Boolean(mention && typeof mention === "object" && !Array.isArray(mention))
+        )
+      : undefined
+    return enqueuePrompt(state, text, {
+      id: clientRequestId || queuedAt || `pending-${index}`,
+      ...(Number.isFinite(createdAtMs) ? { createdAt: createdAtMs } : {}),
+      ...(clientRequestId ? { requestId: clientRequestId } : {}),
+      ...(mentions?.length ? { mentions } : {}),
+    })
+  }, createPromptQueueState())
+}
+
 function sanitizeAutoApproveOptions(value: unknown): Record<string, boolean> {
   const raw = value && typeof value === "object" ? value as Record<string, unknown> : {}
   return Object.keys(DEFAULT_AUTO_APPROVE_OPTIONS).reduce<Record<string, boolean>>((options, key) => {
@@ -4012,7 +4200,7 @@ function isCategoryAlwaysAllowAction(category: AutoApprovalCategory): boolean {
 }
 
 function upsertPendingApproval(items: PendingApproval[], next: PendingApproval): PendingApproval[] {
-  const index = items.findIndex((item) => item.approvalId === next.approvalId)
+  const index = items.findIndex((item) => pendingApprovalMatches(item, next))
   if (index < 0) return [...items, next]
   const updated = [...items]
   updated[index] = next
@@ -4020,11 +4208,59 @@ function upsertPendingApproval(items: PendingApproval[], next: PendingApproval):
 }
 
 function upsertPendingUserInput(items: PendingUserInput[], next: PendingUserInput): PendingUserInput[] {
-  const index = items.findIndex((item) => item.inputId === next.inputId)
+  const index = items.findIndex((item) => pendingUserInputMatches(item, next))
   if (index < 0) return [...items, next]
   const updated = [...items]
   updated[index] = { ...items[index], ...next }
   return updated
+}
+
+function pendingApprovalMatches(
+  item: PendingApproval,
+  target: Pick<PendingApproval, "approvalId"> & Partial<Pick<PendingApproval, "sessionRunId" | "branchBindingId">>,
+): boolean {
+  if (item.approvalId !== target.approvalId) return false
+  if (target.sessionRunId && item.sessionRunId && item.sessionRunId !== target.sessionRunId) return false
+  if (target.branchBindingId && item.branchBindingId && item.branchBindingId !== target.branchBindingId) return false
+  return true
+}
+
+function pendingApprovalBelongsToTarget(
+  item: PendingApproval,
+  sessionRunId: string | undefined,
+  branchBindingId: string | undefined,
+): boolean {
+  if (sessionRunId && item.sessionRunId && item.sessionRunId !== sessionRunId) return false
+  if (branchBindingId && item.branchBindingId && item.branchBindingId !== branchBindingId) return false
+  return Boolean(sessionRunId || branchBindingId)
+}
+
+function pendingUserInputMatches(
+  item: PendingUserInput,
+  target: Pick<PendingUserInput, "inputId"> & Partial<Pick<PendingUserInput, "sessionRunId" | "branchBindingId">>,
+): boolean {
+  if (item.inputId !== target.inputId) return false
+  if (target.sessionRunId && item.sessionRunId && item.sessionRunId !== target.sessionRunId) return false
+  if (target.branchBindingId && item.branchBindingId && item.branchBindingId !== target.branchBindingId) return false
+  return true
+}
+
+function pendingUserInputBelongsToTarget(
+  item: PendingUserInput,
+  sessionRunId: string | undefined,
+  branchBindingId: string | undefined,
+): boolean {
+  if (sessionRunId && item.sessionRunId && item.sessionRunId !== sessionRunId) return false
+  if (branchBindingId && item.branchBindingId && item.branchBindingId !== branchBindingId) return false
+  return Boolean(sessionRunId || branchBindingId)
+}
+
+function pendingUserInputKey(input: Pick<PendingUserInput, "inputId" | "sessionRunId" | "branchBindingId">): string {
+  return userInputDraftKey(input)
+}
+
+function pendingUserInputKeyFromParts(inputId: string, sessionRunId?: string, branchBindingId?: string): string {
+  return userInputDraftKeyFromParts(inputId, sessionRunId, branchBindingId)
 }
 
 function numberValue(value: unknown): number | undefined {

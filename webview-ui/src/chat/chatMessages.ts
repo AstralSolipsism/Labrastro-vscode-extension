@@ -12,6 +12,7 @@ export interface ChatSendInput {
   draftSessionId?: string
   requestId?: string
   locale?: string
+  branchBindingId?: string
   mode?: string
   workflowMode?: ChatWorkflowMode
   providerId?: string
@@ -40,7 +41,22 @@ export interface SessionModelSwitchInput {
 
 export interface ChatRecoverInput {
   sessionRunId: string
+  branchBindingId?: string
   action: "continue" | "retry"
+}
+
+export interface ChatCancelInput {
+  sessionRunId?: string
+  branchBindingId?: string
+  reason?: string
+}
+
+export interface ChatPendingNextTurnInput {
+  sessionRunId: string
+  branchBindingId: string
+  clientRequestId?: string
+  queuedAt?: string
+  text?: string
 }
 
 export interface ChatBranchInput {
@@ -76,6 +92,7 @@ export function buildChatSendMessage(input: ChatSendInput): WebviewToHostMessage
   const providerId = input.providerId?.trim()
   const modelId = input.modelId?.trim()
   const locale = input.locale?.trim()
+  const branchBindingId = input.branchBindingId?.trim()
     return {
       type: "chat.send",
       text,
@@ -83,6 +100,7 @@ export function buildChatSendMessage(input: ChatSendInput): WebviewToHostMessage
     ...(input.draftSessionId ? { draftSessionId: input.draftSessionId } : {}),
     ...(input.requestId ? { requestId: input.requestId } : {}),
     ...(locale ? { locale } : {}),
+    ...(branchBindingId ? { branchBindingId, branch_binding_id: branchBindingId } : {}),
     ...(mode ? { mode } : {}),
     ...(workflowMode ? { workflowMode } : {}),
       ...(providerId && modelId ? { providerId, modelId } : {}),
@@ -126,11 +144,43 @@ export const chatMessages = {
     port.postMessage(buildSessionModelSwitchMessage(input))
   },
 
-  cancel(port: ChatMessagePort, sessionRunId: string | undefined, reason = "user_cancelled"): void {
+  cancel(port: ChatMessagePort, input: ChatCancelInput | string | undefined, reason = "user_cancelled"): void {
+    const payload = typeof input === "object" && input
+      ? input
+      : { sessionRunId: input, reason }
+    const branchBindingId = payload.branchBindingId?.trim()
     port.postMessage({
       type: "sessionRun.cancel",
-      ...(sessionRunId ? { sessionRunId } : {}),
-      reason,
+      ...(payload.sessionRunId ? { sessionRunId: payload.sessionRunId } : {}),
+      ...(branchBindingId ? { branchBindingId, branch_binding_id: branchBindingId } : {}),
+      reason: payload.reason || "user_cancelled",
+    })
+  },
+
+  removePendingNextTurn(port: ChatMessagePort, input: ChatPendingNextTurnInput): void {
+    const branchBindingId = input.branchBindingId.trim()
+    if (!input.sessionRunId || !branchBindingId) return
+    port.postMessage({
+      type: "sessionRun.pendingNextTurn.remove",
+      sessionRunId: input.sessionRunId,
+      session_run_id: input.sessionRunId,
+      branchBindingId,
+      branch_binding_id: branchBindingId,
+      ...(input.clientRequestId ? { clientRequestId: input.clientRequestId, client_request_id: input.clientRequestId } : {}),
+      ...(input.queuedAt ? { queuedAt: input.queuedAt, queued_at: input.queuedAt } : {}),
+      ...(input.text ? { text: input.text } : {}),
+    })
+  },
+
+  clearPendingNextTurns(port: ChatMessagePort, input: Pick<ChatPendingNextTurnInput, "sessionRunId" | "branchBindingId">): void {
+    const branchBindingId = input.branchBindingId.trim()
+    if (!input.sessionRunId || !branchBindingId) return
+    port.postMessage({
+      type: "sessionRun.pendingNextTurn.clear",
+      sessionRunId: input.sessionRunId,
+      session_run_id: input.sessionRunId,
+      branchBindingId,
+      branch_binding_id: branchBindingId,
     })
   },
 
@@ -157,9 +207,11 @@ export const chatMessages = {
   },
 
   recover(port: ChatMessagePort, input: ChatRecoverInput): void {
+    const branchBindingId = input.branchBindingId?.trim()
     port.postMessage({
       type: "sessionRun.recover",
       sessionRunId: input.sessionRunId,
+      ...(branchBindingId ? { branchBindingId, branch_binding_id: branchBindingId } : {}),
       action: input.action,
     })
   },

@@ -22,6 +22,7 @@ describe("chat messages", () => {
     const payload = buildChatSendMessage({
       text: "  hello  ",
       sessionId: "session-1",
+      branchBindingId: "branch-1",
       mode: "taskflow",
       workflowMode: "taskflow",
       mentions: [{ kind: "file", path: "README.md" }],
@@ -31,6 +32,8 @@ describe("chat messages", () => {
       type: "chat.send",
       text: "hello",
       sessionId: "session-1",
+      branchBindingId: "branch-1",
+      branch_binding_id: "branch-1",
       mode: "taskflow",
       workflowMode: "taskflow",
       mentions: [{ kind: "file", path: "README.md" }],
@@ -101,6 +104,36 @@ describe("chat messages", () => {
       {
         type: "sessionRun.branch.select",
         branch_binding_id: "branch-2",
+      },
+    ])
+  })
+
+  it("posts session run controls with branch binding ids", () => {
+    const messages: Record<string, unknown>[] = []
+
+    chatMessages.cancel(
+      { postMessage: (message) => messages.push(message) },
+      { sessionRunId: "run-1", branchBindingId: "branch-1", reason: "user_stop" },
+    )
+    chatMessages.recover(
+      { postMessage: (message) => messages.push(message) },
+      { sessionRunId: "run-1", branchBindingId: "branch-1", action: "continue" },
+    )
+
+    expect(messages).toEqual([
+      {
+        type: "sessionRun.cancel",
+        sessionRunId: "run-1",
+        branchBindingId: "branch-1",
+        branch_binding_id: "branch-1",
+        reason: "user_stop",
+      },
+      {
+        type: "sessionRun.recover",
+        sessionRunId: "run-1",
+        branchBindingId: "branch-1",
+        branch_binding_id: "branch-1",
+        action: "continue",
       },
     ])
   })
