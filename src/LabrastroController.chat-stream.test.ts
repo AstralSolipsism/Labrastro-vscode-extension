@@ -54,6 +54,102 @@ describe("LabrastroController session run event batching", () => {
     expect(source).not.toContain("LIVE_CHAT_STREAM_EVENT_TYPES")
   })
 
+  it("tracks session run event reconnect state per stream branch", () => {
+    const retryFunction = sourceSection(
+      "private async retrySessionRunEventsAfterError",
+      "private async applySessionRunEventsBatch",
+    )
+    const connectedFunction = sourceSection(
+      "private markSessionRunEventsConnected",
+      "private async retrySessionRunEventsAfterError",
+    )
+
+    expect(source).toContain("private readonly sessionRunEventReconnects = new Map<string, SessionRunEventReconnectState>()")
+    expect(retryFunction).toContain("const streamKey = sessionRunEventStreamKey(sessionRunId, branchBindingId)")
+    expect(retryFunction).toContain("this.sessionRunEventReconnects.get(streamKey)")
+    expect(retryFunction).toContain("this.sessionRunEventReconnects.set(streamKey")
+    expect(retryFunction).not.toContain("!canRetrySessionRunEvents(activeRun)")
+    expect(connectedFunction).toContain("activeRun?.sessionRunId === sessionRunId")
+    expect(connectedFunction).toContain("(activeRun.branchBindingId || \"main\") === branchBindingId")
+  })
+
+  it("scopes visible event batches by session run and branch", () => {
+    const batchFunction = sourceSection(
+      "private async applySessionRunEventsBatch",
+      "private async recoverSessionRun",
+    )
+
+    expect(batchFunction).toContain("const activeRun = this.sessionRunCoordinator.activeRun")
+    expect(batchFunction).toContain("activeRun?.sessionRunId === sessionRunId")
+    expect(batchFunction).toContain("(activeRun.branchBindingId || \"main\") === streamBranchBindingId")
+  })
+
+  it("keeps pending next turns owned until continue succeeds", () => {
+    const continueFunction = sourceSection(
+      "private async continueSessionRun",
+      "private async steerAgentRun",
+    )
+    const batchFunction = sourceSection(
+      "private async applySessionRunEventsBatch",
+      "private async recoverSessionRun",
+    )
+    const continuedIndex = continueFunction.indexOf('type: "sessionRun.continued"')
+    const requestIndex = continueFunction.indexOf("await this.client.continueSessionRun")
+
+    expect(batchFunction).toContain("pendingNextTurnForBranch(")
+    expect(batchFunction).not.toContain("shiftPendingNextTurnForBranch(")
+    expect(continueFunction).not.toContain("clearPendingNextTurnForBranch(")
+    expect(continuedIndex).toBeGreaterThan(requestIndex)
+  })
+
+  it("posts the target branch pending snapshot after branch selection", () => {
+    const selectFunction = sourceSection(
+      "private async selectSessionRunBranch",
+      "private async recoverSessionRun",
+    )
+
+    expect(selectFunction).toContain("postPendingNextTurnsSnapshot")
+    expect(selectFunction).toContain("sessionRunId")
+    expect(selectFunction).toContain("branchBindingId")
+  })
+
+  it("echoes the approval candidate save branch in the webview result", () => {
+    const saveFunction = sourceSection(
+      "private async approveCandidateDocumentSave",
+      "private async refreshInitialStateInBackground",
+    )
+
+    expect(saveFunction).toContain("branch_binding_id: branchBindingId")
+    expect(saveFunction).toContain("branchBindingId,")
+    expect(saveFunction).toContain("branch_binding_id: branchBindingId,")
+  })
+
+  it("echoes branch identity on scoped session run errors", () => {
+    const continueFunction = sourceSection(
+      "private async continueSessionRun",
+      "private async steerAgentRun",
+    )
+    const recoverFunction = sourceSection(
+      "private async recoverSessionRun",
+      "private async resolveConfiguredDefaultChatModel",
+    )
+    const cancelFunction = sourceSection(
+      "private async cancelSessionRun",
+      "private async runAdminAction",
+    )
+    const streamFunction = sourceSection(
+      "private ensureSessionRunEventStream(",
+      "private ensureSessionRunEventStreamSoon",
+    )
+
+    for (const section of [continueFunction, recoverFunction, cancelFunction, streamFunction]) {
+      expect(section).toContain('type: "sessionRun.error"')
+      expect(section).toContain("sessionRunId")
+      expect(section).toContain("branchBindingId")
+      expect(section).toContain("branch_binding_id")
+    }
+  })
+
   it("refreshes active run status before sessionRun.resume and forwards pending approvals", () => {
     expect(source).toContain("activeRunPayloadWithServerStatus")
     expect(source).toContain("const status = await this.client.sessionRunStatus(sessionRunId")
