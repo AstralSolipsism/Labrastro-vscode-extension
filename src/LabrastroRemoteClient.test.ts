@@ -1545,15 +1545,16 @@ describe("LabrastroRemoteClient session run start", () => {
 
     await client.listSessions(5, "etag-1")
     await client.forkSession("session-1", 2)
-    await client.sessionRunStatus("run-1", 8)
+    await client.sessionRunStatus("run-1", 8, "main")
     await client.selectSessionRunBranch({
       sessionRunId: "run-1",
       branchBindingId: "branch-2",
       cursor: 0,
     })
-    await client.cancelSessionRun("run-1", "user_stop")
+    await client.cancelSessionRun("run-1", "user_stop", "main")
     await client.continueSessionRun({
       sessionRunId: "run-1",
+      branchBindingId: "main",
       prompt: "next turn",
       clientRequestId: "continue-1",
       locale: "zh-CN",
@@ -1568,10 +1569,12 @@ describe("LabrastroRemoteClient session run start", () => {
     })
     await client.recoverSessionRun({
       sessionRunId: "run-1",
+      branchBindingId: "main",
       action: "continue",
     })
     await client.approvalReply({
       session_run_id: "run-1",
+      branch_binding_id: "main",
       approval_id: "approval-1",
       decision: "allow_once",
     })
@@ -1598,6 +1601,7 @@ describe("LabrastroRemoteClient session run start", () => {
         body: {
           peer_token: "peer-token-1",
           session_run_id: "run-1",
+          branch_binding_id: "main",
           cursor: 8,
         },
       },
@@ -1615,6 +1619,7 @@ describe("LabrastroRemoteClient session run start", () => {
         body: {
           peer_token: "peer-token-1",
           session_run_id: "run-1",
+          branch_binding_id: "main",
           reason: "user_stop",
         },
       },
@@ -1623,6 +1628,7 @@ describe("LabrastroRemoteClient session run start", () => {
         body: {
           peer_token: "peer-token-1",
           session_run_id: "run-1",
+          branch_binding_id: "main",
           prompt: "next turn",
           client_request_id: "continue-1",
           locale: "zh-CN",
@@ -1649,6 +1655,7 @@ describe("LabrastroRemoteClient session run start", () => {
         body: {
           peer_token: "peer-token-1",
           session_run_id: "run-1",
+          branch_binding_id: "main",
           action: "continue",
         },
       },
@@ -1657,6 +1664,7 @@ describe("LabrastroRemoteClient session run start", () => {
         body: {
           peer_token: "peer-token-1",
           session_run_id: "run-1",
+          branch_binding_id: "main",
           approval_id: "approval-1",
           decision: "allow_once",
         },
@@ -1692,7 +1700,7 @@ describe("LabrastroRemoteClient session run start", () => {
     attachPeer(client)
 
     const batches: JsonBody[] = []
-    await client.streamSessionRunEvents("run-1", 1, async (batch) => {
+    await client.streamSessionRunEvents("run-1", 1, "main", async (batch) => {
       batches.push(batch)
     }, { timeoutSec: 2 })
 
@@ -1703,6 +1711,7 @@ describe("LabrastroRemoteClient session run start", () => {
         body: {
           peer_token: "peer-token-1",
           session_run_id: "run-1",
+          branch_binding_id: "main",
           cursor: 1,
           timeout_sec: 2,
         },
@@ -1736,7 +1745,7 @@ describe("LabrastroRemoteClient session run start", () => {
     const client = new LabrastroRemoteClient(context as never)
     attachPeer(client)
 
-    await expect(client.streamSessionRunEvents("run-1", 0, async () => undefined)).rejects.toMatchObject({
+    await expect(client.streamSessionRunEvents("run-1", 0, "main", async () => undefined)).rejects.toMatchObject({
       status: 503,
       code: "session_runs_unavailable",
     })
@@ -2178,7 +2187,7 @@ describe("LabrastroRemoteClient peer retry strategy", () => {
 
     const batches: JsonBody[] = []
     await expect(
-      client.streamSessionRunEvents("run-1", 7, async (batch) => {
+      client.streamSessionRunEvents("run-1", 7, "main", async (batch) => {
         batches.push(batch)
       })
     ).resolves.toBeUndefined()
@@ -2187,12 +2196,14 @@ describe("LabrastroRemoteClient peer retry strategy", () => {
       {
         peer_token: "stale-peer-token",
         session_run_id: "run-1",
+        branch_binding_id: "main",
         cursor: 7,
         timeout_sec: SESSION_RUN_EVENTS_TIMEOUT_SEC,
       },
       {
         peer_token: "fresh-peer-token",
         session_run_id: "run-1",
+        branch_binding_id: "main",
         cursor: 7,
         timeout_sec: SESSION_RUN_EVENTS_TIMEOUT_SEC,
       },

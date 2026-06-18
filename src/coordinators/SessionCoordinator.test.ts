@@ -147,6 +147,7 @@ describe("SessionCoordinator", () => {
     ;(document as Record<string, unknown>).run_state = {
       status: "running",
       session_run_id: "run-missing",
+      branch_binding_id: "branch-a",
       error: null,
     }
     document.turns[0].assistantMessages[0].parts = [
@@ -172,7 +173,7 @@ describe("SessionCoordinator", () => {
 
     await subject.loadSession("remote-1", post, { suppressListRefresh: true })
 
-    expect(client.sessionRunStatus).toHaveBeenCalledWith("run-missing")
+    expect(client.sessionRunStatus).toHaveBeenCalledWith("run-missing", undefined, "branch-a")
     const loaded = emitSessionMessage.mock.calls.find(([message]) => message.type === "session.loaded")?.[0]
     const tool = loaded?.document.turns[0].assistantMessages[0].parts[0]
     expect(loaded?.document.stats.runStatus).toBe("error")

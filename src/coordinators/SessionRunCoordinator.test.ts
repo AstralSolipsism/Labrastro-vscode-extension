@@ -178,6 +178,7 @@ describe("SessionRunCoordinator", () => {
     const post = vi.fn()
     subject.setActiveRun({
       sessionRunId: "active-run",
+      branchBindingId: "branch-a",
       cursor: 0,
       status: "running",
       startedAt: "2026-01-01T00:00:00.000Z",
@@ -187,12 +188,14 @@ describe("SessionRunCoordinator", () => {
     await subject.handleMessage({
       type: "approval.reply",
       approvalId: "approval-1",
+      branchBindingId: "branch-a",
       decision: "allow_once",
       reason: "ok",
     }, post)
 
     expect(options.client.approvalReply).toHaveBeenCalledWith({
       session_run_id: "active-run",
+      branch_binding_id: "branch-a",
       approval_id: "approval-1",
       decision: "allow_once",
       reason: "ok",
@@ -204,6 +207,7 @@ describe("SessionRunCoordinator", () => {
     const post = vi.fn()
     subject.setActiveRun({
       sessionRunId: "active-run",
+      branchBindingId: "branch-a",
       cursor: 0,
       status: "running",
       startedAt: "2026-01-01T00:00:00.000Z",
@@ -220,6 +224,7 @@ describe("SessionRunCoordinator", () => {
 
     expect(options.client.approvalReply).toHaveBeenCalledWith({
       session_run_id: "snake-run",
+      branch_binding_id: "branch-a",
       approval_id: "approval-1",
       decision: "allow_once",
       reason: "ok",
@@ -256,6 +261,7 @@ describe("SessionRunCoordinator", () => {
 
     expect(options.client.approvalReply).toHaveBeenCalledWith({
       session_run_id: "active-run",
+      branch_binding_id: "main",
       approval_id: "approval-1",
       decision: "allow_once",
       reason: "ok",
@@ -273,6 +279,7 @@ describe("SessionRunCoordinator", () => {
     options.approvalDocuments.approvedSaveCandidateFor.mockReturnValueOnce(approvedSaveCandidate)
     subject.setActiveRun({
       sessionRunId: "active-run",
+      branchBindingId: "branch-a",
       cursor: 0,
       status: "running",
       startedAt: "2026-01-01T00:00:00.000Z",
@@ -282,12 +289,14 @@ describe("SessionRunCoordinator", () => {
     await subject.handleMessage({
       type: "approval.reply",
       approvalId: "approval-1",
+      branchBindingId: "branch-a",
       decision: "allow_once",
       reason: "ok",
     }, post)
 
     expect(options.client.approvalReply).toHaveBeenCalledWith({
       session_run_id: "active-run",
+      branch_binding_id: "branch-a",
       approval_id: "approval-1",
       decision: "allow_once",
       reason: "ok",
@@ -320,6 +329,7 @@ describe("SessionRunCoordinator", () => {
 
     expect(options.client.approvalReply).toHaveBeenCalledWith({
       session_run_id: "active-run",
+      branch_binding_id: "main",
       approval_id: "approval-1",
       decision: "allow_once",
       reason: "ok",
@@ -355,6 +365,7 @@ describe("SessionRunCoordinator", () => {
 
     expect(options.client.approvalReply).toHaveBeenCalledWith({
       session_run_id: "active-run",
+      branch_binding_id: "main",
       approval_id: "approval-1",
       decision: "deny_once",
       reason: "no",
@@ -380,6 +391,7 @@ describe("SessionRunCoordinator", () => {
     await subject.handleMessage({
       type: "approval.reply",
       approvalId: "approval-1",
+      branchBindingId: "branch-a",
       decision: "allow_once",
       reason: "ok",
     }, post)
@@ -387,6 +399,8 @@ describe("SessionRunCoordinator", () => {
     expect(post).toHaveBeenCalledWith({
       type: "approval.reply.ok",
       sessionRunId: "active-run",
+      branchBindingId: "branch-a",
+      branch_binding_id: "branch-a",
       approvalId: "approval-1",
       decision: "allow_once",
       payload: {
@@ -403,6 +417,7 @@ describe("SessionRunCoordinator", () => {
     options.client.approvalReply.mockRejectedValueOnce(new Error("fetch failed"))
     subject.setActiveRun({
       sessionRunId: "active-run",
+      branchBindingId: "branch-a",
       cursor: 0,
       status: "running",
       startedAt: "2026-01-01T00:00:00.000Z",
@@ -412,6 +427,7 @@ describe("SessionRunCoordinator", () => {
     await subject.handleMessage({
       type: "approval.reply",
       approvalId: "approval-1",
+      branchBindingId: "branch-a",
       decision: "allow_once",
       reason: "ok",
     }, post)
@@ -419,6 +435,8 @@ describe("SessionRunCoordinator", () => {
     expect(post).toHaveBeenCalledWith({
       type: "approval.reply.error",
       sessionRunId: "active-run",
+      branchBindingId: "branch-a",
+      branch_binding_id: "branch-a",
       approvalId: "approval-1",
       decision: "allow_once",
       message: "fetch failed",
@@ -437,6 +455,7 @@ describe("SessionRunCoordinator", () => {
     })
     subject.setActiveRun({
       sessionRunId: "active-run",
+      branchBindingId: "branch-a",
       cursor: 0,
       status: "running",
       startedAt: "2026-01-01T00:00:00.000Z",
@@ -446,6 +465,7 @@ describe("SessionRunCoordinator", () => {
     await subject.handleMessage({
       type: "sessionRun.userInput.reply",
       inputId: "mcp-elicitation-1",
+      branchBindingId: "branch-a",
       action: "accept",
       content: { format: "markdown" },
       reason: "chosen",
@@ -453,6 +473,7 @@ describe("SessionRunCoordinator", () => {
 
     expect(options.client.sessionRunUserInputReply).toHaveBeenCalledWith({
       session_run_id: "active-run",
+      branch_binding_id: "branch-a",
       input_id: "mcp-elicitation-1",
       action: "accept",
       content: { format: "markdown" },
@@ -461,12 +482,47 @@ describe("SessionRunCoordinator", () => {
     expect(post).toHaveBeenCalledWith({
       type: "sessionRun.userInput.reply.ok",
       sessionRunId: "active-run",
+      branchBindingId: "branch-a",
+      branch_binding_id: "branch-a",
       inputId: "mcp-elicitation-1",
       action: "accept",
       payload: {
         ok: true,
         state: "resolved",
       },
+    })
+  })
+
+  it("reports session run user input reply failures with the target branch", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    options.client.sessionRunUserInputReply.mockRejectedValueOnce(new Error("reply failed"))
+    subject.setActiveRun({
+      sessionRunId: "active-run",
+      branchBindingId: "branch-a",
+      cursor: 0,
+      status: "running",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reconnectAttempts: 0,
+    })
+
+    await subject.handleMessage({
+      type: "sessionRun.userInput.reply",
+      inputId: "mcp-elicitation-1",
+      branchBindingId: "branch-a",
+      action: "accept",
+      content: { format: "markdown" },
+      reason: "chosen",
+    }, post)
+
+    expect(post).toHaveBeenCalledWith({
+      type: "sessionRun.userInput.reply.error",
+      sessionRunId: "active-run",
+      branchBindingId: "branch-a",
+      branch_binding_id: "branch-a",
+      inputId: "mcp-elicitation-1",
+      action: "accept",
+      message: "reply failed",
     })
   })
 
@@ -479,7 +535,7 @@ describe("SessionRunCoordinator", () => {
       session_run_id: "snake-run",
     }, post)
 
-    expect(options.cancelSessionRun).toHaveBeenCalledWith("snake-run", post)
+    expect(options.cancelSessionRun).toHaveBeenCalledWith("snake-run", "main", post)
   })
 
   it("routes sessionRun.branch with snake_case branch payload", async () => {
@@ -529,6 +585,7 @@ describe("SessionRunCoordinator", () => {
       sessionRunId: "active-run",
       cursor: 0,
       status: "idle",
+      branchBindingId: "main",
       startedAt: "2026-01-01T00:00:00.000Z",
       reconnectAttempts: 0,
     })
@@ -542,6 +599,7 @@ describe("SessionRunCoordinator", () => {
     }, post)
 
     expect(options.continueSessionRun).toHaveBeenCalledWith("continue here", post, {
+      branchBindingId: "main",
       clientRequestId: "req-1",
       locale: "zh-CN",
       mentions: [{ kind: "file", path: "README.md" }],
@@ -575,6 +633,7 @@ describe("SessionRunCoordinator", () => {
       "continue after the previous activation ended",
       post,
       {
+        branchBindingId: "main",
         clientRequestId: "next-1",
         locale: "zh-CN",
       }
@@ -604,13 +663,114 @@ describe("SessionRunCoordinator", () => {
 
     expect(options.continueSessionRun).not.toHaveBeenCalled()
     expect(options.steerAgentRun).not.toHaveBeenCalled()
-    expect(subject.activeRun?.pendingNextTurn?.text).toBe("next turn after this finishes")
-    expect(subject.activeRun?.pendingNextTurn?.locale).toBe("zh-CN")
-    expect(subject.activeRun?.pendingNextTurn?.mentions).toEqual([{ kind: "file", path: "README.md" }])
+    const pending = subject.pendingNextTurnForBranch("active-run", "main")
+    expect(pending?.text).toBe("next turn after this finishes")
+    expect(pending?.locale).toBe("zh-CN")
+    expect(pending?.mentions).toEqual([{ kind: "file", path: "README.md" }])
     expect(post).toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.pendingNextTurn",
       sessionRunId: "active-run",
       branchBindingId: "main",
+    }))
+  })
+
+  it("keeps pending next turns branch-local when the selected branch changes", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    subject.setActiveRun({
+      sessionRunId: "active-run",
+      cursor: 0,
+      status: "running",
+      branchBindingId: "branch-a",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reconnectAttempts: 0,
+    })
+
+    await subject.handleMessage({
+      type: "chat.send",
+      text: "queued for A",
+      branch_binding_id: "branch-a",
+      requestId: "req-a",
+    }, post)
+    subject.patchActiveRun({ branchBindingId: "branch-b" })
+    await subject.handleMessage({
+      type: "chat.send",
+      text: "queued for B",
+      branch_binding_id: "branch-b",
+      requestId: "req-b",
+    }, post)
+
+    expect(options.continueSessionRun).not.toHaveBeenCalled()
+    expect(subject.pendingNextTurnForBranch("active-run", "branch-a")?.text).toBe("queued for A")
+    expect(subject.pendingNextTurnForBranch("active-run", "branch-b")?.text).toBe("queued for B")
+
+    const consumedA = subject.shiftPendingNextTurnForBranch("active-run", "branch-a")
+    expect(consumedA?.text).toBe("queued for A")
+    expect(subject.pendingNextTurnForBranch("active-run", "branch-a")).toBeUndefined()
+    expect(subject.pendingNextTurnForBranch("active-run", "branch-b")?.text).toBe("queued for B")
+  })
+
+  it("removes and clears pending next turns by branch through host-owned queue messages", async () => {
+    const { coordinator: subject } = coordinator()
+    const post = vi.fn()
+    subject.setActiveRun({
+      sessionRunId: "active-run",
+      cursor: 0,
+      status: "running",
+      branchBindingId: "branch-a",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reconnectAttempts: 0,
+    })
+
+    await subject.handleMessage({
+      type: "chat.send",
+      text: "queued A one",
+      branch_binding_id: "branch-a",
+      requestId: "req-a-1",
+    }, post)
+    await subject.handleMessage({
+      type: "chat.send",
+      text: "queued A two",
+      branch_binding_id: "branch-a",
+      requestId: "req-a-2",
+    }, post)
+    await subject.handleMessage({
+      type: "chat.send",
+      text: "queued B one",
+      branch_binding_id: "branch-b",
+      requestId: "req-b-1",
+    }, post)
+
+    await subject.handleMessage({
+      type: "sessionRun.pendingNextTurn.remove",
+      sessionRunId: "active-run",
+      branchBindingId: "branch-a",
+      clientRequestId: "req-a-1",
+      text: "queued A one",
+    }, post)
+
+    expect(subject.pendingNextTurnForBranch("active-run", "branch-a")?.text).toBe("queued A two")
+    expect(subject.pendingNextTurnForBranch("active-run", "branch-b")?.text).toBe("queued B one")
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: "sessionRun.pendingNextTurns",
+      sessionRunId: "active-run",
+      branchBindingId: "branch-a",
+      items: [expect.objectContaining({ text: "queued A two" })],
+    }))
+
+    await subject.handleMessage({
+      type: "sessionRun.pendingNextTurn.clear",
+      session_run_id: "active-run",
+      branch_binding_id: "branch-a",
+    }, post)
+
+    expect(subject.pendingNextTurnForBranch("active-run", "branch-a")).toBeUndefined()
+    expect(subject.pendingNextTurnForBranch("active-run", "branch-b")?.text).toBe("queued B one")
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: "sessionRun.pendingNextTurns",
+      sessionRunId: "active-run",
+      branchBindingId: "branch-a",
+      items: [],
     }))
   })
 
@@ -660,7 +820,7 @@ describe("SessionRunCoordinator", () => {
       action: "retry",
     }, post)
 
-    expect(options.recoverSessionRun).toHaveBeenCalledWith("active-run", "retry", post)
+    expect(options.recoverSessionRun).toHaveBeenCalledWith("active-run", "main", "retry", post)
   })
 
   it("routes taskflow complexity requests and posts results", async () => {

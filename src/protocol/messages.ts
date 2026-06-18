@@ -90,12 +90,15 @@ export type HostToWebviewMessageType =
   | "session.state"
   | "session.syncStatus"
   | "sessionRun.cancelled"
+  | "sessionRun.continued"
   | "sessionRun.branches"
   | "sessionRun.branch.selected"
   | "sessionRun.branch.started"
   | "sessionRun.done"
   | "sessionRun.error"
   | "sessionRun.events"
+  | "sessionRun.pendingNextTurn"
+  | "sessionRun.pendingNextTurns"
   | "sessionRun.reconnected"
   | "sessionRun.reconnecting"
   | "sessionRun.resume"
@@ -206,6 +209,8 @@ export type WebviewToHostMessageType =
   | "sessionRun.cancel"
   | "sessionRun.branch"
   | "sessionRun.branch.select"
+  | "sessionRun.pendingNextTurn.clear"
+  | "sessionRun.pendingNextTurn.remove"
   | "sessionRun.userInput.reply"
   | "sessionRun.recover"
   | "settingsTabChanged"
@@ -311,6 +316,9 @@ const HOST_TO_WEBVIEW_TYPES = new Set<HostToWebviewMessageType>([
   "sessionRun.done",
   "sessionRun.error",
   "sessionRun.events",
+  "sessionRun.pendingNextTurn",
+  "sessionRun.pendingNextTurns",
+  "sessionRun.continued",
   "sessionRun.reconnected",
   "sessionRun.reconnecting",
   "sessionRun.resume",
@@ -416,6 +424,8 @@ const WEBVIEW_TO_HOST_TYPES = new Set<WebviewToHostMessageType>([
   "sessionRun.cancel",
   "sessionRun.branch",
   "sessionRun.branch.select",
+  "sessionRun.pendingNextTurn.clear",
+  "sessionRun.pendingNextTurn.remove",
   "sessionRun.userInput.reply",
   "sessionRun.recover",
   "settingsTabChanged",

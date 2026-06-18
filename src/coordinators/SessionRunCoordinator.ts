@@ -23,15 +23,24 @@ export interface ActiveSessionRun {
   lastStreamAt?: string
   nextRetryAt?: number
   pendingNextTurn?: PendingNextTurn
+  pendingNextTurnsByBranch?: Record<string, PendingNextTurn[]>
   branches?: Record<string, unknown>[]
 }
 
 export interface PendingNextTurn {
   text: string
+  sessionRunId?: string
+  branchBindingId?: string
   clientRequestId?: string
   locale?: string
   mentions?: Record<string, unknown>[]
   queuedAt: string
+}
+
+interface PendingNextTurnRemoval {
+  clientRequestId?: string
+  queuedAt?: string
+  text?: string
 }
 
 export interface SessionRunCoordinatorOptions {
@@ -59,6 +68,7 @@ export interface SessionRunCoordinatorOptions {
     text: string,
     post: PostMessage,
     options: {
+      branchBindingId?: string
       clientRequestId?: string
       locale?: string
       mentions?: Record<string, unknown>[]
@@ -91,9 +101,14 @@ export interface SessionRunCoordinatorOptions {
     },
     post: PostMessage
   ) => Promise<void>
-  cancelSessionRun: (sessionRunId: string | undefined, post: PostMessage) => Promise<void>
+  cancelSessionRun: (
+    sessionRunId: string | undefined,
+    branchBindingId: string | undefined,
+    post: PostMessage
+  ) => Promise<void>
   recoverSessionRun: (
     sessionRunId: string,
+    branchBindingId: string,
     action: "continue" | "retry",
     post: PostMessage
   ) => Promise<void>
@@ -139,11 +154,100 @@ export class SessionRunCoordinator {
     return this.run ? activeSessionRunPayload(this.run) : undefined
   }
 
+  pendingNextTurnForBranch(
+    sessionRunId: string | undefined,
+    branchBindingId: string | undefined,
+  ): PendingNextTurn | undefined {
+    if (!sessionRunId || !branchBindingId) return undefined
+    const queue = this.run?.pendingNextTurnsByBranch?.[pendingNextTurnKey(sessionRunId, branchBindingId)]
+    return queue?.[0]
+  }
+
+  pendingNextTurnsForBranch(
+    sessionRunId: string | undefined,
+    branchBindingId: string | undefined,
+  ): PendingNextTurn[] {
+    if (!sessionRunId || !branchBindingId) return []
+    const queue = this.run?.pendingNextTurnsByBranch?.[pendingNextTurnKey(sessionRunId, branchBindingId)]
+    return queue ? [...queue] : []
+  }
+
+  shiftPendingNextTurnForBranch(
+    sessionRunId: string | undefined,
+    branchBindingId: string | undefined,
+  ): PendingNextTurn | undefined {
+    if (!this.run || !sessionRunId || !branchBindingId) return undefined
+    const key = pendingNextTurnKey(sessionRunId, branchBindingId)
+    const current = this.run.pendingNextTurnsByBranch?.[key] || []
+    const [nextTurn, ...remaining] = current
+    if (!nextTurn) return undefined
+    const pendingNextTurnsByBranch = { ...(this.run.pendingNextTurnsByBranch || {}) }
+    if (remaining.length) pendingNextTurnsByBranch[key] = remaining
+    else delete pendingNextTurnsByBranch[key]
+    this.patchActiveRun({ pendingNextTurnsByBranch, pendingNextTurn: undefined })
+    return nextTurn
+  }
+
+  removePendingNextTurnForBranch(
+    sessionRunId: string | undefined,
+    branchBindingId: string | undefined,
+    removal: PendingNextTurnRemoval,
+  ): void {
+    if (!this.run || this.run.sessionRunId !== sessionRunId || !sessionRunId || !branchBindingId) return
+    const key = pendingNextTurnKey(sessionRunId, branchBindingId)
+    const current = this.run.pendingNextTurnsByBranch?.[key] || []
+    const index = current.findIndex((item) => pendingNextTurnMatchesRemoval(item, removal))
+    if (index < 0) return
+    const remaining = [...current.slice(0, index), ...current.slice(index + 1)]
+    const pendingNextTurnsByBranch = { ...(this.run.pendingNextTurnsByBranch || {}) }
+    if (remaining.length) pendingNextTurnsByBranch[key] = remaining
+    else delete pendingNextTurnsByBranch[key]
+    this.patchActiveRun({ pendingNextTurnsByBranch, pendingNextTurn: undefined })
+  }
+
+  clearPendingNextTurnForBranch(
+    sessionRunId: string | undefined,
+    branchBindingId: string | undefined,
+  ): void {
+    if (!this.run || this.run.sessionRunId !== sessionRunId || !sessionRunId || !branchBindingId) return
+    const key = pendingNextTurnKey(sessionRunId, branchBindingId)
+    const pendingNextTurnsByBranch = { ...(this.run.pendingNextTurnsByBranch || {}) }
+    delete pendingNextTurnsByBranch[key]
+    this.patchActiveRun({ pendingNextTurnsByBranch, pendingNextTurn: undefined })
+  }
+
+  enqueuePendingNextTurnForBranch(
+    sessionRunId: string | undefined,
+    branchBindingId: string | undefined,
+    pendingNextTurn: PendingNextTurn,
+  ): void {
+    if (!sessionRunId || !branchBindingId) return
+    this.enqueuePendingNextTurn(sessionRunId, branchBindingId, {
+      ...pendingNextTurn,
+      sessionRunId,
+      branchBindingId,
+    })
+  }
+
+  private enqueuePendingNextTurn(
+    sessionRunId: string,
+    branchBindingId: string,
+    pendingNextTurn: PendingNextTurn,
+  ): void {
+    const key = pendingNextTurnKey(sessionRunId, branchBindingId)
+    const pendingNextTurnsByBranch = { ...(this.run?.pendingNextTurnsByBranch || {}) }
+    pendingNextTurnsByBranch[key] = [
+      ...(pendingNextTurnsByBranch[key] || []),
+      pendingNextTurn,
+    ]
+    this.patchActiveRun({ pendingNextTurnsByBranch })
+  }
+
   setActiveRun(run: ActiveSessionRun | undefined): void {
-    this.run = run
+    this.run = run ? normalizeActiveSessionRun(run) : undefined
     void this.options.context.workspaceState.update(
       ACTIVE_SESSION_RUN_KEY,
-      run ? activeSessionRunPayload(run) : undefined
+      this.run ? activeSessionRunPayload(this.run) : undefined
     )
   }
 
@@ -213,6 +317,7 @@ export class SessionRunCoordinator {
           const locale = stringValue(message.locale)
           const activeRun = this.activeRun
           if (activeRun?.sessionRunId) {
+            const branchBindingId = targetBranchBindingId(message, activeRun)
             const intent = stringValue(message.intent) || stringValue(message.input_intent)
             if (intent === "steer" || intent === "current_activation") {
               if (activeSessionRunIsExecuting(activeRun)) {
@@ -223,6 +328,7 @@ export class SessionRunCoordinator {
                 })
               } else {
                 void this.options.continueSessionRun(text, post, {
+                  branchBindingId,
                   ...(clientRequestId ? { clientRequestId } : {}),
                   ...(locale ? { locale } : {}),
                   ...(mentions.length ? { mentions } : {}),
@@ -233,23 +339,26 @@ export class SessionRunCoordinator {
             if (activeSessionRunIsExecuting(activeRun)) {
               const pendingNextTurn: PendingNextTurn = {
                 text,
+                sessionRunId: activeRun.sessionRunId,
+                branchBindingId,
                 ...(clientRequestId ? { clientRequestId } : {}),
                 ...(locale ? { locale } : {}),
                 ...(mentions.length ? { mentions } : {}),
                 queuedAt: new Date().toISOString(),
               }
-              this.patchActiveRun({ pendingNextTurn })
+              this.enqueuePendingNextTurn(activeRun.sessionRunId, branchBindingId, pendingNextTurn)
               post({
                 type: "sessionRun.pendingNextTurn",
                 sessionRunId: activeRun.sessionRunId,
-                branchBindingId: activeRun.branchBindingId,
-                branch_binding_id: activeRun.branchBindingId,
+                branchBindingId,
+                branch_binding_id: branchBindingId,
                 pendingNextTurn,
                 pending_next_turn: pendingNextTurn,
               })
               return true
             }
             void this.options.continueSessionRun(text, post, {
+              branchBindingId,
               ...(clientRequestId ? { clientRequestId } : {}),
               ...(locale ? { locale } : {}),
               ...(mentions.length ? { mentions } : {}),
@@ -283,9 +392,50 @@ export class SessionRunCoordinator {
           })
         }
         return true
+      case "sessionRun.pendingNextTurn.remove": {
+        const sessionRunId =
+          stringValue(message.sessionRunId) ||
+          stringValue(message.session_run_id) ||
+          this.activeSessionRunId ||
+          ""
+        const branchBindingId =
+          stringValue(message.branchBindingId) ||
+          stringValue(message.branch_binding_id) ||
+          this.activeRun?.branchBindingId ||
+          "main"
+        if (!sessionRunId || !branchBindingId) return true
+        this.removePendingNextTurnForBranch(sessionRunId, branchBindingId, {
+          clientRequestId:
+            stringValue(message.clientRequestId) ||
+            stringValue(message.client_request_id) ||
+            stringValue(message.requestId) ||
+            stringValue(message.request_id),
+          queuedAt: stringValue(message.queuedAt) || stringValue(message.queued_at),
+          text: stringValue(message.text),
+        })
+        this.postPendingNextTurnsSnapshot(post, sessionRunId, branchBindingId)
+        return true
+      }
+      case "sessionRun.pendingNextTurn.clear": {
+        const sessionRunId =
+          stringValue(message.sessionRunId) ||
+          stringValue(message.session_run_id) ||
+          this.activeSessionRunId ||
+          ""
+        const branchBindingId =
+          stringValue(message.branchBindingId) ||
+          stringValue(message.branch_binding_id) ||
+          this.activeRun?.branchBindingId ||
+          "main"
+        if (!sessionRunId || !branchBindingId) return true
+        this.clearPendingNextTurnForBranch(sessionRunId, branchBindingId)
+        this.postPendingNextTurnsSnapshot(post, sessionRunId, branchBindingId)
+        return true
+      }
       case "sessionRun.cancel":
         await this.options.cancelSessionRun(
           stringValue(message.sessionRunId) || stringValue(message.session_run_id) || this.activeSessionRunId,
+          stringValue(message.branchBindingId) || stringValue(message.branch_binding_id) || this.activeRun?.branchBindingId || "main",
           post
         )
         return true
@@ -312,7 +462,12 @@ export class SessionRunCoordinator {
         const rawAction = stringValue(message.action) || "continue"
         const action = rawAction === "retry" ? "retry" : "continue"
         if (!sessionRunId) return true
-        await this.options.recoverSessionRun(sessionRunId, action, post)
+        const branchBindingId =
+          stringValue(message.branchBindingId) ||
+          stringValue(message.branch_binding_id) ||
+          this.activeRun?.branchBindingId ||
+          "main"
+        await this.options.recoverSessionRun(sessionRunId, branchBindingId, action, post)
         return true
       }
       case "approval.reply": {
@@ -323,6 +478,11 @@ export class SessionRunCoordinator {
           ""
         const approvalId = stringValue(message.approvalId) || ""
         const decision = stringValue(message.decision) || "deny_once"
+        const branchBindingId =
+          stringValue(message.branchBindingId) ||
+          stringValue(message.branch_binding_id) ||
+          this.activeRun?.branchBindingId ||
+          "main"
         try {
           const explicitCandidate = objectValue(
             message.approved_save_candidate || message.approvedSaveCandidate
@@ -339,6 +499,7 @@ export class SessionRunCoordinator {
               : undefined
           const request: Record<string, unknown> = {
             session_run_id: sessionRunId,
+            branch_binding_id: branchBindingId,
             approval_id: approvalId,
             decision,
             reason: stringValue(message.reason),
@@ -352,6 +513,8 @@ export class SessionRunCoordinator {
           post({
             type: "approval.reply.ok",
             sessionRunId,
+            branchBindingId,
+            branch_binding_id: branchBindingId,
             approvalId,
             decision,
             payload,
@@ -362,6 +525,8 @@ export class SessionRunCoordinator {
           post({
             type: "approval.reply.error",
             sessionRunId,
+            branchBindingId,
+            branch_binding_id: branchBindingId,
             approvalId,
             decision,
             message: resolvedError,
@@ -379,9 +544,15 @@ export class SessionRunCoordinator {
         const inputId = stringValue(message.inputId) || stringValue(message.input_id) || ""
         const action = stringValue(message.action) || "decline"
         const content = objectValue(message.content) || {}
+        const branchBindingId =
+          stringValue(message.branchBindingId) ||
+          stringValue(message.branch_binding_id) ||
+          this.activeRun?.branchBindingId ||
+          "main"
         try {
           const payload = await this.options.client.sessionRunUserInputReply({
             session_run_id: sessionRunId,
+            branch_binding_id: branchBindingId,
             input_id: inputId,
             action,
             content,
@@ -390,6 +561,8 @@ export class SessionRunCoordinator {
           post({
             type: "sessionRun.userInput.reply.ok",
             sessionRunId,
+            branchBindingId,
+            branch_binding_id: branchBindingId,
             inputId,
             action,
             payload,
@@ -399,6 +572,8 @@ export class SessionRunCoordinator {
           post({
             type: "sessionRun.userInput.reply.error",
             sessionRunId,
+            branchBindingId,
+            branch_binding_id: branchBindingId,
             inputId,
             action,
             message: resolvedError,
@@ -572,6 +747,24 @@ export class SessionRunCoordinator {
     }
   }
 
+  postPendingNextTurnsSnapshot(
+    post: PostMessage,
+    sessionRunId: string,
+    branchBindingId: string,
+  ): void {
+    const items = this.pendingNextTurnsForBranch(sessionRunId, branchBindingId)
+    post({
+      type: "sessionRun.pendingNextTurns",
+      sessionRunId,
+      session_run_id: sessionRunId,
+      branchBindingId,
+      branch_binding_id: branchBindingId,
+      items,
+      pendingNextTurn: items[0],
+      pending_next_turn: items[0],
+    })
+  }
+
   private async handleTaskflowAction(
     message: WebviewToHostMessage,
     post: PostMessage,
@@ -629,8 +822,10 @@ export function activeSessionRunPayload(run: ActiveSessionRun): Record<string, u
     last_stream_at: run.lastStreamAt,
     nextRetryAt: run.nextRetryAt,
     next_retry_at: run.nextRetryAt,
-    pendingNextTurn: run.pendingNextTurn,
-    pending_next_turn: run.pendingNextTurn,
+    pendingNextTurn: selectedPendingNextTurn(run),
+    pending_next_turn: selectedPendingNextTurn(run),
+    pendingNextTurnsByBranch: run.pendingNextTurnsByBranch,
+    pending_next_turns_by_branch: run.pendingNextTurnsByBranch,
     branches: run.branches,
   }
 }
@@ -658,6 +853,18 @@ export function activeSessionRunFromPayload(payload: unknown): ActiveSessionRun 
     ? camelPendingNextTurn
     : objectValue(value.pending_next_turn)
   const pendingNextTurn = pendingNextTurnFromPayload(pendingNextTurnValue)
+  const branchQueues = pendingNextTurnsByBranchFromPayload(
+    objectValue(value.pendingNextTurnsByBranch || value.pending_next_turns_by_branch)
+  )
+  const branchBindingId = stringValue(value.branchBindingId) || stringValue(value.branch_binding_id)
+  if (pendingNextTurn && branchBindingId && !Object.keys(branchQueues).length) {
+    const key = pendingNextTurnKey(sessionRunId, branchBindingId)
+    branchQueues[key] = branchQueues[key]?.length ? branchQueues[key] : [{
+      ...pendingNextTurn,
+      sessionRunId,
+      branchBindingId,
+    }]
+  }
   return {
     sessionRunId,
     cursor,
@@ -665,7 +872,7 @@ export function activeSessionRunFromPayload(payload: unknown): ActiveSessionRun 
     draftSessionId: stringValue(value.draftSessionId) || stringValue(value.draft_session_id),
     agentRunId: stringValue(value.agentRunId) || stringValue(value.agent_run_id),
     activationId: stringValue(value.activationId) || stringValue(value.activation_id),
-    branchBindingId: stringValue(value.branchBindingId) || stringValue(value.branch_binding_id),
+    branchBindingId,
     status,
     startedAt:
       stringValue(value.startedAt) ||
@@ -676,7 +883,12 @@ export function activeSessionRunFromPayload(payload: unknown): ActiveSessionRun 
     lastError: stringValue(value.lastError) || stringValue(value.last_error),
     lastStreamAt: stringValue(value.lastStreamAt) || stringValue(value.last_stream_at),
     nextRetryAt,
-    ...(pendingNextTurn ? { pendingNextTurn } : {}),
+    pendingNextTurnsByBranch: branchQueues,
+    pendingNextTurn: selectedPendingNextTurn({
+      sessionRunId,
+      branchBindingId,
+      pendingNextTurnsByBranch: branchQueues,
+    } as ActiveSessionRun),
     branches: arrayValue(value.branches).filter(
       (item): item is Record<string, unknown> =>
         Boolean(item && typeof item === "object" && !Array.isArray(item))
@@ -693,17 +905,87 @@ function pendingNextTurnFromPayload(value: Record<string, unknown>): PendingNext
   if (!text) return undefined
   const clientRequestId = stringValue(value.clientRequestId) || stringValue(value.client_request_id)
   const locale = stringValue(value.locale)
+  const sessionRunId = stringValue(value.sessionRunId) || stringValue(value.session_run_id)
+  const branchBindingId = stringValue(value.branchBindingId) || stringValue(value.branch_binding_id)
   const mentions = arrayValue(value.mentions).filter(
     (item): item is Record<string, unknown> =>
       Boolean(item && typeof item === "object" && !Array.isArray(item))
   )
   return {
     text,
+    ...(sessionRunId ? { sessionRunId } : {}),
+    ...(branchBindingId ? { branchBindingId } : {}),
     ...(clientRequestId ? { clientRequestId } : {}),
     ...(locale ? { locale } : {}),
     ...(mentions.length ? { mentions } : {}),
     queuedAt: stringValue(value.queuedAt) || stringValue(value.queued_at) || new Date().toISOString(),
   }
+}
+
+function pendingNextTurnsByBranchFromPayload(value: Record<string, unknown>): Record<string, PendingNextTurn[]> {
+  const queues: Record<string, PendingNextTurn[]> = {}
+  for (const [key, rawQueue] of Object.entries(value)) {
+    const queue = arrayValue(rawQueue)
+      .map((item) => pendingNextTurnFromPayload(objectValue(item)))
+      .filter((item): item is PendingNextTurn => Boolean(item))
+    if (queue.length) queues[key] = queue
+  }
+  return queues
+}
+
+function pendingNextTurnKey(sessionRunId: string, branchBindingId: string): string {
+  return `${sessionRunId}:${branchBindingId}`
+}
+
+function selectedPendingNextTurn(run: Pick<ActiveSessionRun, "sessionRunId" | "branchBindingId" | "pendingNextTurnsByBranch">): PendingNextTurn | undefined {
+  const branchBindingId = run.branchBindingId || "main"
+  return run.pendingNextTurnsByBranch?.[pendingNextTurnKey(run.sessionRunId, branchBindingId)]?.[0]
+}
+
+function pendingNextTurnMatchesRemoval(
+  item: PendingNextTurn,
+  removal: PendingNextTurnRemoval,
+): boolean {
+  if (removal.clientRequestId && item.clientRequestId === removal.clientRequestId) {
+    return true
+  }
+  if (removal.queuedAt && removal.text) {
+    return item.queuedAt === removal.queuedAt && item.text === removal.text
+  }
+  return Boolean(!removal.clientRequestId && !removal.queuedAt && removal.text && item.text === removal.text)
+}
+
+function normalizeActiveSessionRun(run: ActiveSessionRun): ActiveSessionRun {
+  const branchBindingId = run.branchBindingId || "main"
+  const pendingNextTurnsByBranch = { ...(run.pendingNextTurnsByBranch || {}) }
+  if (run.pendingNextTurn && !Object.keys(pendingNextTurnsByBranch).length) {
+    const key = pendingNextTurnKey(run.sessionRunId, branchBindingId)
+    pendingNextTurnsByBranch[key] = pendingNextTurnsByBranch[key]?.length
+      ? pendingNextTurnsByBranch[key]
+      : [{
+          ...run.pendingNextTurn,
+          sessionRunId: run.sessionRunId,
+          branchBindingId,
+        }]
+  }
+  const normalized: ActiveSessionRun = {
+    ...run,
+    branchBindingId,
+    pendingNextTurnsByBranch,
+  }
+  return {
+    ...normalized,
+    pendingNextTurn: selectedPendingNextTurn(normalized),
+  }
+}
+
+function targetBranchBindingId(message: WebviewToHostMessage, activeRun: ActiveSessionRun): string {
+  return (
+    stringValue(message.branchBindingId) ||
+    stringValue(message.branch_binding_id) ||
+    activeRun.branchBindingId ||
+    "main"
+  )
 }
 
 function stringList(value: unknown): string[] | undefined {

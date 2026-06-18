@@ -413,7 +413,11 @@ export class SessionCoordinator {
       return payload
     }
     try {
-      await this.options.client.sessionRunStatus(sessionRunId)
+      await this.options.client.sessionRunStatus(
+        sessionRunId,
+        undefined,
+        loadedPayloadBranchBindingId(payload, document)
+      )
       return payload
     } catch (error) {
       if (isRemoteError(error, "session_run_not_found", 404)) {
@@ -843,6 +847,24 @@ function sessionRuntimeStateFromPayload(payload: Record<string, unknown>): Recor
 function documentSessionRunId(document: Record<string, unknown>): string | undefined {
   const runState = objectValue(document.run_state)
   return stringValue(runState.session_run_id) || stringValue(runState.sessionRunId)
+}
+
+function loadedPayloadBranchBindingId(
+  payload: Record<string, unknown>,
+  document: Record<string, unknown>,
+): string {
+  const runState = objectValue(document.run_state)
+  const runtimeState = sessionRuntimeStateFromPayload(payload)
+  const record = sessionRecordFromPayload(payload)
+  return (
+    stringValue(runState.branch_binding_id) ||
+    stringValue(runState.branchBindingId) ||
+    stringValue(runtimeState.branch_binding_id) ||
+    stringValue(runtimeState.branchBindingId) ||
+    stringValue(record.branch_binding_id) ||
+    stringValue(record.branchBindingId) ||
+    "main"
+  )
 }
 
 function documentLooksRunning(document: Record<string, unknown>): boolean {
