@@ -201,6 +201,45 @@ describe("SessionCoordinator", () => {
     )
   })
 
+  it("settles loaded running session runs that lack branch proof without querying main", async () => {
+    const document = documentFor("remote-1", "Remote") as any
+    document.stats = { ...document.stats, runStatus: "running" }
+    ;(document as Record<string, unknown>).run_state = {
+      status: "running",
+      session_run_id: "run-missing-branch",
+      error: null,
+    }
+    const { client, emitSessionMessage, subject } = await coordinator({
+      loadSession: vi.fn(async () => ({
+        record: { ...recordFor("remote-1"), transcript: document },
+      })),
+      sessionRunStatus: vi.fn(async () => ({ status: "running" })),
+    } as Partial<LabrastroRemoteClient>)
+    const post = vi.fn()
+
+    await subject.loadSession("remote-1", post, { suppressListRefresh: true })
+
+    expect(client.sessionRunStatus).not.toHaveBeenCalled()
+    const loaded = emitSessionMessage.mock.calls.find(([message]) => message.type === "session.loaded")?.[0]
+    expect(loaded?.document.stats.runStatus).toBe("error")
+    expect(loaded?.document.run_state.status).toBe("error")
+    expect(loaded?.bundle.stats.runStatus).toBe("error")
+  })
+
+  it("does not emit terminal sessionRun.error when server session preparation fails", async () => {
+    const { subject } = await coordinator({
+      newSession: vi.fn(async () => {
+        throw new Error("new session failed")
+      }),
+    } as Partial<LabrastroRemoteClient>)
+    const post = vi.fn()
+
+    const result = await subject.prepareSessionRunSession(undefined, post, {})
+
+    expect(result).toEqual({ ok: false })
+    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "sessionRun.error" }))
+  })
+
   it("forks by document anchor without sending a local snapshot", async () => {
     const { client, emitSessionMessage, subject } = await coordinator()
     const post = vi.fn()

@@ -4,8 +4,15 @@ import type { ApprovalDocumentProvider } from "../ApprovalDocumentProvider"
 import type { PostMessage } from "../WebviewBus"
 import type { WebviewToHostMessage } from "../protocol/messages"
 import { chatErrorMessage, numberValue, objectValue, stringValue } from "../controller-utils"
+import { sessionRunStartTargetBranchBindingId } from "../sessionRunOperationResults"
+import type { SessionRunOperationSourceScope } from "./SessionRunSourceIdentityResolver"
 
 const ACTIVE_SESSION_RUN_KEY = "labrastro.activeSessionRun"
+
+function sessionRunOperationIdFromMessage(message: WebviewToHostMessage): string | undefined {
+  const record = message as Record<string, unknown>
+  return stringValue(record.operationId)
+}
 
 export interface ActiveSessionRun {
   sessionRunId: string
@@ -57,6 +64,8 @@ export interface SessionRunCoordinatorOptions {
       taskflowId?: string
       draftSessionId?: string
       clientRequestId?: string
+      operationId: string
+      branchBindingId?: string
       locale?: string
       providerId?: string
       modelId?: string
@@ -68,8 +77,11 @@ export interface SessionRunCoordinatorOptions {
     text: string,
     post: PostMessage,
     options: {
+      sessionRunId?: string
       branchBindingId?: string
       clientRequestId?: string
+      operationId: string
+      sourceScope?: SessionRunOperationSourceScope
       locale?: string
       mentions?: Record<string, unknown>[]
     }
@@ -79,14 +91,20 @@ export interface SessionRunCoordinatorOptions {
     post: PostMessage,
     options: {
       clientSteerId?: string
+      operationId: string
+      sessionRunId: string
+      branchBindingId: string
       locale?: string
       mentions?: Record<string, unknown>[]
     }
   ) => Promise<void>
   branchSessionRun: (
     request: {
+      sessionRunId: string
       baseSessionItemId: string
       prompt: string
+      operationId: string
+      sourceBranchBindingId?: string
       branchBindingId?: string
       sourceLabel?: string
       sourceMessageId?: string
@@ -97,20 +115,29 @@ export interface SessionRunCoordinatorOptions {
   ) => Promise<void>
   selectSessionRunBranch: (
     request: {
+      sessionRunId: string
+      sourceBranchBindingId?: string
       branchBindingId: string
+      operationId: string
     },
     post: PostMessage
   ) => Promise<void>
   cancelSessionRun: (
-    sessionRunId: string | undefined,
-    branchBindingId: string | undefined,
-    post: PostMessage
+    sessionRunId: string,
+    branchBindingId: string,
+    post: PostMessage,
+    options: {
+      operationId: string
+    }
   ) => Promise<void>
   recoverSessionRun: (
     sessionRunId: string,
     branchBindingId: string,
     action: "continue" | "retry",
-    post: PostMessage
+    post: PostMessage,
+    options: {
+      operationId: string
+    }
   ) => Promise<void>
   postConnectionStateIfAuthRequired: (error: unknown, post: PostMessage) => Promise<void>
 }
@@ -118,6 +145,8 @@ export interface SessionRunCoordinatorOptions {
 export class SessionRunCoordinator {
   private run: ActiveSessionRun | undefined
   private draftSessionId: string | undefined
+  private runIdentityRevision = 0
+  private runProjectionRevision = 0
 
   constructor(private readonly options: SessionRunCoordinatorOptions) {
     this.run = activeSessionRunFromPayload(
@@ -128,6 +157,14 @@ export class SessionRunCoordinator {
 
   get activeRun(): ActiveSessionRun | undefined {
     return this.run
+  }
+
+  get activeRunIdentityRevision(): number {
+    return this.runIdentityRevision
+  }
+
+  get activeRunProjectionRevision(): number {
+    return this.runProjectionRevision
   }
 
   get activeSessionRunId(): string | undefined {
@@ -193,7 +230,7 @@ export class SessionRunCoordinator {
     branchBindingId: string | undefined,
     removal: PendingNextTurnRemoval,
   ): void {
-    if (!this.run || this.run.sessionRunId !== sessionRunId || !sessionRunId || !branchBindingId) return
+    if (!this.run || !sessionRunId || !branchBindingId) return
     const key = pendingNextTurnKey(sessionRunId, branchBindingId)
     const current = this.run.pendingNextTurnsByBranch?.[key] || []
     const index = current.findIndex((item) => pendingNextTurnMatchesRemoval(item, removal))
@@ -209,7 +246,7 @@ export class SessionRunCoordinator {
     sessionRunId: string | undefined,
     branchBindingId: string | undefined,
   ): void {
-    if (!this.run || this.run.sessionRunId !== sessionRunId || !sessionRunId || !branchBindingId) return
+    if (!this.run || !sessionRunId || !branchBindingId) return
     const key = pendingNextTurnKey(sessionRunId, branchBindingId)
     const pendingNextTurnsByBranch = { ...(this.run.pendingNextTurnsByBranch || {}) }
     delete pendingNextTurnsByBranch[key]
@@ -244,7 +281,14 @@ export class SessionRunCoordinator {
   }
 
   setActiveRun(run: ActiveSessionRun | undefined): void {
-    this.run = run ? normalizeActiveSessionRun(run) : undefined
+    const previousIdentity = activeRunIdentityKey(this.run)
+    const previousProjection = activeRunStateKey(this.run)
+    const nextRun = run ? normalizeActiveSessionRun(run) : undefined
+    const nextIdentity = activeRunIdentityKey(nextRun)
+    const nextProjection = activeRunStateKey(nextRun)
+    this.run = nextRun
+    if (previousIdentity !== nextIdentity) this.runIdentityRevision += 1
+    if (previousProjection !== nextProjection) this.runProjectionRevision += 1
     void this.options.context.workspaceState.update(
       ACTIVE_SESSION_RUN_KEY,
       this.run ? activeSessionRunPayload(this.run) : undefined
@@ -267,15 +311,20 @@ export class SessionRunCoordinator {
     switch (message.type) {
       case "chat.command.dispatch": {
         const text = typeof message.text === "string" ? message.text : ""
-        if (!text.trim() || !text.startsWith("/")) {
-          post({ type: "sessionRun.error", message: "无效指令：Chat 指令必须以 / 开头。" })
-          return true
-        }
-        const clientRequestId =
+        const commandRequestId =
           stringValue(message.clientRequestId) ||
           stringValue(message.client_request_id) ||
           stringValue(message.requestId) ||
           stringValue(message.request_id)
+        const commandScope = commandRequestId ? { requestId: commandRequestId } : {}
+        if (!text.trim() || !text.startsWith("/")) {
+          post({
+            type: "chat.command.error",
+            ...commandScope,
+            message: "无效指令：Chat 指令必须以 / 开头。",
+          })
+          return true
+        }
         try {
           const result = await this.options.client.dispatchChatCommand({
             text,
@@ -283,22 +332,22 @@ export class SessionRunCoordinator {
             trigger: stringValue(message.trigger),
             args: stringValue(message.args),
             sessionId: stringValue(message.sessionId) || stringValue(message.session_id),
-            clientRequestId,
+            clientRequestId: commandRequestId,
             mentions: arrayValue(message.mentions).filter(
               (item): item is Record<string, unknown> =>
                 Boolean(item && typeof item === "object" && !Array.isArray(item))
             ),
           })
           const events = arrayValue(result.events)
-          if (events.length) post({ type: "sessionRun.events", events })
+          if (events.length) post({ type: "chat.command.events", ...commandScope, events })
           if (result.ok === false && !events.length) {
-            post({ type: "sessionRun.error", message: stringValue(result.error) || "指令执行失败。" })
+            post({ type: "chat.command.error", ...commandScope, message: stringValue(result.error) || "指令执行失败。" })
           }
-          post({ type: "sessionRun.done" })
+          post({ type: "chat.command.done", ...commandScope })
         } catch (error) {
-          post({ type: "sessionRun.error", message: chatErrorMessage(error) })
+          post({ type: "chat.command.error", ...commandScope, message: chatErrorMessage(error) })
           await this.options.postConnectionStateIfAuthRequired(error, post)
-          post({ type: "sessionRun.done" })
+          post({ type: "chat.command.done", ...commandScope })
         }
         return true
       }
@@ -314,22 +363,31 @@ export class SessionRunCoordinator {
             stringValue(message.client_request_id) ||
             stringValue(message.requestId) ||
             stringValue(message.request_id)
+          const operationId = sessionRunOperationIdFromMessage(message)
           const locale = stringValue(message.locale)
           const activeRun = this.activeRun
           if (activeRun?.sessionRunId) {
-            const branchBindingId = targetBranchBindingId(message, activeRun)
+            const proof = explicitSessionRunBranchProof(message)
+            if (!proof || proof.sessionRunId !== activeRun.sessionRunId) return true
+            const branchBindingId = proof.branchBindingId
             const intent = stringValue(message.intent) || stringValue(message.input_intent)
             if (intent === "steer" || intent === "current_activation") {
+              if (!operationId) return true
               if (activeSessionRunIsExecuting(activeRun)) {
                 void this.options.steerAgentRun(text, post, {
                   ...(clientRequestId ? { clientSteerId: clientRequestId } : {}),
+                  operationId,
+                  sessionRunId: proof.sessionRunId,
+                  branchBindingId,
                   ...(locale ? { locale } : {}),
                   ...(mentions.length ? { mentions } : {}),
                 })
               } else {
                 void this.options.continueSessionRun(text, post, {
+                  sessionRunId: proof.sessionRunId,
                   branchBindingId,
                   ...(clientRequestId ? { clientRequestId } : {}),
+                  operationId,
                   ...(locale ? { locale } : {}),
                   ...(mentions.length ? { mentions } : {}),
                 })
@@ -339,17 +397,17 @@ export class SessionRunCoordinator {
             if (activeSessionRunIsExecuting(activeRun)) {
               const pendingNextTurn: PendingNextTurn = {
                 text,
-                sessionRunId: activeRun.sessionRunId,
+                sessionRunId: proof.sessionRunId,
                 branchBindingId,
                 ...(clientRequestId ? { clientRequestId } : {}),
                 ...(locale ? { locale } : {}),
                 ...(mentions.length ? { mentions } : {}),
                 queuedAt: new Date().toISOString(),
               }
-              this.enqueuePendingNextTurn(activeRun.sessionRunId, branchBindingId, pendingNextTurn)
+              this.enqueuePendingNextTurn(proof.sessionRunId, branchBindingId, pendingNextTurn)
               post({
                 type: "sessionRun.pendingNextTurn",
-                sessionRunId: activeRun.sessionRunId,
+                sessionRunId: proof.sessionRunId,
                 branchBindingId,
                 branch_binding_id: branchBindingId,
                 pendingNextTurn,
@@ -357,25 +415,20 @@ export class SessionRunCoordinator {
               })
               return true
             }
+            if (!operationId) return true
             void this.options.continueSessionRun(text, post, {
+              sessionRunId: proof.sessionRunId,
               branchBindingId,
               ...(clientRequestId ? { clientRequestId } : {}),
+              operationId,
               ...(locale ? { locale } : {}),
               ...(mentions.length ? { mentions } : {}),
             })
             return true
           }
+          if (!operationId) return true
           const providerId = stringValue(message.providerId) || stringValue(message.provider_id)
           const modelId = stringValue(message.modelId) || stringValue(message.model_id)
-          if (!providerId || !modelId) {
-            post({
-              type: "sessionRun.error",
-              message: providerId || modelId
-                ? "模型选择不完整，请重新选择会话模型。"
-                : "请选择会话模型后再发送。",
-            })
-            return true
-          }
           void this.options.startSessionRun(message.text, stringValue(message.sessionId), post, {
             mode: stringValue(message.mode),
             workflowMode: stringValue(message.workflowMode) || stringValue(message.workflow_mode),
@@ -383,6 +436,10 @@ export class SessionRunCoordinator {
             draftSessionId: stringValue(message.draftSessionId) || stringValue(message.draft_session_id),
             locale,
             clientRequestId,
+            operationId,
+            branchBindingId: sessionRunStartTargetBranchBindingId(
+              stringValue(message.branchBindingId) || stringValue(message.branch_binding_id)
+            ),
             providerId,
             modelId,
             parameters: message.parameters && typeof message.parameters === "object"
@@ -393,18 +450,9 @@ export class SessionRunCoordinator {
         }
         return true
       case "sessionRun.pendingNextTurn.remove": {
-        const sessionRunId =
-          stringValue(message.sessionRunId) ||
-          stringValue(message.session_run_id) ||
-          this.activeSessionRunId ||
-          ""
-        const branchBindingId =
-          stringValue(message.branchBindingId) ||
-          stringValue(message.branch_binding_id) ||
-          this.activeRun?.branchBindingId ||
-          "main"
-        if (!sessionRunId || !branchBindingId) return true
-        this.removePendingNextTurnForBranch(sessionRunId, branchBindingId, {
+        const proof = explicitSessionRunBranchProof(message)
+        if (!proof) return true
+        this.removePendingNextTurnForBranch(proof.sessionRunId, proof.branchBindingId, {
           clientRequestId:
             stringValue(message.clientRequestId) ||
             stringValue(message.client_request_id) ||
@@ -413,76 +461,80 @@ export class SessionRunCoordinator {
           queuedAt: stringValue(message.queuedAt) || stringValue(message.queued_at),
           text: stringValue(message.text),
         })
-        this.postPendingNextTurnsSnapshot(post, sessionRunId, branchBindingId)
+        this.postPendingNextTurnsSnapshot(post, proof.sessionRunId, proof.branchBindingId)
         return true
       }
       case "sessionRun.pendingNextTurn.clear": {
-        const sessionRunId =
-          stringValue(message.sessionRunId) ||
-          stringValue(message.session_run_id) ||
-          this.activeSessionRunId ||
-          ""
-        const branchBindingId =
-          stringValue(message.branchBindingId) ||
-          stringValue(message.branch_binding_id) ||
-          this.activeRun?.branchBindingId ||
-          "main"
-        if (!sessionRunId || !branchBindingId) return true
-        this.clearPendingNextTurnForBranch(sessionRunId, branchBindingId)
-        this.postPendingNextTurnsSnapshot(post, sessionRunId, branchBindingId)
+        const proof = explicitSessionRunBranchProof(message)
+        if (!proof) return true
+        this.clearPendingNextTurnForBranch(proof.sessionRunId, proof.branchBindingId)
+        this.postPendingNextTurnsSnapshot(post, proof.sessionRunId, proof.branchBindingId)
         return true
       }
-      case "sessionRun.cancel":
+      case "sessionRun.cancel": {
+        const proof = explicitSessionRunBranchProof(message)
+        if (!proof) return true
+        const operationId = sessionRunOperationIdFromMessage(message)
+        if (!operationId) return true
         await this.options.cancelSessionRun(
-          stringValue(message.sessionRunId) || stringValue(message.session_run_id) || this.activeSessionRunId,
-          stringValue(message.branchBindingId) || stringValue(message.branch_binding_id) || this.activeRun?.branchBindingId || "main",
-          post
+          proof.sessionRunId,
+          proof.branchBindingId,
+          post,
+          { operationId }
         )
         return true
+      }
       case "sessionRun.branch":
-        await this.options.branchSessionRun({
-          baseSessionItemId: stringValue(message.baseSessionItemId) || stringValue(message.base_session_item_id) || "",
-          prompt: stringValue(message.prompt) || "",
-          branchBindingId: stringValue(message.branchBindingId) || stringValue(message.branch_binding_id),
-          sourceLabel: stringValue(message.sourceLabel) || stringValue(message.source_label),
-          sourceMessageId: stringValue(message.sourceMessageId) || stringValue(message.source_message_id),
-          sourceNodeId: stringValue(message.sourceNodeId) || stringValue(message.source_node_id),
-          composeMode: stringValue(message.composeMode) === "edit" || stringValue(message.compose_mode) === "edit"
-            ? "edit"
-            : "fork",
-        }, post)
-        return true
+        {
+          const proof = explicitSessionRunBranchProof(message)
+          if (!proof) return true
+          const operationId = sessionRunOperationIdFromMessage(message)
+          if (!operationId) return true
+          await this.options.branchSessionRun({
+            sessionRunId: proof.sessionRunId,
+            baseSessionItemId: stringValue(message.baseSessionItemId) || stringValue(message.base_session_item_id) || "",
+            prompt: stringValue(message.prompt) || "",
+            operationId,
+            sourceBranchBindingId: stringValue(message.sourceBranchBindingId) || stringValue(message.source_branch_binding_id),
+            branchBindingId: stringValue(message.branchBindingId) || stringValue(message.branch_binding_id),
+            sourceLabel: stringValue(message.sourceLabel) || stringValue(message.source_label),
+            sourceMessageId: stringValue(message.sourceMessageId) || stringValue(message.source_message_id),
+            sourceNodeId: stringValue(message.sourceNodeId) || stringValue(message.source_node_id),
+            composeMode: stringValue(message.composeMode) === "edit" || stringValue(message.compose_mode) === "edit"
+              ? "edit"
+              : "fork",
+          }, post)
+          return true
+        }
       case "sessionRun.branch.select":
-        await this.options.selectSessionRunBranch({
-          branchBindingId: stringValue(message.branchBindingId) || stringValue(message.branch_binding_id) || "",
-        }, post)
-        return true
+        {
+          const proof = explicitSessionRunBranchProof(message)
+          if (!proof) return true
+          const operationId = sessionRunOperationIdFromMessage(message)
+          if (!operationId) return true
+          await this.options.selectSessionRunBranch({
+            sessionRunId: proof.sessionRunId,
+            sourceBranchBindingId: stringValue(message.sourceBranchBindingId) || stringValue(message.source_branch_binding_id),
+            branchBindingId: proof.branchBindingId,
+            operationId,
+          }, post)
+          return true
+        }
       case "sessionRun.recover": {
-        const sessionRunId = stringValue(message.sessionRunId) || stringValue(message.session_run_id) || this.activeSessionRunId || ""
+        const proof = explicitSessionRunBranchProof(message)
+        if (!proof) return true
+        const operationId = sessionRunOperationIdFromMessage(message)
+        if (!operationId) return true
         const rawAction = stringValue(message.action) || "continue"
         const action = rawAction === "retry" ? "retry" : "continue"
-        if (!sessionRunId) return true
-        const branchBindingId =
-          stringValue(message.branchBindingId) ||
-          stringValue(message.branch_binding_id) ||
-          this.activeRun?.branchBindingId ||
-          "main"
-        await this.options.recoverSessionRun(sessionRunId, branchBindingId, action, post)
+        await this.options.recoverSessionRun(proof.sessionRunId, proof.branchBindingId, action, post, { operationId })
         return true
       }
       case "approval.reply": {
-        const sessionRunId =
-          stringValue(message.sessionRunId) ||
-          stringValue(message.session_run_id) ||
-          this.activeSessionRunId ||
-          ""
+        const proof = explicitSessionRunBranchProof(message)
+        if (!proof) return true
         const approvalId = stringValue(message.approvalId) || ""
         const decision = stringValue(message.decision) || "deny_once"
-        const branchBindingId =
-          stringValue(message.branchBindingId) ||
-          stringValue(message.branch_binding_id) ||
-          this.activeRun?.branchBindingId ||
-          "main"
         try {
           const explicitCandidate = objectValue(
             message.approved_save_candidate || message.approvedSaveCandidate
@@ -498,8 +550,8 @@ export class SessionRunCoordinator {
                 : explicitCandidate
               : undefined
           const request: Record<string, unknown> = {
-            session_run_id: sessionRunId,
-            branch_binding_id: branchBindingId,
+            session_run_id: proof.sessionRunId,
+            branch_binding_id: proof.branchBindingId,
             approval_id: approvalId,
             decision,
             reason: stringValue(message.reason),
@@ -512,9 +564,9 @@ export class SessionRunCoordinator {
           })
           post({
             type: "approval.reply.ok",
-            sessionRunId,
-            branchBindingId,
-            branch_binding_id: branchBindingId,
+            sessionRunId: proof.sessionRunId,
+            branchBindingId: proof.branchBindingId,
+            branch_binding_id: proof.branchBindingId,
             approvalId,
             decision,
             payload,
@@ -524,9 +576,9 @@ export class SessionRunCoordinator {
           const resolvedError = chatErrorMessage(error)
           post({
             type: "approval.reply.error",
-            sessionRunId,
-            branchBindingId,
-            branch_binding_id: branchBindingId,
+            sessionRunId: proof.sessionRunId,
+            branchBindingId: proof.branchBindingId,
+            branch_binding_id: proof.branchBindingId,
             approvalId,
             decision,
             message: resolvedError,
@@ -536,23 +588,15 @@ export class SessionRunCoordinator {
         return true
       }
       case "sessionRun.userInput.reply": {
-        const sessionRunId =
-          stringValue(message.sessionRunId) ||
-          stringValue(message.session_run_id) ||
-          this.activeSessionRunId ||
-          ""
+        const proof = explicitSessionRunBranchProof(message)
+        if (!proof) return true
         const inputId = stringValue(message.inputId) || stringValue(message.input_id) || ""
         const action = stringValue(message.action) || "decline"
         const content = objectValue(message.content) || {}
-        const branchBindingId =
-          stringValue(message.branchBindingId) ||
-          stringValue(message.branch_binding_id) ||
-          this.activeRun?.branchBindingId ||
-          "main"
         try {
           const payload = await this.options.client.sessionRunUserInputReply({
-            session_run_id: sessionRunId,
-            branch_binding_id: branchBindingId,
+            session_run_id: proof.sessionRunId,
+            branch_binding_id: proof.branchBindingId,
             input_id: inputId,
             action,
             content,
@@ -560,9 +604,9 @@ export class SessionRunCoordinator {
           })
           post({
             type: "sessionRun.userInput.reply.ok",
-            sessionRunId,
-            branchBindingId,
-            branch_binding_id: branchBindingId,
+            sessionRunId: proof.sessionRunId,
+            branchBindingId: proof.branchBindingId,
+            branch_binding_id: proof.branchBindingId,
             inputId,
             action,
             payload,
@@ -571,9 +615,9 @@ export class SessionRunCoordinator {
           const resolvedError = chatErrorMessage(error)
           post({
             type: "sessionRun.userInput.reply.error",
-            sessionRunId,
-            branchBindingId,
-            branch_binding_id: branchBindingId,
+            sessionRunId: proof.sessionRunId,
+            branchBindingId: proof.branchBindingId,
+            branch_binding_id: proof.branchBindingId,
             inputId,
             action,
             message: resolvedError,
@@ -834,6 +878,8 @@ export function activeSessionRunFromPayload(payload: unknown): ActiveSessionRun 
   const value = objectValue(payload)
   const sessionRunId = stringValue(value.sessionRunId) || stringValue(value.session_run_id)
   if (!sessionRunId) return undefined
+  const branchBindingId = stringValue(value.branchBindingId) || stringValue(value.branch_binding_id)
+  if (!branchBindingId) return undefined
   const cursor = numberValue(value.cursor) ?? 0
   const reconnectAttempts =
     numberValue(value.reconnectAttempts) ??
@@ -856,7 +902,6 @@ export function activeSessionRunFromPayload(payload: unknown): ActiveSessionRun 
   const branchQueues = pendingNextTurnsByBranchFromPayload(
     objectValue(value.pendingNextTurnsByBranch || value.pending_next_turns_by_branch)
   )
-  const branchBindingId = stringValue(value.branchBindingId) || stringValue(value.branch_binding_id)
   if (pendingNextTurn && branchBindingId && !Object.keys(branchQueues).length) {
     const key = pendingNextTurnKey(sessionRunId, branchBindingId)
     branchQueues[key] = branchQueues[key]?.length ? branchQueues[key] : [{
@@ -938,8 +983,22 @@ function pendingNextTurnKey(sessionRunId: string, branchBindingId: string): stri
 }
 
 function selectedPendingNextTurn(run: Pick<ActiveSessionRun, "sessionRunId" | "branchBindingId" | "pendingNextTurnsByBranch">): PendingNextTurn | undefined {
-  const branchBindingId = run.branchBindingId || "main"
+  const branchBindingId = run.branchBindingId
+  if (!branchBindingId) return undefined
   return run.pendingNextTurnsByBranch?.[pendingNextTurnKey(run.sessionRunId, branchBindingId)]?.[0]
+}
+
+function activeRunStateKey(run: ActiveSessionRun | undefined): string {
+  return run ? JSON.stringify(activeSessionRunPayload(run)) : ""
+}
+
+function activeRunIdentityKey(run: ActiveSessionRun | undefined): string {
+  if (!run) return ""
+  return JSON.stringify({
+    sessionRunId: run.sessionRunId || "",
+    branchBindingId: run.branchBindingId || "",
+    agentRunId: run.agentRunId || "",
+  })
 }
 
 function pendingNextTurnMatchesRemoval(
@@ -955,8 +1014,9 @@ function pendingNextTurnMatchesRemoval(
   return Boolean(!removal.clientRequestId && !removal.queuedAt && removal.text && item.text === removal.text)
 }
 
-function normalizeActiveSessionRun(run: ActiveSessionRun): ActiveSessionRun {
-  const branchBindingId = run.branchBindingId || "main"
+function normalizeActiveSessionRun(run: ActiveSessionRun): ActiveSessionRun | undefined {
+  const branchBindingId = run.branchBindingId
+  if (!branchBindingId) return undefined
   const pendingNextTurnsByBranch = { ...(run.pendingNextTurnsByBranch || {}) }
   if (run.pendingNextTurn && !Object.keys(pendingNextTurnsByBranch).length) {
     const key = pendingNextTurnKey(run.sessionRunId, branchBindingId)
@@ -979,13 +1039,13 @@ function normalizeActiveSessionRun(run: ActiveSessionRun): ActiveSessionRun {
   }
 }
 
-function targetBranchBindingId(message: WebviewToHostMessage, activeRun: ActiveSessionRun): string {
-  return (
-    stringValue(message.branchBindingId) ||
-    stringValue(message.branch_binding_id) ||
-    activeRun.branchBindingId ||
-    "main"
-  )
+function explicitSessionRunBranchProof(
+  message: WebviewToHostMessage,
+): { sessionRunId: string; branchBindingId: string } | undefined {
+  const sessionRunId = stringValue(message.sessionRunId) || stringValue(message.session_run_id)
+  const branchBindingId = stringValue(message.branchBindingId) || stringValue(message.branch_binding_id)
+  if (!sessionRunId || !branchBindingId) return undefined
+  return { sessionRunId, branchBindingId }
 }
 
 function stringList(value: unknown): string[] | undefined {

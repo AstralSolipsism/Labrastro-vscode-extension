@@ -412,11 +412,15 @@ export class SessionCoordinator {
     if (!sessionRunId || !documentLooksRunning(document)) {
       return payload
     }
+    const branchBindingId = loadedPayloadBranchBindingId(payload, document)
+    if (!branchBindingId) {
+      return settleOrphanedSessionRunPayload(payload)
+    }
     try {
       await this.options.client.sessionRunStatus(
         sessionRunId,
         undefined,
-        loadedPayloadBranchBindingId(payload, document)
+        branchBindingId
       )
       return payload
     } catch (error) {
@@ -624,8 +628,7 @@ export class SessionCoordinator {
           sessions: this.sessions,
           fingerprint: this.sessionFingerprint || stringValue(created.fingerprint),
         }, post)
-      } catch (error) {
-        post({ type: "sessionRun.error", message: errorMessage(error) })
+      } catch {
         return { ok: false }
       }
     }
@@ -852,7 +855,7 @@ function documentSessionRunId(document: Record<string, unknown>): string | undef
 function loadedPayloadBranchBindingId(
   payload: Record<string, unknown>,
   document: Record<string, unknown>,
-): string {
+): string | undefined {
   const runState = objectValue(document.run_state)
   const runtimeState = sessionRuntimeStateFromPayload(payload)
   const record = sessionRecordFromPayload(payload)
@@ -863,7 +866,7 @@ function loadedPayloadBranchBindingId(
     stringValue(runtimeState.branchBindingId) ||
     stringValue(record.branch_binding_id) ||
     stringValue(record.branchBindingId) ||
-    "main"
+    undefined
   )
 }
 
