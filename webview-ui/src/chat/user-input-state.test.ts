@@ -13,6 +13,7 @@ function input(schema: Record<string, unknown> = {}): PendingUserInputState {
   return {
     inputId: "input-1",
     sessionRunId: "run-1",
+    branchBindingId: "branch-a",
     kind: "mcp_elicitation",
     message: "Select options",
     inputSchema: schema,
@@ -129,18 +130,61 @@ describe("session run user input state", () => {
     const stale: PendingUserInputState = {
       inputId: "stale-input",
       sessionRunId: "run-1",
+      branchBindingId: "branch-a",
       kind: "mcp_elicitation",
       message: "Already timed out",
       inputSchema: {},
     }
 
-    expect(reconcileStatusUserInputs([stale], [], "run-1")).toEqual([])
+    expect(reconcileStatusUserInputs([stale], [], "run-1", "branch-a")).toEqual([])
     expect(
       reconcileStatusUserInputValues(
-        { "stale-input": { repository: "old" } },
+        { "run-1:branch-a:stale-input": { repository: "old" } },
         [],
+        "run-1",
+        "branch-a",
       ),
     ).toEqual({})
+  })
+
+  it("does not reconcile resume status user inputs without branch proof", () => {
+    const current: PendingUserInputState = {
+      ...input(),
+      inputId: "input-a",
+      message: "current",
+    }
+    const drafts = { "run-1:branch-a:input-a": { repository: "draft-a" } }
+
+    expect(
+      reconcileStatusUserInputs(
+        [current],
+        [
+          {
+            input_id: "input-a",
+            kind: "mcp_elicitation",
+            message: "unscoped status",
+            input_schema: {},
+            state: "requested",
+          },
+        ],
+        "run-1",
+      ),
+    ).toEqual([current])
+    expect(
+      reconcileStatusUserInputValues(
+        drafts,
+        [
+          {
+            input_id: "input-a",
+            kind: "mcp_elicitation",
+            message: "unscoped status",
+            input_schema: {},
+            state: "requested",
+          },
+        ],
+        "run-1",
+      ),
+    ).toEqual(drafts)
   })
 
   it("reconciles resume status only for the targeted branch", () => {
@@ -205,15 +249,47 @@ describe("session run user input state", () => {
     })
   })
 
-  it("filters visible pending user inputs to the active session run", () => {
+  it("does not restore scoped draft values from legacy branch-only keys", () => {
+    const next = reconcileStatusUserInputValues(
+      {
+        "branch-a:input-a": { repository: "legacy-draft" },
+      },
+      [
+        {
+          input_id: "input-a",
+          branch_binding_id: "branch-a",
+          kind: "mcp_elicitation",
+          message: "Still pending on A",
+          input_schema: {},
+          state: "requested",
+        },
+      ],
+      "run-1",
+      "branch-a",
+    )
+
+    expect(next).toEqual({
+      "branch-a:input-a": { repository: "legacy-draft" },
+      "run-1:branch-a:input-a": {},
+    })
+  })
+
+  it("filters visible pending user inputs to the active session run branch", () => {
     const runOne = input()
     const runTwo = {
       ...input(),
       inputId: "input-2",
       sessionRunId: "run-2",
+      branchBindingId: "branch-b",
+    }
+    const { branchBindingId: _branchBindingId, ...unscoped } = {
+      ...input(),
+      inputId: "input-3",
     }
 
-    expect(visiblePendingUserInputsForRun([runOne, runTwo], "run-2")).toEqual([runTwo])
-    expect(visiblePendingUserInputsForRun([runOne, runTwo], "")).toEqual([])
+    expect(visiblePendingUserInputsForRun([runOne, runTwo, unscoped], "run-2", "branch-b")).toEqual([runTwo])
+    expect(visiblePendingUserInputsForRun([runOne, runTwo, unscoped], "run-1", "branch-a")).toEqual([runOne])
+    expect(visiblePendingUserInputsForRun([runOne, runTwo, unscoped], "run-1")).toEqual([])
+    expect(visiblePendingUserInputsForRun([runOne, runTwo, unscoped], "")).toEqual([])
   })
 })

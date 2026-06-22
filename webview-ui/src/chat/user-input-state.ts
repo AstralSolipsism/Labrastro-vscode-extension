@@ -174,33 +174,29 @@ export function reconcileStatusUserInputs<T extends PendingUserInputState>(
   sessionRunId: string,
   branchBindingId?: string,
 ): T[] {
-  const restored = statusUserInputs
-    .map((item) => {
-      const restoredItem = userInputFromPayload(objectValue(item), sessionRunId)
-      return {
-        ...restoredItem,
-        branchBindingId: restoredItem.branchBindingId || branchBindingId,
-      }
-    })
-    .filter((item) => item.inputId)
-    .filter((item) => {
-      const raw = statusUserInputs.find((candidate) => {
-        const payload = objectValue(candidate)
-        return userInputStateStatusKey(payload, branchBindingId) === userInputStateKey(item, branchBindingId)
-      })
-      const state = String(objectValue(raw).state || "requested")
-      return !state || state === "requested"
-    })
-  const restoredIds = new Set(restored.map((item) => userInputStateKey(item, branchBindingId)))
+  if (!branchBindingId) return items
+  const restored = statusUserInputs.flatMap((raw) => {
+    const payload = objectValue(raw)
+    const state = String(payload.state || "requested")
+    if (state && state !== "requested") return []
+    const restoredItem = userInputFromPayload(payload, sessionRunId)
+    const restoredBranchBindingId = restoredItem.branchBindingId || branchBindingId
+    if (!restoredItem.inputId || restoredBranchBindingId !== branchBindingId) return []
+    return [{
+      ...restoredItem,
+      branchBindingId: restoredBranchBindingId,
+    } as T]
+  })
+  const restoredIds = new Set(restored.map((item) => userInputStateKey(item)))
   const next = items.filter((item) => {
     if (item.sessionRunId !== sessionRunId) return true
     if (!userInputMatchesBranch(item, branchBindingId)) return true
-    return restoredIds.has(userInputStateKey(item, branchBindingId))
+    return restoredIds.has(userInputStateKey(item))
   })
   for (const restoredItem of restored) {
     const index = next.findIndex((item) =>
       item.sessionRunId === restoredItem.sessionRunId &&
-      userInputStateKey(item, branchBindingId) === userInputStateKey(restoredItem, branchBindingId)
+      userInputStateKey(item) === userInputStateKey(restoredItem)
     )
     if (index < 0) {
       next.push(restoredItem as T)
@@ -217,28 +213,25 @@ export function reconcileStatusUserInputValues(
   sessionRunId?: string,
   branchBindingId?: string,
 ): Record<string, UserInputDraft> {
+  if (!sessionRunId || !branchBindingId) return current
   const ids = new Set<string>()
   for (const item of statusUserInputs) {
     const payload = objectValue(item)
     const state = String(payload.state || "requested")
     const inputId = String(payload.input_id || payload.inputId || "")
-    if (inputId && (!state || state === "requested")) {
-      ids.add(userInputStatusKey(payload, sessionRunId, branchBindingId))
+    const payloadBranchBindingId: string = stringValue(payload.branch_binding_id || payload.branchBindingId) || branchBindingId
+    if (inputId && payloadBranchBindingId === branchBindingId && (!state || state === "requested")) {
+      ids.add(userInputDraftKeyFromParts(inputId, sessionRunId, branchBindingId))
     }
   }
   const next: Record<string, UserInputDraft> =
-    sessionRunId || branchBindingId
-      ? Object.fromEntries(
-          Object.entries(current).filter(([key]) =>
-            !userInputDraftKeyMatchesTarget(key, sessionRunId, branchBindingId)
-          )
-        )
-      : {}
+    Object.fromEntries(
+      Object.entries(current).filter(([key]) =>
+        !userInputDraftKeyMatchesTarget(key, sessionRunId, branchBindingId)
+      )
+    )
   for (const inputId of ids) {
-    next[inputId] =
-      current[inputId] ||
-      current[legacyUserInputDraftKey(inputId)] ||
-      {}
+    next[inputId] = current[inputId] || {}
   }
   return next
 }
@@ -264,10 +257,10 @@ export function visiblePendingUserInputsForRun<T extends PendingUserInputState>(
   sessionRunId: string | undefined,
   branchBindingId?: string,
 ): T[] {
-  if (!sessionRunId) return []
+  if (!sessionRunId || !branchBindingId) return []
   return items.filter((item) =>
     item.sessionRunId === sessionRunId &&
-    (!branchBindingId || !item.branchBindingId || item.branchBindingId === branchBindingId)
+    item.branchBindingId === branchBindingId
   )
 }
 
@@ -276,42 +269,14 @@ function stringValue(value: unknown): string {
 }
 
 function userInputMatchesBranch(item: PendingUserInputState, branchBindingId: string | undefined): boolean {
-  if (!branchBindingId) return true
-  return !item.branchBindingId || item.branchBindingId === branchBindingId
+  return Boolean(branchBindingId) && item.branchBindingId === branchBindingId
 }
 
 function userInputStateKey(
   item: Pick<PendingUserInputState, "inputId" | "branchBindingId">,
-  fallbackBranchBindingId?: string,
 ): string {
-  const branch = item.branchBindingId || fallbackBranchBindingId || ""
+  const branch = item.branchBindingId || ""
   return branch ? `${branch}:${item.inputId}` : item.inputId
-}
-
-function userInputStateStatusKey(payload: Record<string, unknown>, fallbackBranchBindingId?: string): string {
-  const branch = stringValue(payload.branch_binding_id || payload.branchBindingId) || fallbackBranchBindingId || ""
-  const inputId = stringValue(payload.input_id || payload.inputId)
-  return branch ? `${branch}:${inputId}` : inputId
-}
-
-function userInputStatusKey(
-  payload: Record<string, unknown>,
-  sessionRunId?: string,
-  fallbackBranchBindingId?: string,
-): string {
-  const branch = stringValue(payload.branch_binding_id || payload.branchBindingId) || fallbackBranchBindingId || ""
-  const inputId = stringValue(payload.input_id || payload.inputId)
-  return userInputDraftKeyFromParts(inputId, sessionRunId, branch)
-}
-
-function legacyUserInputDraftKey(key: string): string {
-  const parts = key.split(":")
-  if (parts.length >= 3) {
-    const branch = parts[parts.length - 2]
-    const inputId = parts[parts.length - 1]
-    return branch ? `${branch}:${inputId}` : inputId
-  }
-  return key
 }
 
 export function userInputDraftKeyMatchesTarget(

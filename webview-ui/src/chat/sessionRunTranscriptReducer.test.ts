@@ -60,7 +60,8 @@ function reduce(
     current,
     sessionRunEvent(type, payload, seq, runId),
     {
-      activeSessionRunId: runId,
+      scopedSessionRunId: runId,
+      scopedBranchBindingId: "branch-a",
       currentSessionId: "session-1",
       isWorking: true,
       now: 1000 + seq,
@@ -74,13 +75,18 @@ function sessionRunEvent(
   payload: Record<string, unknown>,
   seq: number,
   runId = "run-1",
+  branchBindingId = "branch-a",
 ): Record<string, unknown> {
   return {
     type,
     session_run_id: runId,
+    branch_binding_id: branchBindingId,
     seq,
     session_event_seq: seq,
-    payload,
+    payload: {
+      ...payload,
+      branch_binding_id: branchBindingId,
+    },
   }
 }
 
@@ -100,7 +106,8 @@ describe("sessionRunTranscriptReducer", () => {
       }, 6),
     ]
     const context = {
-      activeSessionRunId: "run-1",
+      scopedSessionRunId: "run-1",
+      scopedBranchBindingId: "branch-a",
       currentSessionId: "session-1",
       isWorking: true,
       now: 1000,
@@ -114,12 +121,12 @@ describe("sessionRunTranscriptReducer", () => {
 
     expect(batch.bundle).toEqual(sequential)
     expect(batch.eventKeys).toEqual([
-      "session:session-1:1",
-      "session:session-1:2",
-      "session:session-1:3",
-      "session:session-1:4",
-      "session:session-1:5",
-      "session:session-1:6",
+      "session-run:run-1:branch-a:1:session_run_start",
+      "session-run:run-1:branch-a:2:assistant_delta",
+      "session-run:run-1:branch-a:3:assistant_delta",
+      "session-run:run-1:branch-a:4:reasoning_delta",
+      "session-run:run-1:branch-a:5:reasoning_delta",
+      "session-run:run-1:branch-a:6:tool_call_stream:tool-1",
     ])
     expect(batch.changed).toBe(true)
   })
@@ -182,7 +189,55 @@ describe("sessionRunTranscriptReducer", () => {
     expect(replayed.turns[0].userMessage.text).toBe("edited branch question")
     expect(replayed.turns[0].userMessage.sessionItemId).toBe("branch-user-1")
     expect(replayed.turns[0].userMessage.sessionEventSeq).toBe(1)
-    expect(replayed.turns[0].userMessage.eventKey).toBe("session:session-1:1")
+    expect(replayed.turns[0].userMessage.eventKey).toBe("session-run:run-1:branch-a:1:user_message")
+  })
+
+  it("partitions session-run event keys by branch instead of current session fallback", () => {
+    const context = {
+      scopedSessionRunId: "run-1",
+      currentSessionId: "selected-session",
+      isWorking: true,
+      now: 1000,
+      labels: { thinking: "正在思考" },
+    }
+    const branchA = applySessionRunTranscriptEvent(
+      bundle(),
+      sessionRunEvent("assistant_message", { content: "A" }, 1, "run-1", "branch-a"),
+      context,
+    )
+    const branchB = applySessionRunTranscriptEvent(
+      bundle(),
+      sessionRunEvent("assistant_message", { content: "B" }, 1, "run-1", "branch-b"),
+      context,
+    )
+
+    expect(branchA.eventKey).toBe("session-run:run-1:branch-a:1:assistant_message")
+    expect(branchB.eventKey).toBe("session-run:run-1:branch-b:1:assistant_message")
+    expect(branchA.eventKey).not.toBe(branchB.eventKey)
+    expect(branchA.eventKey).not.toContain("selected-session")
+  })
+
+  it("does not use session-level event keys when session-run branch proof is missing", () => {
+    const reduction = applySessionRunTranscriptEvent(
+      bundle(),
+      {
+        type: "assistant_message",
+        session_run_id: "run-1",
+        session_id: "session-1",
+        seq: 1,
+        session_event_seq: 1,
+        payload: { content: "missing branch" },
+      },
+      {
+        currentSessionId: "selected-session",
+        isWorking: true,
+        now: 1000,
+        labels: { thinking: "正在思考" },
+      },
+    )
+
+    expect(reduction.eventKey).toBeUndefined()
+    expect(reduction.bundle.turns[0].assistantMessages[0].eventKey).toBeUndefined()
   })
 
   it("stores stream observability metrics in stats without rendering transcript parts", () => {
@@ -221,7 +276,7 @@ describe("sessionRunTranscriptReducer", () => {
       sessionRunEvent("assistant_delta", { content: "hello" }, 2),
     ]
     const context = {
-      activeSessionRunId: "run-1",
+      scopedSessionRunId: "run-1",
       currentSessionId: "session-1",
       isWorking: true,
       now: 1000,
@@ -425,7 +480,7 @@ describe("sessionRunTranscriptReducer", () => {
 
   it("keeps invalid apply_patch protocol failures out of file change cards", () => {
     const context = {
-      activeSessionRunId: "run-1",
+      scopedSessionRunId: "run-1",
       currentSessionId: "session-1",
       isWorking: true,
       now: 1000,
@@ -452,7 +507,7 @@ describe("sessionRunTranscriptReducer", () => {
 
   it("keeps apply_patch argument deltas in tool preparing state", () => {
     const context = {
-      activeSessionRunId: "run-1",
+      scopedSessionRunId: "run-1",
       currentSessionId: "session-1",
       isWorking: true,
       now: 1000,
@@ -479,7 +534,7 @@ describe("sessionRunTranscriptReducer", () => {
 
   it("creates apply_patch file cards from mutation preview ready state", () => {
     const context = {
-      activeSessionRunId: "run-1",
+      scopedSessionRunId: "run-1",
       currentSessionId: "session-1",
       isWorking: true,
       now: 1000,
@@ -551,7 +606,7 @@ describe("sessionRunTranscriptReducer", () => {
 
   it("keeps semantic preview failures out of file change cards", () => {
     const context = {
-      activeSessionRunId: "run-1",
+      scopedSessionRunId: "run-1",
       currentSessionId: "session-1",
       isWorking: true,
       now: 1000,
@@ -583,7 +638,7 @@ describe("sessionRunTranscriptReducer", () => {
 
   it("does not let late tool_call_end overwrite mutation preview failure details", () => {
     const context = {
-      activeSessionRunId: "run-1",
+      scopedSessionRunId: "run-1",
       currentSessionId: "session-1",
       isWorking: true,
       now: 1000,
@@ -631,7 +686,7 @@ describe("sessionRunTranscriptReducer", () => {
 
   it("keeps interrupted document drafts recoverable", () => {
     const context = {
-      activeSessionRunId: "run-1",
+      scopedSessionRunId: "run-1",
       currentSessionId: "session-1",
       isWorking: true,
       now: 1000,

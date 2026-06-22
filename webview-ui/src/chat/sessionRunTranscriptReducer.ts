@@ -54,7 +54,8 @@ export interface SessionRunTranscriptLabels {
 }
 
 export interface SessionRunTranscriptContext {
-  activeSessionRunId?: string
+  scopedSessionRunId?: string
+  scopedBranchBindingId?: string
   currentSessionId?: string | null
   runStatus?: MockTaskStats["runStatus"]
   isWorking?: boolean
@@ -513,12 +514,27 @@ function eventRenderMeta(
 ): EventRenderMeta {
   const sessionEventSeq = numberValue(event.session_event_seq) ?? numberValue(event.sessionEventSeq)
   const sessionRunSeq = numberValue(event.session_run_seq) ?? numberValue(event.seq)
-  const sessionRunId = stringValue(event.session_run_id) || context.activeSessionRunId
+  const sessionRunId =
+    stringValue(event.session_run_id) ||
+    stringValue(event.sessionRunId) ||
+    context.scopedSessionRunId
+  const branchBindingId =
+    stringValue(event.branch_binding_id) ||
+    stringValue(event.branchBindingId) ||
+    stringValue(payload.branch_binding_id) ||
+    stringValue(payload.branchBindingId) ||
+    context.scopedBranchBindingId
+  const isSessionRunScopedEvent = Boolean(
+    sessionRunId ||
+    branchBindingId ||
+    context.scopedSessionRunId ||
+    context.scopedBranchBindingId,
+  )
   const eventSessionId =
     stringValue(event.session_id) ||
+    stringValue(event.sessionId) ||
     stringValue(payload.session_id) ||
-    context.currentSessionId ||
-    bundle.session.id
+    stringValue(payload.sessionId)
   const toolCallId = stringValue(payload.tool_call_id)
   const sessionItemId =
     stringValue(payload.session_item_id) ||
@@ -527,11 +543,14 @@ function eventRenderMeta(
     stringValue(event.session_item_id) ||
     stringValue(event.item_id) ||
     stringValue(event.event_id)
-  const eventKey = sessionEventSeq !== undefined
-    ? `session:${eventSessionId || "unknown"}:${sessionEventSeq}`
-    : sessionRunId && sessionRunSeq !== undefined
-      ? `session-run:${sessionRunId}:${sessionRunSeq}:${type}${toolCallId ? `:${toolCallId}` : ""}`
-      : undefined
+  const scopedSuffix = `${type}${toolCallId ? `:${toolCallId}` : ""}`
+  const eventKey = sessionRunId && branchBindingId && sessionRunSeq !== undefined
+    ? `session-run:${sessionRunId}:${branchBindingId}:${sessionRunSeq}:${scopedSuffix}`
+    : !isSessionRunScopedEvent && eventSessionId && sessionEventSeq !== undefined
+      ? `session:${eventSessionId}:${sessionEventSeq}`
+      : sessionRunId && branchBindingId && sessionEventSeq !== undefined
+        ? `session-run-event:${sessionRunId}:${branchBindingId}:${sessionEventSeq}:${scopedSuffix}`
+        : undefined
   return { eventKey, sessionEventSeq, sessionItemId }
 }
 
@@ -1349,7 +1368,7 @@ function appendToolStream(
 
 function preparingToolCallId(payload: Record<string, unknown>, context: SessionRunTranscriptContext): string {
   const index = numberValue(payload.index) ?? 0
-  return `preparing:${context.activeSessionRunId || "pending"}:${index}`
+  return `preparing:${context.scopedSessionRunId || "pending"}:${index}`
 }
 
 function shouldIgnoreToolCallDelta(

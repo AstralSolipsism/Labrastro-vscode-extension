@@ -22,6 +22,7 @@ describe("chat messages", () => {
     const payload = buildChatSendMessage({
       text: "  hello  ",
       sessionId: "session-1",
+      operationId: "op-start",
       branchBindingId: "branch-1",
       mode: "taskflow",
       workflowMode: "taskflow",
@@ -32,6 +33,7 @@ describe("chat messages", () => {
       type: "chat.send",
       text: "hello",
       sessionId: "session-1",
+      operationId: "op-start",
       branchBindingId: "branch-1",
       branch_binding_id: "branch-1",
       mode: "taskflow",
@@ -42,9 +44,10 @@ describe("chat messages", () => {
   })
 
   it("omits optional routing fields when chat mode does not need them", () => {
-    expect(buildChatSendMessage({ text: "hello", workflowMode: "chat" })).toEqual({
+    expect(buildChatSendMessage({ text: "hello", operationId: "op-start", workflowMode: "chat" })).toEqual({
       type: "chat.send",
       text: "hello",
+      operationId: "op-start",
     })
   })
 
@@ -52,6 +55,7 @@ describe("chat messages", () => {
     expect(buildChatSendMessage({
       text: "hello",
       draftSessionId: "session-local",
+      operationId: "op-start",
       locale: " zh-CN ",
       providerId: " deepseek ",
       modelId: " V4PRO ",
@@ -60,6 +64,7 @@ describe("chat messages", () => {
       type: "chat.send",
       text: "hello",
       draftSessionId: "session-local",
+      operationId: "op-start",
       locale: "zh-CN",
       providerId: "deepseek",
       modelId: "V4PRO",
@@ -97,13 +102,22 @@ describe("chat messages", () => {
     const messages: Record<string, unknown>[] = []
 
     chatMessages.selectBranch({ postMessage: (message) => messages.push(message) }, {
+      sessionRunId: " run-current ",
+      sourceBranchBindingId: " main ",
       branchBindingId: " branch-2 ",
+      operationId: "op-select",
     })
 
     expect(messages).toEqual([
       {
         type: "sessionRun.branch.select",
+        sessionRunId: "run-current",
+        session_run_id: "run-current",
+        sourceBranchBindingId: "main",
+        source_branch_binding_id: "main",
+        branchBindingId: "branch-2",
         branch_binding_id: "branch-2",
+        operationId: "op-select",
       },
     ])
   })
@@ -113,17 +127,18 @@ describe("chat messages", () => {
 
     chatMessages.cancel(
       { postMessage: (message) => messages.push(message) },
-      { sessionRunId: "run-1", branchBindingId: "branch-1", reason: "user_stop" },
+      { sessionRunId: "run-1", branchBindingId: "branch-1", operationId: "op-cancel", reason: "user_stop" },
     )
     chatMessages.recover(
       { postMessage: (message) => messages.push(message) },
-      { sessionRunId: "run-1", branchBindingId: "branch-1", action: "continue" },
+      { sessionRunId: "run-1", branchBindingId: "branch-1", operationId: "op-recover", action: "continue" },
     )
 
     expect(messages).toEqual([
       {
         type: "sessionRun.cancel",
         sessionRunId: "run-1",
+        operationId: "op-cancel",
         branchBindingId: "branch-1",
         branch_binding_id: "branch-1",
         reason: "user_stop",
@@ -131,6 +146,7 @@ describe("chat messages", () => {
       {
         type: "sessionRun.recover",
         sessionRunId: "run-1",
+        operationId: "op-recover",
         branchBindingId: "branch-1",
         branch_binding_id: "branch-1",
         action: "continue",

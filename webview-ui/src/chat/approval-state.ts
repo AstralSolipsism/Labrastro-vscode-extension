@@ -69,10 +69,10 @@ export function mergeStatusApprovals<T extends RecoverablePendingApproval>(
   sessionRunId: string,
   branchBindingId?: string,
 ): T[] {
+  if (!branchBindingId) return items
   const next = items.filter((item) => {
     if (item.sessionRunId !== sessionRunId) return true
-    if (!branchBindingId) return false
-    return item.branchBindingId && item.branchBindingId !== branchBindingId
+    return item.branchBindingId !== branchBindingId
   })
   for (const raw of statusApprovals) {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue
@@ -80,10 +80,12 @@ export function mergeStatusApprovals<T extends RecoverablePendingApproval>(
     if (payload.state && payload.state !== "requested") continue
     const approval = approvalFromPayload(payload)
     if (!approval.approvalId) continue
+    const restoredBranchBindingId: string = approval.branchBindingId || branchBindingId
+    if (restoredBranchBindingId !== branchBindingId) continue
     const restored = {
       ...approval,
       sessionRunId,
-      branchBindingId: approval.branchBindingId || branchBindingId,
+      branchBindingId: restoredBranchBindingId,
       submittedDecision: undefined,
       submissionState: undefined,
       submissionError: undefined,
@@ -93,7 +95,7 @@ export function mergeStatusApprovals<T extends RecoverablePendingApproval>(
         item,
         restored.approvalId,
         sessionRunId,
-        restored.branchBindingId || branchBindingId,
+        restoredBranchBindingId,
       )
     )
     if (index < 0) {
@@ -114,9 +116,10 @@ function approvalMatches(
   sessionRunId?: string,
   branchBindingId?: string,
 ): boolean {
+  if (!sessionRunId || !branchBindingId) return false
   if (item.approvalId !== approvalId) return false
   const itemWithRun = item as ApprovalSubmissionFields & { sessionRunId?: string; branchBindingId?: string }
-  if (sessionRunId && itemWithRun.sessionRunId && itemWithRun.sessionRunId !== sessionRunId) return false
-  if (branchBindingId && itemWithRun.branchBindingId && itemWithRun.branchBindingId !== branchBindingId) return false
+  if (itemWithRun.sessionRunId !== sessionRunId) return false
+  if (itemWithRun.branchBindingId !== branchBindingId) return false
   return true
 }

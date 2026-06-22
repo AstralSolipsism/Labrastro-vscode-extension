@@ -21,7 +21,7 @@ const approval = (id = "approval-1"): TestApproval => ({
 
 describe("approval-state", () => {
   it("keeps an approval visible while its decision is submitting", () => {
-    const next = markApprovalSubmitting([approval()], "approval-1", "allow_once")
+    const next = markApprovalSubmitting([approval()], "approval-1", "allow_once", "run-1", "branch-a")
 
     expect(next).toMatchObject([
       {
@@ -36,9 +36,9 @@ describe("approval-state", () => {
   })
 
   it("keeps a failed approval visible and retryable", () => {
-    const submitting = markApprovalSubmitting([approval()], "approval-1", "allow_once")
+    const submitting = markApprovalSubmitting([approval()], "approval-1", "allow_once", "run-1", "branch-a")
 
-    const next = markApprovalSubmitFailed(submitting, "approval-1", "fetch failed")
+    const next = markApprovalSubmitFailed(submitting, "approval-1", "fetch failed", "run-1", "branch-a")
 
     expect(next).toMatchObject([
       {
@@ -56,6 +56,8 @@ describe("approval-state", () => {
     const next = markApprovalSubmitSucceeded(
       [approval("approval-1"), approval("approval-2")],
       "approval-1",
+      "run-1",
+      "branch-a",
     )
 
     expect(next).toMatchObject([
@@ -92,9 +94,11 @@ describe("approval-state", () => {
 
   it("restores pending approvals from status payload as actionable approvals", () => {
     const failed = markApprovalSubmitFailed(
-      markApprovalSubmitting([approval()], "approval-1", "allow_once"),
+      markApprovalSubmitting([approval()], "approval-1", "allow_once", "run-1", "branch-a"),
       "approval-1",
       "fetch failed",
+      "run-1",
+      "branch-a",
     )
 
     const next = mergeStatusApprovals(
@@ -113,6 +117,7 @@ describe("approval-state", () => {
         },
       ],
       "run-1",
+      "branch-a",
     )
 
     expect(next).toMatchObject([
@@ -130,6 +135,32 @@ describe("approval-state", () => {
         toolName: "apply_patch",
       },
     ])
+  })
+
+  it("does not update approvals without explicit session run and branch proof", () => {
+    const current = [approval("approval-1")]
+
+    expect(markApprovalSubmitting(current, "approval-1", "allow_once")).toEqual(current)
+    expect(markApprovalSubmitFailed(current, "approval-1", "fetch failed")).toEqual(current)
+    expect(markApprovalSubmitSucceeded(current, "approval-1")).toEqual(current)
+  })
+
+  it("does not restore status approvals without branch proof", () => {
+    const current = [approval("approval-1")]
+
+    const next = mergeStatusApprovals(
+      current,
+      [
+        {
+          approval_id: "approval-2",
+          tool_name: "apply_patch",
+          state: "requested",
+        },
+      ],
+      "run-1",
+    )
+
+    expect(next).toEqual(current)
   })
 
   it("merges status approvals only into the targeted branch", () => {
@@ -190,5 +221,21 @@ describe("approval-state", () => {
         branchBindingId: "branch-b",
       },
     ])
+  })
+
+  it("does not let scoped submit results match approvals without branch proof", () => {
+    const { branchBindingId: _branchBindingId, ...unscoped } = approval("approval-1")
+
+    const next = markApprovalSubmitSucceeded(
+      [
+        unscoped,
+        approval("approval-1"),
+      ],
+      "approval-1",
+      "run-1",
+      "branch-a",
+    )
+
+    expect(next).toEqual([unscoped])
   })
 })

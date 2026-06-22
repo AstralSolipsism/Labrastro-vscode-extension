@@ -10,7 +10,9 @@ export interface ChatSendInput {
   text: string
   sessionId?: string
   draftSessionId?: string
+  sessionRunId?: string
   requestId?: string
+  operationId: string
   locale?: string
   branchBindingId?: string
   mode?: string
@@ -18,6 +20,16 @@ export interface ChatSendInput {
   providerId?: string
   modelId?: string
   parameters?: Record<string, unknown>
+  mentions?: Record<string, unknown>[]
+}
+
+export interface ChatPendingNextTurnSendInput {
+  text: string
+  sessionRunId: string
+  sessionId?: string
+  requestId?: string
+  locale?: string
+  branchBindingId?: string
   mentions?: Record<string, unknown>[]
 }
 
@@ -41,13 +53,15 @@ export interface SessionModelSwitchInput {
 
 export interface ChatRecoverInput {
   sessionRunId: string
-  branchBindingId?: string
+  branchBindingId: string
+  operationId: string
   action: "continue" | "retry"
 }
 
 export interface ChatCancelInput {
-  sessionRunId?: string
-  branchBindingId?: string
+  sessionRunId: string
+  branchBindingId: string
+  operationId: string
   reason?: string
 }
 
@@ -60,9 +74,12 @@ export interface ChatPendingNextTurnInput {
 }
 
 export interface ChatBranchInput {
+  sessionRunId: string
   baseSessionItemId: string
   prompt: string
-  branchBindingId?: string
+  operationId: string
+  sourceBranchBindingId: string
+  branchBindingId: string
   sourceLabel?: string
   sourceMessageId?: string
   sourceNodeId?: string
@@ -70,7 +87,10 @@ export interface ChatBranchInput {
 }
 
 export interface ChatBranchSelectInput {
+  sessionRunId: string
+  sourceBranchBindingId: string
   branchBindingId: string
+  operationId: string
 }
 
 export function routeSelectedChatMode(
@@ -93,21 +113,42 @@ export function buildChatSendMessage(input: ChatSendInput): WebviewToHostMessage
   const modelId = input.modelId?.trim()
   const locale = input.locale?.trim()
   const branchBindingId = input.branchBindingId?.trim()
-    return {
-      type: "chat.send",
-      text,
+  const sessionRunId = input.sessionRunId?.trim()
+  const operationId = input.operationId.trim()
+  return {
+    type: "chat.send",
+    text,
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     ...(input.draftSessionId ? { draftSessionId: input.draftSessionId } : {}),
+    ...(sessionRunId ? { sessionRunId, session_run_id: sessionRunId } : {}),
     ...(input.requestId ? { requestId: input.requestId } : {}),
+    operationId,
     ...(locale ? { locale } : {}),
     ...(branchBindingId ? { branchBindingId, branch_binding_id: branchBindingId } : {}),
     ...(mode ? { mode } : {}),
     ...(workflowMode ? { workflowMode } : {}),
-      ...(providerId && modelId ? { providerId, modelId } : {}),
-      ...(providerId && modelId && input.parameters && Object.keys(input.parameters).length ? { parameters: input.parameters } : {}),
-      ...(input.mentions?.length ? { mentions: input.mentions } : {}),
-    }
+    ...(providerId && modelId ? { providerId, modelId } : {}),
+    ...(providerId && modelId && input.parameters && Object.keys(input.parameters).length ? { parameters: input.parameters } : {}),
+    ...(input.mentions?.length ? { mentions: input.mentions } : {}),
   }
+}
+
+export function buildPendingNextTurnSendMessage(input: ChatPendingNextTurnSendInput): WebviewToHostMessage {
+  const text = input.text.trim()
+  const locale = input.locale?.trim()
+  const sessionRunId = input.sessionRunId.trim()
+  const branchBindingId = input.branchBindingId?.trim()
+  return {
+    type: "chat.send",
+    text,
+    ...(sessionRunId ? { sessionRunId, session_run_id: sessionRunId } : {}),
+    ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+    ...(input.requestId ? { requestId: input.requestId } : {}),
+    ...(locale ? { locale } : {}),
+    ...(branchBindingId ? { branchBindingId, branch_binding_id: branchBindingId } : {}),
+    ...(input.mentions?.length ? { mentions: input.mentions } : {}),
+  }
+}
 
 export function buildSessionModelSwitchMessage(input: SessionModelSwitchInput): WebviewToHostMessage {
   const providerId = input.providerId.trim()
@@ -124,7 +165,13 @@ export function buildSessionModelSwitchMessage(input: SessionModelSwitchInput): 
 
 export const chatMessages = {
   send(port: ChatMessagePort, input: ChatSendInput): void {
+    if (!input.operationId.trim()) return
     port.postMessage(buildChatSendMessage(input))
+  },
+
+  queuePendingNextTurn(port: ChatMessagePort, input: ChatPendingNextTurnSendInput): void {
+    if (!input.sessionRunId.trim() || !input.branchBindingId?.trim()) return
+    port.postMessage(buildPendingNextTurnSendMessage(input))
   },
 
   dispatchCommand(port: ChatMessagePort, input: ChatCommandDispatchInput): void {
@@ -144,16 +191,17 @@ export const chatMessages = {
     port.postMessage(buildSessionModelSwitchMessage(input))
   },
 
-  cancel(port: ChatMessagePort, input: ChatCancelInput | string | undefined, reason = "user_cancelled"): void {
-    const payload = typeof input === "object" && input
-      ? input
-      : { sessionRunId: input, reason }
-    const branchBindingId = payload.branchBindingId?.trim()
+  cancel(port: ChatMessagePort, input: ChatCancelInput): void {
+    const branchBindingId = input.branchBindingId.trim()
+    const operationId = input.operationId.trim()
+    if (!input.sessionRunId || !branchBindingId || !operationId) return
     port.postMessage({
       type: "sessionRun.cancel",
-      ...(payload.sessionRunId ? { sessionRunId: payload.sessionRunId } : {}),
-      ...(branchBindingId ? { branchBindingId, branch_binding_id: branchBindingId } : {}),
-      reason: payload.reason || "user_cancelled",
+      sessionRunId: input.sessionRunId,
+      operationId,
+      branchBindingId,
+      branch_binding_id: branchBindingId,
+      reason: input.reason || "user_cancelled",
     })
   },
 
@@ -185,11 +233,22 @@ export const chatMessages = {
   },
 
   branch(port: ChatMessagePort, input: ChatBranchInput): void {
+    const sessionRunId = input.sessionRunId.trim()
+    const operationId = input.operationId.trim()
+    const sourceBranchBindingId = input.sourceBranchBindingId.trim()
+    const branchBindingId = input.branchBindingId.trim()
+    if (!sessionRunId || !operationId || !sourceBranchBindingId || !branchBindingId) return
     port.postMessage({
       type: "sessionRun.branch",
+      sessionRunId,
+      session_run_id: sessionRunId,
       base_session_item_id: input.baseSessionItemId,
       prompt: input.prompt,
-      ...(input.branchBindingId ? { branch_binding_id: input.branchBindingId } : {}),
+      operationId,
+      sourceBranchBindingId,
+      source_branch_binding_id: sourceBranchBindingId,
+      branchBindingId,
+      branch_binding_id: branchBindingId,
       ...(input.sourceLabel ? { source_label: input.sourceLabel } : {}),
       ...(input.sourceMessageId ? { source_message_id: input.sourceMessageId } : {}),
       ...(input.sourceNodeId ? { source_node_id: input.sourceNodeId } : {}),
@@ -198,20 +257,33 @@ export const chatMessages = {
   },
 
   selectBranch(port: ChatMessagePort, input: ChatBranchSelectInput): void {
+    const sessionRunId = input.sessionRunId.trim()
+    const sourceBranchBindingId = input.sourceBranchBindingId.trim()
     const branchBindingId = input.branchBindingId.trim()
-    if (!branchBindingId) return
+    const operationId = input.operationId.trim()
+    if (!sessionRunId || !sourceBranchBindingId || !branchBindingId || !operationId) return
     port.postMessage({
       type: "sessionRun.branch.select",
+      sessionRunId,
+      session_run_id: sessionRunId,
+      sourceBranchBindingId,
+      source_branch_binding_id: sourceBranchBindingId,
+      branchBindingId,
       branch_binding_id: branchBindingId,
+      operationId,
     })
   },
 
   recover(port: ChatMessagePort, input: ChatRecoverInput): void {
-    const branchBindingId = input.branchBindingId?.trim()
+    const branchBindingId = input.branchBindingId.trim()
+    const operationId = input.operationId.trim()
+    if (!input.sessionRunId || !branchBindingId || !operationId) return
     port.postMessage({
       type: "sessionRun.recover",
       sessionRunId: input.sessionRunId,
-      ...(branchBindingId ? { branchBindingId, branch_binding_id: branchBindingId } : {}),
+      operationId,
+      branchBindingId,
+      branch_binding_id: branchBindingId,
       action: input.action,
     })
   },
