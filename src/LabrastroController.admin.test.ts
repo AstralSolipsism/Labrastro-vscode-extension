@@ -1,4 +1,4 @@
-import type * as vscode from "vscode"
+﻿import type * as vscode from "vscode"
 import { describe, expect, it, vi } from "vitest"
 
 const vscodeMock = vi.hoisted(() => ({
@@ -66,6 +66,9 @@ import { LabrastroController, capabilityPackageIngestPayloadFromChatText } from 
 import { RemoteError } from "./remote-errors"
 import type { WebviewToHostMessage } from "./protocol/messages"
 import type { RemoteStateStore } from "./RemoteStateStore"
+
+const operationSnakeId = ["operation", "id"].join("_")
+const operationSnakeKind = ["operation", "kind"].join("_")
 
 function context(): vscode.ExtensionContext {
   return {
@@ -545,13 +548,88 @@ describe("LabrastroController session run start", () => {
     expect(sessionRunHandleMessage).not.toHaveBeenCalled()
   })
 
+  it("echoes environment run request ids on started and completed messages", async () => {
+    const controller = new LabrastroController(context())
+    const post = vi.fn()
+    const client = (controller as unknown as { client: Record<string, unknown> }).client
+    client.environmentManifest = vi.fn(async () => ({
+      environment_requirements: [
+        { id: "envreq:runtime:node", kind: "runtime", name: "node" },
+      ],
+      mcp_servers: [],
+    }))
+    client.environmentRun = vi.fn(async () => ({ agent_run_id: "env-task-1" }))
+    client.agentRunEvents = vi.fn(async () => ({
+      events: [{ type: "completed", payload: {} }],
+    }))
+
+    await (controller as unknown as {
+      startEnvironmentRun: (
+        mode: "check",
+        post: (message: Record<string, unknown>) => void,
+        entryIds: string[] | undefined,
+        agentId: string | undefined,
+        options: { requestId: string },
+      ) => Promise<void>
+    }).startEnvironmentRun(
+      "check",
+      post,
+      ["envreq:runtime:node"],
+      undefined,
+      { requestId: "env-run-1" },
+    )
+
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: "environment.run.started",
+      requestId: "env-run-1",
+    }))
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: "environment.run.completed",
+      requestId: "env-run-1",
+    }))
+  })
+
+  it("echoes environment run request ids on preflight errors", async () => {
+    const controller = new LabrastroController(context())
+    const post = vi.fn()
+    const client = (controller as unknown as { client: Record<string, unknown> }).client
+    client.environmentManifest = vi.fn(async () => ({
+      environment_requirements: [],
+      mcp_servers: [],
+    }))
+
+    await (controller as unknown as {
+      startEnvironmentRun: (
+        mode: "check",
+        post: (message: Record<string, unknown>) => void,
+        entryIds: string[] | undefined,
+        agentId: string | undefined,
+        options: { requestId: string },
+      ) => Promise<void>
+    }).startEnvironmentRun(
+      "check",
+      post,
+      undefined,
+      undefined,
+      { requestId: "env-run-empty" },
+    )
+
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: "environment.run.error",
+      requestId: "env-run-empty",
+    }))
+  })
+
   it("sends active capability package session run resume to settings initial state", async () => {
     const controller = new LabrastroController(context())
     const post = vi.fn()
     controller.registerWebviewPost(post, "settings")
     const sessionRunStatus = vi.fn(async () => ({
+      session_run_id: "run-cap",
       status: "running",
       session_id: "session-cap",
+      branch_binding_id: "main",
+      agent_run_id: "agent-cap-main",
       runtime_state: {
         workflow: "capability_package_ingest",
         agent_id: "capability_packager",
@@ -575,6 +653,7 @@ describe("LabrastroController session run start", () => {
     }).sessionRunCoordinator.setActiveRun({
       sessionRunId: "run-cap",
       sessionId: "session-cap",
+      branchBindingId: "main",
       cursor: 0,
       status: "running",
       startedAt: "2026-06-02T00:00:00.000Z",
@@ -588,6 +667,7 @@ describe("LabrastroController session run start", () => {
 
     expect(post).toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.resume",
+      bootstrapRestore: true,
       payload: expect.objectContaining({
         sessionRunId: "run-cap",
         sessionId: "session-cap",
@@ -603,14 +683,17 @@ describe("LabrastroController session run start", () => {
         ],
       }),
     }))
-    expect(ensureSessionRunEventStream).toHaveBeenCalledWith("run-cap", "session-cap", post)
+    expect(ensureSessionRunEventStream).toHaveBeenCalledWith("run-cap", "session-cap", post, "main")
   })
 
   it("keeps terminal active runs resumable until final events are consumed", async () => {
     const controller = new LabrastroController(context())
     const sessionRunStatus = vi.fn(async () => ({
+      session_run_id: "run-cap",
       status: "done",
       session_id: "session-cap",
+      branch_binding_id: "main",
+      agent_run_id: "agent-cap-main",
       runtime_state: {
         workflow: "capability_package_ingest",
         agent_id: "capability_packager",
@@ -626,6 +709,7 @@ describe("LabrastroController session run start", () => {
     }).sessionRunCoordinator.setActiveRun({
       sessionRunId: "run-cap",
       sessionId: "session-cap",
+      branchBindingId: "main",
       cursor: 4,
       status: "running",
       startedAt: "2026-06-02T00:00:00.000Z",
@@ -637,6 +721,7 @@ describe("LabrastroController session run start", () => {
     }).activeRunPayloadWithServerStatus({
       sessionRunId: "run-cap",
       sessionId: "session-cap",
+      branchBindingId: "main",
       cursor: 4,
       status: "running",
     })
@@ -662,8 +747,11 @@ describe("LabrastroController session run start", () => {
     const post = vi.fn()
     controller.registerWebviewPost(post, "settings")
     const sessionRunStatus = vi.fn(async () => ({
+      session_run_id: "run-cap",
       status: "failed",
       session_id: "session-cap",
+      branch_binding_id: "main",
+      agent_run_id: "agent-cap-main",
       runtime_state: {
         workflow: "capability_package_ingest",
         agent_id: "capability_packager",
@@ -679,6 +767,7 @@ describe("LabrastroController session run start", () => {
     }).sessionRunCoordinator.setActiveRun({
       sessionRunId: "run-cap",
       sessionId: "session-cap",
+      branchBindingId: "main",
       cursor: 6,
       status: "running",
       startedAt: "2026-06-02T00:00:00.000Z",
@@ -692,6 +781,7 @@ describe("LabrastroController session run start", () => {
 
     expect(post).toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.resume",
+      bootstrapRestore: true,
       payload: expect.objectContaining({
         sessionRunId: "run-cap",
         sessionId: "session-cap",
@@ -704,7 +794,30 @@ describe("LabrastroController session run start", () => {
         approvals: [],
       }),
     }))
-    expect(ensureSessionRunEventStream).toHaveBeenCalledWith("run-cap", "session-cap", post)
+    expect(ensureSessionRunEventStream).toHaveBeenCalledWith("run-cap", "session-cap", post, "main")
+  })
+
+  it("does not refresh restored active runs that lack branch proof", async () => {
+    const controller = new LabrastroController(context())
+    const sessionRunStatus = vi.fn(async () => ({
+      status: "running",
+      session_id: "session-cap",
+      runtime_state: {},
+      approvals: [],
+    }))
+    ;((controller as unknown as { client: Record<string, unknown> }).client).sessionRunStatus = sessionRunStatus
+
+    const payload = await (controller as unknown as {
+      activeRunPayloadWithServerStatus: (payload: Record<string, unknown>) => Promise<Record<string, unknown> | undefined>
+    }).activeRunPayloadWithServerStatus({
+      sessionRunId: "run-cap",
+      sessionId: "session-cap",
+      cursor: 0,
+      status: "running",
+    })
+
+    expect(payload).toBeUndefined()
+    expect(sessionRunStatus).not.toHaveBeenCalled()
   })
 
   it("reports empty session run ids as start failures without persisting active run", async () => {
@@ -730,18 +843,23 @@ describe("LabrastroController session run start", () => {
       providerId: "deepseek",
       modelId: "V4FLASH",
       locale: "en",
+      operationId: "op-start-empty-session-run",
     })
 
     expect(startSessionRun).toHaveBeenCalledWith("hello", "session-1", expect.objectContaining({
       locale: "en",
       providerId: "deepseek",
       modelId: "V4FLASH",
+      operationId: "op-start-empty-session-run",
     }))
-    expect(post).toHaveBeenCalledWith({ type: "sessionRun.started", text: "hello" })
-    expect(post).toHaveBeenCalledWith({
-      type: "sessionRun.error",
+    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "sessionRun.started" }))
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: "sessionRun.operation.error",
+      operationId: "op-start-empty-session-run",
+      operationKind: "start",
       message: "session run start failed: empty session run id",
-    })
+    }))
+    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "sessionRun.error" }))
     expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "sessionRun.session" }))
     expect((controller as unknown as {
       sessionRunCoordinator: { activeRun: unknown }
@@ -753,6 +871,8 @@ describe("LabrastroController session run start", () => {
     const capabilityPackageIngestSessionStart = vi.fn(async () => ({
       session_run_id: "run-cap",
       session_id: "session-cap",
+      branch_binding_id: "main",
+      agent_run_id: "agent-cap-main",
       runtime_state: {
         workflow: "capability_package_ingest",
         agent_id: "capability_packager",
@@ -768,8 +888,18 @@ describe("LabrastroController session run start", () => {
       sessionCoordinator: { prepareSessionRunSession: typeof prepareSessionRunSession }
     }).sessionCoordinator = { prepareSessionRunSession }
     ;(controller as unknown as {
-      sessionRunCoordinator: { setActiveRun: typeof setActiveRun; clearActiveRun: () => void }
-    }).sessionRunCoordinator = { setActiveRun, clearActiveRun: vi.fn() }
+      sessionRunCoordinator: {
+        activeRun: undefined
+        activeRunIdentityRevision: number
+        setActiveRun: typeof setActiveRun
+        clearActiveRun: () => void
+      }
+    }).sessionRunCoordinator = {
+      activeRun: undefined,
+      activeRunIdentityRevision: 0,
+      setActiveRun,
+      clearActiveRun: vi.fn(),
+    }
     ;(controller as unknown as {
       ensureSessionRunEventStream: typeof ensureSessionRunEventStream
     }).ensureSessionRunEventStream = ensureSessionRunEventStream
@@ -800,7 +930,14 @@ describe("LabrastroController session run start", () => {
       status: "running",
     }))
     expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: "sessionRun.operation.pending",
+      operationId: expect.any(String),
+      operationKind: "start",
+    }))
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.session",
+      operationId: expect.any(String),
+      operationKind: "start",
       sessionRunId: "run-cap",
       sessionId: "session-cap",
       runtimeState: {
@@ -811,7 +948,13 @@ describe("LabrastroController session run start", () => {
     expect(post).toHaveBeenCalledWith(expect.objectContaining({
       type: "capabilityPackage.ingest.session.started",
     }))
-    expect(ensureSessionRunEventStream).toHaveBeenCalledWith("run-cap", "session-cap", post)
+    for (const [message] of post.mock.calls as Array<[Record<string, unknown>]>) {
+      if (message.type === "sessionRun.operation.pending" || message.type === "sessionRun.session") {
+        expect(message).not.toHaveProperty(operationSnakeId)
+        expect(message).not.toHaveProperty(operationSnakeKind)
+      }
+    }
+    expect(ensureSessionRunEventStream).toHaveBeenCalledWith("run-cap", "session-cap", post, "main")
     expect(post).not.toHaveBeenCalledWith(expect.objectContaining({
       type: "capabilityPackage.error",
     }))
@@ -827,6 +970,8 @@ describe("LabrastroController session run start", () => {
     const capabilityPackageIngestSessionStart = vi.fn(async () => ({
       session_run_id: "run-cap",
       session_id: "session-cap",
+      branch_binding_id: "main",
+      agent_run_id: "agent-cap-main",
       runtime_state: {
         workflow: "capability_package_ingest",
         agent_id: "capability_packager",
@@ -842,8 +987,18 @@ describe("LabrastroController session run start", () => {
       sessionCoordinator: { prepareSessionRunSession: typeof prepareSessionRunSession }
     }).sessionCoordinator = { prepareSessionRunSession }
     ;(controller as unknown as {
-      sessionRunCoordinator: { setActiveRun: typeof setActiveRun; clearActiveRun: () => void }
-    }).sessionRunCoordinator = { setActiveRun, clearActiveRun: vi.fn() }
+      sessionRunCoordinator: {
+        activeRun: undefined
+        activeRunIdentityRevision: number
+        setActiveRun: typeof setActiveRun
+        clearActiveRun: () => void
+      }
+    }).sessionRunCoordinator = {
+      activeRun: undefined,
+      activeRunIdentityRevision: 0,
+      setActiveRun,
+      clearActiveRun: vi.fn(),
+    }
     ;(controller as unknown as {
       ensureSessionRunEventStream: typeof ensureSessionRunEventStream
     }).ensureSessionRunEventStream = ensureSessionRunEventStream
@@ -860,6 +1015,8 @@ describe("LabrastroController session run start", () => {
 
     const sessionMessage = expect.objectContaining({
       type: "sessionRun.session",
+      operationId: expect.any(String),
+      operationKind: "start",
       sessionRunId: "run-cap",
       sessionId: "session-cap",
     })

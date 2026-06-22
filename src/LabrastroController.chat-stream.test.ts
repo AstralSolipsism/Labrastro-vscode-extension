@@ -63,14 +63,21 @@ describe("LabrastroController session run event batching", () => {
       "private markSessionRunEventsConnected",
       "private async retrySessionRunEventsAfterError",
     )
+    const streamKeyFunction = sourceSection(
+      "function sessionRunEventStreamKey",
+      "function explicitSessionRunBranchProof",
+    )
 
     expect(source).toContain("private readonly sessionRunEventReconnects = new Map<string, SessionRunEventReconnectState>()")
     expect(retryFunction).toContain("const streamKey = sessionRunEventStreamKey(sessionRunId, branchBindingId)")
+    expect(streamKeyFunction).toContain("return `${sessionRunId}:${branchBindingId}`")
+    expect(streamKeyFunction).not.toContain('|| "main"')
     expect(retryFunction).toContain("this.sessionRunEventReconnects.get(streamKey)")
     expect(retryFunction).toContain("this.sessionRunEventReconnects.set(streamKey")
+    expect(retryFunction).toContain("!this.sessionRunEventStreamMatches(sessionRunId, branchBindingId)")
+    expect(retryFunction).not.toContain("!this.activeSessionRunMatches({ sessionRunId, branchBindingId })")
     expect(retryFunction).not.toContain("!canRetrySessionRunEvents(activeRun)")
-    expect(connectedFunction).toContain("activeRun?.sessionRunId === sessionRunId")
-    expect(connectedFunction).toContain("(activeRun.branchBindingId || \"main\") === branchBindingId")
+    expect(connectedFunction).toContain("this.activeSessionRunMatches({ sessionRunId, branchBindingId })")
   })
 
   it("scopes visible event batches by session run and branch", () => {
@@ -79,9 +86,74 @@ describe("LabrastroController session run event batching", () => {
       "private async recoverSessionRun",
     )
 
-    expect(batchFunction).toContain("const activeRun = this.sessionRunCoordinator.activeRun")
-    expect(batchFunction).toContain("activeRun?.sessionRunId === sessionRunId")
-    expect(batchFunction).toContain("(activeRun.branchBindingId || \"main\") === streamBranchBindingId")
+    expect(batchFunction).toContain("const selectedBranch = this.activeSessionRunMatches({ sessionRunId, branchBindingId: streamBranchBindingId })")
+    expect(batchFunction).toContain("const visibleBranch = selectedBranch && options.applyVisibleSideEffects !== false")
+    expect(batchFunction).toContain("const emitScopedEvents = visibleBranch || options.emitScopedEvents === true")
+    expect(batchFunction).toContain("if (visibleBranch) {\n      this.sessionRunCoordinator.patchActiveRun({")
+    expect(batchFunction).toContain("this.sessionRuntimeStore.hasScope({ sessionRunId, branchBindingId: streamBranchBindingId })")
+    expect(batchFunction).not.toContain("this.sessionRunCoordinator.patchActiveRun({\n      ...(visibleBranch ?")
+  })
+
+  it("reports scoped event stream remote session mismatch as a projection error", () => {
+    const mismatchBlock = sourceFrom(
+      "if (remoteSessionId && sessionId && remoteSessionId !== sessionId)",
+      900,
+    )
+
+    expect(mismatchBlock).toContain('type: "sessionRun.projection.error"')
+    expect(mismatchBlock).toContain("stopWorking: true")
+    expect(mismatchBlock).not.toContain('type: "sessionRun.error"')
+    expect(mismatchBlock).not.toContain("this.sessionRuntimeStore.reduce({")
+    expect(mismatchBlock).toContain("branchBindingId: streamBranchBindingId")
+    expect(mismatchBlock).toContain("return { sessionId, cursor, done: false, active: false }")
+    expect(mismatchBlock.indexOf("this.emitChatMessage")).toBeLessThan(
+      mismatchBlock.indexOf("if (visibleBranch)")
+    )
+  })
+
+  it("keeps session run event streams scoped to branch runtime lifecycle", () => {
+    const matchFunction = sourceSection(
+      "private sessionRunEventStreamMatches",
+      "private markSessionRunEventsConnected",
+    )
+
+    expect(matchFunction).toContain("return this.sessionRuntimeStore.streamScopeIsOpen({ sessionRunId, branchBindingId })")
+    expect(matchFunction).not.toContain("activeSessionRunMatches")
+    expect(matchFunction).not.toContain("return Boolean(branchBindingId)")
+  })
+
+  it("requires explicit branch identity for event stream lifecycle APIs", () => {
+    const streamFunction = sourceSection(
+      "private ensureSessionRunEventStream(",
+      "private sessionRunEventStreamMatches",
+    )
+
+    expect(streamFunction).not.toContain("branchBindingId = this.sessionRunCoordinator.activeRun?.branchBindingId")
+    expect(streamFunction).toContain("branchBindingId: string")
+    expect(streamFunction).toContain("this.ensureSessionRunStreamScope(sessionRunId, branchBindingId)")
+  })
+
+  it("does not create missing stream scopes from active run metadata", () => {
+    const ensureScopeFunction = sourceSection(
+      "private ensureSessionRunStreamScope",
+      "private async consumeSessionRunEventStream",
+    )
+
+    expect(ensureScopeFunction).toContain("return this.sessionRuntimeStore.streamScopeIsOpen({ sessionRunId, branchBindingId })")
+    expect(ensureScopeFunction).not.toContain("resolveSessionRunSourceIdentity")
+    expect(ensureScopeFunction).not.toContain("ensureBranchRuntimeScope")
+    expect(ensureScopeFunction).not.toContain("this.sessionRunCoordinator.activeRun")
+  })
+
+  it("reads session run event stream cursor from branch runtime scope", () => {
+    const streamFunction = sourceSection(
+      "private async consumeSessionRunEventStream",
+      "private sessionRunEventStreamMatches",
+    )
+
+    expect(streamFunction).toContain("let cursor = this.sessionRuntimeStore.streamCursorForScope({ sessionRunId, branchBindingId })")
+    expect(streamFunction).not.toContain("selectedBranchBindingId")
+    expect(streamFunction).not.toContain("this.sessionRunCoordinator.activeRun?.cursor")
   })
 
   it("keeps pending next turns owned until continue succeeds", () => {
@@ -102,6 +174,30 @@ describe("LabrastroController session run event batching", () => {
     expect(continuedIndex).toBeGreaterThan(requestIndex)
   })
 
+  it("passes the stream SessionRun id into branch-local auto-continue", () => {
+    const batchFunction = sourceSection(
+      "private async applySessionRunEventsBatch",
+      "private async recoverSessionRun",
+    )
+    const branchLocalContinue = sourceFrom('sourceScope: "branch-local"', 500)
+
+    expect(batchFunction).toContain('sourceScope: "branch-local"')
+    expect(branchLocalContinue).toContain("sessionRunId: pendingNextTurn.sessionRunId || sessionRunId")
+    expect(branchLocalContinue.indexOf("sessionRunId: pendingNextTurn.sessionRunId || sessionRunId")).toBeLessThan(
+      branchLocalContinue.indexOf("branchBindingId: streamBranchBindingId")
+    )
+  })
+
+  it("does not snapshot pending next turns from active run after branch-local source resolution fails", () => {
+    const continueFunction = sourceSection(
+      "private async continueSessionRun",
+      "private async steerAgentRun",
+    )
+
+    expect(continueFunction).not.toContain("sourceResolution.sessionRunId || this.sessionRunCoordinator.activeSessionRunId")
+    expect(continueFunction).toContain("const snapshotSessionRunId = sourceResolution.sessionRunId")
+  })
+
   it("posts the target branch pending snapshot after branch selection", () => {
     const selectFunction = sourceSection(
       "private async selectSessionRunBranch",
@@ -119,14 +215,22 @@ describe("LabrastroController session run event batching", () => {
       "private async refreshInitialStateInBackground",
     )
 
+    expect(saveFunction).toContain("const proof = explicitSessionRunBranchProof(request)")
+    expect(saveFunction).toContain("if (!proof)")
+    expect(saveFunction).not.toContain("request.sessionRunId || this.sessionRunCoordinator.activeSessionRunId")
+    expect(saveFunction).not.toContain("request.branchBindingId || this.sessionRunCoordinator.activeRun?.branchBindingId")
     expect(saveFunction).toContain("branch_binding_id: branchBindingId")
     expect(saveFunction).toContain("branchBindingId,")
     expect(saveFunction).toContain("branch_binding_id: branchBindingId,")
   })
 
-  it("echoes branch identity on scoped session run errors", () => {
+  it("echoes branch identity on scoped operation errors and runtime stream errors", () => {
     const continueFunction = sourceSection(
       "private async continueSessionRun",
+      "private async steerAgentRun",
+    )
+    const continueFailureEffect = sourceSection(
+      "private async applySessionRunControlFailureEffect",
       "private async steerAgentRun",
     )
     const recoverFunction = sourceSection(
@@ -142,12 +246,44 @@ describe("LabrastroController session run event batching", () => {
       "private ensureSessionRunEventStreamSoon",
     )
 
-    for (const section of [continueFunction, recoverFunction, cancelFunction, streamFunction]) {
-      expect(section).toContain('type: "sessionRun.error"')
+    expect(continueFunction).toContain("this.applySessionRunControlFailureEffect({")
+    expect(continueFailureEffect).toContain("this.emitSessionRunOperationError(input.post, {")
+    expect(continueFailureEffect).toContain("sessionRunId: input.sessionRunId")
+    expect(continueFailureEffect).toContain("branchBindingId: input.branchBindingId")
+    expect(continueFailureEffect).not.toContain('type: "sessionRun.error"')
+    for (const section of [recoverFunction, cancelFunction]) {
+      expect(section).toContain("this.emitSessionRunOperationError(post, {")
       expect(section).toContain("sessionRunId")
       expect(section).toContain("branchBindingId")
-      expect(section).toContain("branch_binding_id")
+      expect(section).not.toContain('type: "sessionRun.error"')
     }
+    expect(streamFunction).toContain('type: "sessionRun.error"')
+    expect(streamFunction).toContain("sessionRunId")
+    expect(streamFunction).toContain("branchBindingId")
+    expect(streamFunction).toContain("branch_binding_id")
+    expect(streamFunction).toContain("this.sessionRuntimeStore.reduce({")
+  })
+
+  it("does not fabricate main branch proof for operation preflight failures", () => {
+    const preflightFailureFunction = sourceSection(
+      "private reportSessionRunOperationPreflightFailure",
+      "private async reportSessionRunProjectionRecoveryError",
+    )
+
+    expect(preflightFailureFunction).toContain("branchBindingId: operation.targetBranchBindingId || operation.sourceBranchBindingId")
+    expect(preflightFailureFunction).not.toContain('operation.targetBranchBindingId || operation.sourceBranchBindingId || "main"')
+  })
+
+  it("does not let cancel lifecycle calls infer destructive identity from the active run", () => {
+    const cancelFunction = sourceSection(
+      "private async cancelSessionRun",
+      "private async runAdminAction",
+    )
+
+    expect(cancelFunction).not.toContain("sessionRunId || this.sessionRunCoordinator.activeSessionRunId")
+    expect(cancelFunction).not.toContain("branchBindingId || this.sessionRunCoordinator.activeRun?.branchBindingId")
+    expect(cancelFunction).toContain("const targetSessionRunId = sessionRunId")
+    expect(cancelFunction).toContain("const targetBranchBindingId = branchBindingId")
   })
 
   it("refreshes active run status before sessionRun.resume and forwards pending approvals", () => {
@@ -178,6 +314,8 @@ describe("LabrastroController session run event batching", () => {
     expect(resumeStatusFunction).toContain("await this.storeStatusApprovals(status.approvals)")
     expect(resumeStatusFunction).toContain("this.sessionRunCoordinator.clearActiveRun()")
     expect(initialStateFunction).toContain("this.ensureSessionRunEventStream")
+    expect(initialStateFunction).toContain("if (sessionRunId && branchBindingId)")
+    expect(initialStateFunction).not.toContain('stringValue(activeRunPayload.branch_binding_id) ||\n          "main"')
   })
 
   it("does not advance the active run cursor from chat status", () => {

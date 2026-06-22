@@ -83,6 +83,26 @@ describe("EnvironmentCoordinator", () => {
     })
   })
 
+  it("forwards environment run request ids so completions can be correlated", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+
+    await subject.handleMessage({
+      type: "environment.run",
+      mode: "check",
+      entryIds: ["node"],
+      requestId: "env-run-1",
+    }, post)
+
+    expect(options.startEnvironmentRun).toHaveBeenCalledWith(
+      "check",
+      post,
+      ["node"],
+      undefined,
+      { requestId: "env-run-1" },
+    )
+  })
+
   it("records environment requirements through the split admin endpoint", async () => {
     const { options, coordinator: subject } = coordinator(false)
     const post = vi.fn()

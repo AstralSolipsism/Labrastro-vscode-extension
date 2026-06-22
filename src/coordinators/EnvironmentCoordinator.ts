@@ -13,7 +13,8 @@ export interface EnvironmentCoordinatorOptions {
     mode: "check" | "configure",
     post: PostMessage,
     entryIds?: string[],
-    agentId?: string
+    agentId?: string,
+    options?: { requestId?: string },
   ) => Promise<void>
   cancelEnvironmentRun: (post: PostMessage) => Promise<void>
   runCapabilityAction: (
@@ -192,7 +193,12 @@ export class EnvironmentCoordinator {
             Array.isArray(message.entryIds)
               ? message.entryIds.map((item) => String(item)).filter(Boolean)
               : undefined,
-            stringValue(message.agentId) || stringValue(message.agent_id)
+            stringValue(message.agentId) || stringValue(message.agent_id),
+            {
+              requestId:
+                stringValue(message.requestId) ||
+                stringValue(message.request_id),
+            },
           )
         }
         return true

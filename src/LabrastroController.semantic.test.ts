@@ -2,6 +2,8 @@ import { readFileSync } from "fs"
 import * as path from "path"
 import { describe, expect, it } from "vitest"
 
+import { normalizeBranchCreateResult } from "./sessionRunOperationResults"
+
 const source = readFileSync(path.join(__dirname, "LabrastroController.ts"), "utf-8")
 
 function methodSource(name: string, nextName: string): string {
@@ -13,12 +15,19 @@ function methodSource(name: string, nextName: string): string {
 }
 
 describe("LabrastroController semantic contract", () => {
-  it("stores branch target activation instead of preserving the source activation", () => {
-    const branchSource = methodSource("branchSessionRun", "selectSessionRunBranch")
-
-    expect(branchSource).toContain("current_activation_id")
-    expect(branchSource).toContain("activationId: activationId || undefined")
-    expect(branchSource).toContain("activation_id: activationId")
+  it("normalizes branch create to the target activation instead of preserving source state", () => {
+    expect(normalizeBranchCreateResult({
+      branch_binding_id: "branch-a",
+      agent_run: {
+        id: "agent-branch-a",
+        currentActivationId: "activation-branch-a",
+      },
+      activationId: "activation-fallback",
+    })).toEqual({
+      branchBindingId: "branch-a",
+      agentRunId: "agent-branch-a",
+      activationId: "activation-branch-a",
+    })
   })
 
   it("keeps stale steer fallback equivalent to pending next-turn input", () => {
