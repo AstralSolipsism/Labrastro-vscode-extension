@@ -122,7 +122,7 @@ async function renderChatViewLifecycleTranscriptToString(): Promise<string> {
         "  const trace = useTrace();",
         "  trace.startDraftTask('review lifecycle hooks');",
         "  trace.applySessionRunTranscriptEvents(lifecycleEvents, {",
-        "    activeSessionRunId: 'run-1',",
+        "    scopedSessionRunId: 'run-1',",
         "    currentSessionId: trace.currentSessionId() || undefined,",
         "    isWorking: true,",
         "    now: 1000,",
