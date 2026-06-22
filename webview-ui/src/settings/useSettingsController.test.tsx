@@ -33,12 +33,14 @@ vi.mock("../context/vscode", () => ({
 
 import {
   agentToDraft,
+  agentRunMessageTargetsSettingsAgentRun,
   createSettingsController,
   profileToDraft,
   reduceCapabilityPackageIngestErrorState,
   reduceCapabilityPackageIngestSessionState,
   shouldRefreshCapabilitiesAfterCapabilityPackageIngest,
 } from "./useSettingsController"
+import { environmentRunErrorMessageForGlobalState } from "../context/server-state"
 import { setLocale } from "../i18n"
 
 const settingsControllerSource = readFileSync(join(__dirname, "useSettingsController.tsx"), "utf8")
@@ -812,6 +814,128 @@ describe("settings controller capability model", () => {
     })
   })
 
+  it("ignores capability package session run events that do not target the tracked session", () => {
+    const current = {
+      running: false,
+      agentRunId: "",
+      status: "awaiting_approval",
+      sessionRunId: "run-cap",
+      sessionId: "session-cap",
+      approvalId: "approval-cap",
+      packageId: "pkg-cap",
+      error: "",
+    } as const
+
+    const fromDifferentRun = reduceCapabilityPackageIngestSessionState(current, {
+      type: "sessionRun.events",
+      sessionRunId: "run-other",
+      events: [
+        {
+          type: "workflow_result",
+          payload: {
+            result_type: "capability_package_install",
+            status: "done",
+          },
+        },
+      ],
+    })
+    const withoutRunProof = reduceCapabilityPackageIngestSessionState(current, {
+      type: "sessionRun.events",
+      events: [
+        {
+          type: "workflow_result",
+          payload: {
+            result_type: "capability_package_install",
+            status: "error",
+            message: "wrong run",
+          },
+        },
+      ],
+    })
+    const idle = {
+      running: false,
+      agentRunId: "",
+      status: "idle",
+      error: "",
+    } as const
+    const idleWithoutRunProof = reduceCapabilityPackageIngestSessionState(idle, {
+      type: "sessionRun.events",
+      events: [
+        {
+          type: "workflow_result",
+          payload: {
+            result_type: "capability_package_install",
+            status: "done",
+          },
+        },
+      ],
+    })
+    const idleFromUntrackedRun = reduceCapabilityPackageIngestSessionState(idle, {
+      type: "sessionRun.events",
+      sessionRunId: "run-untracked",
+      events: [
+        {
+          type: "workflow_decision",
+          payload: {
+            decision_type: "capability_package_install",
+            approval_id: "approval-untracked",
+            review: { package_id: "pkg-untracked" },
+          },
+        },
+      ],
+    })
+    const sessionWithoutRunProof = reduceCapabilityPackageIngestSessionState(idle, {
+      type: "sessionRun.session",
+      runtimeState: {
+        workflow: "capability_package_ingest",
+        agent_id: "capability_packager",
+      },
+    })
+    const resumeWithoutRunProof = reduceCapabilityPackageIngestSessionState(idle, {
+      type: "sessionRun.resume",
+      payload: {
+        runtimeState: {
+          workflow: "capability_package_ingest",
+          agent_id: "capability_packager",
+        },
+      },
+    })
+
+    expect(fromDifferentRun).toBe(current)
+    expect(withoutRunProof).toBe(current)
+    expect(idleWithoutRunProof).toBe(idle)
+    expect(idleFromUntrackedRun).toBe(idle)
+    expect(sessionWithoutRunProof).toBe(idle)
+    expect(resumeWithoutRunProof).toBe(idle)
+  })
+
+  it("replies to environment approvals with explicit session run and branch proof", () => {
+    const controller = withController(makeServer({
+      environmentSnapshot: () => ({
+        sessionRunId: "run-env",
+        branchBindingId: "branch-env",
+      }),
+    }), (controller) => controller)
+
+    controller.replyEnvironmentApproval({
+      approvalId: "approval-env",
+      toolName: "shell",
+      command: "npm test",
+      toolArgs: {},
+      sections: [],
+    } as any, "allow_once")
+
+    expect(mocks.vscode.postMessage).toHaveBeenCalledWith({
+      type: "approval.reply",
+      sessionRunId: "run-env",
+      session_run_id: "run-env",
+      branchBindingId: "branch-env",
+      branch_binding_id: "branch-env",
+      approvalId: "approval-env",
+      decision: "allow_once",
+    })
+  })
+
   it("restores awaiting approval state from session run resume payload", () => {
     const next = reduceCapabilityPackageIngestSessionState({
       running: false,
@@ -975,6 +1099,44 @@ describe("settings controller capability model", () => {
       expect(controller.pageInitialLoading("capabilities")).toBe(true)
       expect(controller.pageRevalidating("capabilities")).toBe(false)
     })
+  })
+
+  it("does not route request-scoped environment run errors to environment manifest refresh", () => {
+    expect(environmentRunErrorMessageForGlobalState({
+      type: "environment.run.error",
+      requestId: "env-run-1",
+      message: "environment run failed",
+    })).toBeUndefined()
+    expect(environmentRunErrorMessageForGlobalState({
+      type: "environment.run.error",
+      request_id: "env-run-1",
+      message: "environment run failed",
+    })).toBeUndefined()
+    expect(environmentRunErrorMessageForGlobalState({
+      type: "environment.run.error",
+      message: "manifest refresh failed",
+    })).toBe("manifest refresh failed")
+  })
+
+  it("does not route request-scoped AgentRun events or errors to settings AgentRun state", () => {
+    expect(agentRunMessageTargetsSettingsAgentRun({
+      type: "agentRun.events",
+      requestId: "audit-1",
+      payload: { events: [{ seq: 1 }] },
+    })).toBe(false)
+    expect(agentRunMessageTargetsSettingsAgentRun({
+      type: "agentRun.error",
+      payload: { request_id: "audit-1" },
+      message: "audit failed",
+    })).toBe(false)
+    expect(agentRunMessageTargetsSettingsAgentRun({
+      type: "agentRun.events",
+      payload: { events: [{ seq: 1 }] },
+    })).toBe(true)
+    expect(agentRunMessageTargetsSettingsAgentRun({
+      type: "agentRun.error",
+      message: "settings poll failed",
+    })).toBe(true)
   })
 
   it("keeps provider first-load feedback visible", () => {

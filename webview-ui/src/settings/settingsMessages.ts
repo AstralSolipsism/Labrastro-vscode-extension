@@ -222,11 +222,17 @@ export const settingsMessages = {
 
   replyApproval(
     port: SettingsMessagePort,
-    input: { sessionRunId?: string; approvalId: string; decision: string },
+    input: { sessionRunId?: string; branchBindingId?: string; approvalId: string; decision: string },
   ): void {
+    const sessionRunId = input.sessionRunId?.trim()
+    const branchBindingId = input.branchBindingId?.trim()
+    if (!sessionRunId || !branchBindingId) return
     port.postMessage({
       type: "approval.reply",
-      sessionRunId: input.sessionRunId,
+      sessionRunId,
+      session_run_id: sessionRunId,
+      branchBindingId,
+      branch_binding_id: branchBindingId,
       approvalId: input.approvalId,
       decision: input.decision,
     })

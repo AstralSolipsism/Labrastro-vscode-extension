@@ -50,7 +50,29 @@ export function shouldSetModelListErrorForError(message: Record<string, unknown>
   return shouldSetScopedAdminError(message)
 }
 
+export function environmentRunErrorMessageForGlobalState(message: Record<string, unknown>): string | undefined {
+  if (message.type !== "environment.run.error") return undefined
+  if (!environmentRunMessageTargetsGlobalState(message)) return undefined
+  return stringValue(message.message) || "Environment run failed"
+}
+
+export function environmentRunMessageTargetsGlobalState(message: Record<string, unknown>): boolean {
+  const type = stringValue(message.type)
+  if (
+    type !== "environment.run.started" &&
+    type !== "environment.run.completed" &&
+    type !== "environment.run.error"
+  ) {
+    return false
+  }
+  return !stringValue(message.requestId) && !stringValue(message.request_id)
+}
+
 function shouldSetScopedAdminError(message: Record<string, unknown>): boolean {
   if (message.type !== "admin.error") return false
   return message.scope === "adminState" || shouldClearAdminForError(message)
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : ""
 }

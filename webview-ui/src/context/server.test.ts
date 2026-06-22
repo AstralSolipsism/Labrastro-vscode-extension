@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest"
 import {
   connectionStateFromRemoteSlice,
+  environmentRunErrorMessageForGlobalState,
+  environmentRunMessageTargetsGlobalState,
   remoteStateSliceData,
   remoteStateSliceError,
   shouldClearAdminForConnectionState,
@@ -109,5 +111,39 @@ describe("server context state guards", () => {
     }
     expect(shouldSetAdminStateErrorForError(staleError)).toBe(true)
     expect(shouldSetModelListErrorForError(staleError)).toBe(true)
+  })
+
+  it("keeps request-scoped environment run errors out of global environment state", () => {
+    expect(environmentRunErrorMessageForGlobalState({
+      type: "environment.run.error",
+      requestId: "env-run-1",
+      message: "environment run failed",
+    })).toBeUndefined()
+    expect(environmentRunErrorMessageForGlobalState({
+      type: "environment.run.error",
+      request_id: "env-run-1",
+      message: "environment run failed",
+    })).toBeUndefined()
+    expect(environmentRunErrorMessageForGlobalState({
+      type: "environment.run.error",
+      message: "manifest refresh failed",
+    })).toBe("manifest refresh failed")
+  })
+
+  it("keeps request-scoped environment run lifecycle messages out of global environment state", () => {
+    expect(environmentRunMessageTargetsGlobalState({
+      type: "environment.run.started",
+      requestId: "env-run-1",
+    })).toBe(false)
+    expect(environmentRunMessageTargetsGlobalState({
+      type: "environment.run.started",
+      request_id: "env-run-1",
+    })).toBe(false)
+    expect(environmentRunMessageTargetsGlobalState({
+      type: "environment.run.started",
+    })).toBe(true)
+    expect(environmentRunMessageTargetsGlobalState({
+      type: "chat.command.done",
+    })).toBe(false)
   })
 })

@@ -1,6 +1,7 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from "solid-js"
 import { useVSCode } from "../context/vscode"
 import { useServer } from "../context/server"
+import { environmentRunErrorMessageForGlobalState } from "../context/server-state"
 import {
   normalizeHostUrlInput,
   resolveHostSaveResult,
@@ -321,6 +322,7 @@ interface EnvironmentSnapshotState {
   status: EnvironmentSnapshotStatus
   summary: string
   sessionRunId?: string
+  branchBindingId?: string
   taskId?: string
   agentId?: string
   sessionId?: string
@@ -1362,6 +1364,16 @@ function objectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
 
+export function agentRunMessageTargetsSettingsAgentRun(message: Record<string, unknown>): boolean {
+  const type = stringValue(message.type)
+  if (type !== "agentRun.events" && type !== "agentRun.error") return false
+  const payload = objectValue(message.payload)
+  return !stringValue(message.requestId) &&
+    !stringValue(message.request_id) &&
+    !stringValue(payload.requestId) &&
+    !stringValue(payload.request_id)
+}
+
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : []
 }
@@ -2137,7 +2149,8 @@ function normalizeEnvironmentSnapshot(value: unknown): EnvironmentSnapshotState 
     running: item.running === true,
     status: (["idle", "running", "completed", "error", "canceled"].includes(stringValue(item.status)) ? stringValue(item.status) : "idle") as EnvironmentSnapshotStatus,
     summary: stringValue(item.summary, "环境清单尚未加载。"),
-    sessionRunId: stringValue(item.sessionRunId) || undefined,
+    sessionRunId: stringValue(item.sessionRunId || item.session_run_id) || undefined,
+    branchBindingId: stringValue(item.branchBindingId || item.branch_binding_id) || undefined,
     taskId: stringValue(item.taskId) || undefined,
     agentId: stringValue(item.agentId) || undefined,
     sessionId: stringValue(item.sessionId) || undefined,
@@ -2166,6 +2179,7 @@ export function reduceCapabilityPackageIngestSessionState(
     const agentId = stringValue(runtimeState.agent_id || runtimeState.agentId || payload.agent_id || payload.agentId)
     if (workflow !== "capability_package_ingest" && agentId !== "capability_packager") return current
     const sessionRunId = stringValue(payload.sessionRunId || payload.session_run_id || msg.sessionRunId || msg.session_run_id)
+    if (!sessionRunId) return current
     const sessionId = stringValue(payload.sessionId || payload.session_id || msg.sessionId || msg.session_id)
     let next: CapabilityPackageIngestState = {
       ...current,
@@ -2198,6 +2212,7 @@ export function reduceCapabilityPackageIngestSessionState(
     const agentId = stringValue(runtimeState.agent_id || runtimeState.agentId || payloadRuntimeState.agent_id || payloadRuntimeState.agentId || payload.agent_id || payload.agentId)
     if (workflow !== "capability_package_ingest" && agentId !== "capability_packager") return current
     const sessionRunId = stringValue(msg.sessionRunId || msg.session_run_id || payload.session_run_id || payload.sessionRunId)
+    if (!sessionRunId) return current
     const sessionId = stringValue(msg.sessionId || msg.session_id || payload.session_id || payload.sessionId)
     return {
       ...current,
@@ -2210,6 +2225,8 @@ export function reduceCapabilityPackageIngestSessionState(
   }
   if (type !== "sessionRun.events" && type !== "sessionRun.stream") return current
   const sessionRunId = stringValue(msg.sessionRunId || msg.session_run_id)
+  if (!sessionRunId) return current
+  if (!current.sessionRunId || sessionRunId !== current.sessionRunId) return current
   const events = Array.isArray(msg.events) ? msg.events as Record<string, unknown>[] : []
   let next = current
   for (const event of events) {
@@ -3406,7 +3423,8 @@ export function createSettingsController(props: SettingsViewProps) {
       if (msg.type === "capability.state" || msg.type === "capability.actionResult") settleRefreshSuccess("capabilities")
       if (msg.type === "capability.error") settleRefreshError("capabilities", message)
       if (msg.type === "environment.manifest" || msg.type === "environment.snapshot") settleRefreshSuccess("environmentManifest")
-      if (msg.type === "environment.run.error") settleRefreshError("environmentManifest", message)
+      const environmentManifestError = environmentRunErrorMessageForGlobalState(rawMessage)
+      if (environmentManifestError) settleRefreshError("environmentManifest", environmentManifestError)
       if (msg.type === "auth.devices") markAuthOperationSuccess("authDevices")
       if (msg.type === "auth.users") markAuthOperationSuccess("authUsers")
       if (msg.type === "auth.audit") markAuthOperationSuccess("authAudit")
@@ -3438,7 +3456,12 @@ export function createSettingsController(props: SettingsViewProps) {
         setAgentRunSubmitting(false)
         startAgentRunPolling(stringValue(task.id))
       }
-      if (msg.type === "agentRun.events" && typeof msg.payload === "object" && msg.payload) {
+      if (
+        msg.type === "agentRun.events" &&
+        typeof msg.payload === "object" &&
+        msg.payload &&
+        agentRunMessageTargetsSettingsAgentRun(rawMessage)
+      ) {
         const events = Array.isArray(objectValue(msg.payload).events)
           ? objectValue(msg.payload).events as Record<string, unknown>[]
           : []
@@ -3459,7 +3482,7 @@ export function createSettingsController(props: SettingsViewProps) {
         setAgentRunError("")
         requestAgentRunEvents(selectedAgentRunId())
       }
-      if (msg.type === "agentRun.error") {
+      if (msg.type === "agentRun.error" && agentRunMessageTargetsSettingsAgentRun(rawMessage)) {
         if (operationBusy("agentRunSubmit")) markOperationError("agentRunSubmit", message)
         if (operationBusy("agentRunRetry")) markOperationError("agentRunRetry", message)
         if (operationBusy("agentRunCancel")) markOperationError("agentRunCancel", message)
@@ -4169,6 +4192,7 @@ export function createSettingsController(props: SettingsViewProps) {
     }
     settingsMessages.replyApproval(vscode, {
       sessionRunId: environmentSnapshot().sessionRunId,
+      branchBindingId: environmentSnapshot().branchBindingId,
       approvalId: approval.approvalId,
       decision,
     })

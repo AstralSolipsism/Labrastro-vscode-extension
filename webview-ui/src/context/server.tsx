@@ -14,6 +14,8 @@ import { createContext, useContext, createSignal, onMount, onCleanup, ParentComp
 import { useVSCode, type ExtensionMessage } from "./vscode"
 import {
   connectionStateFromRemoteSlice,
+  environmentRunErrorMessageForGlobalState,
+  environmentRunMessageTargetsGlobalState,
   remoteStateSliceData,
   remoteStateSliceError,
   shouldClearAdminForConnectionState,
@@ -428,12 +430,14 @@ export const ServerProvider: ParentComponent = (props) => {
           ? (msg.payload as Record<string, unknown>).error as string
           : undefined)
       }
-      if (msg.type === "environment.run.started") {
+      if (
+        msg.type === "environment.run.started" &&
+        environmentRunMessageTargetsGlobalState(msg as Record<string, unknown>)
+      ) {
         setEnvironmentError(undefined)
       }
-      if (msg.type === "environment.run.error") {
-        setEnvironmentError(typeof msg.message === "string" ? msg.message : "Environment run failed")
-      }
+      const environmentRunError = environmentRunErrorMessageForGlobalState(msg as Record<string, unknown>)
+      if (environmentRunError) setEnvironmentError(environmentRunError)
       if (msg.type === "startup.metric") {
         console.log("[labrastro startup]", msg.payload)
       }
