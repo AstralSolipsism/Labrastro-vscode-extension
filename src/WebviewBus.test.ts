@@ -35,7 +35,7 @@ describe("WebviewBus", () => {
     bus.register("agentManager", agentManager)
     bus.register("taskflow", taskflow)
 
-    bus.broadcast({ type: "sessionRun.started" }, ["sidebar"])
+    bus.broadcast({ type: "sessionRun.events" }, ["sidebar"])
     bus.broadcast({ type: "session.loaded", sessionId: "s1" }, ["sidebar", "agentManager"])
     bus.broadcast({ type: "taskflow.complexity", taskflowId: "tf-1" }, ["taskflow"])
 

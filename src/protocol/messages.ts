@@ -45,6 +45,9 @@ export type HostToWebviewMessageType =
   | "capabilityPackage.installPlan"
   | "capabilityPackage.installResult"
   | "capabilityPackage.peerStatus"
+  | "chat.command.done"
+  | "chat.command.error"
+  | "chat.command.events"
   | "chatConfig.error"
   | "chatConfig.state"
   | "connection.result"
@@ -96,14 +99,18 @@ export type HostToWebviewMessageType =
   | "sessionRun.branch.started"
   | "sessionRun.done"
   | "sessionRun.error"
+  | "sessionRun.interrupted"
   | "sessionRun.events"
+  | "sessionRun.operation.error"
+  | "sessionRun.operation.pending"
   | "sessionRun.pendingNextTurn"
   | "sessionRun.pendingNextTurns"
+  | "sessionRun.projection.error"
   | "sessionRun.reconnected"
   | "sessionRun.reconnecting"
   | "sessionRun.resume"
   | "sessionRun.session"
-  | "sessionRun.started"
+  | "sessionRun.steer"
   | "sessionRun.stream"
   | "sessionRun.userInput.reply.error"
   | "sessionRun.userInput.reply.ok"
@@ -265,6 +272,9 @@ const HOST_TO_WEBVIEW_TYPES = new Set<HostToWebviewMessageType>([
   "capabilityPackage.installPlan",
   "capabilityPackage.installResult",
   "capabilityPackage.peerStatus",
+  "chat.command.done",
+  "chat.command.error",
+  "chat.command.events",
   "chatConfig.error",
   "chatConfig.state",
   "connection.result",
@@ -315,15 +325,19 @@ const HOST_TO_WEBVIEW_TYPES = new Set<HostToWebviewMessageType>([
   "sessionRun.branch.started",
   "sessionRun.done",
   "sessionRun.error",
+  "sessionRun.interrupted",
   "sessionRun.events",
+  "sessionRun.operation.error",
+  "sessionRun.operation.pending",
   "sessionRun.pendingNextTurn",
   "sessionRun.pendingNextTurns",
+  "sessionRun.projection.error",
   "sessionRun.continued",
   "sessionRun.reconnected",
   "sessionRun.reconnecting",
   "sessionRun.resume",
   "sessionRun.session",
-  "sessionRun.started",
+  "sessionRun.steer",
   "sessionRun.stream",
   "sessionRun.userInput.reply.error",
   "sessionRun.userInput.reply.ok",

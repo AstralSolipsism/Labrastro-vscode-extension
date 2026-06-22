@@ -3,10 +3,17 @@ import { isHostToWebviewMessage, isWebviewToHostMessage } from "./messages"
 
 describe("protocol message guards", () => {
   it("accepts known host/webview messages", () => {
-    expect(isHostToWebviewMessage({ type: "sessionRun.started", text: "hi" })).toBe(true)
     expect(isHostToWebviewMessage({ type: "sessionRun.branch.started", sessionRunId: "run-1" })).toBe(true)
     expect(isHostToWebviewMessage({ type: "sessionRun.branch.selected", sessionRunId: "run-1", branch_binding_id: "branch-2" })).toBe(true)
     expect(isHostToWebviewMessage({ type: "sessionRun.branches", sessionRunId: "run-1", branches: [] })).toBe(true)
+    expect(isHostToWebviewMessage({ type: "sessionRun.operation.pending", operationId: "op-1", operationKind: "branch.select" })).toBe(true)
+    expect(isHostToWebviewMessage({ type: "sessionRun.operation.error", operationId: "op-1", operationKind: "branch.select" })).toBe(true)
+    expect(isHostToWebviewMessage({ type: "sessionRun.steer", operationId: "op-1", operationKind: "steer" })).toBe(true)
+    expect(isHostToWebviewMessage({ type: "sessionRun.projection.error", sessionRunId: "run-1", branchBindingId: "branch-2" })).toBe(true)
+    expect(isHostToWebviewMessage({ type: "sessionRun.interrupted", sessionRunId: "run-1", branchBindingId: "branch-2" })).toBe(true)
+    expect(isHostToWebviewMessage({ type: "chat.command.events", requestId: "cmd-1", events: [] })).toBe(true)
+    expect(isHostToWebviewMessage({ type: "chat.command.done", requestId: "cmd-1" })).toBe(true)
+    expect(isHostToWebviewMessage({ type: "chat.command.error", requestId: "cmd-1", message: "failed" })).toBe(true)
     expect(isHostToWebviewMessage({ type: "session.loaded", sessionId: "s1" })).toBe(true)
     expect(isHostToWebviewMessage({ type: "navigate", view: "taskflow", taskflowId: "tf-1" })).toBe(true)
     expect(isHostToWebviewMessage({ type: "taskflow.focusChatInteraction", taskflowId: "tf-1" })).toBe(true)
@@ -61,6 +68,7 @@ describe("protocol message guards", () => {
 
   it("rejects unknown message types at the bridge boundary", () => {
     expect(isHostToWebviewMessage({ type: "unknown.host" })).toBe(false)
+    expect(isHostToWebviewMessage({ type: "sessionRun.started", text: "hi" })).toBe(false)
     expect(isWebviewToHostMessage({ type: "unknown.webview" })).toBe(false)
     expect(isWebviewToHostMessage({ type: "sessionRun.followup", sessionRunId: "run-1", text: "guide" })).toBe(false)
     expect(isWebviewToHostMessage({ type: "sessionRun.followup.cancel", sessionRunId: "run-1", followupId: "f1" })).toBe(false)

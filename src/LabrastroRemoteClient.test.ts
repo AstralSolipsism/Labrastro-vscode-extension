@@ -1280,6 +1280,7 @@ describe("LabrastroRemoteClient session run start", () => {
       locale: "zh-CN",
       mentions: [{ kind: "file", name: "README.md", path: "README.md" }],
     })
+    expect(postedBody).not.toHaveProperty("branch_binding_id")
   })
 
   it("starts capability package ingestion sessions with bearer auth and peer token", async () => {
@@ -1670,6 +1671,123 @@ describe("LabrastroRemoteClient session run start", () => {
         },
       },
     ])
+  })
+
+  it("rejects branch-scoped session run requests without branch proof before posting", async () => {
+    vscodeMock.labrastroValue = "http://127.0.0.1:8765"
+    const context = {
+      secrets: {
+        get: vi.fn(async () => undefined),
+      },
+    }
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), {
+      headers: { "Content-Type": "application/json" },
+    }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = new LabrastroRemoteClient(context as never)
+    attachPeer(client)
+
+    await expect(
+      client.sessionRunStatus("run-1", 0, undefined as unknown as string)
+    ).rejects.toThrow("branch_binding_id_required")
+    await expect(
+      client.sessionRunStatus("", 0, "main")
+    ).rejects.toThrow("session_run_id_required")
+    await expect(
+      client.fetchSessionRunEventsBatch("run-1", 0, "", { timeoutMs: 1 })
+    ).rejects.toThrow("branch_binding_id_required")
+    await expect(
+      client.fetchSessionRunEventsBatch("", 0, "main", { timeoutMs: 1 })
+    ).rejects.toThrow("session_run_id_required")
+    await expect(
+      client.streamSessionRunEvents("run-1", 0, "", async () => undefined)
+    ).rejects.toThrow("branch_binding_id_required")
+    await expect(
+      client.streamSessionRunEvents("", 0, "main", async () => undefined)
+    ).rejects.toThrow("session_run_id_required")
+    await expect(
+      client.selectSessionRunBranch({ sessionRunId: "run-1", branchBindingId: "" })
+    ).rejects.toThrow("branch_binding_id_required")
+    await expect(
+      client.selectSessionRunBranch({ sessionRunId: "", branchBindingId: "main" })
+    ).rejects.toThrow("session_run_id_required")
+    await expect(
+      client.cancelSessionRun("run-1", "user_cancelled", "")
+    ).rejects.toThrow("branch_binding_id_required")
+    await expect(
+      client.cancelSessionRun("", "user_cancelled", "main")
+    ).rejects.toThrow("session_run_id_required")
+    await expect(
+      client.continueSessionRun({ sessionRunId: "run-1", branchBindingId: "", prompt: "next" })
+    ).rejects.toThrow("branch_binding_id_required")
+    await expect(
+      client.continueSessionRun({ sessionRunId: "", branchBindingId: "main", prompt: "next" })
+    ).rejects.toThrow("session_run_id_required")
+    await expect(
+      client.recoverSessionRun({ sessionRunId: "run-1", branchBindingId: "", action: "continue" })
+    ).rejects.toThrow("branch_binding_id_required")
+    await expect(
+      client.recoverSessionRun({ sessionRunId: "", branchBindingId: "main", action: "continue" })
+    ).rejects.toThrow("session_run_id_required")
+    await expect(
+      client.branchAgentRun({
+        sourceAgentRunId: "agent-run-1",
+        baseSessionItemId: "message-1",
+        runtimeRoot: "D:/repo",
+        prompt: "branch",
+        branchBindingId: "",
+      })
+    ).rejects.toThrow("branch_binding_id_required")
+    await expect(
+      client.steerAgentRun({
+        agentRunId: "agent-1",
+        sessionRunId: "run-1",
+        branchBindingId: "",
+        text: "guide",
+      })
+    ).rejects.toThrow("branch_binding_id_required")
+    await expect(
+      client.steerAgentRun({
+        agentRunId: "agent-1",
+        sessionRunId: "",
+        branchBindingId: "main",
+        text: "guide",
+      })
+    ).rejects.toThrow("session_run_id_required")
+    await expect(
+      client.approvalReply({
+        session_run_id: "run-1",
+        branch_binding_id: "",
+        approval_id: "approval-1",
+        decision: "allow_once",
+      })
+    ).rejects.toThrow("branch_binding_id_required")
+    await expect(
+      client.approvalReply({
+        session_run_id: "",
+        branch_binding_id: "main",
+        approval_id: "approval-1",
+        decision: "allow_once",
+      })
+    ).rejects.toThrow("session_run_id_required")
+    await expect(
+      client.sessionRunUserInputReply({
+        session_run_id: "run-1",
+        branch_binding_id: "",
+        input_id: "input-1",
+        action: "submit",
+      })
+    ).rejects.toThrow("branch_binding_id_required")
+    await expect(
+      client.sessionRunUserInputReply({
+        session_run_id: "",
+        branch_binding_id: "main",
+        input_id: "input-1",
+        action: "submit",
+      })
+    ).rejects.toThrow("session_run_id_required")
+
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it("streams session run SSE frames across chunk boundaries", async () => {
@@ -2297,6 +2415,7 @@ describe("LabrastroRemoteClient peer diagnostics settings", () => {
 
     await expect(client.approvalReply({
       session_run_id: "run-1",
+      branch_binding_id: "branch-a",
       approval_id: "approval-1",
       decision: "allow_once",
     })).resolves.toMatchObject({ ok: true, state: "resolved" })
@@ -2306,6 +2425,7 @@ describe("LabrastroRemoteClient peer diagnostics settings", () => {
       body: {
         peer_token: "peer-token-1",
         session_run_id: "run-1",
+        branch_binding_id: "branch-a",
         approval_id: "approval-1",
         decision: "allow_once",
       },
@@ -2352,6 +2472,7 @@ describe("LabrastroRemoteClient peer diagnostics settings", () => {
 
     await expect(client.sessionRunUserInputReply({
       session_run_id: "run-1",
+      branch_binding_id: "branch-a",
       input_id: "mcp-elicitation-1",
       action: "accept",
       content: { format: "markdown" },
@@ -2363,6 +2484,7 @@ describe("LabrastroRemoteClient peer diagnostics settings", () => {
       body: {
         peer_token: "peer-token-1",
         session_run_id: "run-1",
+        branch_binding_id: "branch-a",
         input_id: "mcp-elicitation-1",
         action: "accept",
         content: { format: "markdown" },

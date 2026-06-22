@@ -499,17 +499,18 @@ export class LabrastroRemoteClient {
     runtimeRoot: string
     prompt: string
     agentRunId?: string
-    branchBindingId?: string
+    branchBindingId: string
     selectBranch?: boolean
     metadata?: JsonObject
   }): Promise<JsonObject> {
+    const branchBindingId = requiredBranchBindingId(payload.branchBindingId)
     return this.authenticatedPost("/remote/admin/agent-runs/branch", {
       source_agent_run_id: payload.sourceAgentRunId,
       base_session_item_id: payload.baseSessionItemId,
       runtime_root: payload.runtimeRoot,
       prompt: payload.prompt,
       ...(payload.agentRunId ? { agent_run_id: payload.agentRunId } : {}),
-      ...(payload.branchBindingId ? { branch_binding_id: payload.branchBindingId } : {}),
+      branch_binding_id: branchBindingId,
       select_branch: payload.selectBranch !== false,
       ...(payload.metadata && Object.keys(payload.metadata).length ? { metadata: payload.metadata } : {}),
     })
@@ -763,10 +764,12 @@ export class LabrastroRemoteClient {
     mentions?: JsonObject[]
   }): Promise<JsonObject> {
     const locale = payload.locale?.trim()
+    const sessionRunId = requiredSessionRunId(payload.sessionRunId)
+    const branchBindingId = requiredBranchBindingId(payload.branchBindingId)
     return this.postPeerJson("/remote/session-runs/continue", (peer) => ({
       peer_token: peer.peer_token,
-      session_run_id: payload.sessionRunId,
-      branch_binding_id: payload.branchBindingId,
+      session_run_id: sessionRunId,
+      branch_binding_id: branchBindingId,
       prompt: payload.prompt,
       client_request_id: payload.clientRequestId || `session-run-continue-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
       ...(locale ? { locale } : {}),
@@ -1046,9 +1049,11 @@ export class LabrastroRemoteClient {
     onBatch: SessionRunEventsHandler,
     options: SessionRunEventsOptions = {}
   ): Promise<void> {
+    const streamSessionRunId = requiredSessionRunId(sessionRunId)
+    const streamBranchBindingId = requiredBranchBindingId(branchBindingId)
     let peer = await this.ensurePeer()
     return retryInvalidPeerTokenOnce(
-      () => this.openSessionRunEventStream(peer, sessionRunId, cursor, branchBindingId, onBatch, options),
+      () => this.openSessionRunEventStream(peer, streamSessionRunId, cursor, streamBranchBindingId, onBatch, options),
       async () => {
         await this.stopPeer("invalid_peer_token_retry")
         peer = await this.ensurePeer()
@@ -1062,9 +1067,11 @@ export class LabrastroRemoteClient {
     branchBindingId: string,
     options: SessionRunEventsBatchOptions = {}
   ): Promise<JsonObject> {
+    const batchSessionRunId = requiredSessionRunId(sessionRunId)
+    const batchBranchBindingId = requiredBranchBindingId(branchBindingId)
     let peer = await this.ensurePeer()
     return retryInvalidPeerTokenOnce(
-      () => this.openSessionRunEventsBatch(peer, sessionRunId, cursor, branchBindingId, options),
+      () => this.openSessionRunEventsBatch(peer, batchSessionRunId, cursor, batchBranchBindingId, options),
       async () => {
         await this.stopPeer("invalid_peer_token_retry")
         peer = await this.ensurePeer()
@@ -1074,13 +1081,15 @@ export class LabrastroRemoteClient {
 
   async sessionRunStatus(
     sessionRunId: string,
-    cursor?: number,
-    branchBindingId?: string,
+    cursor: number | undefined,
+    branchBindingId: string,
   ): Promise<JsonObject> {
+    const statusSessionRunId = requiredSessionRunId(sessionRunId)
+    const statusBranchBindingId = requiredBranchBindingId(branchBindingId)
     return this.postPeerJson("/remote/session-runs/status", (peer) => ({
       peer_token: peer.peer_token,
-      session_run_id: sessionRunId,
-      ...(branchBindingId ? { branch_binding_id: branchBindingId } : {}),
+      session_run_id: statusSessionRunId,
+      branch_binding_id: statusBranchBindingId,
       ...(typeof cursor === "number" ? { cursor } : {}),
     }))
   }
@@ -1090,10 +1099,12 @@ export class LabrastroRemoteClient {
     branchBindingId: string
     cursor?: number
   }): Promise<JsonObject> {
+    const sessionRunId = requiredSessionRunId(payload.sessionRunId)
+    const branchBindingId = requiredBranchBindingId(payload.branchBindingId)
     return this.postPeerJson("/remote/session-runs/branches/select", (peer) => ({
       peer_token: peer.peer_token,
-      session_run_id: payload.sessionRunId,
-      branch_binding_id: payload.branchBindingId,
+      session_run_id: sessionRunId,
+      branch_binding_id: branchBindingId,
       ...(typeof payload.cursor === "number" ? { cursor: payload.cursor } : {}),
     }))
   }
@@ -1103,10 +1114,12 @@ export class LabrastroRemoteClient {
     reason = "user_cancelled",
     branchBindingId: string,
   ): Promise<JsonObject> {
+    const cancelSessionRunId = requiredSessionRunId(sessionRunId)
+    const cancelBranchBindingId = requiredBranchBindingId(branchBindingId)
     return this.postPeerJson("/remote/session-runs/cancel", (peer) => ({
       peer_token: peer.peer_token,
-      session_run_id: sessionRunId,
-      branch_binding_id: branchBindingId,
+      session_run_id: cancelSessionRunId,
+      branch_binding_id: cancelBranchBindingId,
       reason,
     }))
   }
@@ -1116,15 +1129,17 @@ export class LabrastroRemoteClient {
     sessionRunId: string
     text: string
     activationId?: string
-    branchBindingId?: string
+    branchBindingId: string
     clientSteerId?: string
     idempotencyKey?: string
   }): Promise<JsonObject> {
     const agentRunId = encodeURIComponent(payload.agentRunId)
+    const sessionRunId = requiredSessionRunId(payload.sessionRunId)
+    const branchBindingId = requiredBranchBindingId(payload.branchBindingId)
     return this.postPeerJson(`/remote/agent-runs/${agentRunId}/steer`, (peer) => ({
       peer_token: peer.peer_token,
-      session_run_id: payload.sessionRunId,
-      ...(payload.branchBindingId ? { branch_binding_id: payload.branchBindingId } : {}),
+      session_run_id: sessionRunId,
+      branch_binding_id: branchBindingId,
       ...(payload.activationId ? { activation_id: payload.activationId } : {}),
       source: "user",
       payload: {
@@ -1142,25 +1157,35 @@ export class LabrastroRemoteClient {
     branchBindingId: string
     action: "continue" | "retry"
   }): Promise<JsonObject> {
+    const sessionRunId = requiredSessionRunId(payload.sessionRunId)
+    const branchBindingId = requiredBranchBindingId(payload.branchBindingId)
     return this.postPeerJson("/remote/session-runs/recover", (peer) => ({
       peer_token: peer.peer_token,
-      session_run_id: payload.sessionRunId,
-      branch_binding_id: payload.branchBindingId,
+      session_run_id: sessionRunId,
+      branch_binding_id: branchBindingId,
       action: payload.action,
     }))
   }
 
   async approvalReply(payload: JsonObject): Promise<JsonObject> {
+    const sessionRunId = requiredSessionRunId(payload.session_run_id ?? payload.sessionRunId)
+    const branchBindingId = requiredBranchBindingId(payload.branch_binding_id ?? payload.branchBindingId)
     return this.postPeerJson("/remote/approval/reply", (peer) => ({
       ...payload,
       peer_token: peer.peer_token,
+      session_run_id: sessionRunId,
+      branch_binding_id: branchBindingId,
     }))
   }
 
   async sessionRunUserInputReply(payload: JsonObject): Promise<JsonObject> {
+    const sessionRunId = requiredSessionRunId(payload.session_run_id ?? payload.sessionRunId)
+    const branchBindingId = requiredBranchBindingId(payload.branch_binding_id ?? payload.branchBindingId)
     return this.postPeerJson("/remote/session-runs/user-input/reply", (peer) => ({
       ...payload,
       peer_token: peer.peer_token,
+      session_run_id: sessionRunId,
+      branch_binding_id: branchBindingId,
     }))
   }
 
@@ -1464,6 +1489,7 @@ export class LabrastroRemoteClient {
     onBatch: SessionRunEventsHandler,
     options: SessionRunEventsOptions
   ): Promise<void> {
+    const streamBranchBindingId = requiredBranchBindingId(branchBindingId)
     const pathname = "/remote/session-runs/events"
     const startedAt = Date.now()
     let status: number | undefined
@@ -1477,7 +1503,7 @@ export class LabrastroRemoteClient {
         body: JSON.stringify({
           peer_token: peer.peer_token,
           session_run_id: sessionRunId,
-          ...(branchBindingId ? { branch_binding_id: branchBindingId } : {}),
+          branch_binding_id: streamBranchBindingId,
           cursor,
           timeout_sec: options.timeoutSec ?? SESSION_RUN_EVENTS_TIMEOUT_SEC,
         }),
@@ -1542,6 +1568,7 @@ export class LabrastroRemoteClient {
     branchBindingId: string,
     options: SessionRunEventsBatchOptions
   ): Promise<JsonObject> {
+    const batchBranchBindingId = requiredBranchBindingId(branchBindingId)
     const pathname = "/remote/session-runs/events"
     const abortController = new AbortController()
     const abortFromParent = () => abortController.abort()
@@ -1565,7 +1592,7 @@ export class LabrastroRemoteClient {
         body: JSON.stringify({
           peer_token: peer.peer_token,
           session_run_id: sessionRunId,
-          ...(branchBindingId ? { branch_binding_id: branchBindingId } : {}),
+          branch_binding_id: batchBranchBindingId,
           cursor,
           timeout_sec: options.timeoutSec ?? 1,
         }),
@@ -2388,6 +2415,22 @@ function stripUndefined(value: JsonObject): JsonObject {
 
 function stringValue(value: unknown): string {
   return typeof value === "string" ? value : ""
+}
+
+function requiredBranchBindingId(value: unknown): string {
+  const branchBindingId = stringValue(value).trim()
+  if (!branchBindingId) {
+    throw new Error("branch_binding_id_required")
+  }
+  return branchBindingId
+}
+
+function requiredSessionRunId(value: unknown): string {
+  const sessionRunId = stringValue(value).trim()
+  if (!sessionRunId) {
+    throw new Error("session_run_id_required")
+  }
+  return sessionRunId
 }
 
 function stringArray(value: unknown): string[] {
