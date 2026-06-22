@@ -564,17 +564,41 @@ export class LabrastroRemoteClient {
     }))
   }
 
-  async capabilityPackageInstallPlan(): Promise<JsonObject> {
-    return this.postPeerJson("/remote/capability-packages/install/plan", (peer) => ({
+  async claimLocalActions(options: {
+    features?: string[]
+    maxActions?: number
+    workspaceRoot?: string
+  } = {}): Promise<JsonObject> {
+    const workspaceRoot = options.workspaceRoot
+      ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+      ?? process.cwd()
+    return this.postPeerJson("/remote/local-actions/claim", (peer) => ({
       peer_token: peer.peer_token,
+      peer_id: peer.peer_id,
+      worker_kind: "local_peer",
+      features: options.features ?? ["local_actions"],
+      max_actions: options.maxActions ?? 1,
+      workspace_root: workspaceRoot,
     }))
   }
 
-  async capabilityPackageInstallResult(result: JsonObject): Promise<JsonObject> {
-    return this.postPeerJson("/remote/capability-packages/install/result", (peer) => ({
-      peer_token: peer.peer_token,
-      result,
-    }))
+  async completeLocalAction(payload: {
+    localActionId: string
+    leaseId: string
+    status: string
+    result?: JsonObject
+    error?: string
+  }): Promise<JsonObject> {
+    return this.postPeerJson("/remote/local-actions/complete", (peer) =>
+      stripUndefined({
+        peer_token: peer.peer_token,
+        local_action_id: payload.localActionId,
+        lease_id: payload.leaseId,
+        status: payload.status,
+        result: payload.result ?? {},
+        error: payload.error,
+      })
+    )
   }
 
   async capabilityPackageDelete(payload: JsonObject): Promise<JsonObject> {

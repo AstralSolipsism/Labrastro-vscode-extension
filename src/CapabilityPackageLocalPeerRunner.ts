@@ -5,12 +5,18 @@ import { spawn } from "child_process"
 import type { JsonObject, LabrastroRemoteClient } from "./LabrastroRemoteClient"
 
 interface CapabilityPackageLocalPeerRunnerOptions {
-  client: Pick<LabrastroRemoteClient, "capabilityPackageInstallPlan" | "capabilityPackageInstallResult">
+  client: Pick<LabrastroRemoteClient, "claimLocalActions" | "completeLocalAction">
   storageRoot: string
   intervalMs?: number
 }
 
 type TimerHandle = ReturnType<typeof setInterval>
+
+const CAPABILITY_LOCAL_ACTION_FEATURES = [
+  "local_actions",
+  "local_action:check_executable",
+  "local_action:install_python_packages",
+]
 
 export class CapabilityPackageLocalPeerRunner {
   private timer: TimerHandle | undefined
@@ -42,27 +48,41 @@ export class CapabilityPackageLocalPeerRunner {
 
   async runOnce(): Promise<void> {
     if (this.running) return this.running
-    this.running = this.runPlan().finally(() => {
+    this.running = this.runClaimedActions().finally(() => {
       this.running = undefined
     })
     return this.running
   }
 
-  private async runPlan(): Promise<void> {
-    const payload = await this.options.client.capabilityPackageInstallPlan()
-    const plan = objectValue(payload.plan)
-    const planId = stringValue(plan.plan_id || plan.planId)
-    const peerStatusActions = objectValue(objectValue(payload.peer_status || payload.peerStatus).actions)
-    for (const action of recordArray(plan.actions)) {
-      if (stringValue(action.target) !== "local_peer") continue
-      if (actionAlreadyInstalled(planId, action, peerStatusActions)) continue
+  private async runClaimedActions(): Promise<void> {
+    const payload = await this.options.client.claimLocalActions({
+      features: CAPABILITY_LOCAL_ACTION_FEATURES,
+      maxActions: 4,
+    })
+    for (const claimed of recordArray(payload.actions)) {
+      const localActionId = stringValue(claimed.local_action_id || claimed.localActionId)
+      const leaseId = stringValue(claimed.lease_id || claimed.leaseId)
+      if (!localActionId || !leaseId) continue
+      const action = desiredAction(claimed)
+      const planId = stringValue(action.plan_id || action.planId)
       const result = await this.executeAction(planId, action).catch((error) =>
         this.result(planId, action, "failed", {
           reason: "local_action_failed",
           message: errorMessage(error),
         })
       )
-      await this.options.client.capabilityPackageInstallResult(result)
+      const actionResult = stripUndefined({
+        ...result,
+        local_action_id: localActionId,
+      })
+      const terminalStatus = localActionTerminalStatus(actionResult)
+      await this.options.client.completeLocalAction({
+        localActionId,
+        leaseId,
+        status: terminalStatus,
+        result: actionResult,
+        ...(terminalStatus === "failed" ? { error: localActionError(actionResult) } : {}),
+      })
     }
   }
 
@@ -240,31 +260,28 @@ function safePathSegment(value: string): string {
   return cleaned || "package"
 }
 
-function actionAlreadyInstalled(
-  planId: string,
-  action: JsonObject,
-  peerStatusActions: JsonObject,
-): boolean {
-  const status = objectValue(peerStatusActions[installActionKey(planId, action)])
-  const installState = stringValue(status.install_state || status.installState).toLowerCase()
-  const checkState = stringValue(status.check_state || status.checkState).toLowerCase()
-  return installState === "installed" && (!checkState || checkState === "passed")
-}
-
-function installActionKey(planId: string, action: JsonObject): string {
-  const params = objectValue(action.params)
-  return [
-    stringValue(action.package_id || action.packageId || params.package_id || params.packageId),
-    stringValue(action.plan_id || action.planId || params.plan_id || params.planId) || planId,
-    stringValue(action.action_id || action.actionId || action.id || params.action_id || params.actionId || params.id),
-    stringValue(action.component_id || action.componentId || params.component_id || params.componentId),
-  ].join("|")
-}
-
 function stripUndefined(value: JsonObject): JsonObject {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined && item !== ""))
 }
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function desiredAction(claimed: JsonObject): JsonObject {
+  const payload = objectValue(claimed.payload)
+  const desired = objectValue(payload.desired_action || payload.desiredAction)
+  return Object.keys(desired).length ? desired : payload
+}
+
+function localActionTerminalStatus(result: JsonObject): "completed" | "failed" {
+  const status = stringValue(result.status).toLowerCase()
+  return status === "passed" || status === "ok" || status === "success" || status === "succeeded"
+    ? "completed"
+    : "failed"
+}
+
+function localActionError(result: JsonObject): string {
+  const details = objectValue(result.details)
+  return stringValue(details.reason || details.message || result.message || result.status) || "local_action_failed"
 }

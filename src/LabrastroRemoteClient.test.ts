@@ -1335,7 +1335,7 @@ describe("LabrastroRemoteClient session run start", () => {
     })
   })
 
-  it("sends and receives capability package local peer install records", async () => {
+  it("claims and completes local peer actions with peer identity", async () => {
     vscodeMock.labrastroValue = "http://127.0.0.1:8765"
     const context = {
       secrets: {
@@ -1347,26 +1347,20 @@ describe("LabrastroRemoteClient session run start", () => {
       const path = new URL(String(input)).pathname
       const body = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>
       requests.push({ path, body })
-      if (path.endsWith("/plan")) {
+      if (path.endsWith("/claim")) {
         return new Response(JSON.stringify({
-          type: "capabilityPackage.installPlan",
-          plan: {
-            plan_id: "plan-waza",
-            actions: [{
-              id: "install-waza-python",
-              package_id: "waza",
-              component_id: "skill:waza/read",
-              target: "local_peer",
-            }],
-          },
+          actions: [{
+            local_action_id: "local-action-1",
+            lease_id: "lease-1",
+            action_kind: "install_python_packages",
+          }],
         }), { headers: { "Content-Type": "application/json" } })
       }
       return new Response(JSON.stringify({
-        type: "capabilityPackage.installResult",
-        peer_status: {
-          actions: {
-            "install-waza-python": { check_state: "passed", install_state: "installed" },
-          },
+        ok: true,
+        action: {
+          local_action_id: "local-action-1",
+          status: "completed",
         },
       }), { headers: { "Content-Type": "application/json" } })
     })
@@ -1374,37 +1368,42 @@ describe("LabrastroRemoteClient session run start", () => {
     const client = new LabrastroRemoteClient(context as never)
     attachPeer(client, "peer-token-1")
 
-    await expect(client.capabilityPackageInstallPlan()).resolves.toMatchObject({
-      type: "capabilityPackage.installPlan",
-      plan: { plan_id: "plan-waza" },
-    })
-    await expect(client.capabilityPackageInstallResult({
-      plan_id: "plan-waza",
-      action_id: "install-waza-python",
-      package_id: "waza",
-      component_id: "skill:waza/read",
-      target: "local_peer",
-      status: "passed",
-      version: "1.0.0",
-      content_hash: "sha256:abc",
-      message: "installed",
-      timestamp: "2026-06-11T00:00:00Z",
+    await expect(client.claimLocalActions({
+      features: ["local_actions", "local_action:install_python_packages"],
+      maxActions: 2,
+      workspaceRoot: "G:/AboutDEV/Labrastro",
     })).resolves.toMatchObject({
-      type: "capabilityPackage.installResult",
+      actions: [{ local_action_id: "local-action-1" }],
+    })
+    await expect(client.completeLocalAction({
+      localActionId: "local-action-1",
+      leaseId: "lease-1",
+      status: "completed",
+      result: { summary: "installed" },
+    })).resolves.toMatchObject({
+      ok: true,
+      action: { local_action_id: "local-action-1" },
     })
 
     expect(requests[0]).toMatchObject({
-      path: "/remote/capability-packages/install/plan",
-      body: { peer_token: "peer-token-1" },
-    })
-    expect(requests[1]).toMatchObject({
-      path: "/remote/capability-packages/install/result",
+      path: "/remote/local-actions/claim",
       body: {
         peer_token: "peer-token-1",
-        result: expect.objectContaining({
-          target: "local_peer",
-          action_id: "install-waza-python",
-        }),
+        peer_id: "peer-1",
+        worker_kind: "local_peer",
+        features: ["local_actions", "local_action:install_python_packages"],
+        workspace_root: "G:/AboutDEV/Labrastro",
+        max_actions: 2,
+      },
+    })
+    expect(requests[1]).toMatchObject({
+      path: "/remote/local-actions/complete",
+      body: {
+        peer_token: "peer-token-1",
+        local_action_id: "local-action-1",
+        lease_id: "lease-1",
+        status: "completed",
+        result: { summary: "installed" },
       },
     })
   })

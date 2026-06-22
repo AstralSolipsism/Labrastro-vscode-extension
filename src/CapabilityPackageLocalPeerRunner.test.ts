@@ -5,25 +5,30 @@ import { describe, expect, it, vi } from "vitest"
 import { CapabilityPackageLocalPeerRunner } from "./CapabilityPackageLocalPeerRunner"
 
 describe("CapabilityPackageLocalPeerRunner", () => {
-  it("pulls local peer install actions and submits execution results", async () => {
+  it("claims local peer install actions and completes them by lease", async () => {
     const storageRoot = await mkdtemp(path.join(tmpdir(), "labrastro-capability-peer-"))
     const client = {
-      capabilityPackageInstallPlan: vi.fn(async () => ({
-        plan: {
-          plan_id: "plan-local",
-          actions: [
-            {
+      claimLocalActions: vi.fn(async () => ({
+        actions: [
+          {
+            local_action_id: "local-action-check-node",
+            lease_id: "lease-1",
+            action_kind: "check_executable",
+            payload: {
               id: "check-node",
+              action_id: "check-node",
               type: "check_executable",
               target: "local_peer",
+              plan_id: "plan-local",
               package_id: "node-tools",
               component_id: "skill:node/read",
+              expected_content_hash: "sha256:node",
               params: { executable: process.execPath },
             },
-          ],
-        },
+          },
+        ],
       })),
-      capabilityPackageInstallResult: vi.fn(async () => ({ ok: true })),
+      completeLocalAction: vi.fn(async () => ({ ok: true })),
     }
     const runner = new CapabilityPackageLocalPeerRunner({
       client,
@@ -38,45 +43,39 @@ describe("CapabilityPackageLocalPeerRunner", () => {
       await rm(storageRoot, { recursive: true, force: true })
     }
 
-    expect(client.capabilityPackageInstallPlan).toHaveBeenCalledTimes(1)
-    expect(client.capabilityPackageInstallResult).toHaveBeenCalledWith(
+    expect(client.claimLocalActions).toHaveBeenCalledWith(
       expect.objectContaining({
-        plan_id: "plan-local",
-        action_id: "check-node",
-        package_id: "node-tools",
-        component_id: "skill:node/read",
-        target: "local_peer",
-        status: "passed",
+        features: expect.arrayContaining([
+          "local_actions",
+          "local_action:check_executable",
+          "local_action:install_python_packages",
+        ]),
+        maxActions: expect.any(Number),
+      })
+    )
+    expect(client.completeLocalAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        localActionId: "local-action-check-node",
+        leaseId: "lease-1",
+        status: "completed",
+        result: expect.objectContaining({
+          local_action_id: "local-action-check-node",
+          plan_id: "plan-local",
+          action_id: "check-node",
+          package_id: "node-tools",
+          component_id: "skill:node/read",
+          target: "local_peer",
+          status: "passed",
+          content_hash: "sha256:node",
+        }),
       })
     )
   })
 
-  it("skips actions that peer status already marks installed", async () => {
+  it("does nothing when the server has no claimable local actions", async () => {
     const client = {
-      capabilityPackageInstallPlan: vi.fn(async () => ({
-        plan: {
-          plan_id: "plan-local",
-          actions: [
-            {
-              id: "install-python",
-              type: "install_python_packages",
-              target: "local_peer",
-              package_id: "node-tools",
-              component_id: "skill:node/read",
-              params: { packages: ["readability-lxml"] },
-            },
-          ],
-        },
-        peer_status: {
-          actions: {
-            "node-tools|plan-local|install-python|skill:node/read": {
-              check_state: "passed",
-              install_state: "installed",
-            },
-          },
-        },
-      })),
-      capabilityPackageInstallResult: vi.fn(async () => ({ ok: true })),
+      claimLocalActions: vi.fn(async () => ({ actions: [] })),
+      completeLocalAction: vi.fn(async () => ({ ok: true })),
     }
     const runner = new CapabilityPackageLocalPeerRunner({
       client,
@@ -87,41 +86,32 @@ describe("CapabilityPackageLocalPeerRunner", () => {
     await runner.runOnce()
     runner.dispose()
 
-    expect(client.capabilityPackageInstallResult).not.toHaveBeenCalled()
+    expect(client.claimLocalActions).toHaveBeenCalledTimes(1)
+    expect(client.completeLocalAction).not.toHaveBeenCalled()
   })
 
-  it("does not rerun actions after the server marks them installed", async () => {
-    let calls = 0
+  it("reports action failures through the local action completion endpoint", async () => {
     const client = {
-      capabilityPackageInstallPlan: vi.fn(async () => {
-        calls += 1
-        return {
-          plan: {
-            plan_id: "plan-local",
-            actions: [
-              {
-                id: "check-node",
-                type: "check_executable",
-                target: "local_peer",
-                package_id: "node-tools",
-                component_id: "skill:node/read",
-                params: { executable: process.execPath },
-              },
-            ],
+      claimLocalActions: vi.fn(async () => ({
+        actions: [
+          {
+            local_action_id: "local-action-missing-python",
+            lease_id: "lease-2",
+            action_kind: "install_python_packages",
+            payload: {
+              id: "install-python",
+              action_id: "install-python",
+              type: "install_python_packages",
+              target: "local_peer",
+              plan_id: "plan-local",
+              package_id: "python-tools",
+              component_id: "skill:python/read",
+              params: { packages: [] },
+            },
           },
-          peer_status: calls > 1
-            ? {
-                actions: {
-                  "node-tools|plan-local|check-node|skill:node/read": {
-                    check_state: "passed",
-                    install_state: "installed",
-                  },
-                },
-              }
-            : undefined,
-        }
-      }),
-      capabilityPackageInstallResult: vi.fn(async () => ({ ok: true })),
+        ],
+      })),
+      completeLocalAction: vi.fn(async () => ({ ok: true })),
     }
     const runner = new CapabilityPackageLocalPeerRunner({
       client,
@@ -130,10 +120,19 @@ describe("CapabilityPackageLocalPeerRunner", () => {
     })
 
     await runner.runOnce()
-    await runner.runOnce()
     runner.dispose()
 
-    expect(client.capabilityPackageInstallPlan).toHaveBeenCalledTimes(2)
-    expect(client.capabilityPackageInstallResult).toHaveBeenCalledTimes(1)
+    expect(client.completeLocalAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        localActionId: "local-action-missing-python",
+        leaseId: "lease-2",
+        status: "failed",
+        error: expect.stringContaining("python_packages_required"),
+        result: expect.objectContaining({
+          status: "failed",
+          details: { reason: "python_packages_required" },
+        }),
+      })
+    )
   })
 })
