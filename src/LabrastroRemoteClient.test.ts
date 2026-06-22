@@ -2704,6 +2704,24 @@ describe("LabrastroRemoteClient peer startup", () => {
     expect(childProcessMock.spawn.mock.calls[0][0]).toBe(binaryPath)
   })
 
+  it("starts the peer with the AgentRun local worker loop enabled", async () => {
+    const storagePath = await makeTempStorage()
+    const context = makePeerContext(storagePath)
+    mockPeerFetch()
+    mockPeerSpawn()
+
+    const client = new LabrastroRemoteClient(context as never)
+    await client.environmentManifest()
+
+    expect(childProcessMock.spawn).toHaveBeenCalledTimes(1)
+    const args = childProcessMock.spawn.mock.calls[0][1] as string[]
+    expect(args).toContain("--agent-run-worker")
+    expect(args).toEqual(expect.arrayContaining([
+      "--agent-run-worker-kind",
+      "local_peer",
+    ]))
+  })
+
   it("reports peer preparation progress while downloading the peer artifact", async () => {
     const storagePath = await makeTempStorage()
     const artifactContent = Buffer.from("downloaded-peer-binary")
