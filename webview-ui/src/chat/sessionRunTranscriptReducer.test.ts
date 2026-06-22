@@ -270,6 +270,53 @@ describe("sessionRunTranscriptReducer", () => {
     })
   })
 
+  it("projects local action waiting and failure events into one visible transcript item", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "read local workspace" }, 1)
+
+    expect(isSessionRunTranscriptEventType("local_action_waiting_peer")).toBe(true)
+
+    current = reduce(current, "local_action_waiting_peer", {
+      kind: "local_action",
+      local_action_id: "local-action-1",
+      action_kind: "read_workspace_file",
+      status: "waiting_peer",
+      workspace_root: "D:\\AboutDEV\\vika_mcp",
+      payload: { path: "secret.ts" },
+    }, 2)
+
+    let part = current.turns[0].assistantMessages[0].parts[0]
+    expect(part).toMatchObject({
+      id: "local-action-1",
+      type: "local_action",
+      kind: "local_action",
+      localActionId: "local-action-1",
+      actionKind: "read_workspace_file",
+      status: "waiting_peer",
+      workspaceRoot: "D:\\AboutDEV\\vika_mcp",
+      message: expect.stringContaining("等待本地工作区连接"),
+    })
+    expect(JSON.stringify(part)).not.toContain("secret.ts")
+
+    current = reduce(current, "local_action_failed", {
+      local_action_id: "local-action-1",
+      action_kind: "read_workspace_file",
+      status: "failed",
+      workspace_root: "D:\\AboutDEV\\vika_mcp",
+      error: "peer offline",
+    }, 3)
+
+    part = current.turns[0].assistantMessages[0].parts[0]
+    expect(part).toMatchObject({
+      id: "local-action-1",
+      type: "local_action",
+      status: "failed",
+      message: expect.stringContaining("本地动作失败"),
+      error: "peer offline",
+    })
+    expect(current.turns[0].assistantMessages[0].parts).toHaveLength(1)
+  })
+
   it("does not replay batch events whose event keys are already in the transcript", () => {
     const events = [
       sessionRunEvent("session_run_start", { prompt: "hi" }, 1),

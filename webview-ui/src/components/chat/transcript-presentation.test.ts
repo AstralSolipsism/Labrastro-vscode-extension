@@ -816,6 +816,54 @@ describe("transcript presentation", () => {
     })
   })
 
+  it("shows waiting local actions as explicit running process cards", () => {
+    const parts = [{
+      id: "local-action-1",
+      type: "local_action",
+      kind: "local_action",
+      localActionId: "local-action-1",
+      actionKind: "read_workspace_file",
+      status: "waiting_peer",
+      workspaceRoot: "D:\\AboutDEV\\vika_mcp",
+      message: "等待本地工作区连接：读取本地文件 · D:\\AboutDEV\\vika_mcp",
+    }] as unknown as TranscriptItem[]
+
+    const group = groups(buildTranscriptPresentation(parts, assistant(parts, "active")))[0]
+
+    expect(group).toMatchObject({
+      kind: "local_action",
+      label: "本地动作",
+      state: "running",
+      currentLabel: expect.stringContaining("等待本地工作区连接"),
+      count: 1,
+    })
+    expect(group.currentLabel).toContain("D:\\AboutDEV\\vika_mcp")
+  })
+
+  it("shows failed local actions as process card errors", () => {
+    const parts = [{
+      id: "local-action-1",
+      type: "local_action",
+      kind: "local_action",
+      localActionId: "local-action-1",
+      actionKind: "read_workspace_file",
+      status: "failed",
+      workspaceRoot: "D:\\AboutDEV\\vika_mcp",
+      message: "本地动作失败：读取本地文件 · D:\\AboutDEV\\vika_mcp",
+      error: "peer offline",
+    }] as unknown as TranscriptItem[]
+
+    const group = groups(buildTranscriptPresentation(parts, assistant(parts, "error")))[0]
+
+    expect(group).toMatchObject({
+      kind: "local_action",
+      label: "本地动作",
+      state: "error",
+      failureCount: 1,
+      currentLabel: expect.stringContaining("本地动作失败"),
+    })
+  })
+
   it("treats recoverable and stalled document drafts as paused instead of running", () => {
     for (const status of ["stalled", "recoverable"] as const) {
       const parts: TranscriptItem[] = [

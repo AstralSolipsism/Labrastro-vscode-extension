@@ -1,4 +1,4 @@
-﻿import type { ActiveSessionRun } from "./SessionRunCoordinator"
+import type { ActiveSessionRun } from "./SessionRunCoordinator"
 import {
   resolveSessionRuntimeSourceIdentity,
   type ResolvedSessionRuntimeSourceIdentity,

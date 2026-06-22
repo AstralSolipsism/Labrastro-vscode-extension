@@ -5391,6 +5391,7 @@ function isMemoryContextPayload(payload: Record<string, unknown>): boolean {
 
 function transcriptItemSourceLabel(part: TranscriptItem): string {
   if (part.type === "tool") return part.title || part.tool || "工具调用"
+  if (part.type === "local_action") return part.message || "本地动作"
   if (part.type === "session") return part.title || part.sessionId || "会话"
   if (part.type === "terminal") return part.title || "终端输出"
   if (part.type === "view" || part.type === "context_event" || part.type === "memory_context" || part.type === "ui_event") {

@@ -5,6 +5,7 @@ import type {
   AssistantTextItem,
   DocumentDraftItem,
   FileChangeItem,
+  LocalActionItem,
   NoticeItem,
   RawEventRef,
   ReasoningItem,
@@ -82,6 +83,14 @@ const TOOL_ICONS: Record<string, string> = {
   apply_patch: "diff-modified",
   draft_document_begin: "file-text",
   install_capability_package: "package",
+  read_workspace_file: "file",
+  read_workspace_files: "files",
+  write_workspace_file: "save",
+  apply_workspace_patch: "diff-modified",
+  run_workspace_command: "terminal",
+  mcp_status: "server-process",
+  mcp_lifecycle: "server-process",
+  mcp_invocation: "server-process",
 }
 
 const CARD_OPEN_STATE = new Map<string, boolean>()
@@ -174,6 +183,7 @@ const KeyedFor = <T,>(props: {
 
 function traceKindForPart(part: TranscriptItem): TraceNodeKind {
   if (part.type === "file_change" || part.type === "document_draft") return "file_edit"
+  if (part.type === "local_action") return inferTraceNodeKindFromToolName(part.actionKind)
   return part.traceNodeKind || inferTraceNodeKindFromToolName(part.type === "tool" ? part.tool : undefined)
 }
 
@@ -182,6 +192,7 @@ function traceStatusForPart(part: TranscriptItem) {
   if (part.type === "tool") return TOOL_STATUS_TO_TRACE_STATUS[part.status || "pending"]
   if (part.type === "file_change") return fileChangeTraceStatus(part)
   if (part.type === "document_draft") return documentDraftTraceStatus(part)
+  if (part.type === "local_action") return localActionTraceStatus(part)
   if (part.type === "session") return part.state === "error" ? "error" : "success"
   return "success"
 }
@@ -198,6 +209,13 @@ function documentDraftTraceStatus(part: DocumentDraftItem): TraceNodeStatus {
   if (part.status === "failed") return "error"
   if (part.status === "cancelled") return "cancelled"
   if (part.status === "stalled" || part.status === "recoverable") return "returned"
+  return "active"
+}
+
+function localActionTraceStatus(part: LocalActionItem): TraceNodeStatus {
+  if (part.status === "completed") return "success"
+  if (part.status === "failed" || part.status === "timed_out") return "error"
+  if (part.status === "cancelled") return "cancelled"
   return "active"
 }
 
@@ -1461,6 +1479,111 @@ const ContextEventPart: Component<ItemProps<Extract<TranscriptItem, { type: "con
   )
 }
 
+const LocalActionPart: Component<ItemProps<LocalActionItem>> = (props) => {
+  const openKey = `local-action:${props.part.id}`
+  const [open, setOpen] = createCardOpenState(
+    openKey,
+    localActionShouldOpen(props.part),
+    () => localActionShouldOpen(props.part),
+  )
+  const selected = () => Boolean(props.part.traceNodeId && props.part.traceNodeId === props.selectedTraceNodeId)
+  const kind = () => traceKindForPart(props.part)
+  const status = () => traceStatusForPart(props.part)
+  const actionLabel = () => getToolActionLabel(props.part.actionKind)
+  const meta = () => [
+    actionLabel(),
+    props.part.workspaceRoot,
+    props.part.peerId ? `peer ${props.part.peerId}` : "",
+  ].filter(Boolean).join(" · ")
+  const title = () => localActionTitle(props.part)
+  const showFailureActions = () => props.part.status === "failed" || props.part.status === "timed_out"
+
+  return (
+    <div
+      class="tool-card"
+      classList={{
+        "tool-card--selected": selected(),
+        "tool-card--awaiting": props.part.status === "requested" || props.part.status === "waiting_peer" || props.part.status === "started" || props.part.status === "progress",
+        "tool-card--error": props.part.status === "failed" || props.part.status === "timed_out",
+        "tool-card--cancelled": props.part.status === "cancelled",
+      }}
+      data-trace-node-id={props.part.traceNodeId}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <button
+        type="button"
+        class="tool-card__header"
+        onClick={(event) => {
+          event.stopPropagation()
+          setOpen((value) => {
+            const next = !value
+            CARD_OPEN_STATE.set(openKey, next)
+            return next
+          })
+        }}
+      >
+        <span class="tool-card__icon">
+          <span class={`codicon codicon-${TOOL_ICONS[props.part.actionKind] || "device-desktop"}`} aria-hidden="true" />
+        </span>
+        <span class="tool-card__body">
+          <span class="tool-card__title">{title()}</span>
+        </span>
+        <span class={markerClass(kind(), status(), selected())} title={getTraceStatusLabel(status())} />
+        <span class="tool-card__status">{localActionStatusLabel(props.part.status)}</span>
+        <span class={`codicon codicon-chevron-${open() ? "down" : "right"}`} aria-hidden="true" />
+      </button>
+      <Show when={open()}>
+        <div class="tool-card__preview">
+          <ToolSection title="本地动作">
+            <div class="tool-card__approval">
+              <div class="tool-card__approval-main">
+                <span>{props.part.message || title()}</span>
+                <strong>{meta()}</strong>
+              </div>
+            </div>
+          </ToolSection>
+          <Show when={props.part.error}>
+            <ToolSection title={t("tool.section.result")}>
+              <div class="shell-card__truncation-note">{props.part.error}</div>
+            </ToolSection>
+          </Show>
+          <RawAuditRefs
+            part={props.part}
+            rawAuditEvents={props.rawAuditEvents}
+            onLoadRawAuditEvents={props.onLoadRawAuditEvents}
+          />
+          <Show when={showFailureActions()}>
+            <div class="tool-card__footer">
+              <div class="message-action-row tool-card__actions">
+                <button
+                  type="button"
+                  class="local-action-card__button"
+                  aria-disabled="true"
+                  title="重试本地动作"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <span class="codicon codicon-debug-restart" aria-hidden="true" />
+                  <span>重试</span>
+                </button>
+                <button
+                  type="button"
+                  class="local-action-card__button"
+                  aria-disabled="true"
+                  title="取消本地动作"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <span class="codicon codicon-close" aria-hidden="true" />
+                  <span>取消</span>
+                </button>
+              </div>
+            </div>
+          </Show>
+        </div>
+      </Show>
+    </div>
+  )
+}
+
 const WorkflowStepPart: Component<ItemProps<WorkflowStepItem>> = (props) => {
   const [open, setOpen] = createSignal(initialCardOpenState(props.part.id, false))
   createEffect(() => {
@@ -2085,6 +2208,7 @@ const PROCESS_GROUP_ICONS: Record<ProcessGroup["kind"], string> = {
   run: "terminal",
   mcp: "server-process",
   skill: "symbol-method",
+  local_action: "device-desktop",
   context: "file-submodule",
   other: "list-tree",
 }
@@ -2360,6 +2484,9 @@ const TranscriptItemView: Component<PartProps> = (props) => {
       </Match>
       <Match when={props.part.type === "context_event"}>
         <ContextEventPart {...props} part={props.part as Extract<TranscriptItem, { type: "context_event" }>} />
+      </Match>
+      <Match when={props.part.type === "local_action"}>
+        <LocalActionPart {...props} part={props.part as LocalActionItem} />
       </Match>
       <Match when={props.part.type === "workflow_step"}>
         <WorkflowStepPart {...props} part={props.part as WorkflowStepItem} />
@@ -2715,6 +2842,36 @@ function workflowStatusLabel(status?: string): string {
   if (value === "cancelled") return t("process.state.cancelled")
   if (value === "approved") return t("tool.approval.approved")
   return t("process.state.completed")
+}
+
+function localActionShouldOpen(part: LocalActionItem): boolean {
+  return part.status === "requested" ||
+    part.status === "waiting_peer" ||
+    part.status === "started" ||
+    part.status === "progress" ||
+    part.status === "failed" ||
+    part.status === "timed_out"
+}
+
+function localActionTitle(part: LocalActionItem): string {
+  if (part.status === "waiting_peer") return "等待本地工作区连接"
+  if (part.status === "failed") return "本地动作失败"
+  if (part.status === "timed_out") return "本地动作超时"
+  if (part.status === "cancelled") return "本地动作已取消"
+  if (part.status === "completed") return "本地动作已完成"
+  if (part.status === "requested") return "等待本地动作调度"
+  return "本地动作进行中"
+}
+
+function localActionStatusLabel(status?: string): string {
+  if (status === "requested") return "待调度"
+  if (status === "waiting_peer") return "等待本地工作区"
+  if (status === "started" || status === "progress") return "进行中"
+  if (status === "completed") return "已完成"
+  if (status === "failed") return "失败"
+  if (status === "cancelled") return "已取消"
+  if (status === "timed_out") return "超时"
+  return "本地动作"
 }
 
 function rawAuditRefsForPart(part: TranscriptItem): RawEventRef[] {

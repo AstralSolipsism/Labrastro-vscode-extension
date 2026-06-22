@@ -36,6 +36,7 @@ describe("SessionRunCoordinator semantic contract", () => {
       sessionRunId: "run-1",
       cursor: 4,
       sessionId: "session-1",
+      branchBindingId: "branch-main",
       status: "reconnecting",
       startedAt: "2026-05-29T00:00:00.000Z",
       reconnectAttempts: 2,
@@ -49,12 +50,19 @@ describe("SessionRunCoordinator semantic contract", () => {
       session_run_id: "run-1",
       sessionId: "session-1",
       session_id: "session-1",
+      branchBindingId: "branch-main",
+      branch_binding_id: "branch-main",
     })
     expect(coordinator.activeRunPayload()).not.toHaveProperty("chatId")
     expect(coordinator.activeRunPayload()).not.toHaveProperty("chat_id")
     expect(options.context.workspaceState.update).toHaveBeenCalledWith(
       "labrastro.activeSessionRun",
-      expect.objectContaining({ sessionRunId: "run-1", session_run_id: "run-1" })
+      expect.objectContaining({
+        sessionRunId: "run-1",
+        session_run_id: "run-1",
+        branchBindingId: "branch-main",
+        branch_binding_id: "branch-main",
+      })
     )
   })
 
@@ -63,6 +71,7 @@ describe("SessionRunCoordinator semantic contract", () => {
       session_run_id: "run-restored",
       cursor: "7",
       session_id: "session-restored",
+      branch_binding_id: "branch-restored",
       status: "reconnecting",
       started_at: "2026-05-29T00:00:00.000Z",
       reconnect_attempts: "3",
@@ -75,6 +84,8 @@ describe("SessionRunCoordinator semantic contract", () => {
       cursor: 7,
       sessionId: "session-restored",
       session_id: "session-restored",
+      branchBindingId: "branch-restored",
+      branch_binding_id: "branch-restored",
     })
   })
 })

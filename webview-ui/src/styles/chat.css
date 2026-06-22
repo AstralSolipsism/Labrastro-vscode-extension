@@ -928,6 +928,24 @@
   margin-top: 2px;
 }
 
+.local-action-card__button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--ez-border);
+  border-radius: 6px;
+  background: var(--ez-surface);
+  color: var(--ez-fg);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.local-action-card__button[aria-disabled="true"] {
+  color: var(--ez-muted);
+}
+
 .shell-card__actions {
   padding: 0 8px 8px;
 }

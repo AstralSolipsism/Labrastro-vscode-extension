@@ -1,7 +1,7 @@
 import { t } from "../../i18n"
 import { isLifecycleHookPayload, lifecycleDisplayTitle } from "../../chat/lifecycle-display"
 import type { MockMessage } from "./mock-data"
-import type { AssistantTextItem, FileChangeItem, NoticeItem, ToolActivityItem, TranscriptItem } from "./transcript-model"
+import type { AssistantTextItem, FileChangeItem, LocalActionItem, NoticeItem, ToolActivityItem, TranscriptItem } from "./transcript-model"
 
 export type ProcessGroupKind =
   | "explore"
@@ -9,6 +9,7 @@ export type ProcessGroupKind =
   | "run"
   | "mcp"
   | "skill"
+  | "local_action"
   | "context"
   | "other"
 
@@ -573,6 +574,9 @@ interface ProcessGroupInfo {
 
 function processGroupInfoForPart(part: TranscriptItem): ProcessGroupInfo {
   if (part.type === "tool") return toolGroupInfo(part)
+  if (part.type === "local_action") {
+    return { key: `local-action:${part.workspaceRoot || part.actionKind || "default"}`, kind: "local_action", label: "本地动作" }
+  }
   if (part.type === "file_change" || part.type === "document_draft") {
     return { key: "modify", kind: "modify", label: t("process.group.modify") }
   }
@@ -641,6 +645,7 @@ function isProcessItem(part: TranscriptItem): boolean {
     part.type === "workflow_step" ||
     part.type === "memory_context" ||
     part.type === "ui_event" ||
+    part.type === "local_action" ||
     part.type === "parallel_tools" ||
     part.type === "parallel_sessions"
   )
@@ -684,6 +689,7 @@ function processItemCurrentLabel(item: TranscriptItem): string {
   if (item.type === "document_draft") {
     return [t("tool.documentDraft"), compactLabel(item.targetPath || item.title || "")].filter(Boolean).join(" ")
   }
+  if (item.type === "local_action") return item.message || localActionLabel(item)
   if (item.type === "terminal") return item.title || t("process.group.run")
   if (item.type === "workflow_step") return item.title || workflowStageLabel(item.stage)
   if (item.type === "session") return item.title || item.sessionId || t("process.group.context")
@@ -793,6 +799,14 @@ export function getToolActionLabel(toolName?: string): string {
     apply_patch: t("tool.applyPatch"),
     draft_document_begin: t("tool.documentDraft"),
     install_capability_package: t("tool.installCapabilityPackage"),
+    read_workspace_file: "读取本地文件",
+    read_workspace_files: "读取本地文件",
+    write_workspace_file: "写入本地文件",
+    apply_workspace_patch: "修改本地文件",
+    run_workspace_command: "执行本地命令",
+    mcp_status: "检查本地 MCP 状态",
+    mcp_lifecycle: "管理本地 MCP 生命周期",
+    mcp_invocation: "调用本地 MCP",
   }
   const normalized = (toolName || "").trim()
   return labels[normalized] || normalized || "tool"
@@ -812,6 +826,7 @@ export function isMessageRunning(
     if (part.type === "document_draft") {
       return ["streaming", "committing"].includes(part.status)
     }
+    if (part.type === "local_action") return isRunningLocalAction(part)
     if (part.type !== "tool") return false
     return isRunningTool(part)
   })
@@ -847,6 +862,7 @@ function isRunningProcessItem(part: TranscriptItem): boolean {
   if (part.type === "document_draft") {
     return ["streaming", "committing"].includes(part.status)
   }
+  if (part.type === "local_action") return isRunningLocalAction(part)
   if (part.type === "tool") return isRunningTool(part)
   if (part.traceNodeStatus === "active" || part.traceNodeStatus === "streaming") return true
   if (part.type === "session") return part.state === "active" || part.state === "streaming"
@@ -859,12 +875,25 @@ function isErrorProcessItem(part: TranscriptItem): boolean {
   if (part.type === "tool") return part.status === "error" || part.status === "protocol_error"
   if (part.type === "file_change") return part.status === "failed"
   if (part.type === "document_draft") return part.status === "failed"
+  if (part.type === "local_action") return part.status === "failed" || part.status === "timed_out"
   if (part.type === "notice") return part.level === "error"
   if (part.type === "session") return part.state === "error"
   if (part.type === "workflow_step" || part.type === "workflow_result") return part.status === "error"
   if (part.type === "workflow_decision") return part.status === "denied" || part.status === "error"
   if (part.type === "view" || part.type === "ui_event") return part.level === "error"
   return false
+}
+
+function localActionLabel(part: LocalActionItem): string {
+  const target = part.workspaceRoot ? ` · ${compactLabel(part.workspaceRoot)}` : ""
+  return [getToolActionLabel(part.actionKind), target].filter(Boolean).join("")
+}
+
+function isRunningLocalAction(part: LocalActionItem): boolean {
+  return part.status === "requested" ||
+    part.status === "waiting_peer" ||
+    part.status === "started" ||
+    part.status === "progress"
 }
 
 function isPrimaryLanePart(part: TranscriptItem): boolean {

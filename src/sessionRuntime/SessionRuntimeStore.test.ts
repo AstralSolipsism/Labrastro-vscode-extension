@@ -1,4 +1,4 @@
-﻿import { describe, expect, it } from "vitest"
+import { describe, expect, it } from "vitest"
 import { SessionRuntimeStore } from "./SessionRuntimeStore"
 import { scopeIdFor } from "./SessionRuntimeReducer"
 import type { BranchRuntimeScope, SessionRuntimeModel } from "./SessionRuntimeModel"

@@ -196,6 +196,84 @@ describe("SessionTurn source order", () => {
     expect(html).not.toContain("逐个批准 hook")
   })
 
+  it("renders waiting local actions as process cards instead of only a generic busy label", async () => {
+    const turn: MockTurn = {
+      userMessage: {
+        id: "user-local-action-waiting",
+        role: "user",
+        text: "read local workspace",
+        parts: [],
+        timestamp: 0,
+      },
+      assistantMessages: [{
+        id: "assistant-local-action-waiting",
+        role: "assistant",
+        text: "",
+        timestamp: 1,
+        traceNodeStatus: "active",
+        parts: [{
+          id: "local-action-1",
+          type: "local_action",
+          kind: "local_action",
+          localActionId: "local-action-1",
+          actionKind: "read_workspace_file",
+          status: "waiting_peer",
+          workspaceRoot: "D:\\AboutDEV\\vika_mcp",
+          message: "等待本地工作区连接：读取本地文件 · D:\\AboutDEV\\vika_mcp",
+          payload: { path: "secret.ts" },
+        }] as any,
+      }],
+    }
+
+    const html = await renderSessionTurnToString(turn)
+
+    expect(html).toContain("process-group-card")
+    expect(html).toContain("等待本地工作区连接")
+    expect(html).toContain("D:\\AboutDEV\\vika_mcp")
+    expect(html).not.toContain(">处理中</span>")
+    expect(html).not.toContain("secret.ts")
+  })
+
+  it("renders failed local actions with retry and cancel affordances", async () => {
+    const turn: MockTurn = {
+      userMessage: {
+        id: "user-local-action-failed",
+        role: "user",
+        text: "read local workspace",
+        parts: [],
+        timestamp: 0,
+      },
+      assistantMessages: [{
+        id: "assistant-local-action-failed",
+        role: "assistant",
+        text: "",
+        timestamp: 1,
+        traceNodeStatus: "error",
+        parts: [{
+          id: "local-action-1",
+          type: "local_action",
+          kind: "local_action",
+          localActionId: "local-action-1",
+          actionKind: "read_workspace_file",
+          status: "failed",
+          workspaceRoot: "D:\\AboutDEV\\vika_mcp",
+          message: "本地动作失败：读取本地文件 · D:\\AboutDEV\\vika_mcp",
+          error: "peer offline",
+          payload: { path: "secret.ts" },
+        }] as any,
+      }],
+    }
+
+    const html = await renderSessionTurnToString(turn)
+
+    expect(html).toContain("本地动作失败")
+    expect(html).toContain("D:\\AboutDEV\\vika_mcp")
+    expect(html).toContain("重试")
+    expect(html).toContain("取消")
+    expect(html).toContain("peer offline")
+    expect(html).not.toContain("secret.ts")
+  })
+
   it("keeps user and assistant message actions after their content", () => {
     const sessionTurnStart = source.indexOf("export const SessionTurn")
     const userSectionStart = source.indexOf('class="user-message"', sessionTurnStart)

@@ -5,6 +5,8 @@ import type {
   FileChangeEntry,
   FileChangeItem,
   FileChangeStatus,
+  LocalActionItem,
+  LocalActionStatus,
   NoticeLevel,
   RawEventRef,
   ReasoningItem,
@@ -94,6 +96,14 @@ export const SESSION_RUN_TRANSCRIPT_EVENT_TYPES = new Set([
   "workflow_decision",
   "workflow_result",
   "memory_context",
+  "local_action_requested",
+  "local_action_waiting_peer",
+  "local_action_started",
+  "local_action_progress",
+  "local_action_completed",
+  "local_action_failed",
+  "local_action_cancelled",
+  "local_action_timed_out",
   "remote_event",
   "mcp_event",
   "model_event",
@@ -350,6 +360,9 @@ function applySessionRunTranscriptEventToBundle(
   } else if (type === "memory_context") {
     appendMemoryContext(next, payload, meta, context, labels, now)
     markChanged()
+  } else if (isLocalActionEventType(type)) {
+    upsertLocalAction(next, type, payload, meta, context, now)
+    markChanged()
   } else if (isStructuredUiEventType(type)) {
     appendUiEvent(next, type, payload, meta, context, labels, now)
     markChanged()
@@ -536,6 +549,11 @@ function eventRenderMeta(
     stringValue(payload.session_id) ||
     stringValue(payload.sessionId)
   const toolCallId = stringValue(payload.tool_call_id)
+  const localActionId =
+    stringValue(payload.local_action_id) ||
+    stringValue(payload.localActionId) ||
+    stringValue(payload.action_id) ||
+    stringValue(payload.actionId)
   const sessionItemId =
     stringValue(payload.session_item_id) ||
     stringValue(payload.item_id) ||
@@ -543,7 +561,7 @@ function eventRenderMeta(
     stringValue(event.session_item_id) ||
     stringValue(event.item_id) ||
     stringValue(event.event_id)
-  const scopedSuffix = `${type}${toolCallId ? `:${toolCallId}` : ""}`
+  const scopedSuffix = `${type}${toolCallId ? `:${toolCallId}` : ""}${localActionId ? `:${localActionId}` : ""}`
   const eventKey = sessionRunId && branchBindingId && sessionRunSeq !== undefined
     ? `session-run:${sessionRunId}:${branchBindingId}:${sessionRunSeq}:${scopedSuffix}`
     : !isSessionRunScopedEvent && eventSessionId && sessionEventSeq !== undefined
@@ -940,6 +958,70 @@ function appendLifecycleHookEvent(
         rawEventRefs: rawEventRefsFromPayload(payload),
       }, meta),
     ]
+  }, context)
+}
+
+function upsertLocalAction(
+  bundle: MockSessionBundle,
+  eventType: string,
+  payload: Record<string, unknown>,
+  meta: EventRenderMeta,
+  context: SessionRunTranscriptContext,
+  now: number,
+): void {
+  const payloadLocalActionId =
+    stringValue(payload.local_action_id) ||
+    stringValue(payload.localActionId) ||
+    stringValue(payload.action_id) ||
+    stringValue(payload.actionId)
+  const localActionId = payloadLocalActionId || stablePartId("local-action", meta, now, 0)
+  const payloadActionKind =
+    stringValue(payload.action_kind) ||
+    stringValue(payload.actionKind) ||
+    stringValue(payload.local_action_kind) ||
+    stringValue(payload.localActionKind)
+  const payloadWorkspaceRoot =
+    stringValue(payload.workspace_root) ||
+    stringValue(payload.workspaceRoot)
+  const progress = objectOrUndefined(payload.progress)
+  const result = objectOrUndefined(payload.result)
+  const error = localActionError(payload)
+  const rawEventRefs = rawEventRefsFromPayload(payload)
+
+  updateAssistantItems(bundle, (parts) => {
+    const existingIndex = parts.findIndex((part) =>
+      part.type === "local_action" && part.localActionId === localActionId
+    )
+    const existing = existingIndex >= 0 ? parts[existingIndex] as LocalActionItem : undefined
+    const actionKind = payloadActionKind || existing?.actionKind || "local_action"
+    const workspaceRoot = payloadWorkspaceRoot || existing?.workspaceRoot
+    const status = localActionStatus(payload.status, eventType, existing?.status)
+    const nextPart: LocalActionItem = withEventMeta({
+      id: existing?.id || localActionId,
+      type: "local_action",
+      kind: "local_action",
+      localActionId,
+      actionKind,
+      status,
+      workspaceRoot,
+      peerId: stringValue(payload.peer_id) || stringValue(payload.peerId) || existing?.peerId,
+      scope: stringValue(payload.scope) || existing?.scope,
+      message: localActionDisplayMessage(status, actionKind, workspaceRoot),
+      progress: progress || existing?.progress,
+      result: result || existing?.result,
+      error: error || existing?.error,
+      retryable: booleanValue(payload.retryable) ?? existing?.retryable ?? localActionCanRetry(status),
+      cancellable: booleanValue(payload.cancellable) ?? existing?.cancellable ?? localActionCanCancel(status),
+      traceNodeStatus: localActionTraceNodeStatus(status),
+      rawEventRefs: mergeRawEventRefs(existing?.rawEventRefs, rawEventRefs),
+    }, meta)
+
+    if (existingIndex >= 0) {
+      const next = [...parts]
+      next[existingIndex] = nextPart
+      return next
+    }
+    return [...closeTrailingInlineStream(parts), nextPart]
   }, context)
 }
 
@@ -1856,6 +1938,15 @@ function normalizeTranscriptItemForRunEnd(
       traceNodeStatus,
     }
   }
+  if (item.type === "local_action" && isPendingLocalActionStatus(item.status)) {
+    const status = traceNodeStatus === "error" ? "failed" : "cancelled"
+    return {
+      ...item,
+      status,
+      message: localActionDisplayMessage(status, item.actionKind, item.workspaceRoot),
+      traceNodeStatus,
+    }
+  }
   return {
     ...item,
     traceNodeStatus,
@@ -1990,8 +2081,126 @@ function isStructuredUiEventType(value: string): boolean {
   ].includes(value)
 }
 
+function isLocalActionEventType(value: string): boolean {
+  return [
+    "local_action_requested",
+    "local_action_waiting_peer",
+    "local_action_started",
+    "local_action_progress",
+    "local_action_completed",
+    "local_action_failed",
+    "local_action_cancelled",
+    "local_action_timed_out",
+  ].includes(value)
+}
+
 function isMemoryContextPayload(payload: Record<string, unknown>): boolean {
   return payload.schema === "memory_context.v1" || payload.context_kind === "memory_injection"
+}
+
+function localActionStatus(
+  value: unknown,
+  eventType: string,
+  fallback?: LocalActionStatus,
+): LocalActionStatus {
+  const explicit = localActionStatusValue(value)
+  if (explicit) return explicit
+  const mapped: Record<string, LocalActionStatus> = {
+    local_action_requested: "requested",
+    local_action_waiting_peer: "waiting_peer",
+    local_action_started: "started",
+    local_action_progress: "progress",
+    local_action_completed: "completed",
+    local_action_failed: "failed",
+    local_action_cancelled: "cancelled",
+    local_action_timed_out: "timed_out",
+  }
+  return mapped[eventType] || fallback || "requested"
+}
+
+function localActionStatusValue(value: unknown): LocalActionStatus | undefined {
+  const status = typeof value === "string" ? value.trim().toLowerCase() : ""
+  if (
+    status === "requested" ||
+    status === "waiting_peer" ||
+    status === "started" ||
+    status === "progress" ||
+    status === "completed" ||
+    status === "failed" ||
+    status === "cancelled" ||
+    status === "timed_out"
+  ) {
+    return status
+  }
+  if (status === "running") return "started"
+  if (status === "done" || status === "success") return "completed"
+  if (status === "error") return "failed"
+  if (status === "timeout" || status === "timedout") return "timed_out"
+  return undefined
+}
+
+function localActionDisplayMessage(
+  status: LocalActionStatus,
+  actionKind: string,
+  workspaceRoot?: string,
+): string {
+  const action = localActionKindLabel(actionKind)
+  const target = workspaceRoot ? ` · ${workspaceRoot}` : ""
+  if (status === "requested") return `等待本地动作调度：${action}${target}`
+  if (status === "waiting_peer") return `等待本地工作区连接：${action}${target}`
+  if (status === "started" || status === "progress") return `本地动作进行中：${action}${target}`
+  if (status === "completed") return `本地动作已完成：${action}${target}`
+  if (status === "failed") return `本地动作失败：${action}${target}`
+  if (status === "cancelled") return `本地动作已取消：${action}${target}`
+  return `本地动作超时：${action}${target}`
+}
+
+function localActionKindLabel(actionKind: string): string {
+  const labels: Record<string, string> = {
+    read_workspace_file: "读取本地文件",
+    read_workspace_files: "读取本地文件",
+    write_workspace_file: "写入本地文件",
+    apply_workspace_patch: "修改本地文件",
+    run_workspace_command: "执行本地命令",
+    check_workspace_command: "检查本地命令",
+    mcp_status: "检查本地 MCP 状态",
+    mcp_lifecycle: "管理本地 MCP 生命周期",
+    mcp_invocation: "调用本地 MCP",
+    install_capability_package: "安装本地能力依赖",
+    verify_capability_package: "检查本地能力依赖",
+    refresh_peer_target_facts: "刷新本地资源事实",
+  }
+  const normalized = actionKind.trim()
+  return labels[normalized] || normalized || "本地动作"
+}
+
+function localActionTraceNodeStatus(status: LocalActionStatus): LocalActionItem["traceNodeStatus"] {
+  if (status === "completed") return "success"
+  if (status === "failed" || status === "timed_out") return "error"
+  if (status === "cancelled") return "cancelled"
+  return "active"
+}
+
+function localActionCanRetry(status: LocalActionStatus): boolean {
+  return status === "failed" || status === "timed_out"
+}
+
+function localActionCanCancel(status: LocalActionStatus): boolean {
+  return isPendingLocalActionStatus(status) || status === "failed" || status === "timed_out"
+}
+
+function isPendingLocalActionStatus(status: LocalActionStatus): boolean {
+  return status === "requested" ||
+    status === "waiting_peer" ||
+    status === "started" ||
+    status === "progress"
+}
+
+function localActionError(payload: Record<string, unknown>): string | undefined {
+  return stringValue(payload.error) ||
+    stringValue(payload.reason) ||
+    stringValue(payload.failure_reason) ||
+    stringValue(payload.failureReason)
 }
 
 function uiEventTitle(type: string, labels: SessionRunTranscriptLabels): string {
@@ -2100,10 +2309,25 @@ function numberValue(value: unknown): number | undefined {
   return undefined
 }
 
+function booleanValue(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") return value
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase()
+    if (normalized === "true") return true
+    if (normalized === "false") return false
+  }
+  return undefined
+}
+
 function objectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {}
+}
+
+function objectOrUndefined(value: unknown): Record<string, unknown> | undefined {
+  const object = objectValue(value)
+  return Object.keys(object).length ? object : undefined
 }
 
 function rawEventRefsFromPayload(payload: Record<string, unknown>): RawEventRef[] | undefined {

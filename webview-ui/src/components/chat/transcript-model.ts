@@ -272,6 +272,33 @@ export interface UiEventItem extends TranscriptMeta {
   payload?: Record<string, unknown>
 }
 
+export type LocalActionStatus =
+  | "requested"
+  | "waiting_peer"
+  | "started"
+  | "progress"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "timed_out"
+
+export interface LocalActionItem extends TranscriptMeta {
+  type: "local_action"
+  kind: "local_action"
+  localActionId: string
+  actionKind: string
+  status: LocalActionStatus
+  workspaceRoot?: string
+  peerId?: string
+  scope?: string
+  message?: string
+  progress?: Record<string, unknown>
+  result?: Record<string, unknown>
+  error?: string
+  retryable?: boolean
+  cancellable?: boolean
+}
+
 export interface ParallelTranscriptItem extends TranscriptMeta {
   type: "parallel_tools" | "parallel_sessions"
   title?: string
@@ -299,4 +326,5 @@ export type TranscriptItem =
   | WorkflowResultItem
   | MemoryContextItem
   | UiEventItem
+  | LocalActionItem
   | ParallelTranscriptItem

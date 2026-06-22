@@ -1,4 +1,4 @@
-﻿import { scopeIdFor } from "../sessionRuntime/SessionRuntimeReducer"
+import { scopeIdFor } from "../sessionRuntime/SessionRuntimeReducer"
 import {
   SELECTED_VISIBLE_OPERATION_SCOPE,
   type SessionRuntimeOperationSourceScope,

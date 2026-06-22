@@ -1,4 +1,4 @@
-﻿import type * as vscode from "vscode"
+import type * as vscode from "vscode"
 import { describe, expect, it, vi } from "vitest"
 
 const vscodeMock = vi.hoisted(() => ({
