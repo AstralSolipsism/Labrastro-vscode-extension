@@ -2704,22 +2704,60 @@ describe("LabrastroRemoteClient peer startup", () => {
     expect(childProcessMock.spawn.mock.calls[0][0]).toBe(binaryPath)
   })
 
-  it("starts the peer with the AgentRun local worker loop enabled", async () => {
+  it("does not require the local peer AgentRun worker for ordinary chat readiness", async () => {
     const storagePath = await makeTempStorage()
     const context = makePeerContext(storagePath)
+    vi.stubGlobal("fetch", vi.fn(async (input: unknown) => {
+      const url = new URL(String(input))
+      if (url.pathname === "/remote/auth/state") {
+        return new Response(JSON.stringify({ ok: true }), {
+          headers: { "Content-Type": "application/json" },
+        })
+      }
+      if (url.pathname === "/remote/auth/refresh") {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            access_token: "access-token-1",
+            access_expires_at: Math.floor(Date.now() / 1000) + 3600,
+            refresh_token: "refresh-token-2",
+            user: { id: "usr-1", username: "admin", role: "superadmin" },
+            device: { id: "dev-1" },
+          }),
+          { headers: { "Content-Type": "application/json" } }
+        )
+      }
+      if (url.pathname === "/remote/auth/me") {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            user: { id: "usr-1", username: "admin", role: "superadmin", scopes: [] },
+            device: { id: "dev-1" },
+          }),
+          { headers: { "Content-Type": "application/json" } }
+        )
+      }
+      return new Response(JSON.stringify({ error: "unexpected_url", path: url.pathname }), { status: 500 })
+    }))
+
+    const client = new LabrastroRemoteClient(context as never)
+
+    await expect(client.connectionState()).resolves.toMatchObject({
+      authenticated: true,
+      status: "ready",
+      peerConnected: false,
+    })
+    expect(childProcessMock.spawn).not.toHaveBeenCalled()
+
     mockPeerFetch()
     mockPeerSpawn()
 
-    const client = new LabrastroRemoteClient(context as never)
     await client.environmentManifest()
 
     expect(childProcessMock.spawn).toHaveBeenCalledTimes(1)
     const args = childProcessMock.spawn.mock.calls[0][1] as string[]
-    expect(args).toContain("--agent-run-worker")
-    expect(args).toEqual(expect.arrayContaining([
-      "--agent-run-worker-kind",
-      "local_peer",
-    ]))
+    expect(args).not.toContain("--agent-run-worker")
+    expect(args).not.toContain("--agent-run-worker-kind")
   })
 
   it("reports peer preparation progress while downloading the peer artifact", async () => {
