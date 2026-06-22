@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 
-const source = readFileSync(join(__dirname, "LabrastroController.ts"), "utf8")
+const source = readFileSync(join(__dirname, "LabrastroController.ts"), "utf8").replace(/\r\n/g, "\n")
 
 function sourceSection(start: string, end: string): string {
   const startIndex = source.indexOf(start)
