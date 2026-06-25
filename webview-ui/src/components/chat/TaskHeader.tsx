@@ -37,7 +37,7 @@ interface TaskHeaderProps {
   isWorking: boolean
   onCompact?: () => void
   onClose?: () => void
-  onStop?: () => void
+  closeDisabled?: boolean
   onTraceNodeClick?: (nodeId: string) => void
 }
 
@@ -91,17 +91,6 @@ export const TaskHeader: Component<TaskHeaderProps> = (props) => {
             </Show>
           </button>
           <div class="task-header__actions">
-            <Show when={props.isWorking || props.runStatus === "stopping"}>
-              <IconButton
-                icon="debug-stop"
-                title={props.runStatus === "stopping" ? t("task.status.stopping") : "停止当前会话"}
-                disabled={props.runStatus === "stopping"}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  props.onStop?.()
-                }}
-              />
-            </Show>
             <IconButton
               icon="fold"
               title={t("task.compactContext")}
@@ -114,6 +103,7 @@ export const TaskHeader: Component<TaskHeaderProps> = (props) => {
             <IconButton
               icon="close"
               title={t("task.closeAndNew")}
+              disabled={props.closeDisabled}
               onClick={(event) => {
                 event.stopPropagation()
                 props.onClose?.()

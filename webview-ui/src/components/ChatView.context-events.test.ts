@@ -50,13 +50,13 @@ describe("ChatView context events", () => {
     expect(source).not.toContain("first.targetSessionRunId || activeSessionRunId()")
     const targetSessionIdSource = sourceSection("const targetSessionIdForLiveEvent =", "const targetSessionRunIdForLiveEvent =")
     expect(targetSessionIdSource).toContain("scopeProof ? `${scopeProof.sessionRunId}:${scopeProof.branchBindingId}` : \"\"")
-    expect(targetSessionIdSource).not.toContain("activeRunSessionId()")
+    expect(targetSessionIdSource).not.toContain("currentRunSessionId()")
     expect(targetSessionIdSource).not.toContain("trace.currentSessionId()")
     const eventMetaSource = sourceSection("const eventRenderMeta =", "const bundleHasEventKey =")
     expect(eventMetaSource).toContain("session-run:${sessionRunId}:${branchBindingId}")
     expect(eventMetaSource).toContain('sourceScope === "session-run-visible"')
     expect(eventMetaSource).toContain("!isSessionRunScopedEvent && eventSessionId && sessionEventSeq !== undefined")
-    expect(eventMetaSource).not.toContain("activeRunSessionId()")
+    expect(eventMetaSource).not.toContain("currentRunSessionId()")
     expect(eventMetaSource).not.toContain("trace.currentSessionId()")
     expect(source).toContain("LIVE_TRANSCRIPT_FLUSH_MAX_DELAY_MS = 32")
     const liveHandlerStart = source.indexOf("const handleLiveStreamEvent =")
@@ -114,8 +114,8 @@ describe("ChatView context events", () => {
     const appendAssistantStart = source.indexOf("const appendAssistantTextItem =", reducerStart)
     const reducerSource = source.slice(reducerStart, appendAssistantStart)
     const remoteHandlerStart = source.indexOf("const handleRemoteEvent =")
-    const sendCancelStart = source.indexOf("const sendCancel =", remoteHandlerStart)
-    const remoteHandlerSource = source.slice(remoteHandlerStart, sendCancelStart)
+    const sendStopStart = source.indexOf("const sendStop =", remoteHandlerStart)
+    const remoteHandlerSource = source.slice(remoteHandlerStart, sendStopStart)
 
     expect(reducerSource).toContain("if (!isSessionRunTranscriptEventType(type)) return false")
     expect(reducerSource).toContain("const scopeProof = remoteEventScopeProof(event, payload, sourceScope)")
@@ -132,8 +132,8 @@ describe("ChatView context events", () => {
 
   it("commits streaming overlay before structural session-run events", () => {
     const remoteHandlerStart = source.indexOf("const handleRemoteEvent =")
-    const sendCancelStart = source.indexOf("const sendCancel =", remoteHandlerStart)
-    const remoteHandlerSource = source.slice(remoteHandlerStart, sendCancelStart)
+    const sendStopStart = source.indexOf("const sendStop =", remoteHandlerStart)
+    const remoteHandlerSource = source.slice(remoteHandlerStart, sendStopStart)
 
     expect(source).toContain("const flushLiveTranscriptEvents =")
     expect(source).toContain('if (msg.type !== "sessionRun.stream")')
@@ -219,7 +219,7 @@ describe("ChatView context events", () => {
     expect(source).toContain('"assistant_message"')
     expect(source).toContain('"reasoning_message"')
     const remoteHandlerStart = source.indexOf("const handleRemoteEvent =")
-    const runtimeControllerStart = source.indexOf("const sendCancel =", remoteHandlerStart)
+    const runtimeControllerStart = source.indexOf("const sendStop =", remoteHandlerStart)
     const remoteHandlerSource = source.slice(remoteHandlerStart, runtimeControllerStart)
     expect(remoteHandlerSource).not.toContain("appendToolStreamToToolPart(payload, eventMeta)")
     expect(source).toContain('type === "tool_call_delta"')
@@ -492,7 +492,7 @@ describe("ChatView context events", () => {
     expect(branchSelectedSource).not.toContain("clearSessionRunOperationView(")
     expect(branchSelectedSource).not.toContain("|| selectedBranchBindingId()")
     expect(branchSelectedSource).not.toContain("setActiveSessionRunId(")
-    expect(branchSelectedSource).not.toContain("setActiveRunSessionId(")
+    expect(branchSelectedSource).not.toContain("setCurrentRunSessionId(")
     expect(branchSelectedSource).not.toContain("setIsWorking(")
     expect(branchSelectedSource).not.toContain("setWorkingText(")
     expect(branchSelectedSource.indexOf("if (!applySessionRuntimeOperationResult(\"sessionRun.operation.success\", operation)) return")).toBeLessThan(
@@ -504,7 +504,7 @@ describe("ChatView context events", () => {
     expect(sessionSource).not.toContain("applyVisibleBranchBinding(")
     expect(sessionSource).not.toContain("clearSessionRunOperationView(")
     expect(sessionSource).not.toContain("setActiveSessionRunId(")
-    expect(sessionSource).not.toContain("setActiveRunSessionId(")
+    expect(sessionSource).not.toContain("setCurrentRunSessionId(")
     expect(sessionSource.indexOf("if (!applySessionRuntimeOperationResult(\"sessionRun.operation.success\", operation)) return")).toBeLessThan(
       sessionSource.indexOf('if (!applySessionRuntimeScopeSelection(msg.sessionRunId, branchBindingId, "running", {')
     )
@@ -522,9 +522,9 @@ describe("ChatView context events", () => {
     expect(continuedSource).not.toContain("setActiveSessionRunId(")
     expect(reconnectingSource).toContain("const sessionId =")
     expect(reconnectingSource).toContain("...(sessionId ? { sessionId } : {})")
-    expect(reconnectingSource).not.toContain("activeRunSessionId()")
+    expect(reconnectingSource).not.toContain("currentRunSessionId()")
     expect(reconnectingSource).not.toContain("setActiveSessionRunId(")
-    expect(reconnectingSource).not.toContain("setActiveRunSessionId(")
+    expect(reconnectingSource).not.toContain("setCurrentRunSessionId(")
     expect(doneSource).toContain("const rawBranchBindingId = stringValue(msg.branchBindingId) || stringValue(msg.branch_binding_id)")
     expect(doneSource).toContain("if (!applySessionRuntimeMessage({")
     expect(doneSource).toContain('type: "sessionRun.done"')
@@ -561,6 +561,19 @@ describe("ChatView context events", () => {
     expect(operationErrorSource).not.toContain('setSessionRunStatus("error")')
     expect(operationErrorSource).not.toContain('trace.patchStats({ runStatus: "error" })')
     expect(operationErrorSource).not.toContain("finishSessionRun(")
+  })
+
+  it("does not mark the event stream as failed for info-level operation errors", () => {
+    const operationErrorSource = sourceSection(
+      'if (msg.type === "sessionRun.operation.error") {',
+      'if (msg.type === "sessionRun.pendingNextTurn")',
+    )
+
+    expect(operationErrorSource).toContain('const level = stringValue(msg.level) === "info" ? "info" : "error"')
+    expect(operationErrorSource).toContain('if (level === "info") return')
+    expect(operationErrorSource.indexOf('if (level === "info") return')).toBeLessThan(
+      operationErrorSource.indexOf("setServerEventStreamState(serverEventStreamErrorState({"),
+    )
   })
 
   it("routes operation error rollback through the scoped runtime effect", () => {
@@ -747,8 +760,8 @@ describe("ChatView context events", () => {
     expect(reconnectingSource).toContain("if (!applySessionRuntimeMessage({")
     expect(reconnectingSource).toContain("...(sessionId ? { sessionId } : {})")
     expect(reconnectingSource).toContain('viewEffect: { kind: "running", text: t("chat.streamRecovery.reconnecting") }')
-    expect(reconnectingSource).not.toContain("activeRunSessionId()")
-    expect(reconnectingSource).not.toContain("setActiveRunSessionId(")
+    expect(reconnectingSource).not.toContain("currentRunSessionId()")
+    expect(reconnectingSource).not.toContain("setCurrentRunSessionId(")
     expect(reconnectingSource).not.toContain("setActiveSessionRunId(")
     expect(reconnectedSource).toContain("const branchBindingId = stringValue(msg.branchBindingId) || stringValue(msg.branch_binding_id)")
     expect(reconnectedSource).toContain("if (!applySessionRuntimeMessage({")
@@ -891,7 +904,7 @@ describe("ChatView context events", () => {
     expect(bindingMismatchSource).toContain("runtimeResult.model.visible.selectedBranchBindingId")
     expect(bindingMismatchSource).not.toContain("appendNotice(")
     expect(bindingMismatchSource).not.toContain("setIsWorking(false)")
-    expect(bindingMismatchSource).not.toContain('setActiveRunSessionId("")')
+    expect(bindingMismatchSource).not.toContain('setCurrentRunSessionId("")')
     expect(bindingMismatchSource).not.toContain("clearPendingBranchInteractions(activeSessionRunId(), selectedBranchBindingId())")
     expect(bindingMismatchSource).not.toContain("setPendingApprovals([])")
     expect(bindingMismatchSource).not.toContain("clearPendingUserInputs()")
@@ -1036,15 +1049,22 @@ describe("ChatView context events", () => {
     const handleSubmitStart = source.indexOf("const canSubmitComposerAction =", handleSendStart)
     const handleSendSource = source.slice(handleSendStart, handleSubmitStart)
 
-    expect(handleSendSource).toContain("if (isWorking() && activeSessionRunId())")
+    expect(handleSendSource).toContain("const disposition = currentSubmitDisposition(Boolean(rawText.trim()))")
+    expect(handleSendSource).toContain('if (disposition.kind === "queue_next_turn")')
     expect(handleSendSource).toContain("sendRunningChatText(rawText, submission.mentions)")
-    expect(handleSendSource).toContain("if (isWorking())")
-    expect(handleSendSource).toContain('appendNotice("error", "当前任务仍在运行，请等待当前运行完成后再发送。", "chat-busy-without-active-session-run")')
+    expect(handleSendSource).toContain('if (disposition.kind === "blocked")')
+    expect(handleSendSource).toContain("setComposerSubmitError(sessionSubmitBlockedMessage(disposition.reason))")
+    expect(handleSendSource).not.toContain("chat-busy-without-active-session-run")
+    expect(handleSendSource).not.toContain("appendNotice(")
+    expect(handleSendSource).toContain('if (disposition.kind === "disabled") return')
+    expect(source).toContain('<div class="composer-submit-error" role="alert">{composerSubmitError()}</div>')
     expect(source).toContain("chatMessages.queuePendingNextTurn(vscode")
     expect(source).toContain("const sessionRunId = activeSessionRunId()")
     expect(source).toContain("if (!sessionRunId) return")
     expect(source).toContain("sessionRunId,")
     expect(source).toContain("branchBindingId: selectedBranchBindingId()")
+    expect(source).toContain("resolveSessionSubmitDisposition")
+    expect(handleSendSource).not.toContain("if (isWorking() && activeSessionRunId())")
     const runningSendIndex = handleSendSource.indexOf("sendRunningChatText(rawText")
     const chatSendIndex = handleSendSource.indexOf("sendChatText(rawText")
     expect(chatSendIndex).toBeGreaterThan(runningSendIndex)
@@ -1053,12 +1073,95 @@ describe("ChatView context events", () => {
     expect(source).not.toContain("chatMessages.followUp(vscode")
   })
 
+  it("treats first-run creation as a submit-blocking in-flight state", () => {
+    const dispositionSource = sourceSection(
+      "const visibleIsWorking =",
+      "const visiblePendingApprovals =",
+    )
+
+    expect(dispositionSource).toContain("const sessionRunStartInFlight = () =>")
+    expect(dispositionSource).toContain("isWorking() && !activeSessionRunId() && Boolean(currentRunSessionId())")
+    expect(dispositionSource).toContain("startInFlight: sessionRunStartInFlight()")
+  })
+
+  it("routes stop through the bottom composer primary action instead of the task header", () => {
+    const dispositionSource = sourceSection(
+      "const visibleIsWorking =",
+      "const visiblePendingApprovals =",
+    )
+    const taskHeaderSource = sourceSection(
+      "<TaskHeader",
+      "<RunStatusBar",
+    )
+    const promptInputSource = sourceSection(
+      "<PromptInput",
+      "<div class=\"chat-footer-target\">",
+    )
+
+    expect(dispositionSource).toContain("const composerStopAvailable = () =>")
+    expect(dispositionSource).toContain('currentRunSessionMatches() && (visibleIsWorking() || sessionRunStatus() === "stopping")')
+    expect(dispositionSource).toContain("const composerStopDisabled = () => sessionRunStatus() === \"stopping\"")
+    expect(promptInputSource).toContain("stopAvailable={composerStopAvailable()}")
+    expect(promptInputSource).toContain("stopDisabled={composerStopDisabled()}")
+    expect(promptInputSource).toContain("onStop={chatController.runtime.handleStop}")
+    expect(taskHeaderSource).toContain("closeDisabled={sessionRunStartInFlight()}")
+    expect(taskHeaderSource).toContain("onClose={chatController.runtime.handleCloseMainlineAndStartNewTask}")
+    expect(taskHeaderSource).not.toContain("onStop=")
+    expect(taskHeaderSource).not.toContain("onClose={chatController.runtime.handleStop}")
+    expect(taskHeaderSource).not.toContain("onClose={chatController.runtime.clearCurrentSession}")
+  })
+
+  it("routes explicit task close through close-mainline instead of stop-current-activation", () => {
+    const closeSource = sourceSection(
+      "const handleCloseMainlineAndStartNewTask =",
+      "const recoverInterruptedChat =",
+    )
+    const clearSource = sourceSection(
+      "const clearCurrentSession =",
+      "createEffect(() => {",
+    )
+
+    expect(closeSource).toContain("if (sessionRunStartInFlight()) return")
+    expect(closeSource).toContain("createSessionRunOperationId(\"cancel\")")
+    expect(closeSource).toContain("kind: \"cancel\"")
+    expect(closeSource).toContain("chatMessages.cancel(vscode")
+    expect(closeSource).toContain("reason: \"explicit_close\"")
+    expect(closeSource).toContain("clearCurrentSession()")
+    expect(closeSource).not.toContain("chatMessages.stop")
+    expect(clearSource).toContain("setSessionRuntimeModel(emptySessionRuntimeModelView())")
+    expect(clearSource).toContain("setActiveSessionRunId(undefined)")
+    expect(clearSource).toContain("setCurrentRunSessionId(\"\")")
+    expect(clearSource).toContain("setSelectedMainlineFacts(initialSelectedMainlineFacts())")
+    expect(clearSource).toContain("setServerEventStreamState(initialServerEventStreamState())")
+  })
+
+  it("preserves composer text when submit disposition is blocked or disabled", () => {
+    const handleSendSource = sourceSection(
+      "const handleSend =",
+      "const canSubmitComposerAction =",
+    )
+    const handlePromptSubmitSource = sourceSection(
+      "const handlePromptSubmit =",
+      "const handleCommandSelect =",
+    )
+
+    expect(handleSendSource).toContain("if (!rawText.trim()) return false")
+    expect(handleSendSource).toContain("setComposerSubmitError(sessionSubmitBlockedMessage(disposition.reason))")
+    expect(handleSendSource).not.toContain("chat-start-pending")
+    expect(handleSendSource).not.toContain("appendNotice(")
+    expect(handleSendSource).toContain('if (disposition.kind === "disabled") return false')
+    expect(handlePromptSubmitSource).toContain("return handleSend(submission)")
+    expect(handlePromptSubmitSource).not.toContain("handleSend(submission)\n    return true")
+  })
+
   it("distinguishes first-run start from selected-branch continue before posting chat.send", () => {
     const sendChatStart = source.indexOf("const sendChatText =")
     const sendRunningStart = source.indexOf("const sendRunningChatText =", sendChatStart)
     const sendChatSource = source.slice(sendChatStart, sendRunningStart)
 
-    expect(sendChatSource).toContain('const operationKind: SessionRunOperationViewKind = activeSessionRunId() ? "continue" : "start"')
+    expect(sendChatSource).toContain('operationKind?: Extract<SessionRunOperationViewKind, "start" | "continue">')
+    expect(sendChatSource).toContain('options.operationKind || (activeSessionRunId() ? "continue" : "start")')
+    expect(source).toContain("sendChatText(rawText, { mentions: submission.mentions, operationKind: disposition.kind })")
     expect(sendChatSource).toContain('operationKind === "continue"')
     expect(sendChatSource).toContain("selectedBranchBindingId()")
     expect(sendChatSource).not.toContain("selectedBranchBindingId() || \"main\"")
@@ -1066,10 +1169,38 @@ describe("ChatView context events", () => {
     expect(sendChatSource).toContain("kind: operationKind")
     expect(sendChatSource).toContain("sessionRunId: operationKind === \"continue\" ? activeSessionRunId() : undefined")
     expect(sendChatSource).toContain("sourceBranchBindingId: operationKind === \"continue\" ? targetBranchBindingId : undefined")
+    expect(sendChatSource).toContain("operationKind,")
     expect(sendChatSource).toContain("resetLocalDraftBranchProjection(targetBranchBindingId)")
     expect(source).not.toContain("applyVisibleBranchBinding(")
     expect(source).not.toContain("applyVisibleBranchBindingToView(sessionRuntimeViewTarget()")
     expect(sendChatSource).not.toContain("const targetBranchBindingId = activeSessionRunId() ? selectedBranchBindingId() : \"main\"")
+  })
+
+  it("uses server event-stream connecting state for ordinary server-owned sends", () => {
+    const sendChatStart = source.indexOf("const sendChatText =")
+    const sendRunningStart = source.indexOf("const sendRunningChatText =", sendChatStart)
+    const sendChatSource = source.slice(sendChatStart, sendRunningStart)
+    const branchComposeStart = source.indexOf("const startAgentRunBranchFromCompose =")
+    const pendingUserInputStart = source.indexOf("const pendingUserInputContent =", branchComposeStart)
+    const branchComposeSource = source.slice(branchComposeStart, pendingUserInputStart)
+
+    expect(sendChatSource).toContain("setRunPeerState(initialRunPeerState())")
+    expect(sendChatSource).toContain("setServerEventStreamState(remoteSessionId")
+    expect(sendChatSource).toContain("serverEventStreamConnectingState({")
+    expect(sendChatSource).not.toContain('setRunPeerState(remoteSessionId ? { status: "connecting"')
+    expect(branchComposeSource).toContain("setRunPeerState(initialRunPeerState())")
+    expect(branchComposeSource).toContain("setServerEventStreamState(serverEventStreamConnectingState({")
+    expect(branchComposeSource).not.toContain('setRunPeerState({ status: "connecting"')
+  })
+
+  it("does not start server event stream from ordinary session load messages", () => {
+    const sessionMessageStart = source.indexOf('msg.type === "session.loaded"')
+    const sessionErrorStart = source.indexOf('if (msg.type === "session.error")', sessionMessageStart)
+    const sessionMessageSource = source.slice(sessionMessageStart, sessionErrorStart)
+
+    expect(sessionMessageSource).toContain('msg.type === "session.state"')
+    expect(sessionMessageSource).not.toContain("serverEventStreamConnectingState")
+    expect(sessionMessageSource).not.toContain("setServerEventStreamState(")
   })
 
   it("routes pending prompt remove and clear actions through the Host queue", () => {
@@ -1202,14 +1333,20 @@ describe("ChatView context events", () => {
     expect(resumeSource).toContain("branchBindingId = sessionRunOperationResultTargetBranchBindingId(operation)")
     expect(resumeSource).toContain('acceptSessionRuntimeMessage({')
     expect(resumeSource).toContain('type: "sessionRun.events"')
-    expect(resumeSource).toContain('if (!applySessionRuntimeScopeSelection(sessionRunId, branchBindingId, "running", {')
+    expect(resumeSource).toContain("const resumeFacts = sessionRunResumeFacts(payload)")
+    expect(resumeSource).toContain("const resumeStatus = sessionRunResumeRuntimeStatus(payload)")
+    expect(resumeSource).toContain("const resumeCanStartEventStream = sessionRunResumeCanStartEventStream(resumeFacts, resumeStatus)")
+    expect(resumeSource).toContain("if (!sessionRunResumePreservesSelectedMainline(resumeFacts))")
+    expect(resumeSource).toContain("applyNonRecoverableSessionRunResume()")
+    expect(resumeSource).toContain("setSelectedMainlineFacts({")
+    expect(resumeSource).toContain("if (!applySessionRuntimeScopeSelection(sessionRunId, branchBindingId, resumeStatus, {")
     expect(resumeSource).toContain("...(sessionId ? { sessionId } : {})")
     expect(resumeSource).not.toContain("acceptVisibleSessionRuntimeMessage(")
     expect(resumeSource).not.toContain("applyVisibleBranchBinding(")
     expect(resumeSource).not.toContain("clearSessionRunOperationView(")
     expect(resumeSource).not.toContain("rawBranchBindingId ||")
     expect(resumeSource.indexOf("if (!applySessionRuntimeOperationResult(\"sessionRun.operation.success\", operation)) return")).toBeLessThan(
-      resumeSource.indexOf('if (!applySessionRuntimeScopeSelection(sessionRunId, branchBindingId, "running", {')
+      resumeSource.indexOf("if (!applySessionRuntimeScopeSelection(sessionRunId, branchBindingId, resumeStatus, {")
     )
   })
 
@@ -1223,12 +1360,50 @@ describe("ChatView context events", () => {
     expect(resumeSource).toContain("const rawBranchBindingId =")
     expect(resumeSource).toContain("const bootstrapRestore = msg.bootstrapRestore === true || payload.bootstrapRestore === true")
     expect(resumeSource).toContain("Boolean(bootstrapRestore && sessionRunId && rawBranchBindingId)")
-    expect(resumeSource).toContain('if (!applySessionRuntimeScopeSelection(sessionRunId, branchBindingId, "running", {')
+    expect(resumeSource).toContain("if (!sessionRunResumePreservesSelectedMainline(resumeFacts))")
+    expect(resumeSource).toContain("if (!applySessionRuntimeScopeSelection(sessionRunId, branchBindingId, resumeStatus, {")
     expect(resumeSource).toContain("...(sessionId ? { sessionId } : {})")
     expect(resumeSource).toContain("if (!branchBindingId) return")
     expect(resumeSource).not.toContain("if (sessionRunId) setActiveSessionRunId(sessionRunId)")
-    expect(resumeSource).not.toContain("setActiveRunSessionId(sessionId)")
+    expect(resumeSource).not.toContain("setCurrentRunSessionId(sessionId)")
     expect(resumeSource).not.toContain("if (!context.activeSessionRunId) return true")
+  })
+
+  it("uses explicit status protocol facts before accepting sessionRun.resume", () => {
+    const factsSource = sourceSection(
+      "function sessionRunResumeFacts",
+      "function objectValue",
+    )
+
+    expect(factsSource).toContain('booleanField(payload, "terminal")')
+    expect(factsSource).toContain('stringField(payload, "mainlineState", "mainline_state")')
+    expect(factsSource).toContain('stringField(payload, "activationState", "activation_state")')
+    expect(factsSource).toContain('stringField(payload, "bindingStatus", "binding_status")')
+    expect(factsSource).toContain('booleanField(payload, "working")')
+    expect(factsSource).toContain('booleanField(payload, "continuable")')
+    expect(factsSource).toContain('booleanField(payload, "recoverable")')
+    expect(factsSource).toContain('booleanField(payload, "eventStreamAllowed", "event_stream_allowed")')
+    expect(factsSource).toContain('stringField(payload, "projectionState", "projection_state")')
+    expect(factsSource).toContain("facts.bindingStatus === \"active\"")
+    expect(factsSource).toContain("facts.projectionState === \"live\" || facts.projectionState === \"recovered\"")
+    expect(factsSource).toContain("facts.working")
+    expect(factsSource).toContain("sessionRunResumeRuntimeStatusIsActive(status)")
+  })
+
+  it("keeps selected mainline identity for settled and non-continuable resume states", () => {
+    const preserveSource = sourceSection(
+      "function sessionRunResumePreservesSelectedMainline",
+      "function selectedMainlineFactsFromResumeFacts",
+    )
+
+    expect(preserveSource).not.toContain("facts.terminal")
+    expect(preserveSource).not.toContain("!facts.recoverable")
+    expect(preserveSource).not.toContain('facts.bindingStatus !== "active"')
+    expect(preserveSource).toContain('facts.mainlineState === "settled"')
+    expect(preserveSource).toContain('facts.mainlineState === "cancelled"')
+    expect(preserveSource).toContain('facts.mainlineState === "closed"')
+    expect(preserveSource).toContain('facts.mainlineState === "failed"')
+    expect(preserveSource).toContain('facts.mainlineState === "unrecoverable"')
   })
 
   it("uses operation result target proof for sessionRun.session branch identity", () => {
@@ -1271,26 +1446,26 @@ describe("ChatView context events", () => {
     expect(recoverSource).toContain("operationId,")
   })
 
-  it("starts cancel as a tracked SessionRun operation", () => {
-    const sendCancelStart = source.indexOf("const sendCancel =")
-    const recoverStart = source.indexOf("const recoverInterruptedChat =", sendCancelStart)
-    const cancelSource = source.slice(sendCancelStart, recoverStart)
+  it("starts stop as a tracked SessionRun operation", () => {
+    const sendStopStart = source.indexOf("const sendStop =")
+    const recoverStart = source.indexOf("const recoverInterruptedChat =", sendStopStart)
+    const cancelSource = source.slice(sendStopStart, recoverStart)
 
-    expect(cancelSource).toContain('const operationId = createSessionRunOperationId("cancel")')
+    expect(cancelSource).toContain('const operationId = createSessionRunOperationId("stop")')
     expect(cancelSource).toContain("beginSessionRunOperationView({")
-    expect(cancelSource).toContain('kind: "cancel"')
+    expect(cancelSource).toContain('kind: "stop"')
     expect(cancelSource).toContain("targetBranchBindingId")
-    expect(cancelSource).toContain("chatMessages.cancel(vscode, {")
+    expect(cancelSource).toContain("chatMessages.stop(vscode, {")
     expect(cancelSource).toContain("operationId,")
   })
 
-  it("does not enter stopping or clear pending cancel unless cancel operation begins", () => {
+  it("does not enter stopping or clear pending stop unless stop operation begins", () => {
     const handleStopSource = sourceSection(
       "const handleStop = () => {",
-      "const sendCancel =",
+      "const sendStop =",
     )
-    const sendCancelSource = sourceSection(
-      "const sendCancel =",
+    const sendStopSource = sourceSection(
+      "const sendStop =",
       "const recoverInterruptedChat =",
     )
     const liveEventSource = sourceSection(
@@ -1310,19 +1485,19 @@ describe("ChatView context events", () => {
       'if (msg.type === "sessionRun.operation.error")',
     )
 
-    expect(sendCancelSource).toContain("): boolean =>")
+    expect(sendStopSource).toContain("): boolean =>")
     expect(handleStopSource).toContain("const restore = sessionRunOperationRestoreSnapshot()")
-    expect(handleStopSource).toContain("const cancelStarted = sendCancel(sessionRunId, { restore })")
-    expect(handleStopSource.indexOf("const cancelStarted = sendCancel(sessionRunId, { restore })")).toBeLessThan(
+    expect(handleStopSource).toContain("const stopStarted = sendStop(sessionRunId, { restore })")
+    expect(handleStopSource.indexOf("const stopStarted = sendStop(sessionRunId, { restore })")).toBeLessThan(
       handleStopSource.indexOf("applyScopedStoppingState()"),
     )
-    expect(handleStopSource).toContain("if (!cancelStarted) return")
+    expect(handleStopSource).toContain("if (!stopStarted) return")
     expect(source).not.toContain("const applyRemoteEventSessionRunIdentity =")
-    expect(visibleIdentitySource).toContain("if (!sessionRunId || !pendingCancel()) return")
-    expect(visibleIdentitySource).toContain("if (sendCancel(sessionRunId, { restore: pendingCancelRestore() })) {")
+    expect(visibleIdentitySource).toContain("if (!sessionRunId || !pendingStop()) return")
+    expect(visibleIdentitySource).toContain("if (sendStop(sessionRunId, { restore: pendingStopRestore() })) {")
     expect(liveEventSource).not.toContain("applyRemoteEventSessionRunIdentity(event, payload, sourceScope)")
     expect(remoteEventSource).not.toContain("applyRemoteEventSessionRunIdentity(event, payload, sourceScope)")
-    expect(sessionMessageSource).not.toContain("sendCancel(msg.sessionRunId")
+    expect(sessionMessageSource).not.toContain("sendStop(msg.sessionRunId")
   })
 
   it("gates cancelled operation results before terminal cleanup", () => {
@@ -1342,7 +1517,7 @@ describe("ChatView context events", () => {
     )
   })
 
-  it("restores running state for cancel operation errors through the operation effect", () => {
+  it("restores running state for stop operation errors through the operation effect", () => {
     const operationErrorSource = sourceSection(
       'if (msg.type === "sessionRun.operation.error") {',
       'if (msg.type === "sessionRun.pendingNextTurn")',
@@ -1371,7 +1546,7 @@ describe("ChatView context events", () => {
   it("preserves raw non-command text so leading-space slash input stays chat text", () => {
     expect(source).toContain("const rawText = submission.text")
     expect(source).toContain("if (!rawText.trim()) return")
-    expect(source).toContain("sendChatText(rawText, { mentions: submission.mentions })")
+    expect(source).toContain("sendChatText(rawText, { mentions: submission.mentions, operationKind: disposition.kind })")
   })
 
   it("keeps workspace mention search responses tied to the latest request", () => {
@@ -1384,11 +1559,11 @@ describe("ChatView context events", () => {
     expect(source).toContain("const shouldCreateLocalDraft = !sessionId")
     expect(source).toContain("draftSessionId = trace.startDraftTask(text, createUserTurn(text))")
     expect(source).toContain("sessionId = draftSessionId")
-    expect(source).toContain("setActiveRunSessionId(sessionId || \"\")")
+    expect(source).toContain("setCurrentRunSessionId(sessionId || \"\")")
     expect(source).toContain("draftSessionId,")
     expect(source).toContain("function createUserTurn")
-    expect(source).toContain("isLocalDraftSessionId(activeRunSessionId())")
-    expect(source).toContain("setActiveRunSessionId(msg.sessionId)")
+    expect(source).toContain("isLocalDraftSessionId(currentRunSessionId())")
+    expect(source).toContain("setCurrentRunSessionId(msg.sessionId)")
   })
 
   it("validates the selected model before creating a local draft turn", () => {
@@ -1407,10 +1582,13 @@ describe("ChatView context events", () => {
     expect(source).toContain("if (!hasMeaningfulPayload(viewPayload)) return")
   })
 
-  it("routes run peer readiness into the run status bar instead of transcript cards", () => {
+  it("routes only explicit local-action peer readiness into the run status bar instead of transcript cards", () => {
     const branchIndex = source.indexOf('} else if (type === "remote_peer_ready" && applySessionRunLifecycle) {')
 
+    expect(source).toContain("const hasLocalActionProof = remotePeerReadyHasLocalActionProof(payload)")
+    expect(source).toContain("if (hasLocalActionProof) {")
     expect(source).toContain("setRunPeerState(runPeerStateFromReady(payload))")
+    expect(source).toContain("serverEventStreamState")
     expect(source).toContain("<RunStatusBar")
     expect(source).not.toContain("appendRemoteStatusPart")
     expect(source).not.toContain('type: "remote_status"')

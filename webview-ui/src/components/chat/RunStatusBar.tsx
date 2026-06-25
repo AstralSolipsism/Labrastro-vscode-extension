@@ -1,20 +1,32 @@
 import { Component, Show } from "solid-js"
 import { t } from "../../i18n"
-import type { AgentRunState, RunPeerState } from "../../chat/runtimeState"
+import type { AgentRunState, RunPeerState, ServerEventStreamState } from "../../chat/runtimeState"
 
 interface RunStatusBarProps {
+  serverEventStream: ServerEventStreamState
   runPeer: RunPeerState
   agentRun: AgentRunState
 }
 
 export const RunStatusBar: Component<RunStatusBarProps> = (props) => {
+  const hasServerEventStreamStatus = () => props.serverEventStream.status !== "idle"
   const hasRunPeerStatus = () => props.runPeer.status !== "idle"
   const hasAgentRunStatus = () => props.agentRun.phase !== "idle"
-  const visible = () => hasRunPeerStatus() || hasAgentRunStatus()
+  const visible = () => hasServerEventStreamStatus() || hasRunPeerStatus() || hasAgentRunStatus()
 
   return (
     <Show when={visible()}>
       <section class="run-status-bar" aria-label={t("runtimeStatus.label")}>
+        <Show when={hasServerEventStreamStatus()}>
+          <div
+            class={`run-status-chip run-status-chip--${serverEventStreamTone(props.serverEventStream.status)}`}
+            title={serverEventStreamTitle(props.serverEventStream)}
+          >
+            <span class="run-status-chip__dot" aria-hidden="true" />
+            <span class="codicon codicon-radio-tower" aria-hidden="true" />
+            <span class="run-status-chip__text">{serverEventStreamLabel(props.serverEventStream)}</span>
+          </div>
+        </Show>
         <Show when={hasRunPeerStatus()}>
           <div
             class={`run-status-chip run-status-chip--${runPeerTone(props.runPeer.status)}`}
@@ -44,6 +56,17 @@ export const RunStatusBar: Component<RunStatusBarProps> = (props) => {
   )
 }
 
+function serverEventStreamLabel(state: ServerEventStreamState): string {
+  const status = state.status === "connecting"
+    ? t("runtimeStatus.serverEventStream.connecting")
+    : state.status === "reconnecting"
+      ? t("runtimeStatus.serverEventStream.reconnecting")
+      : state.status === "error"
+        ? t("runtimeStatus.serverEventStream.error")
+        : t("runtimeStatus.serverEventStream.idle")
+  return `${t("runtimeStatus.serverEventStream.label")} · ${status}`
+}
+
 function runPeerLabel(state: RunPeerState): string {
   const base = state.status === "connected"
     ? t("runtimeStatus.runPeer.connected")
@@ -68,6 +91,17 @@ function agentLabel(state: AgentRunState): string {
   return `${t("runtimeStatus.agentRun.label")} · ${phase}`
 }
 
+export function serverEventStreamTitle(state: ServerEventStreamState): string {
+  return [
+    serverEventStreamLabel(state),
+    state.sessionRunId ? `SessionRun: ${state.sessionRunId}` : "",
+    state.branchBindingId ? `${t("runtimeStatus.detail.branch")}: ${state.branchBindingId}` : "",
+    state.attempts !== undefined ? `${t("runtimeStatus.detail.attempts")}: ${state.attempts}` : "",
+    state.nextRetryAt !== undefined ? `${t("runtimeStatus.detail.nextRetry")}: ${new Date(state.nextRetryAt).toLocaleTimeString()}` : "",
+    state.errorMessage ? `${t("runtimeStatus.detail.error")}: ${state.errorMessage}` : "",
+  ].filter(Boolean).join("\n")
+}
+
 export function runPeerTitle(state: RunPeerState): string {
   return [
     runPeerLabel(state),
@@ -88,6 +122,12 @@ function agentTitle(state: AgentRunState): string {
     state.kind ? `${t("runtimeStatus.detail.kind")}: ${state.kind}` : "",
     state.message ? `${t("runtimeStatus.detail.message")}: ${state.message}` : "",
   ].filter(Boolean).join("\n")
+}
+
+function serverEventStreamTone(status: ServerEventStreamState["status"]): "muted" | "success" | "warning" | "error" {
+  if (status === "connecting" || status === "reconnecting") return "warning"
+  if (status === "error") return "error"
+  return "muted"
 }
 
 function runPeerTone(status: RunPeerState["status"]): "muted" | "success" | "warning" | "error" {

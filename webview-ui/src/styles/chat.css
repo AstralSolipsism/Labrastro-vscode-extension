@@ -952,7 +952,7 @@
 
 .branch-compose-banner,
 .stream-recovery-banner,
-.prompt-queue-banner {
+.prompt-queue-dock {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -966,7 +966,7 @@
 
 .branch-compose-banner strong,
 .stream-recovery-banner strong,
-.prompt-queue-banner strong {
+.prompt-queue-dock strong {
   color: var(--ez-fg);
 }
 
@@ -1004,13 +1004,13 @@
   background: var(--ez-hover);
 }
 
-.prompt-queue-banner {
+.prompt-queue-dock {
   align-items: flex-start;
   justify-content: space-between;
   flex-wrap: wrap;
 }
 
-.prompt-queue-banner__body {
+.prompt-queue-dock__body {
   flex: 1 1 280px;
   min-width: 0;
   display: grid;
@@ -1054,13 +1054,13 @@
   gap: 6px;
 }
 
-.prompt-queue-banner__actions {
+.prompt-queue-dock__actions {
   display: inline-flex;
   gap: 8px;
 }
 
 .prompt-queue-item__actions button,
-.prompt-queue-banner__actions button {
+.prompt-queue-dock__actions button {
   padding: 4px 10px;
   border: 1px solid var(--ez-border);
   border-radius: 999px;
@@ -1070,7 +1070,7 @@
 }
 
 .prompt-queue-item__actions button:hover,
-.prompt-queue-banner__actions button:hover {
+.prompt-queue-dock__actions button:hover {
   border-color: color-mix(in srgb, var(--ez-accent) 40%, var(--ez-border));
   background: var(--ez-hover);
 }
@@ -2147,7 +2147,7 @@
   font-weight: 600;
 }
 
-.working-indicator {
+.chat-runtime-working {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -2155,16 +2155,19 @@
   color: var(--ez-muted);
 }
 
-.working-spinner {
-  width: 12px;
-  height: 12px;
-  border: 2px solid color-mix(in srgb, var(--ez-muted) 35%, transparent);
-  border-top-color: var(--ez-link);
-  border-radius: 50%;
-  animation: ez-spin 0.8s linear infinite;
+.chat-runtime-working__loader {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  color: var(--ez-link);
 }
 
-.working-elapsed {
+.chat-runtime-working__text {
+  min-width: 0;
+  color: var(--ez-muted);
+}
+
+.chat-runtime-working__elapsed {
   margin-left: auto;
   font-size: 11px;
 }
@@ -2354,6 +2357,17 @@
 
 .user-input-strip__error {
   color: var(--ez-error);
+}
+
+.composer-submit-error {
+  margin: 4px 0 6px;
+  padding: 5px 7px;
+  border: 1px solid color-mix(in srgb, var(--ez-error) 42%, var(--ez-border));
+  border-radius: var(--ez-radius);
+  color: var(--ez-error);
+  background: color-mix(in srgb, var(--ez-error) 8%, transparent);
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .approval-strip {

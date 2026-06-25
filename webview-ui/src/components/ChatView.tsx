@@ -10,6 +10,7 @@ import {
   type PromptSubmission,
 } from "./chat/promptInputCatalog"
 import { RunStatusBar } from "./chat/RunStatusBar"
+import { QueuedNextTurnDock } from "./chat/QueuedNextTurnDock"
 import { AutoApproveMenu } from "./chat/AutoApproveMenu"
 import {
   ApprovalDetailsDialog,
@@ -70,6 +71,82 @@ type SessionRuntimeStatusMessage = Extract<
   { status?: BranchRuntimeScopeView["status"] }
 >
 
+interface SelectedMainlineFacts {
+  mainlineState: SessionMainlineState
+  activationState: SessionActivationState
+  bindingStatus: SessionBindingStatus
+  working: boolean
+  continuable: boolean
+  recoverable: boolean
+  eventStreamAllowed: boolean
+  projectionState: SessionProjectionState
+  transportState: SessionTransportState
+}
+
+function initialSelectedMainlineFacts(): SelectedMainlineFacts {
+  return {
+    mainlineState: "none",
+    activationState: "none",
+    bindingStatus: "none",
+    working: false,
+    continuable: false,
+    recoverable: false,
+    eventStreamAllowed: false,
+    projectionState: "unavailable",
+    transportState: "disconnected",
+  }
+}
+
+function executingSelectedMainlineFacts(): SelectedMainlineFacts {
+  return {
+    mainlineState: "executing",
+    activationState: "running",
+    bindingStatus: "active",
+    working: true,
+    continuable: false,
+    recoverable: true,
+    eventStreamAllowed: true,
+    projectionState: "live",
+    transportState: "connecting",
+  }
+}
+
+function settledSelectedMainlineFacts(): SelectedMainlineFacts {
+  return {
+    mainlineState: "settled",
+    activationState: "completed",
+    bindingStatus: "active",
+    working: false,
+    continuable: true,
+    recoverable: true,
+    eventStreamAllowed: false,
+    projectionState: "drained",
+    transportState: "disconnected",
+  }
+}
+
+function stoppedSelectedMainlineFacts(): SelectedMainlineFacts {
+  return {
+    ...settledSelectedMainlineFacts(),
+    activationState: "cancelled",
+  }
+}
+
+function closedSelectedMainlineFacts(status: "cancelled" | "error" | "interrupted"): SelectedMainlineFacts {
+  const cancelled = status === "cancelled"
+  return {
+    mainlineState: cancelled ? "cancelled" : "failed",
+    activationState: cancelled ? "cancelled" : "failed",
+    bindingStatus: "closed",
+    working: false,
+    continuable: false,
+    recoverable: false,
+    eventStreamAllowed: false,
+    projectionState: "drained",
+    transportState: "disconnected",
+  }
+}
+
 function emptySessionRuntimeModelView(): SessionRuntimeModelView {
   return {
     scopes: {},
@@ -115,7 +192,6 @@ import {
   clearPromptQueue,
   createPromptQueueState,
   enqueuePrompt,
-  queuedPromptCount,
   type PendingPromptItem,
   type PromptQueueState,
 } from "../chat/promptQueue"
@@ -129,10 +205,24 @@ import {
   agentRunStateFromDelegatedCompletion,
   initialAgentRunState,
   initialRunPeerState,
+  initialServerEventStreamState,
+  remotePeerReadyHasLocalActionProof,
   runPeerStateFromError,
   runPeerStateFromReady,
+  serverEventStreamConnectingState,
+  serverEventStreamErrorState,
+  serverEventStreamReconnectingState,
   settleAgentRunStateForSessionRunEvent,
 } from "../chat/runtimeState"
+import {
+  resolveSessionSubmitDisposition,
+  sessionSubmitBlockedMessage,
+  type SessionActivationState,
+  type SessionBindingStatus,
+  type SessionMainlineState,
+  type SessionProjectionState,
+  type SessionTransportState,
+} from "../chat/sessionSubmitDisposition"
 import {
   filterSessionHistory,
   sessionOperationErrorAfterMessage,
@@ -335,11 +425,11 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const [workingElapsed, setWorkingElapsed] = createSignal("0:00")
   const [activeSessionRunId, setActiveSessionRunId] = createSignal<string | undefined>()
   const [selectedBranchBindingId, setSelectedBranchBindingId] = createSignal("main")
-  const [activeRunSessionId, setActiveRunSessionId] = createSignal("")
+  const [currentRunSessionId, setCurrentRunSessionId] = createSignal("")
   const [activeChatCommandRequest, setActiveChatCommandRequest] = createSignal<ActiveChatCommandRequest | undefined>()
   const [sessionRunStatus, setSessionRunStatus] = createSignal<SessionRunStatus>("idle")
-  const [pendingCancel, setPendingCancel] = createSignal(false)
-  const [pendingCancelRestore, setPendingCancelRestore] = createSignal<PendingSessionRunOperationRestoreView | undefined>()
+  const [pendingStop, setPendingStop] = createSignal(false)
+  const [pendingStopRestore, setPendingStopRestore] = createSignal<PendingSessionRunOperationRestoreView | undefined>()
   const [rawAuditEvents, setRawAuditEvents] = createSignal<Record<string, RawAuditEventSnapshot>>({})
   const [environmentRunQueue, setEnvironmentRunQueue] = createSignal<EnvironmentQueueItem[]>([])
   const [activeEnvironmentRunRequestId, setActiveEnvironmentRunRequestId] = createSignal("")
@@ -353,6 +443,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const [showBranchSessions, setShowBranchSessions] = createSignal(false)
   const [deleteSessionId, setDeleteSessionId] = createSignal<string | undefined>()
   const [sessionOperationError, setSessionOperationError] = createSignal("")
+  const [composerSubmitError, setComposerSubmitError] = createSignal("")
   const [sessionLoadState, setSessionLoadState] = createSignal<{ status: SessionLoadStatus; sessionId?: string; message?: string }>({ status: "idle" })
   const [sessionSyncStatus, setSessionSyncStatus] = createSignal<Record<string, unknown>>({})
   const [queuedPrompts, setQueuedPrompts] = createSignal<PromptQueueState>(createPromptQueueState())
@@ -361,6 +452,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const [branchComposeNonce, setBranchComposeNonce] = createSignal(0)
   const [branchSummaries, setBranchSummaries] = createSignal<ChatBranchSummary[]>([])
   const [sessionRuntimeModel, setSessionRuntimeModel] = createSignal<SessionRuntimeModelView>(emptySessionRuntimeModelView())
+  const [selectedMainlineFacts, setSelectedMainlineFacts] =
+    createSignal<SelectedMainlineFacts>(initialSelectedMainlineFacts())
   const initialWebviewState = vscode.getState<ChatWebviewState>() || {}
   const [autoApproveOptions, setAutoApproveOptions] = createSignal<Record<string, boolean>>(
     sanitizeAutoApproveOptions(initialWebviewState.autoApproveOptions)
@@ -391,6 +484,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const [activeTranscriptItems, setActiveTranscriptItems] = createSignal<TranscriptItem[]>([])
   let streamingTextOverlayCommitTimeoutId: number | undefined
   const [runPeerState, setRunPeerState] = createSignal(initialRunPeerState())
+  const [serverEventStreamState, setServerEventStreamState] = createSignal(initialServerEventStreamState())
   const [agentRunState, setAgentRunState] = createSignal(initialAgentRunState())
 
   const hasMessages = () => trace.turns().length > 0
@@ -648,16 +742,19 @@ const ChatView: Component<ChatViewProps> = (props) => {
   ) => {
     const finishedSessionRunId = activeSessionRunId()
     const finishedBranchBindingId = selectedBranchBindingId()
+    const finishedSessionId = currentRunSessionId() || trace.currentSessionId()
     settleAssistantMessageForRunEnd(nextStatus)
     setIsWorking(false)
-    setActiveRunSessionId("")
+    if (finishedSessionId) setCurrentRunSessionId(finishedSessionId)
     setSessionRunStatus(nextStatus)
-    if (nextStatus !== "interrupted") {
-      setActiveSessionRunId(undefined)
-      setStreamRecoveryMessage("")
-    }
-    setPendingCancel(false)
-    setPendingCancelRestore(undefined)
+    setSelectedMainlineFacts(
+      nextStatus === "done"
+        ? settledSelectedMainlineFacts()
+        : closedSelectedMainlineFacts(nextStatus)
+    )
+    setStreamRecoveryMessage("")
+    setPendingStop(false)
+    setPendingStopRestore(undefined)
     clearPendingBranchInteractions(finishedSessionRunId, finishedBranchBindingId)
     setRememberingApprovalId("")
     clearActiveStreamDraft()
@@ -684,10 +781,11 @@ const ChatView: Component<ChatViewProps> = (props) => {
     })
     if (request.mode === "alongside-session-run") return
     setIsWorking(true)
-    setActiveRunSessionId(request.sessionId || "")
-    setPendingCancel(false)
+    setCurrentRunSessionId(request.sessionId || "")
+    setPendingStop(false)
     setActiveSessionRunId(undefined)
     setSessionRunStatus("running")
+    setSelectedMainlineFacts(executingSelectedMainlineFacts())
     setStreamRecoveryMessage("")
     clearActiveStreamDraft()
     setWorkingText("正在执行指令")
@@ -708,10 +806,11 @@ const ChatView: Component<ChatViewProps> = (props) => {
     if (request.mode === "alongside-session-run") return
     settleAssistantMessageForRunEnd(status)
     setIsWorking(false)
-    setActiveRunSessionId("")
+    setCurrentRunSessionId("")
     setSessionRunStatus(status)
-    setPendingCancel(false)
-    setPendingCancelRestore(undefined)
+    setSelectedMainlineFacts(status === "done" ? settledSelectedMainlineFacts() : closedSelectedMainlineFacts("error"))
+    setPendingStop(false)
+    setPendingStopRestore(undefined)
     clearActiveStreamDraft()
     patchTraceStats({ runStatus: status })
     stopTimer()
@@ -730,11 +829,12 @@ const ChatView: Component<ChatViewProps> = (props) => {
     setActiveEnvironmentRunRequestId("")
     settleAssistantMessageForRunEnd(status)
     setIsWorking(false)
-    setActiveRunSessionId("")
+    setCurrentRunSessionId("")
     setSessionRunStatus(status)
     setActiveSessionRunId(undefined)
-    setPendingCancel(false)
-    setPendingCancelRestore(undefined)
+    setSelectedMainlineFacts(status === "done" ? settledSelectedMainlineFacts() : closedSelectedMainlineFacts("error"))
+    setPendingStop(false)
+    setPendingStopRestore(undefined)
     clearActiveStreamDraft()
     patchTraceStats({ runStatus: status })
     stopTimer()
@@ -749,7 +849,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
 
   const currentRunSessionMatches = () => {
     const sessionId = trace.currentSessionId()
-    const runSessionId = activeRunSessionId()
+    const runSessionId = currentRunSessionId()
     return Boolean(sessionId && runSessionId && sessionId === runSessionId)
   }
   const activeChatCommandRequestId = () => activeChatCommandRequest()?.requestId || ""
@@ -995,6 +1095,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     messageType: "sessionRun.operation.success" | "sessionRun.operation.error",
     operation: ReturnType<typeof sessionRunOperationMessage>,
     message?: string,
+    level?: "info" | "error",
   ) => {
     if (!operation.operationId || !operation.operationKind) return undefined
     const target = sessionRuntimeOperationTarget(operation, messageType)
@@ -1018,6 +1119,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       operationId: operation.operationId,
       operationKind: operation.operationKind as SessionRunOperationViewKind,
       ...(message ? { message } : {}),
+      ...(level ? { level } : {}),
     })
     if (sessionRuntimeMessageRejected(result.effects)) return undefined
     setSessionRuntimeModel(result.model)
@@ -1027,8 +1129,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
     messageType: "sessionRun.operation.success" | "sessionRun.operation.error",
     operation: ReturnType<typeof sessionRunOperationMessage>,
     message?: string,
+    level?: "info" | "error",
   ) => {
-    const result = reduceSessionRuntimeOperationResult(messageType, operation, message)
+    const result = reduceSessionRuntimeOperationResult(messageType, operation, message, level)
     if (!result) return false
     applySessionRuntimeEffectsToView(result.effects)
     return true
@@ -1066,22 +1169,23 @@ const ChatView: Component<ChatViewProps> = (props) => {
   }
   const applyVisibleSessionRunIdentity = (sessionRunId: string | undefined) => {
     setActiveSessionRunId(sessionRunId)
-    if (!sessionRunId || !pendingCancel()) return
-    if (sendCancel(sessionRunId, { restore: pendingCancelRestore() })) {
-      setPendingCancel(false)
-      setPendingCancelRestore(undefined)
+    if (!sessionRunId || !pendingStop()) return
+    if (sendStop(sessionRunId, { restore: pendingStopRestore() })) {
+      setPendingStop(false)
+      setPendingStopRestore(undefined)
     }
   }
   const sessionRuntimeViewTarget = () => ({
     setSelectedBranchBindingId,
     setActiveSessionRunId: applyVisibleSessionRunIdentity,
-    setActiveRunSessionId,
+    setCurrentRunSessionId,
     setSessionRunStatus,
     setIsWorking,
     setWorkingText,
     replaceCurrentTurns: replaceTraceTurns,
     patchStats: patchTraceStats,
-    appendOperationErrorNotice: (message: string) => appendNotice("error", `操作失败：${message}`, "error"),
+    appendOperationErrorNotice: (message: string, level: "info" | "error" = "error") =>
+      appendNotice(level === "info" ? "info" : "error", level === "info" ? message : `操作失败：${message}`, level === "info" ? "operation-info" : "error"),
     appendScopedErrorNotice: (message: string, noticeId: string) => appendNotice("error", message, noticeId),
     enqueuePendingNextTurn: (pending: Record<string, unknown>) => {
       const text = stringValue(pending.text) || ""
@@ -1129,7 +1233,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const sessionRunOperationRestoreSnapshot = (): PendingSessionRunOperationRestoreView => ({
     kind: "sessionRun.operation.optimistic-ui",
     selectedBranchBindingId: selectedBranchBindingId(),
-    activeRunSessionId: activeRunSessionId(),
+    currentRunSessionId: currentRunSessionId(),
     sessionRunStatus: sessionRunStatus(),
     isWorking: isWorking(),
     workingText: workingText(),
@@ -1156,8 +1260,43 @@ const ChatView: Component<ChatViewProps> = (props) => {
   ) => {
     applyScopedTerminalStateToView(sessionRuntimeViewTarget(), status, options)
   }
+  const applyNonRecoverableSessionRunResume = () => {
+    setServerEventStreamState(initialServerEventStreamState())
+    setSessionRuntimeModel(emptySessionRuntimeModelView())
+    setBranchSummaries([])
+    setIsWorking(false)
+    setWorkingText("")
+    setActiveSessionRunId(undefined)
+    setCurrentRunSessionId("")
+    setSessionRunStatus("idle")
+    setSelectedMainlineFacts(initialSelectedMainlineFacts())
+    setStreamRecoveryMessage("")
+    setPendingStop(false)
+    setPendingStopRestore(undefined)
+    clearActiveStreamDraft()
+    patchTraceStats({ runStatus: "idle" })
+    stopTimer()
+  }
 
   const visibleIsWorking = () => isWorking() && currentRunSessionMatches()
+  const composerStopAvailable = () =>
+    currentRunSessionMatches() && (visibleIsWorking() || sessionRunStatus() === "stopping")
+  const composerStopDisabled = () => sessionRunStatus() === "stopping"
+  const sessionRunStartInFlight = () => isWorking() && !activeSessionRunId() && Boolean(currentRunSessionId())
+  const selectedRuntimeStatusForSubmit = (): BranchRuntimeScopeView["status"] =>
+    sessionRuntimeModel().visible.selectedRuntimeStatus || sessionRunStatus()
+  const currentSubmitDisposition = (hasText: boolean) => resolveSessionSubmitDisposition({
+    hasText,
+    activeSessionRunId: activeSessionRunId(),
+    selectedBranchBindingId: selectedBranchBindingId(),
+    selectedRuntimeStatus: selectedRuntimeStatusForSubmit(),
+    ...selectedMainlineFacts(),
+    serverEventStreamStatus: serverEventStreamState().status,
+    serverEventStreamSessionRunId: serverEventStreamState().sessionRunId,
+    serverEventStreamBranchBindingId: serverEventStreamState().branchBindingId,
+    currentRunSessionMatches: currentRunSessionMatches(),
+    startInFlight: sessionRunStartInFlight(),
+  })
   const visiblePendingApprovals = () => (
     currentRunSessionMatches() && activeSessionRunId() && selectedBranchBindingId()
       ? pendingApprovals().filter((item) =>
@@ -1298,8 +1437,28 @@ const ChatView: Component<ChatViewProps> = (props) => {
   const clearCurrentSession = () => {
     clearSessionLoadState()
     trace.clearSession()
+    setSessionRuntimeModel(emptySessionRuntimeModelView())
+    setBranchSummaries([])
+    setQueuedPrompts(createPromptQueueState())
+    setIsWorking(false)
+    setWorkingText("")
+    setActiveSessionRunId(undefined)
+    setCurrentRunSessionId("")
+    setSelectedBranchBindingId("main")
+    setSessionRunStatus("idle")
+    setSelectedMainlineFacts(initialSelectedMainlineFacts())
+    setServerEventStreamState(initialServerEventStreamState())
+    setRunPeerState(initialRunPeerState())
+    setAgentRunState(initialAgentRunState())
+    setStreamRecoveryMessage("")
+    setPendingStop(false)
+    setPendingStopRestore(undefined)
     setSelectedApproval(undefined)
+    setPendingApprovals([])
+    clearPendingUserInputs()
     clearActiveStreamDraft()
+    patchTraceStats({ runStatus: "idle" })
+    stopTimer()
   }
 
   createEffect(() => {
@@ -1422,6 +1581,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
     memoryContext: t("memoryContext.title"),
     runEvent: "运行事件",
     cancelled: "已取消当前请求。",
+    stopped: "已停止当前执行。",
     errorPrefix: "错误：",
     streamInterruptedPrefix: t("chat.streamRecovery.interruptedPrefix"),
     providerStreamInterrupted: t("chat.streamRecovery.interruptedRecovering"),
@@ -2570,9 +2730,11 @@ const ChatView: Component<ChatViewProps> = (props) => {
         chatMessages.openTaskflow(vscode, nextTaskflowId)
       }
     } else if (type === "remote_peer_ready" && applySessionRunLifecycle) {
+      const hasLocalActionProof = remotePeerReadyHasLocalActionProof(payload)
       const remoteSessionId = String(payload.session_id || "")
       const currentSessionId = trace.currentSessionId()
       if (
+        hasLocalActionProof &&
         remoteSessionId &&
         currentSessionId &&
         remoteSessionId !== currentSessionId &&
@@ -2601,7 +2763,9 @@ const ChatView: Component<ChatViewProps> = (props) => {
         mode: stringValue(payload.mode) || trace.stats().mode,
         runStatus: sessionRunStatus(),
       })
-      setRunPeerState(runPeerStateFromReady(payload))
+      if (hasLocalActionProof) {
+        setRunPeerState(runPeerStateFromReady(payload))
+      }
     } else if (type === "reasoning_message") {
       if (!canonicalTranscriptEvent) {
         finalizeReasoningMessage(payload, "reasoning-message", {
@@ -2885,6 +3049,20 @@ const ChatView: Component<ChatViewProps> = (props) => {
         status: "stopping",
         viewEffect: { kind: "stopping" },
       })) return
+    } else if (type === "session_run_stop_requested" && applySessionRunLifecycle) {
+      if (!applyRemoteSessionRuntimeMessage("sessionRun.stopping", event, payload, sourceScope, {
+        status: "stopping",
+        viewEffect: { kind: "stopping" },
+      })) return
+    } else if (type === "session_run_stopped" && applySessionRunLifecycle) {
+      const runtimeResult = applyRemoteSessionRuntimeMessageResult("sessionRun.stopped", event, payload, sourceScope, {
+        status: "done",
+        skipWhenStatus: ["error", "cancelled", "interrupted"],
+        viewEffect: { kind: "terminal", status: "done" },
+      })
+      if (!runtimeResult) return
+      if (!sessionRuntimeVisibleTerminalAccepted(runtimeResult, "done")) return
+      setSelectedMainlineFacts(stoppedSelectedMainlineFacts())
     } else if (type === "session_run_cancelled" && applySessionRunLifecycle) {
       const runtimeResult = applyRemoteSessionRuntimeMessageResult("sessionRun.cancelled", event, payload, sourceScope, {
         status: "cancelled",
@@ -3253,6 +3431,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       modeOverride?: string | null
       forceDirect?: boolean
       mentions?: Record<string, unknown>[]
+      operationKind?: Extract<SessionRunOperationViewKind, "start" | "continue">
     } = {},
   ) => {
     let sessionId = trace.currentSessionId()
@@ -3271,7 +3450,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
     }
 
     const requestId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    const operationKind: SessionRunOperationViewKind = activeSessionRunId() ? "continue" : "start"
+    const operationKind: Extract<SessionRunOperationViewKind, "start" | "continue"> =
+      options.operationKind || (activeSessionRunId() ? "continue" : "start")
     const operationId = createSessionRunOperationId(operationKind)
     const remoteSessionIdBeforeDraft = remoteSessionIdForMutation(sessionId)
     const targetBranchBindingId = operationKind === "continue"
@@ -3295,11 +3475,19 @@ const ChatView: Component<ChatViewProps> = (props) => {
     const remoteSessionId = remoteSessionIdForMutation(sessionId)
     if (!remoteSessionId) resetLocalDraftBranchProjection(targetBranchBindingId)
     applyScopedRunningState("处理中")
-    setActiveRunSessionId(sessionId || "")
-    setPendingCancel(false)
+    setSelectedMainlineFacts(executingSelectedMainlineFacts())
+    setCurrentRunSessionId(sessionId || "")
+    setPendingStop(false)
     if (operationKind === "start") setActiveSessionRunId(undefined)
     setAgentRunState(initialAgentRunState())
-    setRunPeerState(remoteSessionId ? { status: "connecting", updatedAt: Date.now() } : initialRunPeerState())
+    setRunPeerState(initialRunPeerState())
+    setServerEventStreamState(remoteSessionId
+      ? serverEventStreamConnectingState({
+          sessionRunId: operationKind === "continue" ? activeSessionRunId() : undefined,
+          branchBindingId: targetBranchBindingId,
+        })
+      : initialServerEventStreamState()
+    )
     setStreamRecoveryMessage("")
     clearActiveStreamDraft()
     setPendingApprovals([])
@@ -3314,6 +3502,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       sessionRunId: operationKind === "continue" ? activeSessionRunId() : undefined,
       requestId,
       operationId,
+      operationKind,
       locale: locale(),
       branchBindingId: targetBranchBindingId,
       providerId: activeModelOverride.providerId,
@@ -3381,22 +3570,31 @@ const ChatView: Component<ChatViewProps> = (props) => {
     return true
   }
 
-  const handleSend = (submission: PromptSubmission) => {
+  const handleSend = (submission: PromptSubmission): boolean => {
     const rawText = submission.text
-    if (!rawText.trim()) return
-    if (isWorking() && activeSessionRunId()) {
+    if (!rawText.trim()) return false
+    const disposition = currentSubmitDisposition(Boolean(rawText.trim()))
+    if (disposition.kind === "queue_next_turn") {
+      setComposerSubmitError("")
       sendRunningChatText(rawText, submission.mentions)
-      return
+      return true
     }
-    if (isWorking()) {
-      appendNotice("error", "当前任务仍在运行，请等待当前运行完成后再发送。", "chat-busy-without-active-session-run")
-      return
+    if (disposition.kind === "blocked") {
+      setComposerSubmitError(sessionSubmitBlockedMessage(disposition.reason))
+      return false
     }
-    sendChatText(rawText, { mentions: submission.mentions })
+    if (disposition.kind === "disabled") return false
+    setComposerSubmitError("")
+    sendChatText(rawText, { mentions: submission.mentions, operationKind: disposition.kind })
+    return true
   }
 
   const canSubmitComposerAction = () => {
-    if (sessionRunStatus() === "stopping" || modelSwitching()) return false
+    if (sessionRunStatus() === "stopping") {
+      setComposerSubmitError("正在停止当前任务，请等待停止完成后再发送。")
+      return false
+    }
+    if (modelSwitching()) return false
     const activeModelResolution = requiredModelSelection()
     if (!activeModelResolution.ok || !activeModelResolution.model) {
       setModelSwitchError(activeModelResolution.message)
@@ -3413,8 +3611,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       return dispatchChatCommand({ text, command, mentions: submission.mentions })
     }
     if (!text.trim() || !canSubmitComposerAction()) return false
-    handleSend(submission)
-    return true
+    return handleSend(submission)
   }
 
   const handleCommandSelect = (selection: PromptCommandSelection) => {
@@ -3470,8 +3667,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
 
     beginEnvironmentRunRequest(item.requestId)
     setIsWorking(true)
-    setActiveRunSessionId(sessionId || "")
-    setPendingCancel(false)
+    setCurrentRunSessionId(sessionId || "")
+    setPendingStop(false)
     setActiveSessionRunId(undefined)
     setSessionRunStatus("running")
     setStreamRecoveryMessage("")
@@ -3534,44 +3731,73 @@ const ChatView: Component<ChatViewProps> = (props) => {
   })
 
   const handleStop = () => {
+    setComposerSubmitError("")
     setEnvironmentRunQueue([])
     const sessionRunId = activeSessionRunId()
     if (sessionRunStatus() === "stopping") return
     const restore = sessionRunOperationRestoreSnapshot()
     if (sessionRunId) {
-      const cancelStarted = sendCancel(sessionRunId, { restore })
-      if (!cancelStarted) return
-      setPendingCancelRestore(undefined)
+      const stopStarted = sendStop(sessionRunId, { restore })
+      if (!stopStarted) return
+      setPendingStopRestore(undefined)
       applyScopedStoppingState()
       return
     }
     if (!isWorking()) return
-    setPendingCancel(true)
-    setPendingCancelRestore(restore)
+    setPendingStop(true)
+    setPendingStopRestore(restore)
     applyScopedStoppingState()
     markActiveToolsCancelled()
   }
 
-  const sendCancel = (
+  const sendStop = (
     sessionRunId: string,
     options: { restore?: PendingSessionRunOperationRestoreView } = {},
   ): boolean => {
-    const operationId = createSessionRunOperationId("cancel")
+    const operationId = createSessionRunOperationId("stop")
     const targetBranchBindingId = selectedBranchBindingId()
     if (!beginSessionRunOperationView({
       operationId,
-      kind: "cancel",
+      kind: "stop",
       sessionRunId,
       sourceBranchBindingId: targetBranchBindingId,
       targetBranchBindingId,
       ...(options.restore ? { restore: options.restore } : {}),
     })) return false
-    chatMessages.cancel(vscode, {
+    chatMessages.stop(vscode, {
       sessionRunId,
       branchBindingId: targetBranchBindingId,
       operationId,
     })
     return true
+  }
+
+  const handleCloseMainlineAndStartNewTask = () => {
+    const sessionRunId = activeSessionRunId()
+    const branchBindingId = selectedBranchBindingId()
+    if (!sessionRunId) {
+      if (sessionRunStartInFlight()) return
+      clearCurrentSession()
+      return
+    }
+    if (!branchBindingId) return
+    const operationId = createSessionRunOperationId("cancel")
+    const restore = sessionRunOperationRestoreSnapshot()
+    if (!beginSessionRunOperationView({
+      operationId,
+      kind: "cancel",
+      sessionRunId,
+      sourceBranchBindingId: branchBindingId,
+      targetBranchBindingId: branchBindingId,
+      restore,
+    })) return
+    chatMessages.cancel(vscode, {
+      sessionRunId,
+      branchBindingId,
+      operationId,
+      reason: "explicit_close",
+    })
+    clearCurrentSession()
   }
 
   const recoverInterruptedChat = (action: "continue" | "retry") => {
@@ -3673,10 +3899,14 @@ const ChatView: Component<ChatViewProps> = (props) => {
       restore,
     })) return
     applyScopedRunningState("处理中")
-    setActiveRunSessionId(sessionId)
-    setPendingCancel(false)
+    setCurrentRunSessionId(sessionId)
+    setPendingStop(false)
     setAgentRunState(initialAgentRunState())
-    setRunPeerState({ status: "connecting", updatedAt: Date.now() })
+    setRunPeerState(initialRunPeerState())
+    setServerEventStreamState(serverEventStreamConnectingState({
+      sessionRunId,
+      branchBindingId,
+    }))
     setStreamRecoveryMessage("")
     clearActiveStreamDraft()
     setPendingApprovals([])
@@ -4007,12 +4237,12 @@ const ChatView: Component<ChatViewProps> = (props) => {
           msg.type === "session.created" &&
           isWorking() &&
           (
-            activeRunSessionId() === trace.currentSessionId() ||
-            isLocalDraftSessionId(activeRunSessionId()) ||
+            currentRunSessionId() === trace.currentSessionId() ||
+            isLocalDraftSessionId(currentRunSessionId()) ||
             trace.currentSessionId() === msg.sessionId
           )
         ) {
-          setActiveRunSessionId(msg.sessionId)
+          setCurrentRunSessionId(msg.sessionId)
         }
         const runtime = sessionRuntimeStateFromMessage(msg as Record<string, unknown>)
         if (Object.keys(runtime).length) {
@@ -4087,8 +4317,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
       }
       if (msg.type === "session.adopted" && typeof msg.sessionId === "string") {
         const previousSessionId = typeof msg.previousSessionId === "string" ? msg.previousSessionId : ""
-        if (!activeRunSessionId() || activeRunSessionId() === previousSessionId) {
-          setActiveRunSessionId(msg.sessionId)
+        if (!currentRunSessionId() || currentRunSessionId() === previousSessionId) {
+          setCurrentRunSessionId(msg.sessionId)
         }
       }
       if (msg.type === "session.model.state") {
@@ -4165,7 +4395,18 @@ const ChatView: Component<ChatViewProps> = (props) => {
         }
         if (!resumeAccepted) return
         if (!branchBindingId) return
-        if (!applySessionRuntimeScopeSelection(sessionRunId, branchBindingId, "running", {
+        const resumeFacts = sessionRunResumeFacts(payload)
+        const resumeStatus = sessionRunResumeRuntimeStatus(payload)
+        const resumeCanStartEventStream = sessionRunResumeCanStartEventStream(resumeFacts, resumeStatus)
+        if (!sessionRunResumePreservesSelectedMainline(resumeFacts)) {
+          applyNonRecoverableSessionRunResume()
+          return
+        }
+        setSelectedMainlineFacts({
+          ...selectedMainlineFactsFromResumeFacts(resumeFacts),
+          ...(resumeCanStartEventStream ? { transportState: "connecting" } : {}),
+        })
+        if (!applySessionRuntimeScopeSelection(sessionRunId, branchBindingId, resumeStatus, {
           ...(sessionId ? { sessionId } : {}),
         })) return
         if (sessionId) {
@@ -4193,19 +4434,27 @@ const ChatView: Component<ChatViewProps> = (props) => {
           setSessionRuntimeState(runtime)
         }
         if (!applySessionRuntimeBranchSummaries(sessionRunId, normalizeBranchSummaries(payload.branches))) return
-        if (!applySessionRuntimeMessage({
-          type: "sessionRun.running",
-          sessionRunId,
-          branchBindingId,
-          ...(sessionId ? { sessionId } : {}),
-          status: "running",
-          viewEffect: {
-            kind: "running",
-            text: String(payload.status || "") === "reconnecting"
-              ? t("chat.streamRecovery.reconnecting")
-              : t("chat.streamRecovery.continuing"),
-          },
-        })) return
+        if (resumeCanStartEventStream) {
+          setServerEventStreamState(serverEventStreamConnectingState({
+            sessionRunId,
+            branchBindingId,
+          }))
+          if (!applySessionRuntimeMessage({
+            type: "sessionRun.running",
+            sessionRunId,
+            branchBindingId,
+            ...(sessionId ? { sessionId } : {}),
+            status: resumeStatus,
+            viewEffect: {
+              kind: "running",
+              text: String(payload.status || "") === "reconnecting"
+                ? t("chat.streamRecovery.reconnecting")
+                : t("chat.streamRecovery.continuing"),
+            },
+          })) return
+        } else {
+          setServerEventStreamState(initialServerEventStreamState())
+        }
       }
       if (msg.type === "sessionRun.operation.pending") {
         const operation = sessionRunOperationMessage(msg as Record<string, unknown>)
@@ -4229,6 +4478,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         if (!applySessionRuntimeScopeSelection(msg.sessionRunId, branchBindingId, "running", {
           ...(sessionId ? { sessionId } : {}),
         })) return
+        setSelectedMainlineFacts(executingSelectedMainlineFacts())
         const runtime = sessionRuntimeStateFromMessage(msg as Record<string, unknown>)
         if (Object.keys(runtime).length) {
           setSessionRuntimeState(runtime)
@@ -4237,11 +4487,19 @@ const ChatView: Component<ChatViewProps> = (props) => {
       }
       if (msg.type === "sessionRun.operation.error") {
         const operation = sessionRunOperationMessage(msg as Record<string, unknown>)
+        const level = stringValue(msg.level) === "info" ? "info" : "error"
         if (!applySessionRuntimeOperationResult(
           "sessionRun.operation.error",
           operation,
           typeof msg.message === "string" ? msg.message : undefined,
+          level,
         )) return
+        if (level === "info") return
+        setServerEventStreamState(serverEventStreamErrorState({
+          sessionRunId: operation.sessionRunId,
+          branchBindingId: operation.branchBindingId,
+          errorMessage: typeof msg.message === "string" ? msg.message : "session run operation failed",
+        }))
       }
       if (msg.type === "sessionRun.pendingNextTurn") {
         const sessionRunId = stringValue(msg.sessionRunId) || stringValue(msg.session_run_id)
@@ -4291,6 +4549,11 @@ const ChatView: Component<ChatViewProps> = (props) => {
             consumePendingNextTurnText: stringValue(msg.text) || "",
           },
         })) return
+        setSelectedMainlineFacts(executingSelectedMainlineFacts())
+        setServerEventStreamState(serverEventStreamConnectingState({
+          sessionRunId: continuedSessionRunId,
+          branchBindingId: continuedBranchBindingId,
+        }))
       }
       if (msg.type === "sessionRun.reconnecting") {
         const payload = objectValue(msg.payload)
@@ -4307,6 +4570,17 @@ const ChatView: Component<ChatViewProps> = (props) => {
           status: "running",
           viewEffect: { kind: "running", text: t("chat.streamRecovery.reconnecting") },
         })) return
+        setSelectedMainlineFacts({
+          ...executingSelectedMainlineFacts(),
+          transportState: "reconnecting",
+        })
+        setServerEventStreamState(serverEventStreamReconnectingState({
+          sessionRunId,
+          branchBindingId,
+          attempts: numberValue(payload.reconnectAttempts) ?? numberValue(payload.reconnect_attempts),
+          errorMessage: stringValue(msg.message) || stringValue(payload.lastError) || stringValue(payload.last_error),
+          nextRetryAt: numberValue(payload.nextRetryAt) ?? numberValue(payload.next_retry_at),
+        }))
       }
       if (msg.type === "sessionRun.reconnected") {
         const payload = objectValue(msg.payload)
@@ -4323,6 +4597,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
           status: "running",
           viewEffect: { kind: "running", text: t("chat.streamRecovery.continuing") },
         })) return
+        setSelectedMainlineFacts(executingSelectedMainlineFacts())
+        setServerEventStreamState(initialServerEventStreamState())
       }
       if (msg.type === "sessionRun.events" && Array.isArray(msg.events)) {
         const sessionRunId = stringValue(msg.sessionRunId) || stringValue(msg.session_run_id)
@@ -4338,6 +4614,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         )
         if (!runtimeResult) return
         if (!sessionRuntimeVisibleEventsAccepted(runtimeResult, "sessionRun.events")) return
+        setServerEventStreamState(initialServerEventStreamState())
         for (const event of msg.events) {
           if (event && typeof event === "object") {
             handleRemoteEvent(
@@ -4361,6 +4638,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
         )
         if (!runtimeResult) return
         if (!sessionRuntimeVisibleEventsAccepted(runtimeResult, "sessionRun.stream")) return
+        setServerEventStreamState(initialServerEventStreamState())
         for (const event of msg.events) {
           if (event && typeof event === "object") {
             handleLiveStreamEvent(
@@ -4435,6 +4713,29 @@ const ChatView: Component<ChatViewProps> = (props) => {
           skipWhenStatus: ["error", "cancelled", "interrupted"],
           viewEffect: { kind: "terminal", status: "done", startNextEnvironment: true },
         })) return
+        setServerEventStreamState(initialServerEventStreamState())
+      }
+      if (msg.type === "sessionRun.stopped") {
+        const operation = sessionRunOperationMessage(msg as Record<string, unknown>)
+        const sessionRunId = stringValue(msg.sessionRunId) || stringValue(msg.session_run_id)
+        const rawBranchBindingId = stringValue(msg.branchBindingId) || stringValue(msg.branch_binding_id)
+        const stoppedSessionRunId = operation.sessionRunId || sessionRunId
+        const stoppedBranchBindingId =
+          sessionRunOperationResultTargetBranchBindingId(operation) ||
+          rawBranchBindingId
+        if (operation.operationId) {
+          if (!applySessionRuntimeOperationResult("sessionRun.operation.success", operation)) return
+        }
+        if (!applySessionRuntimeMessage({
+          type: "sessionRun.stopped",
+          sessionRunId: stoppedSessionRunId,
+          branchBindingId: stoppedBranchBindingId,
+          status: "done",
+          skipWhenStatus: ["error", "cancelled", "interrupted"],
+          viewEffect: { kind: "terminal", status: "done" },
+        })) return
+        setSelectedMainlineFacts(stoppedSelectedMainlineFacts())
+        setServerEventStreamState(initialServerEventStreamState())
       }
       if (msg.type === "environment.run.completed") {
         const requestId = stringValue(msg.requestId) || stringValue(msg.request_id)
@@ -4459,6 +4760,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
           status: "cancelled",
           viewEffect: { kind: "terminal", status: "cancelled" },
         })) return
+        setServerEventStreamState(initialServerEventStreamState())
       }
       if (msg.type === "approval.reply.ok") {
         const approvalId = stringValue(msg.approvalId) || stringValue(msg.approval_id)
@@ -4557,6 +4859,11 @@ const ChatView: Component<ChatViewProps> = (props) => {
           message: `投影恢复失败：${typeof msg.message === "string" ? msg.message : "unknown error"}`,
           stopWorking: msg.stopWorking === true,
         })) return
+        setServerEventStreamState(serverEventStreamErrorState({
+          sessionRunId,
+          branchBindingId,
+          errorMessage: typeof msg.message === "string" ? msg.message : "projection recovery failed",
+        }))
       }
       if (msg.type === "sessionRun.interrupted") {
         const sessionRunId = stringValue(msg.sessionRunId) || stringValue(msg.session_run_id)
@@ -4569,6 +4876,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
           message: typeof msg.message === "string" ? msg.message : undefined,
           viewEffect: { kind: "terminal", status: "interrupted" },
         })) return
+        setServerEventStreamState(initialServerEventStreamState())
       }
       if (msg.type === "sessionRun.error") {
         const sessionRunId = stringValue(msg.sessionRunId) || stringValue(msg.session_run_id)
@@ -4582,6 +4890,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
           viewEffect: { kind: "terminal", status: "error" },
         })
         if (!runtimeResult) return
+        setServerEventStreamState(initialServerEventStreamState())
         if (sessionRuntimeVisibleTerminalAccepted(runtimeResult, "error")) {
           setEnvironmentRunQueue([])
         }
@@ -4612,6 +4921,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
       handleCommandSelect,
       handleSessionCommand,
       clearCurrentSession,
+      handleCloseMainlineAndStartNewTask,
     },
     model: {
       modeOptions,
@@ -4685,11 +4995,12 @@ const ChatView: Component<ChatViewProps> = (props) => {
         traceLocale="zh-CN"
         isWorking={visibleIsWorking()}
         onCompact={() => chatController.runtime.handleSessionCommand("/compact")}
-        onClose={chatController.runtime.clearCurrentSession}
-        onStop={chatController.runtime.handleStop}
+        closeDisabled={sessionRunStartInFlight()}
+        onClose={chatController.runtime.handleCloseMainlineAndStartNewTask}
         onTraceNodeClick={focusTraceNode}
       />
       <RunStatusBar
+        serverEventStream={serverEventStreamState()}
         runPeer={runPeerState()}
         agentRun={agentRunState()}
       />
@@ -4859,36 +5170,13 @@ const ChatView: Component<ChatViewProps> = (props) => {
             </div>
           </div>
         </Show>
-        <Show when={queuedPrompts().items.length > 0}>
-          <div class="prompt-queue-banner" role="status">
-            <span class="codicon codicon-history" aria-hidden="true" />
-            <div class="prompt-queue-banner__body">
-              <strong>
-                {queuedPrompts().paused
-                  ? `${queuedPromptCount(queuedPrompts())} 条输入已暂停`
-                  : `${queuedPromptCount(queuedPrompts())} 条输入排队等待下一轮`}
-              </strong>
-              <div class="prompt-queue-list">
-                <For each={queuedPrompts().items}>
-                  {(item) => (
-                    <div class="prompt-queue-item prompt-queue-item--queue">
-                      <span class="codicon codicon-history" aria-hidden="true" />
-                      <span class="prompt-queue-item__text" title={item.text}>{item.text}</span>
-                      <span class="prompt-queue-item__status">
-                        {item.error || (queuedPrompts().paused ? "已暂停" : "排队")}
-                      </span>
-                      <div class="prompt-queue-item__actions">
-                        <button type="button" onClick={() => removePendingPrompt(item)}>移除</button>
-                      </div>
-                    </div>
-                  )}
-                </For>
-              </div>
-            </div>
-            <div class="prompt-queue-banner__actions">
-              <button type="button" onClick={clearQueuedPrompts}>清空</button>
-            </div>
-          </div>
+        <QueuedNextTurnDock
+          queue={queuedPrompts()}
+          onRemove={removePendingPrompt}
+          onClear={clearQueuedPrompts}
+        />
+        <Show when={composerSubmitError()}>
+          <div class="composer-submit-error" role="alert">{composerSubmitError()}</div>
         </Show>
         <PromptInput
           disabled={sessionRunStatus() === "stopping"}
@@ -4906,6 +5194,8 @@ const ChatView: Component<ChatViewProps> = (props) => {
           modelSwitching={modelSwitching()}
           modelError={visibleModelError()}
           modelRequired={true}
+          stopAvailable={composerStopAvailable()}
+          stopDisabled={composerStopDisabled()}
           chatCommands={chatCommandCatalog()}
           mentionProviders={mentionProviderCatalog()}
           agentTools={agentToolCatalog()}
@@ -4913,6 +5203,7 @@ const ChatView: Component<ChatViewProps> = (props) => {
           onMentionQuery={requestWorkspaceMentionFiles}
           onModelChange={chatController.model.handleModelChange}
           onModelUnavailable={chatController.model.handleModelUnavailable}
+          onStop={chatController.runtime.handleStop}
           onSubmit={chatController.runtime.handlePromptSubmit}
           onCommandSelect={chatController.runtime.handleCommandSelect}
         />
@@ -5311,6 +5602,334 @@ function runStatusValue(value: unknown): SessionRunStatus | undefined {
     value === "interrupted"
     ? value
     : undefined
+}
+
+interface SessionRunResumeFacts {
+  terminal: boolean
+  mainlineState: string
+  activationState: string
+  bindingStatus: string
+  working: boolean
+  continuable: boolean
+  recoverable: boolean
+  eventStreamAllowed: boolean
+  projectionState: string
+  transportState: string
+}
+
+function sessionRunResumeFacts(payload: Record<string, unknown>): SessionRunResumeFacts {
+  const rawMainlineState = stringField(payload, "mainlineState", "mainline_state") ||
+    mainlineStateFromResumeStatus(payload)
+  const rawActivationState = stringField(payload, "activationState", "activation_state") ||
+    activationStateFromResumeStatus(payload)
+  const rawBindingStatus = stringField(payload, "bindingStatus", "binding_status") ||
+    bindingStatusFromResumeMainlineState(rawMainlineState)
+  const rawProjectionState = stringField(payload, "projectionState", "projection_state") ||
+    (rawMainlineState === "settled" ? "drained" : "unavailable")
+  const explicitRecoverable = booleanField(payload, "recoverable")
+  const mainlineState = effectiveResumeMainlineState({
+    mainlineState: rawMainlineState,
+    bindingStatus: rawBindingStatus,
+    projectionState: rawProjectionState,
+    recoverable: explicitRecoverable,
+  })
+  const bindingStatus = effectiveResumeBindingStatus(rawBindingStatus, mainlineState)
+  const activationState = effectiveResumeActivationState(rawActivationState, mainlineState)
+  const canRun = resumeMainlineCanRun(mainlineState, bindingStatus)
+  const working = canRun
+    ? booleanField(payload, "working") ?? resumeActivationStateIsExecuting(activationState)
+    : false
+  const continuable = booleanField(payload, "continuable") ?? (
+    mainlineState === "settled" && bindingStatus === "active"
+  )
+  const recoverable = (
+    bindingStatus === "active" &&
+    (
+      canRun ||
+      mainlineState === "settled" ||
+      mainlineState === "waiting_user" ||
+      mainlineState === "blocked"
+    )
+  )
+  const eventStreamAllowed = canRun
+    ? booleanField(payload, "eventStreamAllowed", "event_stream_allowed") ?? (
+        working && recoverable && bindingStatus === "active"
+      )
+    : false
+  const projectionState = effectiveResumeProjectionState(rawProjectionState, mainlineState, eventStreamAllowed)
+  return {
+    terminal: booleanField(payload, "terminal") === true,
+    mainlineState,
+    activationState,
+    bindingStatus,
+    working,
+    continuable,
+    recoverable,
+    eventStreamAllowed,
+    projectionState,
+    transportState: stringField(payload, "transportState", "transport_state") ||
+      (eventStreamAllowed ? "streaming" : "disconnected"),
+  }
+}
+
+function sessionRunResumePreservesSelectedMainline(facts: SessionRunResumeFacts): boolean {
+  return (
+    facts.mainlineState === "starting" ||
+    facts.mainlineState === "executing" ||
+    facts.mainlineState === "waiting_user" ||
+    facts.mainlineState === "blocked" ||
+    facts.mainlineState === "settled" ||
+    facts.mainlineState === "cancelled" ||
+    facts.mainlineState === "closed" ||
+    facts.mainlineState === "failed" ||
+    facts.mainlineState === "unrecoverable"
+  )
+}
+
+function effectiveResumeMainlineState(input: {
+  mainlineState: string
+  bindingStatus: string
+  projectionState: string
+  recoverable?: boolean
+}): string {
+  if (
+    input.mainlineState === "cancelled" ||
+    input.mainlineState === "closed" ||
+    input.mainlineState === "failed" ||
+    input.mainlineState === "unrecoverable"
+  ) {
+    return input.mainlineState
+  }
+  if (input.projectionState === "nonrecoverable") return "unrecoverable"
+  if (input.recoverable === false && input.mainlineState !== "settled") return "unrecoverable"
+  if (input.bindingStatus === "deleted" || input.bindingStatus === "closed") return "closed"
+  return input.mainlineState
+}
+
+function effectiveResumeBindingStatus(bindingStatus: string, mainlineState: string): string {
+  if (bindingStatus === "deleted") return "deleted"
+  if (
+    mainlineState === "cancelled" ||
+    mainlineState === "closed" ||
+    mainlineState === "failed" ||
+    mainlineState === "unrecoverable"
+  ) {
+    return "closed"
+  }
+  return bindingStatus
+}
+
+function effectiveResumeActivationState(activationState: string, mainlineState: string): string {
+  if (mainlineState === "cancelled") return "cancelled"
+  if (mainlineState === "failed" || mainlineState === "unrecoverable") return "failed"
+  if (mainlineState === "closed") return resumeActivationStateIsExecuting(activationState) ? "completed" : activationState
+  if (mainlineState === "settled") return activationState === "cancelled" ? "cancelled" : "completed"
+  return activationState
+}
+
+function resumeMainlineCanRun(mainlineState: string, bindingStatus: string): boolean {
+  return (
+    bindingStatus === "active" &&
+    (
+      mainlineState === "starting" ||
+      mainlineState === "executing"
+    )
+  )
+}
+
+function effectiveResumeProjectionState(
+  projectionState: string,
+  mainlineState: string,
+  eventStreamAllowed: boolean,
+): string {
+  if (mainlineState === "unrecoverable") {
+    return "nonrecoverable"
+  }
+  if (mainlineState === "failed" || mainlineState === "cancelled" || mainlineState === "closed") return "drained"
+  if (mainlineState === "settled") return "drained"
+  if (projectionState === "nonrecoverable") return "nonrecoverable"
+  if (projectionState === "recovered" || projectionState === "drained") return projectionState
+  return eventStreamAllowed ? "live" : "unavailable"
+}
+
+function selectedMainlineFactsFromResumeFacts(facts: SessionRunResumeFacts): SelectedMainlineFacts {
+  return {
+    mainlineState: normalizeMainlineState(facts.mainlineState),
+    activationState: normalizeActivationState(facts.activationState),
+    bindingStatus: normalizeBindingStatus(facts.bindingStatus),
+    working: facts.working,
+    continuable: facts.continuable,
+    recoverable: facts.recoverable,
+    eventStreamAllowed: facts.eventStreamAllowed,
+    projectionState: normalizeProjectionState(facts.projectionState),
+    transportState: normalizeTransportState(facts.transportState),
+  }
+}
+
+function sessionRunResumeCanStartEventStream(
+  facts: SessionRunResumeFacts,
+  status: BranchRuntimeScopeView["status"],
+): boolean {
+  return (
+    facts.working &&
+    sessionRunResumeRuntimeStatusIsActive(status) &&
+    facts.recoverable &&
+    facts.eventStreamAllowed &&
+    !facts.terminal &&
+    facts.bindingStatus === "active" &&
+    (facts.projectionState === "live" || facts.projectionState === "recovered")
+  )
+}
+
+function sessionRunResumeRuntimeStatus(payload: Record<string, unknown>): BranchRuntimeScopeView["status"] {
+  const status = stringValue(payload.status)
+  const mainlineState = stringField(payload, "mainlineState", "mainline_state")
+  const activationState = stringField(payload, "activationState", "activation_state")
+  if (resumeActivationStateIsExecuting(activationState || "")) return "running"
+  if (mainlineState === "settled") return "done"
+  if (mainlineState === "cancelled") return "cancelled"
+  if (mainlineState === "closed" || mainlineState === "failed" || mainlineState === "unrecoverable" || mainlineState === "blocked") {
+    return "error"
+  }
+  if (mainlineState === "waiting_user") return "waiting"
+  if (
+    status === "queued" ||
+    status === "running" ||
+    status === "waiting" ||
+    status === "stopping" ||
+    status === "cancelled" ||
+    status === "done" ||
+    status === "error" ||
+    status === "interrupted"
+  ) {
+    return status
+  }
+  if (status === "completed" || status === "success") return "done"
+  if (status === "settled") return "done"
+  if (status === "failed" || status === "failure" || status === "blocked") return "error"
+  return "running"
+}
+
+function sessionRunResumeRuntimeStatusIsActive(status: BranchRuntimeScopeView["status"]): boolean {
+  return (
+    status === "queued" ||
+    status === "running" ||
+    status === "waiting" ||
+    status === "stopping"
+  )
+}
+
+function mainlineStateFromResumeStatus(payload: Record<string, unknown>): string {
+  const status = stringValue(payload.status)
+  if (
+    status === "queued" ||
+    status === "running" ||
+    status === "waiting" ||
+    status === "stopping"
+  ) {
+    return "executing"
+  }
+  if (status === "reconnecting") return "none"
+  if (status === "completed" || status === "success" || status === "done" || status === "settled") return "settled"
+  if (status === "waiting_user") return "waiting_user"
+  if (status === "blocked") return "blocked"
+  if (status === "cancelled" || status === "canceled") return "cancelled"
+  if (status === "closed") return "closed"
+  if (status === "failed" || status === "failure" || status === "error" || status === "interrupted") return "failed"
+  if (status === "unrecoverable") return "unrecoverable"
+  return "executing"
+}
+
+function activationStateFromResumeStatus(payload: Record<string, unknown>): string {
+  const status = stringValue(payload.status)
+  if (status === "queued") return "queued"
+  if (status === "dispatched") return "dispatched"
+  if (status === "running" || status === "stopping") return "running"
+  if (status === "reconnecting") return "none"
+  if (status === "waiting" || status === "waiting_server") return "waiting_server"
+  if (status === "completed" || status === "success" || status === "done" || status === "settled") return "completed"
+  if (status === "waiting_user") return "waiting_user"
+  if (status === "blocked") return "blocked"
+  if (status === "cancelled" || status === "canceled") return "cancelled"
+  if (status === "failed" || status === "failure" || status === "error" || status === "interrupted" || status === "unrecoverable") {
+    return "failed"
+  }
+  return "running"
+}
+
+function bindingStatusFromResumeMainlineState(mainlineState: string): string {
+  if (mainlineState === "closed" || mainlineState === "cancelled" || mainlineState === "failed" || mainlineState === "unrecoverable") {
+    return "closed"
+  }
+  if (mainlineState === "none") return "none"
+  return "active"
+}
+
+function resumeActivationStateIsExecuting(status: string): boolean {
+  return status === "queued" || status === "dispatched" || status === "running" || status === "waiting_server"
+}
+
+function normalizeMainlineState(value: string): SessionMainlineState {
+  if (
+    value === "none" ||
+    value === "starting" ||
+    value === "executing" ||
+    value === "waiting_user" ||
+    value === "settled" ||
+    value === "closed" ||
+    value === "cancelled" ||
+    value === "failed" ||
+    value === "blocked" ||
+    value === "unrecoverable"
+  ) return value
+  return "none"
+}
+
+function normalizeActivationState(value: string): SessionActivationState {
+  if (
+    value === "none" ||
+    value === "queued" ||
+    value === "dispatched" ||
+    value === "running" ||
+    value === "waiting_server" ||
+    value === "waiting_user" ||
+    value === "completed" ||
+    value === "failed" ||
+    value === "cancelled" ||
+    value === "blocked"
+  ) return value
+  return "none"
+}
+
+function normalizeBindingStatus(value: string): SessionBindingStatus {
+  if (value === "none" || value === "pending" || value === "active" || value === "closed" || value === "deleted") return value
+  return "none"
+}
+
+function normalizeProjectionState(value: string): SessionProjectionState {
+  if (value === "live" || value === "recovered" || value === "drained" || value === "unavailable" || value === "nonrecoverable") return value
+  return "unavailable"
+}
+
+function normalizeTransportState(value: string): SessionTransportState {
+  if (value === "disconnected" || value === "connecting" || value === "streaming" || value === "reconnecting" || value === "closed" || value === "error") return value
+  return "disconnected"
+}
+
+function booleanField(record: Record<string, unknown>, ...keys: string[]): boolean | undefined {
+  for (const key of keys) {
+    const value = record[key]
+    if (typeof value === "boolean") return value
+  }
+  return undefined
+}
+
+function stringField(record: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = stringValue(record[key])?.trim()
+    if (value) return value
+  }
+  return undefined
 }
 
 function objectValue(value: unknown): Record<string, unknown> {
