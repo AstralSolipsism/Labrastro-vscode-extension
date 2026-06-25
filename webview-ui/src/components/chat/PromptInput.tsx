@@ -34,6 +34,8 @@ interface PromptInputProps {
   modelSwitching?: boolean
   modelError?: string
   modelRequired?: boolean
+  stopAvailable?: boolean
+  stopDisabled?: boolean
   chatCommands?: unknown[]
   mentionProviders?: unknown[]
   agentTools?: unknown[]
@@ -43,6 +45,7 @@ interface PromptInputProps {
   onCommandSelect?: (selection: PromptCommandSelection) => boolean | void
   onModelChange?: (modelId: string) => void
   onModelUnavailable?: () => void
+  onStop?: () => void
   onSubmit?: (submission: PromptSubmission) => boolean | void
 }
 
@@ -211,10 +214,22 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     Boolean(props.selectedModel && props.modelOptions?.some((option) => option.id === props.selectedModel))
   const modelBlocked = () =>
     props.modelRequired === true && (!hasModelOptions() || !selectedModelAvailable())
+  const hasDraft = () => Boolean(text().trim())
+  const showStopAction = () => Boolean(props.stopAvailable && !hasDraft())
   const sendButtonTitle = () => {
     if (props.modelError) return props.modelError
     if (modelBlocked()) return "请选择会话模型后再发送。"
     return t("chat.send")
+  }
+  const primaryActionDisabled = (): boolean => Boolean(
+    showStopAction() ? props.stopDisabled : !hasDraft() || props.disabled || props.modelSwitching || modelBlocked()
+  )
+  const handlePrimaryAction = () => {
+    if (showStopAction()) {
+      props.onStop?.()
+      return
+    }
+    handleSubmit()
   }
   const canOpenModelSelector = () => !props.modelSwitching
   const canShowModelMenu = () => canOpenModelSelector() && hasModelOptions()
@@ -432,10 +447,10 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         </div>
         <div class="prompt-input-actions">
           <IconButton
-            icon="arrow-up"
-            title={sendButtonTitle()}
-            disabled={!text().trim() || props.disabled || props.modelSwitching || modelBlocked()}
-            onClick={handleSubmit}
+            icon={showStopAction() ? "debug-stop" : "arrow-up"}
+            title={showStopAction() ? t("task.stopSession") : sendButtonTitle()}
+            disabled={primaryActionDisabled()}
+            onClick={handlePrimaryAction}
           />
         </div>
       </div>
