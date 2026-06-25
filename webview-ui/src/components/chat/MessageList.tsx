@@ -2,7 +2,7 @@ import { Component, Index, Show, createEffect, type Accessor } from "solid-js"
 import { t } from "../../i18n"
 import { SessionTurn, type WorkflowUsageSnapshot } from "./SessionTurn"
 import { WelcomeState } from "./WelcomeState"
-import { WorkingIndicator } from "./WorkingIndicator"
+import { ChatRuntimeWorkingIndicator } from "./ChatRuntimeWorkingIndicator"
 import { IconButton } from "../common/IconButton"
 import { useVirtualMessageList, type UseVirtualMessageListResult, type VirtualTurnItem } from "./useVirtualMessageList"
 import type { MockTurn, MockSession, MockMessage } from "./mock-data"
@@ -119,7 +119,7 @@ export const MessageList: Component<MessageListProps> = (props) => {
             </div>
           </Show>
 
-          <WorkingIndicator
+          <ChatRuntimeWorkingIndicator
             isWorking={props.showWorkingIndicator ?? props.isWorking}
             text={props.workingText}
             elapsed={props.workingElapsed}

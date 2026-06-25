@@ -4,10 +4,15 @@ import { describe, expect, it } from "vitest"
 const source = readFileSync(new URL("./MessageList.tsx", import.meta.url), "utf8")
 
 describe("MessageList working indicator", () => {
-  it("uses showWorkingIndicator for the footer while preserving isWorking for virtualization", () => {
+  it("uses ChatView runtime indicator for the footer while preserving isWorking for virtualization", () => {
     expect(source).toContain("showWorkingIndicator?: boolean")
     expect(source).toContain("isWorking: () => props.isWorking")
+    expect(source).toContain('import { ChatRuntimeWorkingIndicator } from "./ChatRuntimeWorkingIndicator"')
+    expect(source).toContain("<ChatRuntimeWorkingIndicator")
     expect(source).toContain("isWorking={props.showWorkingIndicator ?? props.isWorking}")
+    expect(source).not.toContain('import { WorkingIndicator }')
+    expect(source).not.toContain("<WorkingIndicator")
+    expect(source).not.toContain("working-spinner")
   })
 
   it("passes working text into SessionTurn as the running process label", () => {
