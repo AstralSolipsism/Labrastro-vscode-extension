@@ -9,7 +9,7 @@ type SessionRuntimeStatsPatch = Partial<VisibleSessionProjectionView["selectedSt
 export interface SessionRuntimeViewTarget {
   setSelectedBranchBindingId: (branchBindingId: string) => void
   setActiveSessionRunId: (sessionRunId: string | undefined) => void
-  setActiveRunSessionId: (sessionId: string) => void
+  setCurrentRunSessionId: (sessionId: string) => void
   setSessionRunStatus: (status: SessionRuntimeViewStatus) => void
   setIsWorking: (isWorking: boolean) => void
   setWorkingText: (text: string) => void
@@ -18,7 +18,7 @@ export interface SessionRuntimeViewTarget {
     stats: SessionRuntimeStatsPatch,
   ) => void
   patchStats: (stats: SessionRuntimeStatsPatch) => void
-  appendOperationErrorNotice: (message: string) => void
+  appendOperationErrorNotice: (message: string, level?: "info" | "error") => void
   appendScopedErrorNotice: (message: string, noticeId: string) => void
   enqueuePendingNextTurn: (pendingNextTurn: Record<string, unknown>) => void
   consumePendingNextTurn: (text: string) => void
@@ -86,7 +86,7 @@ export function applySessionRuntimeEffectsToView(
       applyVisibleBranchProjectionToView(target, rollback.sourceBranchBindingId, rollback.turns, rollback.stats)
     },
     applyVisibleOperationRestore: ({ restore }) => applySessionRunOperationRestoreToView(target, restore),
-    applyVisibleOperationErrorNotice: ({ message }) => target.appendOperationErrorNotice(message),
+    applyVisibleOperationErrorNotice: ({ message, level }) => target.appendOperationErrorNotice(message, level),
     applyVisibleProjectionErrorStopped: () => applyVisibleProjectionErrorStoppedToView(target),
     applyVisibleScopedErrorNotice: ({ message, messageType }) => target.appendScopedErrorNotice(message, messageType),
     applyVisiblePendingNextTurnAdded: ({ pendingNextTurn }) => target.enqueuePendingNextTurn(pendingNextTurn),
@@ -107,7 +107,7 @@ export function applySessionRunOperationRestoreToView(
 ): void {
   target.setSelectedBranchBindingId(restore.selectedBranchBindingId)
   target.setActiveSessionRunId(restore.activeSessionRunId)
-  target.setActiveRunSessionId(restore.activeRunSessionId)
+  target.setCurrentRunSessionId(restore.currentRunSessionId)
   target.setSessionRunStatus(restore.sessionRunStatus)
   target.setIsWorking(restore.isWorking)
   target.setWorkingText(restore.workingText)
@@ -127,7 +127,6 @@ export function applyVisibleWorkingStoppedToView(target: SessionRuntimeViewTarge
 
 export function applyVisibleProjectionErrorStoppedToView(target: SessionRuntimeViewTarget): void {
   target.setIsWorking(false)
-  target.setActiveRunSessionId("")
   target.setWorkingText("")
   target.stopTimer()
 }
@@ -188,7 +187,9 @@ function applyVisibleProjectionView(
 ): void {
   target.setSelectedBranchBindingId(projection.selectedBranchBindingId)
   target.setActiveSessionRunId(projection.selectedSessionRunId)
-  target.setActiveRunSessionId(projection.selectedSessionId || "")
+  if (projection.selectedSessionId) {
+    target.setCurrentRunSessionId(projection.selectedSessionId)
+  }
   applyVisibleProjectionRuntimeStateToView(target, projection.selectedRuntimeStatus)
   target.setBranchSummaries(projection.branchSummaries)
   target.replaceCurrentTurns(projection.selectedTranscript, projection.selectedStats)

@@ -6,6 +6,7 @@ export type SessionRunOperationViewKind =
   | "continue"
   | "recover"
   | "steer"
+  | "stop"
   | "cancel"
   | "branch.create"
   | "branch.select"
@@ -157,6 +158,7 @@ function isSessionRunOperationKind(value: string | undefined): value is SessionR
     value === "continue" ||
     value === "recover" ||
     value === "steer" ||
+    value === "stop" ||
     value === "cancel" ||
     value === "branch.create" ||
     value === "branch.select"

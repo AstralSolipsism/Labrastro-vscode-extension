@@ -14,6 +14,18 @@ export interface RunPeerState {
   errorMessage?: string
 }
 
+export type ServerEventStreamStatus = "idle" | "connecting" | "reconnecting" | "error"
+
+export interface ServerEventStreamState {
+  status: ServerEventStreamStatus
+  sessionRunId?: string
+  branchBindingId?: string
+  attempts?: number
+  errorMessage?: string
+  nextRetryAt?: number
+  updatedAt?: number
+}
+
 export type AgentRunPhase = "idle" | "queued" | "running" | "completed" | "error"
 export type AgentRunKind = "chat" | "delegated_run"
 
@@ -25,6 +37,10 @@ export interface AgentRunState {
 }
 
 export function initialRunPeerState(): RunPeerState {
+  return { status: "idle" }
+}
+
+export function initialServerEventStreamState(): ServerEventStreamState {
   return { status: "idle" }
 }
 
@@ -54,6 +70,62 @@ export function runPeerStateFromError(message: string, now = Date.now()): RunPee
   return {
     status: "error",
     errorMessage: message,
+    updatedAt: now,
+  }
+}
+
+export function remotePeerReadyHasLocalActionProof(payload: Readonly<Record<string, unknown>>): boolean {
+  return Boolean(
+    stringValue(payload.local_action_id || payload.localActionId) ||
+    stringValue(payload.local_action_kind || payload.localActionKind) ||
+    stringValue(payload.local_resource_id || payload.localResourceId) ||
+    stringValue(payload.local_peer_reason || payload.localPeerReason) ||
+    stringValue(payload.scope) === "local_action"
+  )
+}
+
+export function serverEventStreamConnectingState(
+  input: { sessionRunId?: string; branchBindingId?: string },
+  now = Date.now(),
+): ServerEventStreamState {
+  return {
+    status: "connecting",
+    ...(input.sessionRunId ? { sessionRunId: input.sessionRunId } : {}),
+    ...(input.branchBindingId ? { branchBindingId: input.branchBindingId } : {}),
+    updatedAt: now,
+  }
+}
+
+export function serverEventStreamReconnectingState(
+  input: {
+    sessionRunId?: string
+    branchBindingId?: string
+    attempts?: number
+    errorMessage?: string
+    nextRetryAt?: number
+  },
+  now = Date.now(),
+): ServerEventStreamState {
+  return {
+    status: "reconnecting",
+    ...(input.sessionRunId ? { sessionRunId: input.sessionRunId } : {}),
+    ...(input.branchBindingId ? { branchBindingId: input.branchBindingId } : {}),
+    ...(input.attempts !== undefined ? { attempts: input.attempts } : {}),
+    ...(input.errorMessage ? { errorMessage: input.errorMessage } : {}),
+    ...(input.nextRetryAt !== undefined ? { nextRetryAt: input.nextRetryAt } : {}),
+    updatedAt: now,
+  }
+}
+
+export function serverEventStreamErrorState(
+  input: { sessionRunId?: string; branchBindingId?: string; errorMessage?: string },
+  now = Date.now(),
+): ServerEventStreamState {
+  return {
+    status: "error",
+    ...(input.sessionRunId ? { sessionRunId: input.sessionRunId } : {}),
+    ...(input.branchBindingId ? { branchBindingId: input.branchBindingId } : {}),
+    ...(input.errorMessage ? { errorMessage: input.errorMessage } : {}),
     updatedAt: now,
   }
 }

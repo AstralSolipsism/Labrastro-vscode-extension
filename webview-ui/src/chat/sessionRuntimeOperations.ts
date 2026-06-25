@@ -202,6 +202,7 @@ function operationResultInitialStatus(
 ): SessionRuntimeStatus {
   if (messageType === "sessionRun.operation.error") return "idle"
   if (operationKind === "branch.select") return "idle"
+  if (operationKind === "stop") return "done"
   return "running"
 }
 

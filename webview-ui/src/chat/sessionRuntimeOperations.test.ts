@@ -239,6 +239,35 @@ describe("sessionRuntimeOperations", () => {
     }, "sessionRun.operation.error")).toBeUndefined()
   })
 
+  it("settles stop operation success without requiring a cancel operation kind", () => {
+    const state = model([
+      scope("run-1", "main", {
+        operationId: "op-stop",
+        kind: "stop",
+        targetBranchBindingId: "main",
+      }),
+    ])
+
+    const result = sessionRuntimeModelForOperationResult({
+      model: state,
+      operation: {
+        operationId: "op-stop",
+        operationKind: "stop",
+        sessionRunId: "run-1",
+        branchBindingId: "main",
+      },
+      target: {
+        sessionRunId: "run-1",
+        branchBindingId: "main",
+        scopeId: scopeIdFor("run-1", "main"),
+      },
+      messageType: "sessionRun.operation.success",
+      createScope,
+    })
+
+    expect(result?.scopes[scopeIdFor("run-1", "main")]?.operationsById["op-stop"]).toBeDefined()
+  })
+
   it("moves a selected pending start operation to the response scope", () => {
     const pending = {
       ...scope(PENDING_SESSION_RUN_START_SESSION_RUN_ID, "op-start", {

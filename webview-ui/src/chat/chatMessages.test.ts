@@ -15,11 +15,13 @@ describe("chatMessages operation correlation fields", () => {
     const message = buildChatSendMessage({
       text: "hello",
       operationId: "op-start",
+      operationKind: "start",
       providerId: "provider-1",
       modelId: "model-1",
     }) as Record<string, unknown>
 
     expect(message.operationId).toBe("op-start")
+    expect(message.operationKind).toBe("start")
     expect(message).not.toHaveProperty(operationSnakeId)
   })
 
@@ -38,6 +40,22 @@ describe("chatMessages operation correlation fields", () => {
     expect(message.branchBindingId).toBe("branch-a")
     expect(message).not.toHaveProperty("operationId")
     expect(message).not.toHaveProperty(operationSnakeId)
+  })
+
+  it("emits continue operationKind for normal SessionRun continuation", () => {
+    const message = buildChatSendMessage({
+      text: "second turn",
+      sessionRunId: "run-current",
+      branchBindingId: "main",
+      operationId: "op-continue",
+      operationKind: "continue",
+    }) as Record<string, unknown>
+
+    expect(message.sessionRunId).toBe("run-current")
+    expect(message.session_run_id).toBe("run-current")
+    expect(message.branchBindingId).toBe("main")
+    expect(message.branch_binding_id).toBe("main")
+    expect(message.operationKind).toBe("continue")
   })
 
   it("emits branch operationId without snake_case operation alias", () => {
@@ -113,6 +131,24 @@ describe("chatMessages operation correlation fields", () => {
     expect(message).not.toHaveProperty(operationSnakeId)
   })
 
+  it("emits stop operationId without snake_case operation alias", () => {
+    const chatPort = port()
+
+    chatMessages.stop(chatPort, {
+      sessionRunId: "run-current",
+      branchBindingId: "branch-a",
+      operationId: "op-stop",
+    })
+
+    const message = chatPort.postMessage.mock.calls[0]?.[0] as Record<string, unknown>
+    expect(message.type).toBe("sessionRun.stop")
+    expect(message.operationId).toBe("op-stop")
+    expect(message.branchBindingId).toBe("branch-a")
+    expect(message.branch_binding_id).toBe("branch-a")
+    expect(message.reason).toBe("user_stop")
+    expect(message).not.toHaveProperty(operationSnakeId)
+  })
+
   it("fails closed selected-visible facade calls without non-empty operationId", () => {
     const chatPort = port()
 
@@ -153,6 +189,11 @@ describe("chatMessages operation correlation fields", () => {
       operationId: "",
     })
     chatMessages.cancel(chatPort, {
+      sessionRunId: "run-current",
+      branchBindingId: "main",
+      operationId: "",
+    })
+    chatMessages.stop(chatPort, {
       sessionRunId: "run-current",
       branchBindingId: "main",
       operationId: "",

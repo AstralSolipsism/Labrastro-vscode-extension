@@ -13,6 +13,7 @@ export interface ChatSendInput {
   sessionRunId?: string
   requestId?: string
   operationId: string
+  operationKind?: "start" | "continue"
   locale?: string
   branchBindingId?: string
   mode?: string
@@ -100,7 +101,7 @@ export function routeSelectedChatMode(
   const selected = mode.trim()
   if (!selected) return {}
   if (selected === "taskflow") {
-    return options.forceDirect ? {} : { mode: "taskflow", workflowMode: "taskflow" }
+    return options.forceDirect ? {} : { workflowMode: "taskflow" }
   }
   return { mode: selected }
 }
@@ -115,6 +116,9 @@ export function buildChatSendMessage(input: ChatSendInput): WebviewToHostMessage
   const branchBindingId = input.branchBindingId?.trim()
   const sessionRunId = input.sessionRunId?.trim()
   const operationId = input.operationId.trim()
+  const operationKind = input.operationKind === "start" || input.operationKind === "continue"
+    ? input.operationKind
+    : undefined
   return {
     type: "chat.send",
     text,
@@ -123,6 +127,7 @@ export function buildChatSendMessage(input: ChatSendInput): WebviewToHostMessage
     ...(sessionRunId ? { sessionRunId, session_run_id: sessionRunId } : {}),
     ...(input.requestId ? { requestId: input.requestId } : {}),
     operationId,
+    ...(operationKind ? { operationKind } : {}),
     ...(locale ? { locale } : {}),
     ...(branchBindingId ? { branchBindingId, branch_binding_id: branchBindingId } : {}),
     ...(mode ? { mode } : {}),
@@ -202,6 +207,20 @@ export const chatMessages = {
       branchBindingId,
       branch_binding_id: branchBindingId,
       reason: input.reason || "user_cancelled",
+    })
+  },
+
+  stop(port: ChatMessagePort, input: ChatCancelInput): void {
+    const branchBindingId = input.branchBindingId.trim()
+    const operationId = input.operationId.trim()
+    if (!input.sessionRunId || !branchBindingId || !operationId) return
+    port.postMessage({
+      type: "sessionRun.stop",
+      sessionRunId: input.sessionRunId,
+      operationId,
+      branchBindingId,
+      branch_binding_id: branchBindingId,
+      reason: input.reason || "user_stop",
     })
   },
 

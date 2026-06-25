@@ -23,8 +23,9 @@ describe("chat messages", () => {
       text: "  hello  ",
       sessionId: "session-1",
       operationId: "op-start",
+      operationKind: "start",
       branchBindingId: "branch-1",
-      mode: "taskflow",
+      mode: "coder",
       workflowMode: "taskflow",
       mentions: [{ kind: "file", path: "README.md" }],
     })
@@ -34,9 +35,10 @@ describe("chat messages", () => {
       text: "hello",
       sessionId: "session-1",
       operationId: "op-start",
+      operationKind: "start",
       branchBindingId: "branch-1",
       branch_binding_id: "branch-1",
-      mode: "taskflow",
+      mode: "coder",
       workflowMode: "taskflow",
       mentions: [{ kind: "file", path: "README.md" }],
     })
@@ -56,6 +58,7 @@ describe("chat messages", () => {
       text: "hello",
       draftSessionId: "session-local",
       operationId: "op-start",
+      operationKind: "start",
       locale: " zh-CN ",
       providerId: " deepseek ",
       modelId: " V4PRO ",
@@ -65,6 +68,7 @@ describe("chat messages", () => {
       text: "hello",
       draftSessionId: "session-local",
       operationId: "op-start",
+      operationKind: "start",
       locale: "zh-CN",
       providerId: "deepseek",
       modelId: "V4PRO",
@@ -125,9 +129,9 @@ describe("chat messages", () => {
   it("posts session run controls with branch binding ids", () => {
     const messages: Record<string, unknown>[] = []
 
-    chatMessages.cancel(
+    chatMessages.stop(
       { postMessage: (message) => messages.push(message) },
-      { sessionRunId: "run-1", branchBindingId: "branch-1", operationId: "op-cancel", reason: "user_stop" },
+      { sessionRunId: "run-1", branchBindingId: "branch-1", operationId: "op-stop", reason: "user_stop" },
     )
     chatMessages.recover(
       { postMessage: (message) => messages.push(message) },
@@ -136,9 +140,9 @@ describe("chat messages", () => {
 
     expect(messages).toEqual([
       {
-        type: "sessionRun.cancel",
+        type: "sessionRun.stop",
         sessionRunId: "run-1",
-        operationId: "op-cancel",
+        operationId: "op-stop",
         branchBindingId: "branch-1",
         branch_binding_id: "branch-1",
         reason: "user_stop",
@@ -159,7 +163,6 @@ describe("chat messages", () => {
     expect(routeSelectedChatMode("planner")).toEqual({ mode: "planner" })
     expect(routeSelectedChatMode("debugger")).toEqual({ mode: "debugger" })
     expect(routeSelectedChatMode("taskflow")).toEqual({
-      mode: "taskflow",
       workflowMode: "taskflow",
     })
     expect(routeSelectedChatMode("taskflow", { forceDirect: true })).toEqual({})

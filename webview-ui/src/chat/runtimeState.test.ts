@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest"
 import {
   agentRunStateFromDelegatedCompletion,
   agentRunStateFromRuntimeStatus,
+  initialServerEventStreamState,
+  remotePeerReadyHasLocalActionProof,
   runPeerStateFromReady,
+  serverEventStreamConnectingState,
+  serverEventStreamErrorState,
+  serverEventStreamReconnectingState,
   settleAgentRunStateForSessionRunEvent,
 } from "./runtimeState"
 
@@ -26,6 +31,53 @@ describe("runtime state helpers", () => {
       model: "gpt-4o",
       workspaceRoot: "G:/project",
       updatedAt: 100,
+    })
+  })
+
+  it("requires explicit local-action proof before showing run peer state", () => {
+    expect(remotePeerReadyHasLocalActionProof({ session_id: "session-1" })).toBe(false)
+    expect(remotePeerReadyHasLocalActionProof({
+      session_id: "session-1",
+      local_action_id: "local-action-1",
+    })).toBe(true)
+  })
+
+  it("models server event-stream state separately from run peer state", () => {
+    expect(initialServerEventStreamState()).toEqual({ status: "idle" })
+    expect(serverEventStreamConnectingState({
+      sessionRunId: "run-1",
+      branchBindingId: "main",
+    }, 200)).toEqual({
+      status: "connecting",
+      sessionRunId: "run-1",
+      branchBindingId: "main",
+      updatedAt: 200,
+    })
+    expect(serverEventStreamReconnectingState({
+      sessionRunId: "run-1",
+      branchBindingId: "main",
+      attempts: 2,
+      errorMessage: "network",
+      nextRetryAt: 260,
+    }, 220)).toEqual({
+      status: "reconnecting",
+      sessionRunId: "run-1",
+      branchBindingId: "main",
+      attempts: 2,
+      errorMessage: "network",
+      nextRetryAt: 260,
+      updatedAt: 220,
+    })
+    expect(serverEventStreamErrorState({
+      sessionRunId: "run-1",
+      branchBindingId: "main",
+      errorMessage: "timeout",
+    }, 240)).toEqual({
+      status: "error",
+      sessionRunId: "run-1",
+      branchBindingId: "main",
+      errorMessage: "timeout",
+      updatedAt: 240,
     })
   })
 

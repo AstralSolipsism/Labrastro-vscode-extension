@@ -48,6 +48,7 @@ export interface SessionRunTranscriptLabels {
   memoryContext: string
   runEvent: string
   cancelled: string
+  stopped: string
   errorPrefix: string
   streamInterruptedPrefix: string
   providerStreamInterrupted: string
@@ -147,6 +148,8 @@ export const SESSION_RUN_TRANSCRIPT_EVENT_TYPES = new Set([
   "approval_resolved",
   "session_run_cancel_requested",
   "session_run_cancelled",
+  "session_run_stop_requested",
+  "session_run_stopped",
   "error",
   "session_run_failed",
   "session_run_end",
@@ -164,6 +167,7 @@ const DEFAULT_LABELS: SessionRunTranscriptLabels = {
   memoryContext: "注入记忆",
   runEvent: "运行事件",
   cancelled: "已取消当前请求。",
+  stopped: "已停止当前执行。",
   errorPrefix: "错误：",
   streamInterruptedPrefix: "输出中断：",
   providerStreamInterrupted: "模型输出流中断，正在尝试恢复。",
@@ -445,8 +449,14 @@ function applySessionRunTranscriptEventToBundle(
   } else if (type === "approval_resolved") {
     appendApprovalResolved(next, payload, meta, context)
     markChanged()
-  } else if (type === "session_run_cancel_requested") {
+  } else if (type === "session_run_cancel_requested" || type === "session_run_stop_requested") {
     patchRunStatus(next, "stopping")
+    markChanged()
+  } else if (type === "session_run_stopped") {
+    appendNotice("info", labels.stopped, "stopped", { rawEventRefs: rawEventRefsFromPayload(payload) })
+    finalizeRunTranscriptItems(next, "done", context)
+    patchRunStatus(next, "done")
+    next.session = { ...next.session, state: "success" }
     markChanged()
   } else if (type === "session_run_cancelled") {
     settlePendingApprovalTools(next, "cancelled", String(payload.reason || "session_run_cancelled"), meta)

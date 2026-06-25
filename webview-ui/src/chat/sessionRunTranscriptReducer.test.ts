@@ -1721,6 +1721,30 @@ describe("sessionRunTranscriptReducer", () => {
     expect(current.session.state).toBe("cancelled")
   })
 
+  it("settles stopped activation without cancelling the session mainline", () => {
+    let current = bundle()
+    current = reduce(current, "session_run_start", { prompt: "hi" }, 1)
+    current = reduce(current, "tool_call_start", {
+      tool_call_id: "tool-1",
+      tool_name: "shell",
+      tool_args: { command: "npm test" },
+    }, 2)
+    current = reduce(current, "session_run_stopped", { reason: "user_stop" }, 3)
+
+    const parts = current.turns[0].assistantMessages[0].parts
+    expect(parts[0]).toMatchObject({
+      type: "tool",
+      status: "cancelled",
+    })
+    expect(parts[1]).toMatchObject({
+      type: "notice",
+      level: "info",
+      text: "已停止当前执行。",
+    })
+    expect(current.stats.runStatus).toBe("done")
+    expect(current.session.state).toBe("success")
+  })
+
   it("does not duplicate the terminal error notice when failed follows error", () => {
     let current = bundle()
     current = reduce(current, "session_run_start", { prompt: "hi" }, 1)

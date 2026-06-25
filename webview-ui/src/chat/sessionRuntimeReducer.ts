@@ -103,7 +103,8 @@ export function reduceSessionRuntimeHostMessage(
     }
   }
   if (message.type === "sessionRun.operation.error" || message.type === "sessionRun.operation.success") {
-    return settleOperation(model, scope, message.operationId, message.operationKind, message.branchBindingId, message.type, message.message)
+    const level = message.type === "sessionRun.operation.error" && message.level === "info" ? "info" : "error"
+    return settleOperation(model, scope, message.operationId, message.operationKind, message.branchBindingId, message.type, message.message, level)
   }
   if (message.type === "sessionRun.pendingNextTurn") {
     const reduction = updateScope(model, {
@@ -256,6 +257,7 @@ function settleOperation(
   messageBranchBindingId: string | undefined,
   messageType: "sessionRun.operation.error" | "sessionRun.operation.success",
   message: string | undefined,
+  level: "info" | "error" = "error",
 ): SessionRuntimeReduction {
   const operation = scope.operationsById[operationId]
   if (!operation || operation.kind !== operationKind) {
@@ -275,6 +277,21 @@ function settleOperation(
   const settled = updateScope(model, { ...scope, operationsById }).model
   const effects: SessionRuntimeEffect[] = [{ kind: "operation.settled", operationId, scopeId: scope.scopeId }]
   if (messageType === "sessionRun.operation.error" && operation.visible && settled.visible.selectedScopeId === scope.scopeId) {
+    if (level === "info") {
+      return {
+        model: settled,
+        effects: [
+          ...effects,
+          {
+            kind: "visible.operation.errorNotice",
+            operationId: operation.operationId,
+            scopeId: scope.scopeId,
+            message: message || "当前任务状态已变化，停止未执行，已刷新状态。",
+            level: "info",
+          },
+        ],
+      }
+    }
     if (operation.kind === "branch.create" && operation.rollback) {
       const rollback = rollbackScopedBranchCreateOperation(settled, scope, operation)
       const selectedScopeErrorEffects = selectedScopeOperationErrorEffects(operation, scope.scopeId, message, {
@@ -382,11 +399,12 @@ function selectedScopeOperationErrorEffects(
     operationId: operation.operationId,
     scopeId,
     message: message || "unknown error",
+    level: "error",
   })
   if (!operation.restore && shouldStopWorkingAfterOperationError(operation.kind)) {
     effects.push({ kind: "visible.working.stopped", operationId: operation.operationId, scopeId })
   }
-  if (!operation.restore && operation.kind === "cancel") {
+  if (!operation.restore && (operation.kind === "stop" || operation.kind === "cancel")) {
     effects.push({ kind: "visible.running", text: "处理中" })
   }
   return effects
@@ -507,6 +525,7 @@ function hasScopeProof(target: { sessionRunId?: string; branchBindingId?: string
 
 function statusForMessage(type: string): SessionRuntimeStatus {
   if (type === "sessionRun.done") return "done"
+  if (type === "sessionRun.stopped") return "done"
   if (type === "sessionRun.cancelled") return "cancelled"
   if (type === "sessionRun.error") return "error"
   if (type === "sessionRun.stopping") return "stopping"
@@ -519,6 +538,7 @@ function isRuntimeStatusMessage(
 ): message is SessionRuntimeStatusHostMessage {
   return (
     message.type === "sessionRun.done" ||
+    message.type === "sessionRun.stopped" ||
     message.type === "sessionRun.cancelled" ||
     message.type === "sessionRun.error" ||
     message.type === "sessionRun.running" ||

@@ -92,7 +92,7 @@ function viewTarget(): SessionRuntimeViewTarget {
   return {
     setSelectedBranchBindingId: vi.fn(),
     setActiveSessionRunId: vi.fn(),
-    setActiveRunSessionId: vi.fn(),
+    setCurrentRunSessionId: vi.fn(),
     setSessionRunStatus: vi.fn(),
     setIsWorking: vi.fn(),
     setWorkingText: vi.fn(),
@@ -342,7 +342,7 @@ describe("sessionRuntimeReducer", () => {
     const restore = {
       kind: "sessionRun.operation.optimistic-ui" as const,
       selectedBranchBindingId: "main",
-      activeRunSessionId: "session-1",
+      currentRunSessionId: "session-1",
       sessionRunStatus: "running" as const,
       isWorking: true,
       workingText: "处理中",
@@ -362,7 +362,7 @@ describe("sessionRuntimeReducer", () => {
 
     expect(target.setSelectedBranchBindingId).toHaveBeenCalledWith("main")
     expect(target.setActiveSessionRunId).toHaveBeenCalledWith("run-1")
-    expect(target.appendOperationErrorNotice).toHaveBeenCalledWith("failed")
+    expect(target.appendOperationErrorNotice).toHaveBeenCalledWith("failed", undefined)
     expect(target.setIsWorking).toHaveBeenCalledWith(false)
     expect(target.setWorkingText).toHaveBeenCalledWith("")
     expect(target.stopTimer).toHaveBeenCalled()
@@ -650,6 +650,20 @@ describe("sessionRuntimeReducer", () => {
     expect(sibling.effects.map((effect) => effect.kind)).not.toContain("visible.projection.errorStopped")
   })
 
+  it("stops projection-error working state without clearing the durable chat session", () => {
+    const target = viewTarget()
+
+    applySessionRuntimeEffectsToView([
+      { kind: "visible.projection.errorStopped", scopeId: scopeIdFor("run-1", "main") },
+    ] as any, target)
+
+    expect(target.setIsWorking).toHaveBeenCalledWith(false)
+    expect(target.setWorkingText).toHaveBeenCalledWith("")
+    expect(target.stopTimer).toHaveBeenCalled()
+    expect(target.setCurrentRunSessionId).not.toHaveBeenCalled()
+    expect(target.setActiveSessionRunId).not.toHaveBeenCalled()
+  })
+
   it("emits the updated visible projection after branch summary updates", () => {
     const summary = branchSummary("branch-a", "done")
     const result = reduceSessionRuntimeHostMessage(model(), {
@@ -820,12 +834,12 @@ describe("sessionRuntimeReducer", () => {
 
     applySessionRuntimeEffectsToView(visible.effects, target)
     expect(target.setActiveSessionRunId).toHaveBeenCalledWith("run-1")
-    expect(target.setActiveRunSessionId).toHaveBeenCalledWith("session-main")
+    expect(target.setCurrentRunSessionId).toHaveBeenCalledWith("session-main")
 
     const siblingTarget = viewTarget()
     applySessionRuntimeEffectsToView(sibling.effects, siblingTarget)
     expect(siblingTarget.setActiveSessionRunId).not.toHaveBeenCalled()
-    expect(siblingTarget.setActiveRunSessionId).not.toHaveBeenCalled()
+    expect(siblingTarget.setCurrentRunSessionId).not.toHaveBeenCalled()
 
     const noSessionTarget = viewTarget()
     applySessionRuntimeEffectsToView([
@@ -839,7 +853,7 @@ describe("sessionRuntimeReducer", () => {
       },
     ], noSessionTarget)
     expect(noSessionTarget.setActiveSessionRunId).toHaveBeenCalledWith("run-1")
-    expect(noSessionTarget.setActiveRunSessionId).toHaveBeenCalledWith("")
+    expect(noSessionTarget.setCurrentRunSessionId).not.toHaveBeenCalled()
   })
 
   it("applies branch.create optimistic projection from the scoped operation pending event", () => {
@@ -1101,10 +1115,47 @@ describe("sessionRuntimeReducer", () => {
       operationId: "op-continue",
       scopeId,
       message: "backend rejected",
+      level: "error",
     })
     expect(result.effects).toContainEqual({ kind: "visible.working.stopped", operationId: "op-continue", scopeId })
     expect(result.effects.map((effect) => effect.kind)).not.toContain("visible.terminal")
     expect(result.effects.map((effect) => effect.kind)).not.toContain("visible.error")
+  })
+
+  it("settles info-level operation errors without error recovery effects", () => {
+    const scopeId = scopeIdFor("run-1", "main")
+    const withOperation = reduceSessionRuntimeHostMessage(model(), {
+      type: "sessionRun.operation.pending",
+      operation: {
+        operationId: "op-stop-noop",
+        kind: "stop",
+        scopeId,
+        targetBranchBindingId: "main",
+        visible: true,
+      },
+    }).model
+
+    const result = reduceSessionRuntimeHostMessage(withOperation, {
+      type: "sessionRun.operation.error",
+      sessionRunId: "run-1",
+      branchBindingId: "main",
+      operationId: "op-stop-noop",
+      operationKind: "stop",
+      message: "当前任务状态已变化，停止未执行，已刷新状态。",
+      level: "info",
+    })
+
+    expect(result.effects).toContainEqual({ kind: "operation.settled", operationId: "op-stop-noop", scopeId })
+    expect(result.effects).toContainEqual({
+      kind: "visible.operation.errorNotice",
+      operationId: "op-stop-noop",
+      scopeId,
+      message: "当前任务状态已变化，停止未执行，已刷新状态。",
+      level: "info",
+    })
+    expect(result.effects.map((effect) => effect.kind)).not.toContain("visible.operation.restore")
+    expect(result.effects.map((effect) => effect.kind)).not.toContain("visible.working.stopped")
+    expect(result.effects.map((effect) => effect.kind)).not.toContain("visible.running")
   })
 
   it("restores visible operation snapshots through the runtime operation effect", () => {
@@ -1112,7 +1163,7 @@ describe("sessionRuntimeReducer", () => {
     const restore = {
       kind: "sessionRun.operation.optimistic-ui" as const,
       selectedBranchBindingId: "main",
-      activeRunSessionId: "session-1",
+      currentRunSessionId: "session-1",
       sessionRunStatus: "running" as const,
       isWorking: true,
       workingText: "处理中",

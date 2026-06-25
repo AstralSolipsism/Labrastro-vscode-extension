@@ -27,6 +27,7 @@ export type SessionRuntimeOperationKind =
   | "continue"
   | "recover"
   | "steer"
+  | "stop"
   | "cancel"
   | "branch.create"
   | "branch.select"
@@ -102,7 +103,7 @@ export interface SessionRuntimeOperationView {
 export interface SessionRuntimeOperationRestoreView {
   kind: "sessionRun.operation.optimistic-ui"
   selectedBranchBindingId: string
-  activeRunSessionId: string
+  currentRunSessionId: string
   sessionRunStatus: Exclude<SessionRuntimeStatus, "queued" | "waiting">
   isWorking: boolean
   workingText: string
@@ -135,6 +136,7 @@ export type SessionRuntimeHostMessage =
   | {
       type:
         | "sessionRun.done"
+        | "sessionRun.stopped"
         | "sessionRun.cancelled"
         | "sessionRun.error"
         | "sessionRun.running"
@@ -201,6 +203,7 @@ export type SessionRuntimeHostMessage =
       operationId: string
       operationKind: SessionRuntimeOperationKind
       message?: string
+      level?: "info" | "error"
     }
 
 export type SessionRuntimeEffect =
@@ -221,7 +224,7 @@ export type SessionRuntimeEffect =
   | { kind: "visible.projection.updated"; projection: VisibleSessionProjectionView }
   | { kind: "visible.rollback"; operationId: string; scopeId: string; rollback: NonNullable<SessionRuntimeOperationView["rollback"]> }
   | { kind: "visible.operation.restore"; operationId: string; scopeId: string; restore: SessionRuntimeOperationRestoreView }
-  | { kind: "visible.operation.errorNotice"; operationId: string; scopeId: string; message: string }
+  | { kind: "visible.operation.errorNotice"; operationId: string; scopeId: string; message: string; level?: "info" | "error" }
   | { kind: "visible.projection.errorStopped"; scopeId: string }
   | { kind: "visible.pendingNextTurn.added"; pendingNextTurn: Record<string, unknown> }
   | { kind: "visible.pendingNextTurn.consumed"; text: string }
