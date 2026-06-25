@@ -21,6 +21,7 @@ type RuntimeStatusSessionRunEvent = Extract<
       | "sessionRun.waiting"
       | "sessionRun.stopping"
       | "sessionRun.cancelled"
+      | "sessionRun.stopped"
       | "sessionRun.done"
       | "sessionRun.error"
       | "sessionRun.interrupted"
@@ -450,6 +451,8 @@ function statusForEventType(type: string): SessionRuntimeStatus {
       return "stopping"
     case "sessionRun.cancelled":
       return "cancelled"
+    case "sessionRun.stopped":
+      return "done"
     case "sessionRun.done":
       return "done"
     case "sessionRun.error":
@@ -467,6 +470,7 @@ function isRuntimeStatusEvent(event: ScopedSessionRunEvent): event is RuntimeSta
     event.type === "sessionRun.waiting" ||
     event.type === "sessionRun.stopping" ||
     event.type === "sessionRun.cancelled" ||
+    event.type === "sessionRun.stopped" ||
     event.type === "sessionRun.done" ||
     event.type === "sessionRun.error" ||
     event.type === "sessionRun.interrupted"

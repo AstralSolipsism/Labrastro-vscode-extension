@@ -49,6 +49,7 @@ function coordinator() {
     steerAgentRun: vi.fn(),
     branchSessionRun: vi.fn(),
     selectSessionRunBranch: vi.fn(),
+    stopSessionRun: vi.fn(),
     cancelSessionRun: vi.fn(),
     recoverSessionRun: vi.fn(),
     postConnectionStateIfAuthRequired: vi.fn(),
@@ -62,7 +63,7 @@ function coordinator() {
 function coordinatorWithStoredActiveRun(stored: unknown) {
   const created = coordinator()
   created.options.context.workspaceState.get.mockImplementation((key: string) =>
-    key === "labrastro.activeSessionRun" ? stored : undefined
+    key === "labrastro.selectedMainlineSnapshot" ? stored : undefined
   )
   return {
     ...created,
@@ -128,12 +129,106 @@ describe("SessionRunCoordinator", () => {
     }))
   })
 
+  it("routes explicit first-run start even when a stale selected mainline snapshot exists", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    subject.setSelectedMainlineSnapshot({
+      sessionRunId: "stale-run",
+      sessionId: "old-session",
+      cursor: 9,
+      status: "settled",
+      mainlineState: "settled",
+      activationState: "completed",
+      bindingStatus: "active",
+      continuable: true,
+      working: false,
+      branchBindingId: "main",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reconnectAttempts: 0,
+    })
+
+    await expect(subject.handleMessage({
+      type: "chat.send",
+      text: "first message in the visible empty chat",
+      sessionId: "new-session",
+      requestId: "request-new-start",
+      operationId: "op-new-start",
+      operationKind: "start",
+      branchBindingId: "main",
+      providerId: "p1",
+      modelId: "m1",
+    }, post)).resolves.toBe(true)
+
+    expect(options.startSessionRun).toHaveBeenCalledWith(
+      "first message in the visible empty chat",
+      "new-session",
+      post,
+      expect.objectContaining({
+        operationId: "op-new-start",
+        clientRequestId: "request-new-start",
+        branchBindingId: "main",
+        providerId: "p1",
+        modelId: "m1",
+      })
+    )
+    expect(options.continueSessionRun).not.toHaveBeenCalled()
+  })
+
+  it("blocks duplicate first-run starts while startSessionRun is pending", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    let resolveStart: (() => void) | undefined
+    options.startSessionRun.mockImplementation(() => new Promise<void>((resolve) => {
+      resolveStart = resolve
+    }))
+
+    await expect(subject.handleMessage({
+      type: "chat.send",
+      text: "hello",
+      sessionId: "s1",
+      requestId: "request-1",
+      operationId: "op-start-1",
+      draftSessionId: "draft-1",
+    }, post)).resolves.toBe(true)
+
+    await expect(subject.handleMessage({
+      type: "chat.send",
+      text: "second",
+      sessionId: "s1",
+      requestId: "request-2",
+      operationId: "op-start-2",
+      draftSessionId: "draft-1",
+    }, post)).resolves.toBe(true)
+
+    expect(options.startSessionRun).toHaveBeenCalledTimes(1)
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: "sessionRun.operation.error",
+      operationId: "op-start-2",
+      operationKind: "start",
+      message: "会话运行正在启动，请稍候后再发送。",
+    }))
+
+    resolveStart?.()
+    await Promise.resolve()
+
+    await expect(subject.handleMessage({
+      type: "chat.send",
+      text: "third",
+      sessionId: "s1",
+      requestId: "request-3",
+      operationId: "op-start-3",
+      draftSessionId: "draft-1",
+    }, post)).resolves.toBe(true)
+
+    expect(options.startSessionRun).toHaveBeenCalledTimes(2)
+  })
+
   it("tracks active run identity and projection revisions separately", () => {
     const { coordinator: subject } = coordinator()
 
-    expect(subject.activeRunIdentityRevision).toBe(0)
-    expect(subject.activeRunProjectionRevision).toBe(0)
-    subject.setActiveRun({
+    expect(subject.selectedMainlineIdentityRevision).toBe(0)
+    expect(subject.selectedMainlineProjectionRevision).toBe(0)
+    subject.setSelectedMainlineSnapshot({
       sessionRunId: "run-1",
       sessionId: "session-1",
       branchBindingId: "main",
@@ -143,10 +238,10 @@ describe("SessionRunCoordinator", () => {
       startedAt: "2026-06-18T00:00:00.000Z",
       reconnectAttempts: 0,
     })
-    expect(subject.activeRunIdentityRevision).toBe(1)
-    expect(subject.activeRunProjectionRevision).toBe(1)
+    expect(subject.selectedMainlineIdentityRevision).toBe(1)
+    expect(subject.selectedMainlineProjectionRevision).toBe(1)
 
-    subject.patchActiveRun({
+    subject.patchSelectedMainlineSnapshot({
       cursor: 20,
       status: "reconnecting",
       reconnectAttempts: 1,
@@ -155,26 +250,26 @@ describe("SessionRunCoordinator", () => {
         "run-1:main": [{ text: "next", clientRequestId: "req-next", queuedAt: "2026-06-18T00:00:02.000Z" }],
       },
     })
-    expect(subject.activeRunIdentityRevision).toBe(1)
-    expect(subject.activeRunProjectionRevision).toBe(2)
+    expect(subject.selectedMainlineIdentityRevision).toBe(1)
+    expect(subject.selectedMainlineProjectionRevision).toBe(2)
 
-    subject.patchActiveRun({ branchBindingId: "branch-a" })
-    expect(subject.activeRunIdentityRevision).toBe(2)
-    expect(subject.activeRunProjectionRevision).toBe(3)
+    subject.patchSelectedMainlineSnapshot({ branchBindingId: "branch-a" })
+    expect(subject.selectedMainlineIdentityRevision).toBe(2)
+    expect(subject.selectedMainlineProjectionRevision).toBe(3)
 
-    subject.patchActiveRun({ agentRunId: "agent-branch-a" })
-    expect(subject.activeRunIdentityRevision).toBe(3)
-    expect(subject.activeRunProjectionRevision).toBe(4)
+    subject.patchSelectedMainlineSnapshot({ agentRunId: "agent-branch-a" })
+    expect(subject.selectedMainlineIdentityRevision).toBe(3)
+    expect(subject.selectedMainlineProjectionRevision).toBe(4)
 
-    subject.clearActiveRun()
-    expect(subject.activeRunIdentityRevision).toBe(4)
-    expect(subject.activeRunProjectionRevision).toBe(5)
+    subject.clearSelectedMainlineSnapshot()
+    expect(subject.selectedMainlineIdentityRevision).toBe(4)
+    expect(subject.selectedMainlineProjectionRevision).toBe(5)
   })
 
   it("keeps active run identity revision stable across projection-only mutations", () => {
     const { coordinator: subject } = coordinator()
 
-    subject.setActiveRun({
+    subject.setSelectedMainlineSnapshot({
       sessionRunId: "run-1",
       sessionId: "session-1",
       branchBindingId: "main",
@@ -185,10 +280,10 @@ describe("SessionRunCoordinator", () => {
       reconnectAttempts: 0,
       branches: [{ branch_binding_id: "main", agent_run_id: "agent-main", status: "running" }],
     })
-    const identityRevision = subject.activeRunIdentityRevision
-    const projectionRevision = subject.activeRunProjectionRevision
+    const identityRevision = subject.selectedMainlineIdentityRevision
+    const projectionRevision = subject.selectedMainlineProjectionRevision
 
-    subject.patchActiveRun({
+    subject.patchSelectedMainlineSnapshot({
       cursor: 20,
       lastStreamAt: "2026-06-18T00:00:01.000Z",
       pendingNextTurnsByBranch: {
@@ -197,11 +292,11 @@ describe("SessionRunCoordinator", () => {
       branches: [{ branch_binding_id: "main", agent_run_id: "agent-main", status: "waiting" }],
     })
 
-    expect(subject.activeRunIdentityRevision).toBe(identityRevision)
-    expect(subject.activeRunProjectionRevision).toBe(projectionRevision + 1)
+    expect(subject.selectedMainlineIdentityRevision).toBe(identityRevision)
+    expect(subject.selectedMainlineProjectionRevision).toBe(projectionRevision + 1)
 
-    subject.patchActiveRun({ branchBindingId: "branch-a", agentRunId: "agent-branch-a" })
-    expect(subject.activeRunIdentityRevision).toBe(identityRevision + 1)
+    subject.patchSelectedMainlineSnapshot({ branchBindingId: "branch-a", agentRunId: "agent-branch-a" })
+    expect(subject.selectedMainlineIdentityRevision).toBe(identityRevision + 1)
   })
 
   it("routes missing selected model through start operation preflight", async () => {
@@ -284,7 +379,7 @@ describe("SessionRunCoordinator", () => {
   it("does not use the active session run as proof for approval replies", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
-    subject.setActiveRun({
+    subject.setSelectedMainlineSnapshot({
       sessionRunId: "active-run",
       branchBindingId: "branch-a",
       cursor: 0,
@@ -309,7 +404,7 @@ describe("SessionRunCoordinator", () => {
   it("uses explicit snake_case session_run_id and branch_binding_id for approval replies", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
-    subject.setActiveRun({
+    subject.setSelectedMainlineSnapshot({
       sessionRunId: "active-run",
       branchBindingId: "branch-a",
       cursor: 0,
@@ -348,7 +443,7 @@ describe("SessionRunCoordinator", () => {
       operations: [{ kind: "update", path: "src/app.ts", new_content: "edited" }],
     }
     options.approvalDocuments.approvedSaveCandidateFor.mockReturnValueOnce(currentStoredCandidate)
-    subject.setActiveRun({
+    subject.setSelectedMainlineSnapshot({
       sessionRunId: "active-run",
       cursor: 0,
       status: "running",
@@ -384,7 +479,7 @@ describe("SessionRunCoordinator", () => {
       operations: [{ kind: "update", path: "src/app.ts", new_content: "edited" }],
     }
     options.approvalDocuments.approvedSaveCandidateFor.mockReturnValueOnce(approvedSaveCandidate)
-    subject.setActiveRun({
+    subject.setSelectedMainlineSnapshot({
       sessionRunId: "active-run",
       branchBindingId: "branch-a",
       cursor: 0,
@@ -419,7 +514,7 @@ describe("SessionRunCoordinator", () => {
       tool_name: "apply_patch",
       operations: [{ kind: "update", path: "src/app.ts", new_content: "explicit" }],
     }
-    subject.setActiveRun({
+    subject.setSelectedMainlineSnapshot({
       sessionRunId: "active-run",
       cursor: 0,
       status: "running",
@@ -454,7 +549,7 @@ describe("SessionRunCoordinator", () => {
       tool_name: "apply_patch",
       operations: [{ kind: "update", path: "src/app.ts", new_content: "stored" }],
     })
-    subject.setActiveRun({
+    subject.setSelectedMainlineSnapshot({
       sessionRunId: "active-run",
       cursor: 0,
       status: "running",
@@ -492,7 +587,7 @@ describe("SessionRunCoordinator", () => {
       ok: true,
       state: "already_resolved",
     })
-    subject.setActiveRun({
+    subject.setSelectedMainlineSnapshot({
       sessionRunId: "active-run",
       cursor: 0,
       status: "running",
@@ -528,7 +623,7 @@ describe("SessionRunCoordinator", () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
     options.client.approvalReply.mockRejectedValueOnce(new Error("fetch failed"))
-    subject.setActiveRun({
+    subject.setSelectedMainlineSnapshot({
       sessionRunId: "active-run",
       branchBindingId: "branch-a",
       cursor: 0,
@@ -557,13 +652,13 @@ describe("SessionRunCoordinator", () => {
     })
     expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "sessionRun.error" }))
     expect(options.approvalDocuments.close).not.toHaveBeenCalled()
-    expect(subject.activeRun?.sessionRunId).toBe("active-run")
+    expect(subject.selectedMainlineSnapshot?.sessionRunId).toBe("active-run")
   })
 
   it("does not use the active session run as proof for user input replies", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
-    subject.setActiveRun({
+    subject.setSelectedMainlineSnapshot({
       sessionRunId: "active-run",
       branchBindingId: "branch-a",
       cursor: 0,
@@ -593,7 +688,7 @@ describe("SessionRunCoordinator", () => {
       ok: true,
       state: "resolved",
     })
-    subject.setActiveRun({
+    subject.setSelectedMainlineSnapshot({
       sessionRunId: "active-run",
       branchBindingId: "branch-a",
       cursor: 0,
@@ -638,7 +733,7 @@ describe("SessionRunCoordinator", () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
     options.client.sessionRunUserInputReply.mockRejectedValueOnce(new Error("reply failed"))
-    subject.setActiveRun({
+    subject.setSelectedMainlineSnapshot({
       sessionRunId: "active-run",
       branchBindingId: "branch-a",
       cursor: 0,
@@ -677,17 +772,36 @@ describe("SessionRunCoordinator", () => {
       session_run_id: "snake-run",
       branch_binding_id: "branch-a",
       operationId: "op-cancel",
+      reason: "explicit_close",
     }, post)
 
     expect(options.cancelSessionRun).toHaveBeenCalledWith("snake-run", "branch-a", post, {
       operationId: "op-cancel",
+      reason: "explicit_close",
     })
+  })
+
+  it("routes sessionRun.stop with snake_case session_run_id", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+
+    await subject.handleMessage({
+      type: "sessionRun.stop",
+      session_run_id: "snake-run",
+      branch_binding_id: "branch-a",
+      operationId: "op-stop",
+    }, post)
+
+    expect(options.stopSessionRun).toHaveBeenCalledWith("snake-run", "branch-a", post, {
+      operationId: "op-stop",
+    })
+    expect(options.cancelSessionRun).not.toHaveBeenCalled()
   })
 
   it("does not use the active session run as proof for cancel messages", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
-    subject.setActiveRun({
+    subject.setSelectedMainlineSnapshot({
       sessionRunId: "active-run",
       branchBindingId: "branch-a",
       cursor: 0,
@@ -765,10 +879,10 @@ describe("SessionRunCoordinator", () => {
 
     {
       const { options, coordinator: subject } = coordinator()
-      subject.setActiveRun({
+      subject.setSelectedMainlineSnapshot({
         sessionRunId: "active-run",
         cursor: 0,
-        status: "idle",
+        status: "settled",
         branchBindingId: "main",
         startedAt: "2026-01-01T00:00:00.000Z",
         reconnectAttempts: 0,
@@ -833,10 +947,10 @@ describe("SessionRunCoordinator", () => {
 
     {
       const { options, coordinator: subject } = coordinator()
-      subject.setActiveRun({
+      subject.setSelectedMainlineSnapshot({
         sessionRunId: "active-run",
         cursor: 0,
-        status: "idle",
+        status: "settled",
         branchBindingId: "main",
         startedAt: "2026-01-01T00:00:00.000Z",
         reconnectAttempts: 0,
@@ -847,7 +961,7 @@ describe("SessionRunCoordinator", () => {
 
     {
       const { options, coordinator: subject } = coordinator()
-      subject.setActiveRun({
+      subject.setSelectedMainlineSnapshot({
         sessionRunId: "active-run",
         cursor: 0,
         status: "running",
@@ -912,17 +1026,17 @@ describe("SessionRunCoordinator", () => {
       reconnectAttempts: 0,
     })
 
-    expect(subject.activeRun).toBeUndefined()
-    expect(subject.activeRunPayload()).toBeUndefined()
+    expect(subject.selectedMainlineSnapshot).toBeUndefined()
+    expect(subject.selectedMainlineSnapshotPayload()).toBeUndefined()
   })
 
   it("does not route selected-visible branch operations without explicit session run proof", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
-    subject.setActiveRun({
+    subject.setSelectedMainlineSnapshot({
       sessionRunId: "active-run",
       cursor: 0,
-      status: "idle",
+      status: "settled",
       branchBindingId: "main",
       startedAt: "2026-01-01T00:00:00.000Z",
       reconnectAttempts: 0,
@@ -950,10 +1064,10 @@ describe("SessionRunCoordinator", () => {
   it("does not route active chat.send without explicit branch proof", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
-    subject.setActiveRun({
+    subject.setSelectedMainlineSnapshot({
       sessionRunId: "active-run",
       cursor: 0,
-      status: "idle",
+      status: "settled",
       branchBindingId: "main",
       startedAt: "2026-01-01T00:00:00.000Z",
       reconnectAttempts: 0,
@@ -970,13 +1084,44 @@ describe("SessionRunCoordinator", () => {
     expect(options.startSessionRun).not.toHaveBeenCalled()
   })
 
-  it("does not route idle active chat.send without explicit session run proof", async () => {
+  it("blocks explicit continue chat.send without complete branch proof", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
-    subject.setActiveRun({
+    subject.setSelectedMainlineSnapshot({
       sessionRunId: "active-run",
       cursor: 0,
-      status: "idle",
+      status: "settled",
+      branchBindingId: "main",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reconnectAttempts: 0,
+    })
+
+    await subject.handleMessage({
+      type: "chat.send",
+      text: "continue without branch proof",
+      sessionRunId: "active-run",
+      operationKind: "continue",
+      requestId: "req-missing-branch",
+      operationId: "op-missing-branch",
+    }, post)
+
+    expect(options.continueSessionRun).not.toHaveBeenCalled()
+    expect(options.startSessionRun).not.toHaveBeenCalled()
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: "sessionRun.operation.error",
+      operationId: "op-missing-branch",
+      operationKind: "continue",
+      reason: "scope_mismatch",
+    }))
+  })
+
+  it("does not route settled active chat.send without explicit session run proof", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    subject.setSelectedMainlineSnapshot({
+      sessionRunId: "active-run",
+      cursor: 0,
+      status: "settled",
       branchBindingId: "main",
       startedAt: "2026-01-01T00:00:00.000Z",
       reconnectAttempts: 0,
@@ -996,13 +1141,13 @@ describe("SessionRunCoordinator", () => {
     expect(options.startSessionRun).not.toHaveBeenCalled()
   })
 
-  it("routes idle active chat.send only with explicit session run and branch proof", async () => {
+  it("routes settled active chat.send only with explicit session run and branch proof", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
-    subject.setActiveRun({
+    subject.setSelectedMainlineSnapshot({
       sessionRunId: "active-run",
       cursor: 0,
-      status: "idle",
+      status: "settled",
       branchBindingId: "main",
       startedAt: "2026-01-01T00:00:00.000Z",
       reconnectAttempts: 0,
@@ -1030,13 +1175,40 @@ describe("SessionRunCoordinator", () => {
     expect(options.startSessionRun).not.toHaveBeenCalled()
   })
 
-  it("routes idle active chat.send to session run continue", async () => {
+  it("routes explicit continue with branch proof when the host snapshot is not restored yet", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
-    subject.setActiveRun({
+
+    await subject.handleMessage({
+      type: "chat.send",
+      text: "continue with proof",
+      sessionRunId: "run-current",
+      branchBindingId: "main",
+      operationKind: "continue",
+      requestId: "req-continue",
+      operationId: "op-continue",
+      locale: "zh-CN",
+      mentions: [{ kind: "file", path: "README.md" }],
+    }, post)
+
+    expect(options.continueSessionRun).toHaveBeenCalledWith("continue with proof", post, {
+      sessionRunId: "run-current",
+      branchBindingId: "main",
+      clientRequestId: "req-continue",
+      operationId: "op-continue",
+      locale: "zh-CN",
+      mentions: [{ kind: "file", path: "README.md" }],
+    })
+    expect(options.startSessionRun).not.toHaveBeenCalled()
+  })
+
+  it("routes settled active chat.send to session run continue", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    subject.setSelectedMainlineSnapshot({
       sessionRunId: "active-run",
       cursor: 0,
-      status: "idle",
+      status: "settled",
       branchBindingId: "main",
       startedAt: "2026-01-01T00:00:00.000Z",
       reconnectAttempts: 0,
@@ -1064,13 +1236,13 @@ describe("SessionRunCoordinator", () => {
     expect(options.startSessionRun).not.toHaveBeenCalled()
   })
 
-  it("routes explicit current-activation input to continue when the active run is idle", async () => {
+  it("routes explicit current-activation input to continue when the active run is settled", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
-    subject.setActiveRun({
+    subject.setSelectedMainlineSnapshot({
       sessionRunId: "active-run",
       cursor: 3,
-      status: "idle",
+      status: "settled",
       agentRunId: "agent-run-1",
       activationId: "old-activation",
       branchBindingId: "main",
@@ -1106,7 +1278,7 @@ describe("SessionRunCoordinator", () => {
   it("queues ordinary chat.send as branch-local pending next turn while active run is executing", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
-    subject.setActiveRun({
+    subject.setSelectedMainlineSnapshot({
       sessionRunId: "active-run",
       cursor: 0,
       status: "running",
@@ -1138,10 +1310,50 @@ describe("SessionRunCoordinator", () => {
     }))
   })
 
+  it("continues ordinary chat.send after the selected active run is settled", async () => {
+    const { options, coordinator: subject } = coordinator()
+    const post = vi.fn()
+    subject.setSelectedMainlineSnapshot({
+      sessionRunId: "active-run",
+      cursor: 12,
+      status: "settled",
+      branchBindingId: "main",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reconnectAttempts: 0,
+    })
+
+    await subject.handleMessage({
+      type: "chat.send",
+      text: "second turn",
+      sessionRunId: "active-run",
+      branchBindingId: "main",
+      requestId: "req-second",
+      operationId: "op-second",
+      locale: "zh-CN",
+    }, post)
+
+    expect(options.continueSessionRun).toHaveBeenCalledWith(
+      "second turn",
+      post,
+      {
+        sessionRunId: "active-run",
+        branchBindingId: "main",
+        clientRequestId: "req-second",
+        operationId: "op-second",
+        locale: "zh-CN",
+      }
+    )
+    expect(options.steerAgentRun).not.toHaveBeenCalled()
+    expect(subject.pendingNextTurnForBranch("active-run", "main")).toBeUndefined()
+    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({
+      type: "sessionRun.pendingNextTurn",
+    }))
+  })
+
   it("keeps pending next turns branch-local when the selected branch changes", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
-    subject.setActiveRun({
+    subject.setSelectedMainlineSnapshot({
       sessionRunId: "active-run",
       cursor: 0,
       status: "running",
@@ -1157,7 +1369,7 @@ describe("SessionRunCoordinator", () => {
       branch_binding_id: "branch-a",
       requestId: "req-a",
     }, post)
-    subject.patchActiveRun({ branchBindingId: "branch-b" })
+    subject.patchSelectedMainlineSnapshot({ branchBindingId: "branch-b" })
     await subject.handleMessage({
       type: "chat.send",
       text: "queued for B",
@@ -1179,7 +1391,7 @@ describe("SessionRunCoordinator", () => {
   it("removes and clears pending next turns by branch through host-owned queue messages", async () => {
     const { coordinator: subject } = coordinator()
     const post = vi.fn()
-    subject.setActiveRun({
+    subject.setSelectedMainlineSnapshot({
       sessionRunId: "active-run",
       cursor: 0,
       status: "running",
@@ -1246,7 +1458,7 @@ describe("SessionRunCoordinator", () => {
   it("does not use the active session run as proof for pending next turn mutations", async () => {
     const { coordinator: subject } = coordinator()
     const post = vi.fn()
-    subject.setActiveRun({
+    subject.setSelectedMainlineSnapshot({
       sessionRunId: "active-run",
       cursor: 0,
       status: "running",
@@ -1282,7 +1494,7 @@ describe("SessionRunCoordinator", () => {
 
   it("uses explicit pending next turn scope even when the active run identity differs", () => {
     const { coordinator: subject } = coordinator()
-    subject.setActiveRun({
+    subject.setSelectedMainlineSnapshot({
       sessionRunId: "run-visible",
       cursor: 0,
       status: "running",
@@ -1313,15 +1525,15 @@ describe("SessionRunCoordinator", () => {
     })
     subject.clearPendingNextTurnForBranch("run-hidden", "branch-b")
 
-    expect(subject.activeRun?.sessionRunId).toBe("run-visible")
+    expect(subject.selectedMainlineSnapshot?.sessionRunId).toBe("run-visible")
     expect(subject.pendingNextTurnForBranch("run-hidden", "branch-a")).toBeUndefined()
     expect(subject.pendingNextTurnForBranch("run-hidden", "branch-b")).toBeUndefined()
   })
 
-  it("routes explicit current-activation guidance to AgentRun steer", async () => {
+  it("queues explicit current-activation guidance instead of steering the current run", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
-    subject.setActiveRun({
+    subject.setSelectedMainlineSnapshot({
       sessionRunId: "active-run",
       cursor: 0,
       status: "running",
@@ -1344,20 +1556,24 @@ describe("SessionRunCoordinator", () => {
       mentions: [{ kind: "file", path: "README.md" }],
     }, post)
 
-    expect(options.steerAgentRun).toHaveBeenCalledWith("apply this to the current run", post, {
-      clientSteerId: "steer-1",
-      operationId: "op-steer",
-      sessionRunId: "active-run",
-      branchBindingId: "main",
+    expect(options.steerAgentRun).not.toHaveBeenCalled()
+    expect(subject.pendingNextTurnForBranch("active-run", "main")).toMatchObject({
+      text: "apply this to the current run",
+      clientRequestId: "steer-1",
       locale: "zh-CN",
       mentions: [{ kind: "file", path: "README.md" }],
     })
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: "sessionRun.pendingNextTurn",
+      sessionRunId: "active-run",
+      branchBindingId: "main",
+    }))
   })
 
   it("routes sessionRun.recover to the active interrupted session run", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
-    subject.setActiveRun({
+    subject.setSelectedMainlineSnapshot({
       sessionRunId: "active-run",
       cursor: 7,
       status: "running",
@@ -1381,7 +1597,7 @@ describe("SessionRunCoordinator", () => {
   it("does not use the active session run as proof for recover messages", async () => {
     const { options, coordinator: subject } = coordinator()
     const post = vi.fn()
-    subject.setActiveRun({
+    subject.setSelectedMainlineSnapshot({
       sessionRunId: "active-run",
       cursor: 0,
       status: "running",
@@ -1590,7 +1806,7 @@ describe("SessionRunCoordinator", () => {
   it("owns active run resume state and persists it host-scoped", () => {
     const { options, coordinator: subject } = coordinator()
 
-    subject.setActiveRun({
+    subject.setSelectedMainlineSnapshot({
       sessionRunId: "run-1",
       cursor: 4,
       sessionId: "session-1",
@@ -1603,7 +1819,7 @@ describe("SessionRunCoordinator", () => {
     })
 
     expect(subject.activeSessionRunId).toBe("run-1")
-    expect(subject.activeRunPayload()).toMatchObject({
+    expect(subject.selectedMainlineSnapshotPayload()).toMatchObject({
       sessionRunId: "run-1",
       session_run_id: "run-1",
       cursor: 4,
@@ -1619,7 +1835,7 @@ describe("SessionRunCoordinator", () => {
       next_retry_at: 123,
     })
     expect(options.context.workspaceState.update).toHaveBeenCalledWith(
-      "labrastro.activeSessionRun",
+      "labrastro.selectedMainlineSnapshot",
       expect.objectContaining({ sessionRunId: "run-1", session_run_id: "run-1" })
     )
   })
@@ -1640,7 +1856,7 @@ describe("SessionRunCoordinator", () => {
     })
 
     expect(subject.activeSessionRunId).toBe("run-restored")
-    expect(subject.activeRunPayload()).toMatchObject({
+    expect(subject.selectedMainlineSnapshotPayload()).toMatchObject({
       sessionRunId: "run-restored",
       session_run_id: "run-restored",
       cursor: 7,
@@ -1664,7 +1880,7 @@ describe("SessionRunCoordinator", () => {
     })
     const { coordinator: arrayPayload } = coordinatorWithStoredActiveRun([])
 
-    expect(missingSessionRunId.activeRun).toBeUndefined()
-    expect(arrayPayload.activeRun).toBeUndefined()
+    expect(missingSessionRunId.selectedMainlineSnapshot).toBeUndefined()
+    expect(arrayPayload.selectedMainlineSnapshot).toBeUndefined()
   })
 })

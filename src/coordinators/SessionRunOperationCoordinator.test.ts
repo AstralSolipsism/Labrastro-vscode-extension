@@ -45,7 +45,7 @@ describe("SessionRunOperationCoordinator adapter", () => {
     expect(store.snapshot().scopes[scopeIdFor("run-existing", "main")]).toBeUndefined()
     expect(store.acceptsStartSuccess({
       operationId: "op-start",
-      activeRun: {
+      selectedMainlineSnapshot: {
         sessionRunId: "run-existing",
         branchBindingId: "main",
         agentRunId: "agent-existing",
@@ -70,7 +70,7 @@ describe("SessionRunOperationCoordinator adapter", () => {
     })
     expect(store.acceptsBranchCreateSuccess({
       operationId: "op-branch",
-      activeRun: {
+      selectedMainlineSnapshot: {
         sessionRunId: "run-1",
         branchBindingId: "main",
         agentRunId: "agent-main",

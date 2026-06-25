@@ -65,11 +65,22 @@ vi.mock("vscode", () => ({
 }))
 
 import { LabrastroController } from "./LabrastroController"
-import type { ActiveSessionRun, PendingNextTurn } from "./coordinators/SessionRunCoordinator"
+import type { SelectedMainlineSnapshot, PendingNextTurn } from "./coordinators/SessionRunCoordinator"
 import { RemoteError } from "./remote-errors"
 
 const operationSnakeId = ["operation", "id"].join("_")
 const operationSnakeKind = ["operation", "kind"].join("_")
+
+function recoverableSessionRunStatusFacts(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    terminal: false,
+    bindingStatus: "active",
+    recoverable: true,
+    eventStreamAllowed: true,
+    projectionState: "live",
+    ...overrides,
+  }
+}
 
 function context(): vscode.ExtensionContext {
   return {
@@ -96,10 +107,10 @@ function deferred<T>() {
 function sessionRunCoordinator(controller: LabrastroController) {
   return (controller as unknown as {
     sessionRunCoordinator: {
-      activeRun: ActiveSessionRun | undefined
-      activeRunIdentityRevision: number
+      selectedMainlineSnapshot: SelectedMainlineSnapshot | undefined
+      selectedMainlineIdentityRevision: number
       activeDraftSessionId: string | undefined
-      setActiveRun: (run: ActiveSessionRun | undefined) => void
+      setSelectedMainlineSnapshot: (run: SelectedMainlineSnapshot | undefined) => void
       setActiveDraftSessionId: (sessionId: string | undefined) => void
       pendingNextTurnForBranch: (
         sessionRunId: string | undefined,
@@ -121,7 +132,7 @@ function sessionRuntimeStore(controller: LabrastroController) {
         branchBindingId: string
         agentRunId?: string
         activeActivationId?: string
-        status?: "idle" | "running"
+        status?: "done" | "running"
         select?: boolean
       }) => boolean
     }
@@ -136,8 +147,8 @@ function recordString(record: Record<string, unknown>, ...keys: string[]): strin
   return ""
 }
 
-function setActiveRun(controller: LabrastroController, patch: Partial<ActiveSessionRun>): void {
-  const run: ActiveSessionRun = {
+function setSelectedMainlineSnapshot(controller: LabrastroController, patch: Partial<SelectedMainlineSnapshot>): void {
+  const run: SelectedMainlineSnapshot = {
     sessionRunId: "run-current",
     sessionId: "session-current",
     branchBindingId: "main",
@@ -149,14 +160,14 @@ function setActiveRun(controller: LabrastroController, patch: Partial<ActiveSess
     reconnectAttempts: 0,
     ...patch,
   }
-  sessionRunCoordinator(controller).setActiveRun(run)
+  sessionRunCoordinator(controller).setSelectedMainlineSnapshot(run)
   if (run.branchBindingId && run.agentRunId) {
     sessionRuntimeStore(controller).ensureBranchRuntimeScope({
       sessionRunId: run.sessionRunId,
       branchBindingId: run.branchBindingId,
       agentRunId: run.agentRunId,
       activeActivationId: run.activationId,
-      status: run.status === "idle" ? "idle" : "running",
+      status: run.status === "settled" ? "done" : "running",
       select: true,
     })
   }
@@ -170,7 +181,7 @@ function setActiveRun(controller: LabrastroController, patch: Partial<ActiveSess
       sessionRunId: run.sessionRunId,
       branchBindingId,
       agentRunId,
-      status: "idle",
+      status: "done",
     })
   }
 }
@@ -205,7 +216,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       operationId: "op-start-stale",
     })
     await Promise.resolve()
-    setActiveRun(controller, { sessionRunId: "run-other", sessionId: "session-other", branchBindingId: "main" })
+    setSelectedMainlineSnapshot(controller, { sessionRunId: "run-other", sessionId: "session-other", branchBindingId: "main" })
 
     start.resolve({
       session_run_id: "run-start",
@@ -216,7 +227,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     })
     await pending
 
-    expect(sessionRunCoordinator(controller).activeRun?.sessionRunId).toBe("run-other")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.sessionRunId).toBe("run-other")
     expect(post).not.toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.session",
       sessionRunId: "run-start",
@@ -292,7 +303,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     ;(controller as unknown as {
       consumeSessionRunEventStream: typeof consumeSessionRunEventStream
     }).consumeSessionRunEventStream = consumeSessionRunEventStream
-    sessionRunCoordinator(controller).setActiveRun({
+    sessionRunCoordinator(controller).setSelectedMainlineSnapshot({
       sessionRunId: "run-current",
       sessionId: "session-current",
       branchBindingId: "main",
@@ -330,7 +341,7 @@ describe("LabrastroController SessionRun response correlation", () => {
 
   it("does not create a stream scope from event payload identity", async () => {
     const controller = new LabrastroController(context())
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       sessionId: "session-current",
       branchBindingId: "main",
@@ -384,7 +395,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     ;(controller as unknown as {
       ensureSessionRunEventStream: typeof ensureSessionRunEventStream
     }).ensureSessionRunEventStream = ensureSessionRunEventStream
-    setActiveRun(controller, { sessionRunId: "run-existing", sessionId: "session-existing", branchBindingId: "main" })
+    setSelectedMainlineSnapshot(controller, { sessionRunId: "run-existing", sessionId: "session-existing", branchBindingId: "main" })
     const post = vi.fn()
 
     await (controller as unknown as {
@@ -400,7 +411,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       operationId: "op-start-new",
     })
 
-    expect(sessionRunCoordinator(controller).activeRun?.sessionRunId).toBe("run-new")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.sessionRunId).toBe("run-new")
     expect(post).toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.session",
       operationId: "op-start-new",
@@ -495,7 +506,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       operationId: "op-start-branch-a",
     })
 
-    expect(sessionRunCoordinator(controller).activeRun).toBeUndefined()
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot).toBeUndefined()
     expect(post).not.toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.session",
       sessionRunId: "run-new",
@@ -530,7 +541,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     ;(controller as unknown as {
       ensureSessionRunEventStream: typeof ensureSessionRunEventStream
     }).ensureSessionRunEventStream = ensureSessionRunEventStream
-    setActiveRun(controller, { sessionRunId: "run-existing", sessionId: "session-existing", branchBindingId: "main" })
+    setSelectedMainlineSnapshot(controller, { sessionRunId: "run-existing", sessionId: "session-existing", branchBindingId: "main" })
     const post = vi.fn()
 
     await (controller as unknown as {
@@ -544,7 +555,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       payload: { source: { type: "github_repo", url: "https://github.com/acme/tool" } },
     }, post)
 
-    expect(sessionRunCoordinator(controller).activeRun?.sessionRunId).toBe("run-cap-new")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.sessionRunId).toBe("run-cap-new")
     expect(post).toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.session",
       operationId: "op-cap-start",
@@ -567,7 +578,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       cancelSessionRun: vi.fn(),
     }
     ;(controller as unknown as { client: typeof client }).client = client
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       sessionId: "session-current",
       branchBindingId: "main",
@@ -647,7 +658,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     ;(controller as unknown as {
       sessionCoordinator: { prepareSessionRunSession: typeof prepareSessionRunSession }
     }).sessionCoordinator = { prepareSessionRunSession }
-    setActiveRun(controller, { sessionRunId: "run-existing", sessionId: "session-existing", branchBindingId: "main" })
+    setSelectedMainlineSnapshot(controller, { sessionRunId: "run-existing", sessionId: "session-existing", branchBindingId: "main" })
     const post = vi.fn()
 
     await (controller as unknown as {
@@ -663,7 +674,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       operationId: "op-start-fail",
     })
 
-    expect(sessionRunCoordinator(controller).activeRun?.sessionRunId).toBe("run-existing")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.sessionRunId).toBe("run-existing")
     expect(post).toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.operation.error",
       operationId: "op-start-fail",
@@ -682,7 +693,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     ;(controller as unknown as {
       ensureSessionRunEventStreamSoon: typeof ensureSessionRunEventStreamSoon
     }).ensureSessionRunEventStreamSoon = ensureSessionRunEventStreamSoon
-    setActiveRun(controller, { sessionRunId: "run-current", branchBindingId: "main" })
+    setSelectedMainlineSnapshot(controller, { sessionRunId: "run-current", branchBindingId: "main" })
     const post = vi.fn()
 
     const pending = (controller as unknown as {
@@ -706,7 +717,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       branchBindingId: "branch-a",
     }, post)
     await Promise.resolve()
-    setActiveRun(controller, { sessionRunId: "run-current", branchBindingId: "branch-b" })
+    setSelectedMainlineSnapshot(controller, { sessionRunId: "run-current", branchBindingId: "branch-b" })
 
     branch.resolve({
       agent_run: {
@@ -717,7 +728,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     })
     await pending
 
-    expect(sessionRunCoordinator(controller).activeRun?.branchBindingId).toBe("branch-b")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.branchBindingId).toBe("branch-b")
     expect(post).not.toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.branch.started",
       branchBindingId: "branch-a",
@@ -747,7 +758,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     ;(controller as unknown as {
       ensureSessionRunEventStreamSoon: typeof ensureSessionRunEventStreamSoon
     }).ensureSessionRunEventStreamSoon = ensureSessionRunEventStreamSoon
-    setActiveRun(controller, { sessionRunId: "run-current", branchBindingId: "main" })
+    setSelectedMainlineSnapshot(controller, { sessionRunId: "run-current", branchBindingId: "main" })
     const post = vi.fn()
 
     const pending = (controller as unknown as {
@@ -757,14 +768,14 @@ describe("LabrastroController SessionRun response correlation", () => {
       ) => Promise<void>
     }).selectSessionRunBranch({ sessionRunId: "run-current", sourceBranchBindingId: "main", branchBindingId: "branch-a", operationId: "op-select-stale" }, post)
     await Promise.resolve()
-    setActiveRun(controller, { sessionRunId: "run-current", branchBindingId: "branch-b" })
+    setSelectedMainlineSnapshot(controller, { sessionRunId: "run-current", branchBindingId: "branch-b" })
 
     select.resolve({
       session_run_id: "run-current",
       session_id: "session-current",
       branch_binding_id: "branch-a",
       agent_run_id: "agent-branch-a",
-      status: "idle",
+      status: "settled",
       branches: [
         { branch_binding_id: "branch-a", selected: true },
         { branch_binding_id: "branch-b", selected: false },
@@ -772,7 +783,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     })
     await pending
 
-    expect(sessionRunCoordinator(controller).activeRun?.branchBindingId).toBe("branch-b")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.branchBindingId).toBe("branch-b")
     expect(post).not.toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.branch.selected",
       branchBindingId: "branch-a",
@@ -797,7 +808,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     ;(controller as unknown as {
       ensureSessionRunEventStreamSoon: typeof ensureSessionRunEventStreamSoon
     }).ensureSessionRunEventStreamSoon = ensureSessionRunEventStreamSoon
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "main",
       agentRunId: "agent-current",
@@ -825,7 +836,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       branchBindingId: "branch-a",
     }, post)
     await Promise.resolve()
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "main",
       agentRunId: undefined,
@@ -862,7 +873,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     ;(controller as unknown as {
       ensureSessionRunEventStreamSoon: typeof ensureSessionRunEventStreamSoon
     }).ensureSessionRunEventStreamSoon = ensureSessionRunEventStreamSoon
-    setActiveRun(controller, { sessionRunId: "run-current", branchBindingId: "main" })
+    setSelectedMainlineSnapshot(controller, { sessionRunId: "run-current", branchBindingId: "main" })
     const post = vi.fn()
 
     const pending = (controller as unknown as {
@@ -872,20 +883,20 @@ describe("LabrastroController SessionRun response correlation", () => {
       ) => Promise<void>
     }).selectSessionRunBranch({ sessionRunId: "run-current", sourceBranchBindingId: "main", operationId: "op-select-aba", branchBindingId: "branch-a" }, post)
     await Promise.resolve()
-    setActiveRun(controller, { sessionRunId: "run-current", branchBindingId: "branch-b" })
-    setActiveRun(controller, { sessionRunId: "run-current", branchBindingId: "main" })
+    setSelectedMainlineSnapshot(controller, { sessionRunId: "run-current", branchBindingId: "branch-b" })
+    setSelectedMainlineSnapshot(controller, { sessionRunId: "run-current", branchBindingId: "main" })
 
     select.resolve({
       session_run_id: "run-current",
       session_id: "session-current",
       branch_binding_id: "branch-a",
       agent_run_id: "agent-branch-a",
-      status: "idle",
+      status: "settled",
       branches: [{ branch_binding_id: "branch-a", selected: true }],
     })
     await pending
 
-    expect(sessionRunCoordinator(controller).activeRun?.branchBindingId).toBe("main")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.branchBindingId).toBe("main")
     expect(post).not.toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.branch.selected",
       branchBindingId: "branch-a",
@@ -901,7 +912,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       session_id: "session-current",
       branch_binding_id: "branch-a",
       agent_run_id: "agent-branch-a",
-      status: "idle",
+      status: "settled",
       branches: [{ branch_binding_id: "branch-a", selected: true }],
     }))
     const fetchSessionRunEventsBatch = vi.fn(async () => ({}))
@@ -915,7 +926,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     ;(controller as unknown as {
       ensureSessionRunEventStreamSoon: typeof ensureSessionRunEventStreamSoon
     }).ensureSessionRunEventStreamSoon = ensureSessionRunEventStreamSoon
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "main",
       agentRunId: undefined,
@@ -929,7 +940,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       ) => Promise<void>
     }).selectSessionRunBranch({ sessionRunId: "run-current", sourceBranchBindingId: "main", operationId: "op-select-no-source-agent", branchBindingId: "branch-a" }, post)
 
-    expect(sessionRunCoordinator(controller).activeRun?.branchBindingId).toBe("main")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.branchBindingId).toBe("main")
     expect(post).not.toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.branch.selected",
       branchBindingId: "branch-a",
@@ -947,7 +958,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     ;(controller as unknown as {
       ensureSessionRunEventStream: typeof ensureSessionRunEventStream
     }).ensureSessionRunEventStream = ensureSessionRunEventStream
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "main",
       agentRunId: "agent-main",
@@ -967,7 +978,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       operationId: "op-continue-stale",
     })
     await Promise.resolve()
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "branch-b",
       agentRunId: "agent-branch-b",
@@ -981,8 +992,8 @@ describe("LabrastroController SessionRun response correlation", () => {
     })
     await pending
 
-    expect(sessionRunCoordinator(controller).activeRun?.branchBindingId).toBe("branch-b")
-    expect(sessionRunCoordinator(controller).activeRun?.agentRunId).toBe("agent-branch-b")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.branchBindingId).toBe("branch-b")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.agentRunId).toBe("agent-branch-b")
     expect(post).not.toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.continued",
       branchBindingId: "main",
@@ -1005,7 +1016,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       activation_id: "activation-main-2",
     }))
     ;(controller as unknown as { client: { continueSessionRun: typeof continueSessionRun } }).client = { continueSessionRun }
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "main",
       agentRunId: "agent-main",
@@ -1062,7 +1073,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     ;(controller as unknown as {
       consumeSessionRunEventStream: typeof consumeSessionRunEventStream
     }).consumeSessionRunEventStream = consumeSessionRunEventStream
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "main",
       agentRunId: "agent-main",
@@ -1079,7 +1090,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       ) => Promise<void>
     }).recoverSessionRun("run-current", "main", "retry", post, { operationId: "op-recover-stale" })
     await Promise.resolve()
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "branch-b",
       agentRunId: "agent-branch-b",
@@ -1088,8 +1099,8 @@ describe("LabrastroController SessionRun response correlation", () => {
     recovered.resolve()
     await pending
 
-    expect(sessionRunCoordinator(controller).activeRun?.branchBindingId).toBe("branch-b")
-    expect(sessionRunCoordinator(controller).activeRun?.agentRunId).toBe("agent-branch-b")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.branchBindingId).toBe("branch-b")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.agentRunId).toBe("agent-branch-b")
     expect(post).not.toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.resume",
     }))
@@ -1131,7 +1142,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     ;(controller as unknown as {
       consumeSessionRunEventStream: typeof consumeSessionRunEventStream
     }).consumeSessionRunEventStream = consumeSessionRunEventStream
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "main",
       agentRunId: "agent-main",
@@ -1148,7 +1159,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       ) => Promise<void>
     }).recoverSessionRun("run-current", "main", "retry", post, { operationId: "op-recover-branches" })
 
-    expect(sessionRunCoordinator(controller).activeRun?.branches).toEqual([
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.branches).toEqual([
       { branch_binding_id: "main", agent_run_id: "agent-main", selected: true },
       { branch_binding_id: "branch-a", agent_run_id: "agent-branch-a", selected: false },
     ])
@@ -1183,7 +1194,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     ;(controller as unknown as {
       consumeSessionRunEventStream: typeof consumeSessionRunEventStream
     }).consumeSessionRunEventStream = consumeSessionRunEventStream
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "main",
       agentRunId: "agent-main",
@@ -1218,7 +1229,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     const steered = deferred<Record<string, unknown>>()
     const steerAgentRun = vi.fn(() => steered.promise)
     ;(controller as unknown as { client: { steerAgentRun: typeof steerAgentRun } }).client = { steerAgentRun }
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "main",
       agentRunId: "agent-main",
@@ -1239,7 +1250,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       branchBindingId: "main",
     })
     await Promise.resolve()
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "branch-b",
       agentRunId: "agent-branch-b",
@@ -1267,7 +1278,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     const steered = deferred<Record<string, unknown>>()
     const steerAgentRun = vi.fn(() => steered.promise)
     ;(controller as unknown as { client: { steerAgentRun: typeof steerAgentRun } }).client = { steerAgentRun }
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "main",
       agentRunId: "agent-main",
@@ -1288,7 +1299,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       branchBindingId: "main",
     })
     await Promise.resolve()
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "branch-b",
       agentRunId: "agent-branch-b",
@@ -1309,17 +1320,17 @@ describe("LabrastroController SessionRun response correlation", () => {
       sessionRunId: "run-current",
       branchBindingId: "main",
     }))
-    expect(sessionRunCoordinator(controller).activeRun?.pendingNextTurnsByBranch).not.toHaveProperty("run-current:main")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.pendingNextTurnsByBranch).not.toHaveProperty("run-current:main")
   })
 
   it("wraps idle steer fallback in a visible operation pending/result pair", async () => {
     const controller = new LabrastroController(context())
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "main",
       agentRunId: "agent-main",
       activationId: undefined,
-      status: "idle",
+      status: "settled",
     })
     const post = vi.fn()
 
@@ -1371,11 +1382,11 @@ describe("LabrastroController SessionRun response correlation", () => {
     ;(controller as unknown as {
       ensureSessionRunEventStream: typeof ensureSessionRunEventStream
     }).ensureSessionRunEventStream = ensureSessionRunEventStream
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "branch-a",
       agentRunId: "agent-branch-a",
-      status: "idle",
+      status: "settled",
     })
     const post = vi.fn()
 
@@ -1408,11 +1419,11 @@ describe("LabrastroController SessionRun response correlation", () => {
       throw new Error("continue failed")
     })
     ;(controller as unknown as { client: { continueSessionRun: typeof continueSessionRun } }).client = { continueSessionRun }
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "branch-a",
       agentRunId: "agent-branch-a",
-      status: "idle",
+      status: "settled",
     })
     const post = vi.fn()
 
@@ -1445,7 +1456,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       throw new Error("steer failed")
     })
     ;(controller as unknown as { client: { steerAgentRun: typeof steerAgentRun } }).client = { steerAgentRun }
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "branch-a",
       agentRunId: "agent-branch-a",
@@ -1482,7 +1493,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     const controller = new LabrastroController(context())
     const recoverSessionRun = vi.fn()
     ;(controller as unknown as { client: { recoverSessionRun: typeof recoverSessionRun } }).client = { recoverSessionRun }
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "branch-a",
       agentRunId: undefined,
@@ -1518,7 +1529,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     const controller = new LabrastroController(context())
     const cancelSessionRun = vi.fn(async () => undefined)
     ;(controller as unknown as { client: { cancelSessionRun: typeof cancelSessionRun } }).client = { cancelSessionRun }
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "branch-a",
       agentRunId: "agent-branch-a",
@@ -1531,20 +1542,33 @@ describe("LabrastroController SessionRun response correlation", () => {
         sessionRunId: string | undefined,
         branchBindingId: string | undefined,
         post: (message: Record<string, unknown>) => void,
-        options?: { operationId?: string },
+        options?: { operationId?: string; reason?: string },
       ) => Promise<void>
     }).cancelSessionRun("run-current", "branch-a", post, {
       operationId: "op-cancel",
+      reason: "explicit_close",
     })
 
-    expect(cancelSessionRun).toHaveBeenCalledWith("run-current", "user_cancelled", "branch-a")
-    expect(sessionRunCoordinator(controller).activeRun).toBeUndefined()
+    expect(cancelSessionRun).toHaveBeenCalledWith("run-current", "explicit_close", "branch-a")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot).toMatchObject({
+      sessionRunId: "run-current",
+      branchBindingId: "branch-a",
+      agentRunId: "agent-branch-a",
+      status: "cancelled",
+      mainlineState: "cancelled",
+      activationState: "cancelled",
+      bindingStatus: "closed",
+      working: false,
+      continuable: false,
+      eventStreamAllowed: false,
+    })
     expect(post).toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.cancelled",
       operationId: "op-cancel",
       operationKind: "cancel",
       sessionRunId: "run-current",
       branchBindingId: "branch-a",
+      reason: "explicit_close",
     }))
   })
 
@@ -1553,7 +1577,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     const cancelled = deferred<void>()
     const cancelSessionRun = vi.fn(() => cancelled.promise)
     ;(controller as unknown as { client: { cancelSessionRun: typeof cancelSessionRun } }).client = { cancelSessionRun }
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "branch-a",
       agentRunId: "agent-branch-a",
@@ -1572,7 +1596,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       operationId: "op-cancel-stale",
     })
     await Promise.resolve()
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "branch-b",
       agentRunId: "agent-branch-b",
@@ -1582,7 +1606,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     cancelled.resolve()
     await pending
 
-    expect(sessionRunCoordinator(controller).activeRun?.branchBindingId).toBe("branch-b")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.branchBindingId).toBe("branch-b")
     expect(post).not.toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.cancelled",
       branchBindingId: "branch-a",
@@ -1600,7 +1624,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     const controller = new LabrastroController(context())
     const cancelSessionRun = vi.fn(async () => undefined)
     ;(controller as unknown as { client: { cancelSessionRun: typeof cancelSessionRun } }).client = { cancelSessionRun }
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "branch-a",
       agentRunId: "agent-branch-a",
@@ -1620,7 +1644,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     })
 
     expect(cancelSessionRun).not.toHaveBeenCalled()
-    expect(sessionRunCoordinator(controller).activeRun?.sessionRunId).toBe("run-current")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.sessionRunId).toBe("run-current")
     expect(post).toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.operation.error",
       operationId: "op-cancel-missing-proof",
@@ -1638,7 +1662,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       throw new Error("cancel failed")
     })
     ;(controller as unknown as { client: { cancelSessionRun: typeof cancelSessionRun } }).client = { cancelSessionRun }
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "branch-a",
       agentRunId: "agent-branch-a",
@@ -1657,7 +1681,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       operationId: "op-cancel-fail",
     })
 
-    expect(sessionRunCoordinator(controller).activeRun?.sessionRunId).toBe("run-current")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.sessionRunId).toBe("run-current")
     expect(post).toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.operation.error",
       operationId: "op-cancel-fail",
@@ -1667,6 +1691,204 @@ describe("LabrastroController SessionRun response correlation", () => {
       message: "停止失败：cancel failed",
     }))
     expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "sessionRun.error" }))
+  })
+
+  it("refreshes real status instead of emitting stopped when stop returns ok false", async () => {
+    const controller = new LabrastroController(context())
+    const stopSessionRun = vi.fn(async () => ({
+      ok: false,
+      error: "session_run_not_stoppable",
+    }))
+    const sessionRunStatus = vi.fn(async () => ({
+      ...recoverableSessionRunStatusFacts({
+        mainlineState: "settled",
+        mainline_state: "settled",
+        agentRunState: "continuable",
+        agent_run_state: "continuable",
+        activationState: "completed",
+        activation_state: "completed",
+        working: false,
+        continuable: true,
+        eventStreamAllowed: false,
+        event_stream_allowed: false,
+        projectionState: "drained",
+        projection_state: "drained",
+        transportState: "disconnected",
+        transport_state: "disconnected",
+      }),
+      session_run_id: "run-current",
+      session_id: "session-current",
+      branch_binding_id: "branch-a",
+      agent_run_id: "agent-branch-a",
+      activation_id: "activation-completed",
+      cursor: 4,
+      branches: [{ branch_binding_id: "branch-a", agent_run_id: "agent-branch-a", status: "settled", selected: true }],
+    }))
+    ;(controller as unknown as {
+      client: {
+        stopSessionRun: typeof stopSessionRun
+        sessionRunStatus: typeof sessionRunStatus
+      }
+    }).client = { stopSessionRun, sessionRunStatus }
+    setSelectedMainlineSnapshot(controller, {
+      sessionRunId: "run-current",
+      sessionId: "session-current",
+      branchBindingId: "branch-a",
+      agentRunId: "agent-branch-a",
+      activationId: "activation-running",
+      cursor: 3,
+      status: "running",
+    })
+    const post = vi.fn()
+
+    await (controller as unknown as {
+      stopSessionRun: (
+        sessionRunId: string | undefined,
+        branchBindingId: string | undefined,
+        post: (message: Record<string, unknown>) => void,
+        options?: { operationId?: string },
+      ) => Promise<void>
+    }).stopSessionRun("run-current", "branch-a", post, {
+      operationId: "op-stop-noop",
+    })
+
+    expect(stopSessionRun).toHaveBeenCalledWith("run-current", "user_stop", "branch-a")
+    expect(sessionRunStatus).toHaveBeenCalledWith("run-current", 3, "branch-a")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot).toMatchObject({
+      sessionRunId: "run-current",
+      branchBindingId: "branch-a",
+      agentRunId: "agent-branch-a",
+      activationId: "activation-completed",
+      cursor: 4,
+      status: "settled",
+      mainlineState: "settled",
+      agentRunState: "continuable",
+      activationState: "completed",
+      bindingStatus: "active",
+      projectionState: "drained",
+      transportState: "disconnected",
+      working: false,
+      continuable: true,
+      eventStreamAllowed: false,
+    })
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: "sessionRun.operation.error",
+      operationId: "op-stop-noop",
+      operationKind: "stop",
+      sessionRunId: "run-current",
+      branchBindingId: "branch-a",
+      level: "info",
+      message: "当前任务状态已变化，停止未执行，已刷新状态。",
+    }))
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: "sessionRun.done",
+      sessionRunId: "run-current",
+      branchBindingId: "branch-a",
+    }))
+    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({
+      type: "sessionRun.stopped",
+      sessionRunId: "run-current",
+      branchBindingId: "branch-a",
+    }))
+  })
+
+  it("restores running status and event stream when stop no-op status is still active", async () => {
+    const controller = new LabrastroController(context())
+    const stopSessionRun = vi.fn(async () => ({
+      ok: false,
+      error: "session_run_not_stoppable",
+    }))
+    const sessionRunStatus = vi.fn(async () => ({
+      ...recoverableSessionRunStatusFacts({
+        mainlineState: "executing",
+        mainline_state: "executing",
+        agentRunState: "executing",
+        agent_run_state: "executing",
+        activationState: "running",
+        activation_state: "running",
+        working: true,
+        continuable: false,
+        eventStreamAllowed: true,
+        event_stream_allowed: true,
+        projectionState: "live",
+        projection_state: "live",
+        transportState: "streaming",
+        transport_state: "streaming",
+      }),
+      session_run_id: "run-current",
+      session_id: "session-current",
+      branch_binding_id: "branch-a",
+      agent_run_id: "agent-branch-a",
+      activation_id: "activation-running",
+      cursor: 5,
+      branches: [{ branch_binding_id: "branch-a", agent_run_id: "agent-branch-a", status: "running", selected: true }],
+    }))
+    const ensureSessionRunEventStream = vi.fn()
+    ;(controller as unknown as {
+      client: {
+        stopSessionRun: typeof stopSessionRun
+        sessionRunStatus: typeof sessionRunStatus
+      }
+      ensureSessionRunEventStream: typeof ensureSessionRunEventStream
+    }).client = { stopSessionRun, sessionRunStatus }
+    ;(controller as unknown as {
+      ensureSessionRunEventStream: typeof ensureSessionRunEventStream
+    }).ensureSessionRunEventStream = ensureSessionRunEventStream
+    setSelectedMainlineSnapshot(controller, {
+      sessionRunId: "run-current",
+      sessionId: "session-current",
+      branchBindingId: "branch-a",
+      agentRunId: "agent-branch-a",
+      activationId: "activation-running",
+      cursor: 4,
+      status: "running",
+    })
+    const post = vi.fn()
+
+    await (controller as unknown as {
+      stopSessionRun: (
+        sessionRunId: string | undefined,
+        branchBindingId: string | undefined,
+        post: (message: Record<string, unknown>) => void,
+        options?: { operationId?: string },
+      ) => Promise<void>
+    }).stopSessionRun("run-current", "branch-a", post, {
+      operationId: "op-stop-noop-running",
+    })
+
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot).toMatchObject({
+      sessionRunId: "run-current",
+      branchBindingId: "branch-a",
+      status: "running",
+      mainlineState: "executing",
+      activationState: "running",
+      working: true,
+      eventStreamAllowed: true,
+      cursor: 5,
+    })
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: "sessionRun.operation.error",
+      operationId: "op-stop-noop-running",
+      operationKind: "stop",
+      level: "info",
+    }))
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: "sessionRun.resume",
+      sessionRunId: "run-current",
+      branchBindingId: "branch-a",
+      payload: expect.objectContaining({
+        status: "running",
+        mainlineState: "executing",
+        activationState: "running",
+        eventStreamAllowed: true,
+      }),
+    }))
+    expect(ensureSessionRunEventStream).toHaveBeenCalledWith("run-current", "session-current", post, "branch-a")
+    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({
+      type: "sessionRun.stopped",
+      sessionRunId: "run-current",
+      branchBindingId: "branch-a",
+    }))
   })
 
   it("continues a branch-local pending next turn without switching the selected branch", async () => {
@@ -1682,12 +1904,12 @@ describe("LabrastroController SessionRun response correlation", () => {
     ;(controller as unknown as {
       ensureSessionRunEventStream: typeof ensureSessionRunEventStream
     }).ensureSessionRunEventStream = ensureSessionRunEventStream
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       sessionId: "session-current",
       branchBindingId: "branch-b",
       agentRunId: "agent-branch-b",
-      status: "idle",
+      status: "settled",
       branches: [
         { branch_binding_id: "branch-a", agent_run_id: "agent-branch-a", selected: false },
         { branch_binding_id: "branch-b", agent_run_id: "agent-branch-b", selected: true },
@@ -1728,8 +1950,8 @@ describe("LabrastroController SessionRun response correlation", () => {
       prompt: "queued on A",
       clientRequestId: "queued-a",
     }))
-    expect(sessionRunCoordinator(controller).activeRun?.branchBindingId).toBe("branch-b")
-    expect(sessionRunCoordinator(controller).activeRun?.agentRunId).toBe("agent-branch-b")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.branchBindingId).toBe("branch-b")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.agentRunId).toBe("agent-branch-b")
     expect(sessionRunCoordinator(controller).pendingNextTurnForBranch("run-current", "branch-a")).toBeUndefined()
     expect(ensureSessionRunEventStream).toHaveBeenCalledWith("run-current", "session-current", post, "branch-a")
     expect(post).not.toHaveBeenCalledWith(expect.objectContaining({
@@ -1751,12 +1973,12 @@ describe("LabrastroController SessionRun response correlation", () => {
     ;(controller as unknown as {
       ensureSessionRunEventStream: typeof ensureSessionRunEventStream
     }).ensureSessionRunEventStream = ensureSessionRunEventStream
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       sessionId: "session-current",
       branchBindingId: "branch-a",
       agentRunId: "agent-branch-a",
-      status: "idle",
+      status: "settled",
       branches: [
         { branch_binding_id: "branch-a", agent_run_id: "agent-branch-a", selected: true },
         { branch_binding_id: "branch-b", agent_run_id: "agent-branch-b", selected: false },
@@ -1792,7 +2014,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     })
 
     expect(sessionRunCoordinator(controller).pendingNextTurnForBranch("run-current", "branch-a")).toBeUndefined()
-    expect(sessionRunCoordinator(controller).activeRun).toEqual(expect.objectContaining({
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot).toEqual(expect.objectContaining({
       branchBindingId: "branch-a",
       agentRunId: "agent-branch-a",
       activationId: "activation-branch-a-2",
@@ -1820,12 +2042,12 @@ describe("LabrastroController SessionRun response correlation", () => {
     const controller = new LabrastroController(context())
     const continueSessionRun = vi.fn()
     ;(controller as unknown as { client: { continueSessionRun: typeof continueSessionRun } }).client = { continueSessionRun }
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       sessionId: "session-current",
       branchBindingId: "branch-b",
       agentRunId: "agent-branch-b",
-      status: "idle",
+      status: "settled",
       branches: [
         { branch_binding_id: "branch-a", selected: false },
         { branch_binding_id: "branch-b", agent_run_id: "agent-branch-b", selected: true },
@@ -1861,7 +2083,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     })
 
     expect(continueSessionRun).not.toHaveBeenCalled()
-    expect(sessionRunCoordinator(controller).activeRun?.branchBindingId).toBe("branch-b")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.branchBindingId).toBe("branch-b")
     expect(sessionRunCoordinator(controller).pendingNextTurnForBranch("run-current", "branch-a")?.text).toBe("queued on A")
     expect(post).toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.pendingNextTurns",
@@ -1884,7 +2106,7 @@ describe("LabrastroController SessionRun response correlation", () => {
         refreshSessionListAfterSessionRunDone: typeof refreshSessionListAfterSessionRunDone
       }
     }).sessionCoordinator = { refreshSessionListAfterSessionRunDone }
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       sessionId: "session-current",
       branchBindingId: "main",
@@ -1917,8 +2139,8 @@ describe("LabrastroController SessionRun response correlation", () => {
     }, post)
 
     expect(sessionRunCoordinator(controller).activeDraftSessionId).toBe("draft-selected")
-    expect(sessionRunCoordinator(controller).activeRun?.branchBindingId).toBe("main")
-    expect(sessionRunCoordinator(controller).activeRun?.status).toBe("running")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.branchBindingId).toBe("main")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.status).toBe("running")
     expect(post).toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.done",
       sessionRunId: "run-current",
@@ -1934,7 +2156,7 @@ describe("LabrastroController SessionRun response correlation", () => {
         refreshSessionListAfterSessionRunDone: typeof refreshSessionListAfterSessionRunDone
       }
     }).sessionCoordinator = { refreshSessionListAfterSessionRunDone }
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       sessionId: "session-current",
       branchBindingId: "main",
@@ -1977,15 +2199,42 @@ describe("LabrastroController SessionRun response correlation", () => {
     }))
   })
 
-  it("reports stream terminal projection errors instead of defaulting missing branch status to done", async () => {
+  it("resolves stream completion from status when branch summaries do not carry terminal status", async () => {
     const controller = new LabrastroController(context())
     const refreshSessionListAfterSessionRunDone = vi.fn(async () => undefined)
+    const sessionRunStatus = vi.fn(async () => ({
+      session_run_id: "run-current",
+      session_id: "session-current",
+      branch_binding_id: "main",
+      agent_run_id: "agent-main",
+      mainlineState: "settled",
+      agentRunState: "continuable",
+      activationState: "completed",
+      bindingStatus: "active",
+      working: false,
+      continuable: true,
+      recoverable: true,
+      eventStreamAllowed: false,
+      projectionState: "drained",
+      transportState: "disconnected",
+      status: "done",
+      branches: [
+        {
+          branch_binding_id: "main",
+          agent_run_id: "agent-main",
+          selected: true,
+          status: "settled",
+        },
+      ],
+      approvals: [],
+    }))
     ;(controller as unknown as {
       sessionCoordinator: {
         refreshSessionListAfterSessionRunDone: typeof refreshSessionListAfterSessionRunDone
       }
     }).sessionCoordinator = { refreshSessionListAfterSessionRunDone }
-    setActiveRun(controller, {
+    ;(controller as unknown as { client: { sessionRunStatus: typeof sessionRunStatus } }).client = { sessionRunStatus }
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       sessionId: "session-current",
       branchBindingId: "main",
@@ -2015,15 +2264,86 @@ describe("LabrastroController SessionRun response correlation", () => {
       next_cursor: 7,
     }, post)
 
-    expect(sessionRuntimeStore(controller).snapshot().scopes["run-current:main"].status).toBe("running")
+    expect(sessionRunStatus).toHaveBeenCalledWith("run-current", 7, "main")
+    expect(sessionRuntimeStore(controller).snapshot().scopes["run-current:main"].status).toBe("done")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot).toMatchObject({
+      sessionRunId: "run-current",
+      branchBindingId: "main",
+      status: "settled",
+      mainlineState: "settled",
+      activationState: "completed",
+      bindingStatus: "active",
+      working: false,
+      continuable: true,
+      eventStreamAllowed: false,
+      projectionState: "drained",
+      transportState: "disconnected",
+    })
     expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: "sessionRun.done",
+      sessionRunId: "run-current",
+      branchBindingId: "main",
+    }))
+    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.projection.error",
       sessionRunId: "run-current",
       branchBindingId: "main",
-      message: "SessionRun stream completed without scoped branch terminal status.",
+    }))
+  })
+
+  it("treats settled scoped branch summaries as normal stream completion", async () => {
+    const controller = new LabrastroController(context())
+    const refreshSessionListAfterSessionRunDone = vi.fn(async () => undefined)
+    ;(controller as unknown as {
+      sessionCoordinator: {
+        refreshSessionListAfterSessionRunDone: typeof refreshSessionListAfterSessionRunDone
+      }
+    }).sessionCoordinator = { refreshSessionListAfterSessionRunDone }
+    setSelectedMainlineSnapshot(controller, {
+      sessionRunId: "run-current",
+      sessionId: "session-current",
+      branchBindingId: "main",
+      agentRunId: "agent-main",
+      status: "running",
+      branches: [
+        { branch_binding_id: "main", agent_run_id: "agent-main", selected: true, status: "running" },
+      ],
+    })
+    const post = vi.fn()
+
+    await (controller as unknown as {
+      applySessionRunEventsBatch: (
+        sessionRunId: string,
+        sessionId: string,
+        streamBranchBindingId: string,
+        cursor: number,
+        stream: Record<string, unknown>,
+        post: (message: Record<string, unknown>) => void,
+      ) => Promise<{ sessionId: string; cursor: number; done: boolean; active: boolean }>
+    }).applySessionRunEventsBatch("run-current", "session-current", "main", 0, {
+      events: [],
+      branches: [
+        {
+          branch_binding_id: "main",
+          agent_run_id: "agent-main",
+          selected: true,
+          status: "settled",
+        },
+      ],
+      done: true,
+      next_cursor: 7,
+    }, post)
+
+    expect(sessionRuntimeStore(controller).snapshot().scopes["run-current:main"].status).toBe("done")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.status).toBe("settled")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.continuable).toBe(true)
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({
+      type: "sessionRun.done",
+      sessionRunId: "run-current",
+      branchBindingId: "main",
     }))
     expect(post).not.toHaveBeenCalledWith(expect.objectContaining({
-      type: "sessionRun.done",
+      type: "sessionRun.projection.error",
       sessionRunId: "run-current",
       branchBindingId: "main",
     }))
@@ -2031,7 +2351,7 @@ describe("LabrastroController SessionRun response correlation", () => {
 
   it("reports stream session binding mismatch as projection error without terminalizing runtime scope", async () => {
     const controller = new LabrastroController(context())
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       sessionId: "session-current",
       branchBindingId: "main",
@@ -2080,7 +2400,7 @@ describe("LabrastroController SessionRun response correlation", () => {
 
   it("keeps sibling branch metadata from advancing selected operation revision", async () => {
     const controller = new LabrastroController(context())
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       sessionId: "session-current",
       branchBindingId: "main",
@@ -2091,7 +2411,7 @@ describe("LabrastroController SessionRun response correlation", () => {
         { branch_binding_id: "branch-a", agent_run_id: "agent-branch-a", selected: false, status: "running" },
       ],
     })
-    const revisionBeforeSiblingMetadata = sessionRunCoordinator(controller).activeRunIdentityRevision
+    const revisionBeforeSiblingMetadata = sessionRunCoordinator(controller).selectedMainlineIdentityRevision
     const post = vi.fn()
 
     await (controller as unknown as {
@@ -2112,7 +2432,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       next_cursor: 9,
     }, post)
 
-    expect(sessionRunCoordinator(controller).activeRunIdentityRevision).toBe(revisionBeforeSiblingMetadata)
+    expect(sessionRunCoordinator(controller).selectedMainlineIdentityRevision).toBe(revisionBeforeSiblingMetadata)
     expect(sessionRuntimeStore(controller).snapshot().scopes["run-current:branch-a"].status).toBe("running")
     expect(post).toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.branches",
@@ -2129,7 +2449,7 @@ describe("LabrastroController SessionRun response correlation", () => {
         refreshSessionListAfterSessionRunDone: typeof refreshSessionListAfterSessionRunDone
       }
     }).sessionCoordinator = { refreshSessionListAfterSessionRunDone }
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       sessionId: "session-current",
       branchBindingId: "main",
@@ -2185,7 +2505,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     ;(controller as unknown as {
       draftDocuments: { applySessionRunEvents: typeof applySessionRunEvents }
     }).draftDocuments = { applySessionRunEvents }
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       sessionId: "session-current",
       branchBindingId: "main",
@@ -2219,13 +2539,13 @@ describe("LabrastroController SessionRun response correlation", () => {
       next_cursor: 2,
     }, post)
 
-    expect(sessionRunCoordinator(controller).activeRun?.branchBindingId).toBe("main")
-    expect(sessionRunCoordinator(controller).activeRun?.agentRunId).toBe("agent-main")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.branchBindingId).toBe("main")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.agentRunId).toBe("agent-main")
   })
 
   it("keeps branch summaries from becoming selected runtime status authority", async () => {
     const controller = new LabrastroController(context())
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       sessionId: "session-current",
       branchBindingId: "main",
@@ -2268,12 +2588,12 @@ describe("LabrastroController SessionRun response correlation", () => {
       throw new Error("continue failed")
     })
     ;(controller as unknown as { client: { continueSessionRun: typeof continueSessionRun } }).client = { continueSessionRun }
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       sessionId: "session-current",
       branchBindingId: "branch-b",
       agentRunId: "agent-branch-b",
-      status: "idle",
+      status: "settled",
       branches: [
         { branch_binding_id: "branch-a", agent_run_id: "agent-branch-a", selected: false },
         { branch_binding_id: "branch-b", agent_run_id: "agent-branch-b", selected: true },
@@ -2308,7 +2628,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       clientRequestId: "queued-a",
     })
 
-    expect(sessionRunCoordinator(controller).activeRun?.branchBindingId).toBe("branch-b")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.branchBindingId).toBe("branch-b")
     expect(sessionRunCoordinator(controller).pendingNextTurnForBranch("run-current", "branch-a")?.text).toBe("queued on A")
     expect(post).toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.pendingNextTurns",
@@ -2339,12 +2659,12 @@ describe("LabrastroController SessionRun response correlation", () => {
         queuedAt: "2026-06-18T00:00:00.000Z",
       }],
     }
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       sessionId: "session-current",
       branchBindingId: "branch-b",
       agentRunId: "agent-branch-b",
-      status: "idle",
+      status: "settled",
       branches: [
         { branch_binding_id: "branch-a", agent_run_id: "agent-branch-a", selected: false },
         { branch_binding_id: "branch-b", agent_run_id: "agent-branch-b", selected: true },
@@ -2377,20 +2697,20 @@ describe("LabrastroController SessionRun response correlation", () => {
       prompt: "queued on A",
       clientRequestId: "queued-a",
     }))
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-other",
       sessionId: "session-other",
       branchBindingId: "main",
       agentRunId: "agent-other",
-      status: "idle",
+      status: "settled",
       pendingNextTurnsByBranch,
     })
 
     continuation.reject(new Error("continue failed after switch"))
     await pending
 
-    expect(sessionRunCoordinator(controller).activeRun?.sessionRunId).toBe("run-other")
-    expect(sessionRunCoordinator(controller).activeRun?.agentRunId).toBe("agent-other")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.sessionRunId).toBe("run-other")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.agentRunId).toBe("agent-other")
     expect(sessionRunCoordinator(controller).pendingNextTurnForBranch("run-current", "branch-a")?.text).toBe("queued on A")
     expect(post).toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.pendingNextTurns",
@@ -2427,12 +2747,12 @@ describe("LabrastroController SessionRun response correlation", () => {
         queuedAt: "2026-06-18T00:00:00.000Z",
       }],
     }
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       sessionId: "session-current",
       branchBindingId: "branch-b",
       agentRunId: "agent-branch-b",
-      status: "idle",
+      status: "settled",
       branches: [
         { branch_binding_id: "branch-a", agent_run_id: "agent-branch-a", selected: false },
         { branch_binding_id: "branch-b", agent_run_id: "agent-branch-b", selected: true },
@@ -2465,12 +2785,12 @@ describe("LabrastroController SessionRun response correlation", () => {
       prompt: "queued on A",
       clientRequestId: "queued-a",
     }))
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-other",
       sessionId: "session-other",
       branchBindingId: "main",
       agentRunId: "agent-other",
-      status: "idle",
+      status: "settled",
       pendingNextTurnsByBranch,
     })
 
@@ -2482,8 +2802,8 @@ describe("LabrastroController SessionRun response correlation", () => {
     })
     await pending
 
-    expect(sessionRunCoordinator(controller).activeRun?.sessionRunId).toBe("run-other")
-    expect(sessionRunCoordinator(controller).activeRun?.agentRunId).toBe("agent-other")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.sessionRunId).toBe("run-other")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.agentRunId).toBe("agent-other")
     expect(sessionRunCoordinator(controller).pendingNextTurnForBranch("run-current", "branch-a")).toBeUndefined()
     expect(post).toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.pendingNextTurns",
@@ -2501,12 +2821,12 @@ describe("LabrastroController SessionRun response correlation", () => {
     const controller = new LabrastroController(context())
     const continueSessionRun = vi.fn()
     ;(controller as unknown as { client: { continueSessionRun: typeof continueSessionRun } }).client = { continueSessionRun }
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       sessionId: "session-current",
       branchBindingId: "branch-b",
       agentRunId: "agent-branch-b",
-      status: "idle",
+      status: "settled",
       branches: [
         { branch_binding_id: "branch-a", agent_run_id: "agent-branch-a", selected: false },
         { branch_binding_id: "branch-b", agent_run_id: "agent-branch-b", selected: true },
@@ -2542,7 +2862,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     })
 
     expect(continueSessionRun).not.toHaveBeenCalled()
-    expect(sessionRunCoordinator(controller).activeRun?.sessionRunId).toBe("run-current")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.sessionRunId).toBe("run-current")
     expect(sessionRunCoordinator(controller).pendingNextTurnForBranch("run-stale", "branch-a")?.text).toBe("queued on stale run")
     expect(post).toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.pendingNextTurns",
@@ -2561,17 +2881,17 @@ describe("LabrastroController SessionRun response correlation", () => {
     const status = deferred<Record<string, unknown>>()
     const sessionRunStatus = vi.fn(() => status.promise)
     ;(controller as unknown as { client: { sessionRunStatus: typeof sessionRunStatus } }).client = { sessionRunStatus }
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "main",
       agentRunId: "agent-main",
     })
 
     const pending = (controller as unknown as {
-      activeRunPayloadWithServerStatus: (
+      selectedMainlineSnapshotPayloadWithServerStatus: (
         payload: Record<string, unknown>,
       ) => Promise<Record<string, unknown> | undefined>
-    }).activeRunPayloadWithServerStatus({
+    }).selectedMainlineSnapshotPayloadWithServerStatus({
       sessionRunId: "run-current",
       session_run_id: "run-current",
       sessionId: "session-current",
@@ -2584,7 +2904,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       status: "running",
     })
     await Promise.resolve()
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-other",
       sessionId: "session-other",
       branchBindingId: "main",
@@ -2592,6 +2912,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     })
 
     status.resolve({
+      ...recoverableSessionRunStatusFacts(),
       session_run_id: "run-current",
       session_id: "session-current",
       branch_binding_id: "main",
@@ -2601,18 +2922,18 @@ describe("LabrastroController SessionRun response correlation", () => {
     })
 
     await expect(pending).resolves.toBeUndefined()
-    expect(sessionRunCoordinator(controller).activeRun?.sessionRunId).toBe("run-other")
-    expect(sessionRunCoordinator(controller).activeRun?.agentRunId).toBe("agent-other")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.sessionRunId).toBe("run-other")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.agentRunId).toBe("agent-other")
   })
 
   it("rejects restored active-run payloads without run proof", async () => {
     const controller = new LabrastroController(context())
 
     const payload = await (controller as unknown as {
-      activeRunPayloadWithServerStatus: (
+      selectedMainlineSnapshotPayloadWithServerStatus: (
         payload: Record<string, unknown>,
       ) => Promise<Record<string, unknown> | undefined>
-    }).activeRunPayloadWithServerStatus({
+    }).selectedMainlineSnapshotPayloadWithServerStatus({
       sessionId: "session-current",
       session_id: "session-current",
       branchBindingId: "main",
@@ -2626,9 +2947,160 @@ describe("LabrastroController SessionRun response correlation", () => {
     expect(payload).toBeUndefined()
   })
 
+  it.each([
+    ["closed binding", {
+      bindingStatus: "closed",
+      recoverable: false,
+      eventStreamAllowed: false,
+      projectionState: "closed",
+    }],
+    ["deleted binding", {
+      bindingStatus: "deleted",
+      recoverable: false,
+      eventStreamAllowed: false,
+      projectionState: "closed",
+    }],
+    ["non-recoverable status", { recoverable: false }],
+  ])("preserves restored selected mainline identity as non-continuable for %s", async (_caseName, facts) => {
+    const controller = new LabrastroController(context())
+    const sessionRunStatus = vi.fn(async () => ({
+      ...recoverableSessionRunStatusFacts(facts),
+      session_run_id: "run-current",
+      session_id: "session-current",
+      branch_binding_id: "main",
+      agent_run_id: "agent-main",
+      status: "running",
+      approvals: [],
+    }))
+    ;(controller as unknown as { client: { sessionRunStatus: typeof sessionRunStatus } }).client = { sessionRunStatus }
+    setSelectedMainlineSnapshot(controller, {
+      sessionRunId: "run-current",
+      branchBindingId: "main",
+      agentRunId: "agent-main",
+    })
+
+    const payload = await (controller as unknown as {
+      selectedMainlineSnapshotPayloadWithServerStatus: (
+        payload: Record<string, unknown>,
+      ) => Promise<Record<string, unknown> | undefined>
+    }).selectedMainlineSnapshotPayloadWithServerStatus({
+      sessionRunId: "run-current",
+      session_run_id: "run-current",
+      sessionId: "session-current",
+      session_id: "session-current",
+      branchBindingId: "main",
+      branch_binding_id: "main",
+      agentRunId: "agent-main",
+      agent_run_id: "agent-main",
+      cursor: 0,
+      status: "running",
+    })
+
+    expect(payload).toMatchObject({
+      sessionRunId: "run-current",
+      session_run_id: "run-current",
+      branchBindingId: "main",
+      branch_binding_id: "main",
+      agentRunId: "agent-main",
+      agent_run_id: "agent-main",
+      mainlineState: "unrecoverable",
+      mainline_state: "unrecoverable",
+      activationState: "failed",
+      activation_state: "failed",
+      recoverable: false,
+      eventStreamAllowed: false,
+      event_stream_allowed: false,
+      projectionState: "nonrecoverable",
+      projection_state: "nonrecoverable",
+      transportState: "disconnected",
+      transport_state: "disconnected",
+      working: false,
+      continuable: false,
+    })
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot).toMatchObject({
+      sessionRunId: "run-current",
+      branchBindingId: "main",
+      agentRunId: "agent-main",
+      mainlineState: "unrecoverable",
+      activationState: "failed",
+      recoverable: false,
+      eventStreamAllowed: false,
+      projectionState: "nonrecoverable",
+      transportState: "disconnected",
+      working: false,
+      continuable: false,
+    })
+  })
+
+  it("preserves settled continuable active-run payloads without event stream", async () => {
+    const controller = new LabrastroController(context())
+    const sessionRunStatus = vi.fn(async () => ({
+      ...recoverableSessionRunStatusFacts({
+        mainlineState: "settled",
+        agentRunState: "continuable",
+        activationState: "completed",
+        working: false,
+        continuable: true,
+        eventStreamAllowed: false,
+        projectionState: "drained",
+        transportState: "disconnected",
+      }),
+      session_run_id: "run-current",
+      session_id: "session-current",
+      branch_binding_id: "main",
+      agent_run_id: "agent-main",
+      status: "done",
+      approvals: [],
+    }))
+    ;(controller as unknown as { client: { sessionRunStatus: typeof sessionRunStatus } }).client = { sessionRunStatus }
+    setSelectedMainlineSnapshot(controller, {
+      sessionRunId: "run-current",
+      branchBindingId: "main",
+      agentRunId: "agent-main",
+    })
+
+    const payload = await (controller as unknown as {
+      selectedMainlineSnapshotPayloadWithServerStatus: (
+        payload: Record<string, unknown>,
+      ) => Promise<Record<string, unknown> | undefined>
+    }).selectedMainlineSnapshotPayloadWithServerStatus({
+      sessionRunId: "run-current",
+      session_run_id: "run-current",
+      sessionId: "session-current",
+      session_id: "session-current",
+      branchBindingId: "main",
+      branch_binding_id: "main",
+      agentRunId: "agent-main",
+      agent_run_id: "agent-main",
+      cursor: 0,
+      status: "running",
+    })
+
+    expect(payload).toMatchObject({
+      sessionRunId: "run-current",
+      branchBindingId: "main",
+      status: "settled",
+      mainlineState: "settled",
+      activationState: "completed",
+      continuable: true,
+      eventStreamAllowed: false,
+      projectionState: "drained",
+      transportState: "disconnected",
+    })
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot).toMatchObject({
+      sessionRunId: "run-current",
+      branchBindingId: "main",
+      status: "settled",
+      mainlineState: "settled",
+      continuable: true,
+      eventStreamAllowed: false,
+    })
+  })
+
   it("rejects restored active-run status when the response branch proof changes", async () => {
     const controller = new LabrastroController(context())
     const sessionRunStatus = vi.fn(async () => ({
+      ...recoverableSessionRunStatusFacts(),
       session_run_id: "run-current",
       session_id: "session-current",
       branch_binding_id: "branch-a",
@@ -2637,7 +3109,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       approvals: [],
     }))
     ;(controller as unknown as { client: { sessionRunStatus: typeof sessionRunStatus } }).client = { sessionRunStatus }
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "main",
       agentRunId: "agent-main",
@@ -2645,10 +3117,10 @@ describe("LabrastroController SessionRun response correlation", () => {
     })
 
     const payload = await (controller as unknown as {
-      activeRunPayloadWithServerStatus: (
+      selectedMainlineSnapshotPayloadWithServerStatus: (
         payload: Record<string, unknown>,
       ) => Promise<Record<string, unknown> | undefined>
-    }).activeRunPayloadWithServerStatus({
+    }).selectedMainlineSnapshotPayloadWithServerStatus({
       sessionRunId: "run-current",
       session_run_id: "run-current",
       sessionId: "session-current",
@@ -2662,13 +3134,13 @@ describe("LabrastroController SessionRun response correlation", () => {
     })
 
     expect(payload).toBeUndefined()
-    expect(sessionRunCoordinator(controller).activeRun?.branchBindingId).toBe("main")
-    expect(sessionRunCoordinator(controller).activeRun?.agentRunId).toBe("agent-main")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot).toBeUndefined()
   })
 
   it("rejects restored active-run status without response branch proof", async () => {
     const controller = new LabrastroController(context())
     const sessionRunStatus = vi.fn(async () => ({
+      ...recoverableSessionRunStatusFacts(),
       session_run_id: "run-current",
       session_id: "session-current",
       agent_run_id: "agent-main",
@@ -2676,17 +3148,17 @@ describe("LabrastroController SessionRun response correlation", () => {
       approvals: [],
     }))
     ;(controller as unknown as { client: { sessionRunStatus: typeof sessionRunStatus } }).client = { sessionRunStatus }
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "main",
       agentRunId: "agent-main",
     })
 
     const payload = await (controller as unknown as {
-      activeRunPayloadWithServerStatus: (
+      selectedMainlineSnapshotPayloadWithServerStatus: (
         payload: Record<string, unknown>,
       ) => Promise<Record<string, unknown> | undefined>
-    }).activeRunPayloadWithServerStatus({
+    }).selectedMainlineSnapshotPayloadWithServerStatus({
       sessionRunId: "run-current",
       session_run_id: "run-current",
       sessionId: "session-current",
@@ -2700,13 +3172,13 @@ describe("LabrastroController SessionRun response correlation", () => {
     })
 
     expect(payload).toBeUndefined()
-    expect(sessionRunCoordinator(controller).activeRun?.branchBindingId).toBe("main")
-    expect(sessionRunCoordinator(controller).activeRun?.agentRunId).toBe("agent-main")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot).toBeUndefined()
   })
 
   it("rejects restored active-run status when the response agent proof changes", async () => {
     const controller = new LabrastroController(context())
     const sessionRunStatus = vi.fn(async () => ({
+      ...recoverableSessionRunStatusFacts(),
       session_run_id: "run-current",
       session_id: "session-current",
       branch_binding_id: "main",
@@ -2715,17 +3187,17 @@ describe("LabrastroController SessionRun response correlation", () => {
       approvals: [],
     }))
     ;(controller as unknown as { client: { sessionRunStatus: typeof sessionRunStatus } }).client = { sessionRunStatus }
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "main",
       agentRunId: "agent-main",
     })
 
     const payload = await (controller as unknown as {
-      activeRunPayloadWithServerStatus: (
+      selectedMainlineSnapshotPayloadWithServerStatus: (
         payload: Record<string, unknown>,
       ) => Promise<Record<string, unknown> | undefined>
-    }).activeRunPayloadWithServerStatus({
+    }).selectedMainlineSnapshotPayloadWithServerStatus({
       sessionRunId: "run-current",
       session_run_id: "run-current",
       sessionId: "session-current",
@@ -2739,12 +3211,13 @@ describe("LabrastroController SessionRun response correlation", () => {
     })
 
     expect(payload).toBeUndefined()
-    expect(sessionRunCoordinator(controller).activeRun?.agentRunId).toBe("agent-main")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot).toBeUndefined()
   })
 
   it("rejects bootstrap restore when response agent proof differs from payload agent proof", async () => {
     const controller = new LabrastroController(context())
     const sessionRunStatus = vi.fn(async () => ({
+      ...recoverableSessionRunStatusFacts(),
       session_run_id: "run-current",
       session_id: "session-current",
       branch_binding_id: "main",
@@ -2753,7 +3226,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       approvals: [],
     }))
     ;(controller as unknown as { client: { sessionRunStatus: typeof sessionRunStatus } }).client = { sessionRunStatus }
-    sessionRunCoordinator(controller).setActiveRun({
+    sessionRunCoordinator(controller).setSelectedMainlineSnapshot({
       sessionRunId: "run-current",
       sessionId: "session-current",
       branchBindingId: "main",
@@ -2765,10 +3238,10 @@ describe("LabrastroController SessionRun response correlation", () => {
     })
 
     const payload = await (controller as unknown as {
-      activeRunPayloadWithServerStatus: (
+      selectedMainlineSnapshotPayloadWithServerStatus: (
         payload: Record<string, unknown>,
       ) => Promise<Record<string, unknown> | undefined>
-    }).activeRunPayloadWithServerStatus({
+    }).selectedMainlineSnapshotPayloadWithServerStatus({
       sessionRunId: "run-current",
       session_run_id: "run-current",
       sessionId: "session-current",
@@ -2782,7 +3255,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     })
 
     expect(payload).toBeUndefined()
-    expect(sessionRunCoordinator(controller).activeRun?.agentRunId).toBe("agent-main")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot).toBeUndefined()
   })
 
   it("rejects degraded restored active-run fallback after the active run changes", async () => {
@@ -2790,17 +3263,17 @@ describe("LabrastroController SessionRun response correlation", () => {
     const status = deferred<Record<string, unknown>>()
     const sessionRunStatus = vi.fn(() => status.promise)
     ;(controller as unknown as { client: { sessionRunStatus: typeof sessionRunStatus } }).client = { sessionRunStatus }
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "main",
       agentRunId: "agent-main",
     })
 
     const pending = (controller as unknown as {
-      activeRunPayloadWithServerStatus: (
+      selectedMainlineSnapshotPayloadWithServerStatus: (
         payload: Record<string, unknown>,
       ) => Promise<Record<string, unknown> | undefined>
-    }).activeRunPayloadWithServerStatus({
+    }).selectedMainlineSnapshotPayloadWithServerStatus({
       sessionRunId: "run-current",
       session_run_id: "run-current",
       sessionId: "session-current",
@@ -2813,7 +3286,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       status: "running",
     })
     await Promise.resolve()
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-other",
       sessionId: "session-other",
       branchBindingId: "main",
@@ -2823,13 +3296,14 @@ describe("LabrastroController SessionRun response correlation", () => {
     status.reject(new RemoteError(503, "service_unavailable", "service unavailable", {}))
 
     await expect(pending).resolves.toBeUndefined()
-    expect(sessionRunCoordinator(controller).activeRun?.sessionRunId).toBe("run-other")
-    expect(sessionRunCoordinator(controller).activeRun?.agentRunId).toBe("agent-other")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.sessionRunId).toBe("run-other")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.agentRunId).toBe("agent-other")
   })
 
   it("preserves status branch agent identities while restoring an active run", async () => {
     const controller = new LabrastroController(context())
     const sessionRunStatus = vi.fn(async () => ({
+      ...recoverableSessionRunStatusFacts(),
       session_run_id: "run-current",
       session_id: "session-current",
       branch_binding_id: "main",
@@ -2841,7 +3315,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       approvals: [],
     }))
     ;(controller as unknown as { client: { sessionRunStatus: typeof sessionRunStatus } }).client = { sessionRunStatus }
-    setActiveRun(controller, {
+    setSelectedMainlineSnapshot(controller, {
       sessionRunId: "run-current",
       branchBindingId: "main",
       agentRunId: "agent-main",
@@ -2849,10 +3323,10 @@ describe("LabrastroController SessionRun response correlation", () => {
     })
 
     const payload = await (controller as unknown as {
-      activeRunPayloadWithServerStatus: (
+      selectedMainlineSnapshotPayloadWithServerStatus: (
         payload: Record<string, unknown>,
       ) => Promise<Record<string, unknown> | undefined>
-    }).activeRunPayloadWithServerStatus({
+    }).selectedMainlineSnapshotPayloadWithServerStatus({
       sessionRunId: "run-current",
       session_run_id: "run-current",
       sessionId: "session-current",
@@ -2869,12 +3343,13 @@ describe("LabrastroController SessionRun response correlation", () => {
       { branch_binding_id: "main", agent_run_id: "agent-main", selected: true },
       { branch_binding_id: "branch-a", agent_run_id: "agent-branch-a", selected: false },
     ])
-    expect(sessionRunCoordinator(controller).activeRun?.branches).toEqual(payload?.branches)
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.branches).toEqual(payload?.branches)
   })
 
   it("restores a strongly proven bootstrap payload when the runtime store is empty", async () => {
     const controller = new LabrastroController(context())
     const sessionRunStatus = vi.fn(async () => ({
+      ...recoverableSessionRunStatusFacts(),
       session_run_id: "run-current",
       session_id: "session-current",
       branch_binding_id: "main",
@@ -2883,7 +3358,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       approvals: [],
     }))
     ;(controller as unknown as { client: { sessionRunStatus: typeof sessionRunStatus } }).client = { sessionRunStatus }
-    sessionRunCoordinator(controller).setActiveRun({
+    sessionRunCoordinator(controller).setSelectedMainlineSnapshot({
       sessionRunId: "run-current",
       sessionId: "session-current",
       branchBindingId: "main",
@@ -2895,10 +3370,10 @@ describe("LabrastroController SessionRun response correlation", () => {
     })
 
     const payload = await (controller as unknown as {
-      activeRunPayloadWithServerStatus: (
+      selectedMainlineSnapshotPayloadWithServerStatus: (
         payload: Record<string, unknown>,
       ) => Promise<Record<string, unknown> | undefined>
-    }).activeRunPayloadWithServerStatus({
+    }).selectedMainlineSnapshotPayloadWithServerStatus({
       sessionRunId: "run-current",
       session_run_id: "run-current",
       sessionId: "session-current",
@@ -2919,13 +3394,13 @@ describe("LabrastroController SessionRun response correlation", () => {
     }))
   })
 
-  it("degrades a strongly proven bootstrap payload when status refresh fails and the runtime store is empty", async () => {
+  it("does not resume a bootstrap payload when status refresh fails", async () => {
     const controller = new LabrastroController(context())
     const sessionRunStatus = vi.fn(async () => {
       throw new RemoteError(503, "service_unavailable", "service unavailable", {})
     })
     ;(controller as unknown as { client: { sessionRunStatus: typeof sessionRunStatus } }).client = { sessionRunStatus }
-    sessionRunCoordinator(controller).setActiveRun({
+    sessionRunCoordinator(controller).setSelectedMainlineSnapshot({
       sessionRunId: "run-current",
       sessionId: "session-current",
       branchBindingId: "main",
@@ -2937,10 +3412,10 @@ describe("LabrastroController SessionRun response correlation", () => {
     })
 
     const payload = await (controller as unknown as {
-      activeRunPayloadWithServerStatus: (
+      selectedMainlineSnapshotPayloadWithServerStatus: (
         payload: Record<string, unknown>,
       ) => Promise<Record<string, unknown> | undefined>
-    }).activeRunPayloadWithServerStatus({
+    }).selectedMainlineSnapshotPayloadWithServerStatus({
       sessionRunId: "run-current",
       session_run_id: "run-current",
       sessionId: "session-current",
@@ -2953,12 +3428,9 @@ describe("LabrastroController SessionRun response correlation", () => {
       status: "running",
     })
 
-    expect(payload).toEqual(expect.objectContaining({
-      sessionRunId: "run-current",
-      branchBindingId: "main",
-      agentRunId: "agent-main",
-      cursor: 3,
-    }))
+    expect(payload).toBeUndefined()
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.sessionRunId).toBe("run-current")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.agentRunId).toBe("agent-main")
   })
 
   it("rejects branch selection when the response branch differs from the operation target", async () => {
@@ -2968,7 +3440,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       session_id: "session-current",
       branch_binding_id: "branch-b",
       agent_run_id: "agent-branch-b",
-      status: "idle",
+      status: "settled",
       branches: [{ branch_binding_id: "branch-b", selected: true }],
     }))
     const fetchSessionRunEventsBatch = vi.fn(async () => ({}))
@@ -2982,7 +3454,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     ;(controller as unknown as {
       ensureSessionRunEventStreamSoon: typeof ensureSessionRunEventStreamSoon
     }).ensureSessionRunEventStreamSoon = ensureSessionRunEventStreamSoon
-    setActiveRun(controller, { sessionRunId: "run-current", branchBindingId: "main" })
+    setSelectedMainlineSnapshot(controller, { sessionRunId: "run-current", branchBindingId: "main" })
     const post = vi.fn()
 
     await (controller as unknown as {
@@ -2992,7 +3464,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       ) => Promise<void>
     }).selectSessionRunBranch({ sessionRunId: "run-current", sourceBranchBindingId: "main", operationId: "op-select-target", branchBindingId: "branch-a" }, post)
 
-    expect(sessionRunCoordinator(controller).activeRun?.branchBindingId).toBe("main")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.branchBindingId).toBe("main")
     expect(post).not.toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.branch.selected",
     }))
@@ -3009,7 +3481,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     ;(controller as unknown as {
       ensureSessionRunEventStreamSoon: typeof ensureSessionRunEventStreamSoon
     }).ensureSessionRunEventStreamSoon = ensureSessionRunEventStreamSoon
-    setActiveRun(controller, { sessionRunId: "run-current", branchBindingId: "main" })
+    setSelectedMainlineSnapshot(controller, { sessionRunId: "run-current", branchBindingId: "main" })
     const post = vi.fn()
 
     const pending = (controller as unknown as {
@@ -3043,7 +3515,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     })
     await pending
 
-    expect(sessionRunCoordinator(controller).activeRun?.branchBindingId).toBe("main")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.branchBindingId).toBe("main")
     expect(post).not.toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.branch.started",
       branchBindingId: "branch-a",
@@ -3060,7 +3532,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     ;(controller as unknown as {
       ensureSessionRunEventStreamSoon: typeof ensureSessionRunEventStreamSoon
     }).ensureSessionRunEventStreamSoon = ensureSessionRunEventStreamSoon
-    setActiveRun(controller, { sessionRunId: "run-current", branchBindingId: "main" })
+    setSelectedMainlineSnapshot(controller, { sessionRunId: "run-current", branchBindingId: "main" })
     const post = vi.fn()
 
     const pending = (controller as unknown as {
@@ -3093,7 +3565,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     })
     await pending
 
-    expect(sessionRunCoordinator(controller).activeRun?.branchBindingId).toBe("main")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.branchBindingId).toBe("main")
     expect(post).toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.operation.error",
       operationId: "op-create-missing-branch",
@@ -3158,7 +3630,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     const controller = new LabrastroController(context())
     const branchAgentRun = vi.fn()
     ;(controller as unknown as { client: { branchAgentRun: typeof branchAgentRun } }).client = { branchAgentRun }
-    setActiveRun(controller, { sessionRunId: "run-current", branchBindingId: "main" })
+    setSelectedMainlineSnapshot(controller, { sessionRunId: "run-current", branchBindingId: "main" })
     const post = vi.fn()
 
     await (controller as unknown as {
@@ -3221,7 +3693,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     const controller = new LabrastroController(context())
     const selectSessionRunBranch = vi.fn()
     ;(controller as unknown as { client: { selectSessionRunBranch: typeof selectSessionRunBranch } }).client = { selectSessionRunBranch }
-    setActiveRun(controller, { sessionRunId: "run-current", branchBindingId: "main" })
+    setSelectedMainlineSnapshot(controller, { sessionRunId: "run-current", branchBindingId: "main" })
     const post = vi.fn()
 
     await (controller as unknown as {
@@ -3251,7 +3723,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       session_id: "session-current",
       branch_binding_id: "branch-a",
       agent_run_id: "agent-branch-a",
-      status: "idle",
+      status: "settled",
       branches: [{ branch_binding_id: "branch-a", selected: true }],
     }))
     const fetchSessionRunEventsBatch = vi.fn(() => replay.promise)
@@ -3265,7 +3737,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     ;(controller as unknown as {
       ensureSessionRunEventStreamSoon: typeof ensureSessionRunEventStreamSoon
     }).ensureSessionRunEventStreamSoon = ensureSessionRunEventStreamSoon
-    setActiveRun(controller, { sessionRunId: "run-current", branchBindingId: "main" })
+    setSelectedMainlineSnapshot(controller, { sessionRunId: "run-current", branchBindingId: "main" })
     const post = vi.fn()
 
     const pending = (controller as unknown as {
@@ -3280,7 +3752,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       type: "sessionRun.branch.selected",
       branchBindingId: "branch-a",
     }))
-    expect(sessionRunCoordinator(controller).activeRun?.branchBindingId).toBe("main")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.branchBindingId).toBe("main")
 
     replay.resolve({})
     await pending
@@ -3291,7 +3763,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       operationKind: "branch.select",
       branchBindingId: "branch-a",
     }))
-    expect(sessionRunCoordinator(controller).activeRun?.branchBindingId).toBe("branch-a")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.branchBindingId).toBe("branch-a")
     expect(ensureSessionRunEventStreamSoon).toHaveBeenCalledWith("run-current", "session-current", post, "branch-a")
   })
 
@@ -3302,7 +3774,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       session_id: "session-current",
       branch_binding_id: "branch-a",
       agent_run_id: "agent-branch-a",
-      status: "idle",
+      status: "settled",
       branches: [{ branch_binding_id: "branch-a", selected: true }],
     }))
     const fetchSessionRunEventsBatch = vi.fn(async () => {
@@ -3318,7 +3790,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     ;(controller as unknown as {
       ensureSessionRunEventStreamSoon: typeof ensureSessionRunEventStreamSoon
     }).ensureSessionRunEventStreamSoon = ensureSessionRunEventStreamSoon
-    setActiveRun(controller, { sessionRunId: "run-current", branchBindingId: "main" })
+    setSelectedMainlineSnapshot(controller, { sessionRunId: "run-current", branchBindingId: "main" })
     const post = vi.fn()
 
     await (controller as unknown as {
@@ -3328,7 +3800,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       ) => Promise<void>
     }).selectSessionRunBranch({ sessionRunId: "run-current", sourceBranchBindingId: "main", operationId: "op-select-replay", branchBindingId: "branch-a" }, post)
 
-    expect(sessionRunCoordinator(controller).activeRun?.branchBindingId).toBe("main")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.branchBindingId).toBe("main")
     expect(post).not.toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.branch.selected",
       branchBindingId: "branch-a",
@@ -3363,7 +3835,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       session_id: "session-current",
       branch_binding_id: "branch-a",
       agent_run_id: "agent-branch-a",
-      status: "idle",
+      status: "settled",
       branches: [{ branch_binding_id: "branch-a", selected: true }],
     }))
     const fetchSessionRunEventsBatch = vi.fn(async () => ({
@@ -3387,7 +3859,7 @@ describe("LabrastroController SessionRun response correlation", () => {
     ;(controller as unknown as {
       ensureSessionRunEventStreamSoon: typeof ensureSessionRunEventStreamSoon
     }).ensureSessionRunEventStreamSoon = ensureSessionRunEventStreamSoon
-    setActiveRun(controller, { sessionRunId: "run-current", branchBindingId: "main" })
+    setSelectedMainlineSnapshot(controller, { sessionRunId: "run-current", branchBindingId: "main" })
     const post = vi.fn()
 
     await (controller as unknown as {
@@ -3406,7 +3878,7 @@ describe("LabrastroController SessionRun response correlation", () => {
       post,
       { emitScopedEvents: true, applyVisibleSideEffects: false },
     )
-    expect(sessionRunCoordinator(controller).activeRun?.branchBindingId).toBe("main")
+    expect(sessionRunCoordinator(controller).selectedMainlineSnapshot?.branchBindingId).toBe("main")
     expect(post).not.toHaveBeenCalledWith(expect.objectContaining({
       type: "sessionRun.branch.selected",
       branchBindingId: "branch-a",

@@ -7,22 +7,81 @@ import { chatErrorMessage, numberValue, objectValue, stringValue } from "../cont
 import { sessionRunStartTargetBranchBindingId } from "../sessionRunOperationResults"
 import type { SessionRunOperationSourceScope } from "./SessionRunSourceIdentityResolver"
 
-const ACTIVE_SESSION_RUN_KEY = "labrastro.activeSessionRun"
+const SELECTED_MAINLINE_SNAPSHOT_KEY = "labrastro.selectedMainlineSnapshot"
 
 function sessionRunOperationIdFromMessage(message: WebviewToHostMessage): string | undefined {
   const record = message as Record<string, unknown>
   return stringValue(record.operationId)
 }
 
-export interface ActiveSessionRun {
+function sessionRunSubmitOperationKindFromMessage(
+  message: WebviewToHostMessage,
+): "start" | "continue" | undefined {
+  const record = message as Record<string, unknown>
+  const kind = stringValue(record.operationKind) || stringValue(record.operation_kind)
+  return kind === "start" || kind === "continue" ? kind : undefined
+}
+
+export type SelectedMainlineSnapshotStatus =
+  | "starting"
+  | "running"
+  | "reconnecting"
+  | "settled"
+  | "waiting_user"
+  | "blocked"
+  | "closed"
+  | "cancelled"
+  | "failed"
+  | "unrecoverable"
+
+export type SelectedMainlineState =
+  | "none"
+  | "starting"
+  | "executing"
+  | "waiting_user"
+  | "settled"
+  | "closed"
+  | "cancelled"
+  | "failed"
+  | "blocked"
+  | "unrecoverable"
+
+export type SelectedActivationState =
+  | "none"
+  | "queued"
+  | "dispatched"
+  | "running"
+  | "waiting_server"
+  | "waiting_user"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "blocked"
+
+export type SelectedBindingStatus = "none" | "pending" | "active" | "closed" | "deleted"
+export type SelectedProjectionState = "live" | "recovered" | "drained" | "unavailable" | "nonrecoverable"
+export type SelectedTransportState = "disconnected" | "connecting" | "streaming" | "reconnecting" | "closed" | "error"
+
+export interface SelectedMainlineSnapshot {
   sessionRunId: string
   cursor: number
   sessionId?: string
   draftSessionId?: string
-  status: "idle" | "running" | "reconnecting"
+  status: SelectedMainlineSnapshotStatus
   agentRunId?: string
   activationId?: string
   branchBindingId?: string
+  mainlineState?: SelectedMainlineState
+  agentRunState?: string
+  activationState?: SelectedActivationState
+  bindingStatus?: SelectedBindingStatus
+  projectionState?: SelectedProjectionState
+  transportState?: SelectedTransportState
+  working?: boolean
+  continuable?: boolean
+  recoverable?: boolean
+  eventStreamAllowed?: boolean
+  closedReason?: string
   startedAt: string
   reconnectAttempts: number
   reconnectStartedAt?: number
@@ -44,10 +103,47 @@ export interface PendingNextTurn {
   queuedAt: string
 }
 
+export type HostSessionSubmitDispositionKind =
+  | "start"
+  | "continue"
+  | "queue_next_turn"
+  | "blocked"
+  | "disabled"
+
+export interface HostSessionSubmitDisposition {
+  kind: HostSessionSubmitDispositionKind
+  reason: string
+  proof: {
+    activeSessionRunId?: string
+    proofSessionRunId?: string
+    proofBranchBindingId?: string
+    activeStatus?: SelectedMainlineSnapshot["status"]
+    mainlineState?: SelectedMainlineState
+    activationState?: SelectedActivationState
+    bindingStatus?: SelectedBindingStatus
+    working?: boolean
+    continuable?: boolean
+    recoverable?: boolean
+    eventStreamAllowed?: boolean
+    projectionState?: SelectedProjectionState
+    transportState?: SelectedTransportState
+    currentRunSessionMatches: boolean
+    startInFlight?: boolean
+  }
+}
+
 interface PendingNextTurnRemoval {
   clientRequestId?: string
   queuedAt?: string
   text?: string
+}
+
+interface PendingSessionRunStart {
+  operationId: string
+  clientRequestId?: string
+  sessionId?: string
+  draftSessionId?: string
+  createdAt: number
 }
 
 export interface SessionRunCoordinatorOptions {
@@ -128,6 +224,15 @@ export interface SessionRunCoordinatorOptions {
     post: PostMessage,
     options: {
       operationId: string
+      reason?: string
+    }
+  ) => Promise<void>
+  stopSessionRun: (
+    sessionRunId: string,
+    branchBindingId: string,
+    post: PostMessage,
+    options: {
+      operationId: string
     }
   ) => Promise<void>
   recoverSessionRun: (
@@ -143,27 +248,28 @@ export interface SessionRunCoordinatorOptions {
 }
 
 export class SessionRunCoordinator {
-  private run: ActiveSessionRun | undefined
+  private run: SelectedMainlineSnapshot | undefined
   private draftSessionId: string | undefined
   private runIdentityRevision = 0
   private runProjectionRevision = 0
+  private pendingSessionRunStart: PendingSessionRunStart | undefined
 
   constructor(private readonly options: SessionRunCoordinatorOptions) {
-    this.run = activeSessionRunFromPayload(
-      this.options.context.workspaceState.get<Record<string, unknown>>(ACTIVE_SESSION_RUN_KEY)
+    this.run = selectedMainlineSnapshotFromPayload(
+      this.options.context.workspaceState.get<Record<string, unknown>>(SELECTED_MAINLINE_SNAPSHOT_KEY)
     )
     this.draftSessionId = this.run?.draftSessionId
   }
 
-  get activeRun(): ActiveSessionRun | undefined {
+  get selectedMainlineSnapshot(): SelectedMainlineSnapshot | undefined {
     return this.run
   }
 
-  get activeRunIdentityRevision(): number {
+  get selectedMainlineIdentityRevision(): number {
     return this.runIdentityRevision
   }
 
-  get activeRunProjectionRevision(): number {
+  get selectedMainlineProjectionRevision(): number {
     return this.runProjectionRevision
   }
 
@@ -187,8 +293,8 @@ export class SessionRunCoordinator {
     return Boolean(this.run?.sessionRunId)
   }
 
-  activeRunPayload(): Record<string, unknown> | undefined {
-    return this.run ? activeSessionRunPayload(this.run) : undefined
+  selectedMainlineSnapshotPayload(): Record<string, unknown> | undefined {
+    return this.run ? selectedMainlineSnapshotPayload(this.run) : undefined
   }
 
   pendingNextTurnForBranch(
@@ -209,6 +315,54 @@ export class SessionRunCoordinator {
     return queue ? [...queue] : []
   }
 
+  private hasPendingSessionRunStart(): boolean {
+    return Boolean(this.pendingSessionRunStart)
+  }
+
+  private beginPendingSessionRunStart(start: PendingSessionRunStart): void {
+    this.pendingSessionRunStart = start
+  }
+
+  private clearPendingSessionRunStart(operationId?: string): void {
+    if (!this.pendingSessionRunStart) return
+    if (operationId && this.pendingSessionRunStart.operationId !== operationId) return
+    this.pendingSessionRunStart = undefined
+  }
+
+  private postPendingSessionRunStartError(post: PostMessage, operationId: string): void {
+    const branchBindingId = sessionRunStartTargetBranchBindingId()
+    post({
+      type: "sessionRun.operation.error",
+      operationId,
+      operationKind: "start",
+      branchBindingId,
+      branch_binding_id: branchBindingId,
+      message: "会话运行正在启动，请稍候后再发送。",
+    })
+  }
+
+  private postBlockedSessionSubmitError(
+    post: PostMessage,
+    operationId: string,
+    disposition: HostSessionSubmitDisposition,
+    proof?: { sessionRunId: string; branchBindingId: string },
+  ): void {
+    post({
+      type: "sessionRun.operation.error",
+      operationId,
+      operationKind: "continue",
+      ...(proof?.sessionRunId ? { sessionRunId: proof.sessionRunId } : {}),
+      ...(proof?.branchBindingId
+        ? {
+            branchBindingId: proof.branchBindingId,
+            branch_binding_id: proof.branchBindingId,
+          }
+        : {}),
+      message: hostSessionSubmitBlockedMessage(disposition.reason),
+      reason: disposition.reason,
+    })
+  }
+
   shiftPendingNextTurnForBranch(
     sessionRunId: string | undefined,
     branchBindingId: string | undefined,
@@ -221,7 +375,7 @@ export class SessionRunCoordinator {
     const pendingNextTurnsByBranch = { ...(this.run.pendingNextTurnsByBranch || {}) }
     if (remaining.length) pendingNextTurnsByBranch[key] = remaining
     else delete pendingNextTurnsByBranch[key]
-    this.patchActiveRun({ pendingNextTurnsByBranch, pendingNextTurn: undefined })
+    this.patchSelectedMainlineSnapshot({ pendingNextTurnsByBranch, pendingNextTurn: undefined })
     return nextTurn
   }
 
@@ -239,7 +393,7 @@ export class SessionRunCoordinator {
     const pendingNextTurnsByBranch = { ...(this.run.pendingNextTurnsByBranch || {}) }
     if (remaining.length) pendingNextTurnsByBranch[key] = remaining
     else delete pendingNextTurnsByBranch[key]
-    this.patchActiveRun({ pendingNextTurnsByBranch, pendingNextTurn: undefined })
+    this.patchSelectedMainlineSnapshot({ pendingNextTurnsByBranch, pendingNextTurn: undefined })
   }
 
   clearPendingNextTurnForBranch(
@@ -250,7 +404,7 @@ export class SessionRunCoordinator {
     const key = pendingNextTurnKey(sessionRunId, branchBindingId)
     const pendingNextTurnsByBranch = { ...(this.run.pendingNextTurnsByBranch || {}) }
     delete pendingNextTurnsByBranch[key]
-    this.patchActiveRun({ pendingNextTurnsByBranch, pendingNextTurn: undefined })
+    this.patchSelectedMainlineSnapshot({ pendingNextTurnsByBranch, pendingNextTurn: undefined })
   }
 
   enqueuePendingNextTurnForBranch(
@@ -277,33 +431,35 @@ export class SessionRunCoordinator {
       ...(pendingNextTurnsByBranch[key] || []),
       pendingNextTurn,
     ]
-    this.patchActiveRun({ pendingNextTurnsByBranch })
+    this.patchSelectedMainlineSnapshot({ pendingNextTurnsByBranch })
   }
 
-  setActiveRun(run: ActiveSessionRun | undefined): void {
-    const previousIdentity = activeRunIdentityKey(this.run)
-    const previousProjection = activeRunStateKey(this.run)
-    const nextRun = run ? normalizeActiveSessionRun(run) : undefined
-    const nextIdentity = activeRunIdentityKey(nextRun)
-    const nextProjection = activeRunStateKey(nextRun)
+  setSelectedMainlineSnapshot(run: SelectedMainlineSnapshot | undefined): void {
+    const previousIdentity = selectedMainlineIdentityKey(this.run)
+    const previousProjection = selectedMainlineStateKey(this.run)
+    const nextRun = run ? normalizeSelectedMainlineSnapshot(run) : undefined
+    const nextIdentity = selectedMainlineIdentityKey(nextRun)
+    const nextProjection = selectedMainlineStateKey(nextRun)
     this.run = nextRun
+    if (nextRun?.sessionRunId) this.clearPendingSessionRunStart()
     if (previousIdentity !== nextIdentity) this.runIdentityRevision += 1
     if (previousProjection !== nextProjection) this.runProjectionRevision += 1
     void this.options.context.workspaceState.update(
-      ACTIVE_SESSION_RUN_KEY,
-      this.run ? activeSessionRunPayload(this.run) : undefined
+      SELECTED_MAINLINE_SNAPSHOT_KEY,
+      this.run ? selectedMainlineSnapshotPayload(this.run) : undefined
     )
   }
 
-  patchActiveRun(patch: Partial<ActiveSessionRun>): ActiveSessionRun | undefined {
+  patchSelectedMainlineSnapshot(patch: Partial<SelectedMainlineSnapshot>): SelectedMainlineSnapshot | undefined {
     if (!this.run) return undefined
     const next = { ...this.run, ...patch }
-    this.setActiveRun(next)
+    this.setSelectedMainlineSnapshot(next)
     return next
   }
 
-  clearActiveRun(): void {
-    this.setActiveRun(undefined)
+  clearSelectedMainlineSnapshot(): void {
+    this.clearPendingSessionRunStart()
+    this.setSelectedMainlineSnapshot(undefined)
     this.clearActiveDraftSessionId()
   }
 
@@ -365,36 +521,41 @@ export class SessionRunCoordinator {
             stringValue(message.request_id)
           const operationId = sessionRunOperationIdFromMessage(message)
           const locale = stringValue(message.locale)
-          const activeRun = this.activeRun
-          if (activeRun?.sessionRunId) {
-            const proof = explicitSessionRunBranchProof(message)
-            if (!proof || proof.sessionRunId !== activeRun.sessionRunId) return true
-            const branchBindingId = proof.branchBindingId
+          const proof = explicitSessionRunBranchProof(message)
+          const operationKind = sessionRunSubmitOperationKindFromMessage(message)
+          const hasSessionRunReference = Boolean(
+            stringValue(message.sessionRunId) || stringValue(message.session_run_id)
+          )
+          const selectedMainlineSnapshot = this.selectedMainlineSnapshot
+          if (operationKind === "continue" && !proof) {
+            if (operationId) {
+              this.postBlockedSessionSubmitError(post, operationId, {
+                kind: "blocked",
+                reason: "scope_mismatch",
+                proof: {
+                  activeSessionRunId: selectedMainlineSnapshot?.sessionRunId,
+                  currentRunSessionMatches: false,
+                },
+              })
+            }
+            return true
+          }
+          if (selectedMainlineSnapshot?.sessionRunId && proof) {
             const intent = stringValue(message.intent) || stringValue(message.input_intent)
-            if (intent === "steer" || intent === "current_activation") {
-              if (!operationId) return true
-              if (activeSessionRunIsExecuting(activeRun)) {
-                void this.options.steerAgentRun(text, post, {
-                  ...(clientRequestId ? { clientSteerId: clientRequestId } : {}),
-                  operationId,
-                  sessionRunId: proof.sessionRunId,
-                  branchBindingId,
-                  ...(locale ? { locale } : {}),
-                  ...(mentions.length ? { mentions } : {}),
-                })
-              } else {
-                void this.options.continueSessionRun(text, post, {
-                  sessionRunId: proof.sessionRunId,
-                  branchBindingId,
-                  ...(clientRequestId ? { clientRequestId } : {}),
-                  operationId,
-                  ...(locale ? { locale } : {}),
-                  ...(mentions.length ? { mentions } : {}),
-                })
-              }
+            const disposition = resolveHostSessionSubmitDisposition({
+              hasText: Boolean(text.trim()),
+              selectedMainlineSnapshot,
+              proof,
+              intent,
+            })
+            if (disposition.kind === "disabled") return true
+            if (disposition.kind === "blocked") {
+              if (operationId) this.postBlockedSessionSubmitError(post, operationId, disposition, proof)
               return true
             }
-            if (activeSessionRunIsExecuting(activeRun)) {
+            if (!proof) return true
+            const branchBindingId = proof.branchBindingId
+            if (disposition.kind === "queue_next_turn") {
               const pendingNextTurn: PendingNextTurn = {
                 text,
                 sessionRunId: proof.sessionRunId,
@@ -426,14 +587,53 @@ export class SessionRunCoordinator {
             })
             return true
           }
+          if (operationKind === "continue" && proof) {
+            if (!operationId) return true
+            void this.options.continueSessionRun(text, post, {
+              sessionRunId: proof.sessionRunId,
+              branchBindingId: proof.branchBindingId,
+              ...(clientRequestId ? { clientRequestId } : {}),
+              operationId,
+              ...(locale ? { locale } : {}),
+              ...(mentions.length ? { mentions } : {}),
+            })
+            return true
+          }
+          if (hasSessionRunReference) {
+            if (operationId) {
+              this.postBlockedSessionSubmitError(post, operationId, {
+                kind: "blocked",
+                reason: "scope_mismatch",
+                proof: {
+                  activeSessionRunId: selectedMainlineSnapshot?.sessionRunId,
+                  currentRunSessionMatches: false,
+                },
+              })
+            }
+            return true
+          }
+          if (selectedMainlineSnapshot?.sessionRunId && operationKind !== "start") return true
           if (!operationId) return true
+          if (this.hasPendingSessionRunStart()) {
+            this.postPendingSessionRunStartError(post, operationId)
+            return true
+          }
           const providerId = stringValue(message.providerId) || stringValue(message.provider_id)
           const modelId = stringValue(message.modelId) || stringValue(message.model_id)
-          void this.options.startSessionRun(message.text, stringValue(message.sessionId), post, {
+          const requestedSessionId = stringValue(message.sessionId)
+          const draftSessionId = stringValue(message.draftSessionId) || stringValue(message.draft_session_id)
+          this.beginPendingSessionRunStart({
+            operationId,
+            ...(clientRequestId ? { clientRequestId } : {}),
+            ...(requestedSessionId ? { sessionId: requestedSessionId } : {}),
+            ...(draftSessionId ? { draftSessionId } : {}),
+            createdAt: Date.now(),
+          })
+          const startPromise = Promise.resolve(this.options.startSessionRun(message.text, requestedSessionId, post, {
             mode: stringValue(message.mode),
             workflowMode: stringValue(message.workflowMode) || stringValue(message.workflow_mode),
             taskflowId: stringValue(message.taskflowId) || stringValue(message.taskflow_id),
-            draftSessionId: stringValue(message.draftSessionId) || stringValue(message.draft_session_id),
+            draftSessionId,
             locale,
             clientRequestId,
             operationId,
@@ -446,7 +646,10 @@ export class SessionRunCoordinator {
               ? message.parameters as Record<string, unknown>
               : {},
             ...(mentions.length ? { mentions } : {}),
-          })
+          }))
+          void startPromise
+            .finally(() => this.clearPendingSessionRunStart(operationId))
+            .catch(() => undefined)
         }
         return true
       case "sessionRun.pendingNextTurn.remove": {
@@ -476,7 +679,21 @@ export class SessionRunCoordinator {
         if (!proof) return true
         const operationId = sessionRunOperationIdFromMessage(message)
         if (!operationId) return true
+        const reason = stringValue(message.reason)
         await this.options.cancelSessionRun(
+          proof.sessionRunId,
+          proof.branchBindingId,
+          post,
+          { operationId, ...(reason ? { reason } : {}) }
+        )
+        return true
+      }
+      case "sessionRun.stop": {
+        const proof = explicitSessionRunBranchProof(message)
+        if (!proof) return true
+        const operationId = sessionRunOperationIdFromMessage(message)
+        if (!operationId) return true
+        await this.options.stopSessionRun(
           proof.sessionRunId,
           proof.branchBindingId,
           post,
@@ -838,7 +1055,7 @@ export class SessionRunCoordinator {
   }
 }
 
-export function activeSessionRunPayload(run: ActiveSessionRun): Record<string, unknown> {
+export function selectedMainlineSnapshotPayload(run: SelectedMainlineSnapshot): Record<string, unknown> {
   return {
     sessionRunId: run.sessionRunId,
     session_run_id: run.sessionRunId,
@@ -854,6 +1071,25 @@ export function activeSessionRunPayload(run: ActiveSessionRun): Record<string, u
     branchBindingId: run.branchBindingId,
     branch_binding_id: run.branchBindingId,
     status: run.status,
+    mainlineState: run.mainlineState,
+    mainline_state: run.mainlineState,
+    agentRunState: run.agentRunState,
+    agent_run_state: run.agentRunState,
+    activationState: run.activationState,
+    activation_state: run.activationState,
+    bindingStatus: run.bindingStatus,
+    binding_status: run.bindingStatus,
+    projectionState: run.projectionState,
+    projection_state: run.projectionState,
+    transportState: run.transportState,
+    transport_state: run.transportState,
+    working: run.working,
+    continuable: run.continuable,
+    recoverable: run.recoverable,
+    eventStreamAllowed: run.eventStreamAllowed,
+    event_stream_allowed: run.eventStreamAllowed,
+    closedReason: run.closedReason,
+    closed_reason: run.closedReason,
     startedAt: run.startedAt,
     started_at: run.startedAt,
     reconnectAttempts: run.reconnectAttempts,
@@ -874,7 +1110,7 @@ export function activeSessionRunPayload(run: ActiveSessionRun): Record<string, u
   }
 }
 
-export function activeSessionRunFromPayload(payload: unknown): ActiveSessionRun | undefined {
+export function selectedMainlineSnapshotFromPayload(payload: unknown): SelectedMainlineSnapshot | undefined {
   const value = objectValue(payload)
   const sessionRunId = stringValue(value.sessionRunId) || stringValue(value.session_run_id)
   if (!sessionRunId) return undefined
@@ -891,9 +1127,26 @@ export function activeSessionRunFromPayload(payload: unknown): ActiveSessionRun 
   const nextRetryAt =
     numberValue(value.nextRetryAt) ??
     numberValue(value.next_retry_at)
-  const statusValue = stringValue(value.status)
-  const status: ActiveSessionRun["status"] =
-    statusValue === "reconnecting" ? "reconnecting" : statusValue === "idle" ? "idle" : "running"
+  const status = selectedMainlineSnapshotStatusFromPayload(value)
+  const mainlineState = selectedMainlineStateFromPayload(value, status)
+  const activationState = selectedActivationStateFromPayload(value, status)
+  const bindingStatus = selectedBindingStatusFromPayload(value, mainlineState)
+  const working = booleanValue(value.working) ?? selectedActivationStateIsExecuting(activationState)
+  const continuable = booleanValue(value.continuable) ?? (
+    mainlineState === "settled" && bindingStatus === "active"
+  )
+  const recoverable = booleanValue(value.recoverable) ?? (
+    bindingStatus === "active" &&
+    mainlineState !== "cancelled" &&
+    mainlineState !== "closed" &&
+    mainlineState !== "failed" &&
+    mainlineState !== "unrecoverable"
+  )
+  const eventStreamAllowed = booleanValue(value.eventStreamAllowed ?? value.event_stream_allowed) ?? (
+    working && bindingStatus === "active"
+  )
+  const projectionState = selectedProjectionStateFromPayload(value, mainlineState, eventStreamAllowed)
+  const transportState = selectedTransportStateFromPayload(value, eventStreamAllowed)
   const camelPendingNextTurn = objectValue(value.pendingNextTurn)
   const pendingNextTurnValue = Object.keys(camelPendingNextTurn).length
     ? camelPendingNextTurn
@@ -919,6 +1172,17 @@ export function activeSessionRunFromPayload(payload: unknown): ActiveSessionRun 
     activationId: stringValue(value.activationId) || stringValue(value.activation_id),
     branchBindingId,
     status,
+    mainlineState,
+    agentRunState: stringValue(value.agentRunState) || stringValue(value.agent_run_state),
+    activationState,
+    bindingStatus,
+    projectionState,
+    transportState,
+    working,
+    continuable,
+    recoverable,
+    eventStreamAllowed,
+    closedReason: stringValue(value.closedReason) || stringValue(value.closed_reason),
     startedAt:
       stringValue(value.startedAt) ||
       stringValue(value.started_at) ||
@@ -933,7 +1197,7 @@ export function activeSessionRunFromPayload(payload: unknown): ActiveSessionRun 
       sessionRunId,
       branchBindingId,
       pendingNextTurnsByBranch: branchQueues,
-    } as ActiveSessionRun),
+    } as SelectedMainlineSnapshot),
     branches: arrayValue(value.branches).filter(
       (item): item is Record<string, unknown> =>
         Boolean(item && typeof item === "object" && !Array.isArray(item))
@@ -941,8 +1205,320 @@ export function activeSessionRunFromPayload(payload: unknown): ActiveSessionRun 
   }
 }
 
-function activeSessionRunIsExecuting(run: ActiveSessionRun): boolean {
-  return run.status === "running" || run.status === "reconnecting"
+export function resolveHostSessionSubmitDisposition(input: {
+  hasText: boolean
+  selectedMainlineSnapshot?: SelectedMainlineSnapshot
+  proof?: { sessionRunId: string; branchBindingId: string }
+  intent?: string
+  disabled?: boolean
+  startInFlight?: boolean
+}): HostSessionSubmitDisposition {
+  const currentRunSessionMatches = Boolean(
+    input.selectedMainlineSnapshot?.sessionRunId &&
+    input.proof?.sessionRunId === input.selectedMainlineSnapshot.sessionRunId
+  )
+  const mainlineState = selectedMainlineState(input.selectedMainlineSnapshot)
+  const activationState = selectedActivationState(input.selectedMainlineSnapshot)
+  const bindingStatus = selectedBindingStatus(input.selectedMainlineSnapshot, mainlineState)
+  const working = input.selectedMainlineSnapshot?.working ?? selectedActivationStateIsExecuting(activationState)
+  const continuable = input.selectedMainlineSnapshot?.continuable ?? (
+    mainlineState === "settled" && bindingStatus === "active"
+  )
+  const recoverable = input.selectedMainlineSnapshot?.recoverable ?? (
+    bindingStatus === "active" &&
+    mainlineState !== "none" &&
+    mainlineState !== "cancelled" &&
+    mainlineState !== "closed" &&
+    mainlineState !== "failed" &&
+    mainlineState !== "unrecoverable"
+  )
+  const eventStreamAllowed = input.selectedMainlineSnapshot?.eventStreamAllowed ?? (
+    working && bindingStatus === "active"
+  )
+  const projectionState = input.selectedMainlineSnapshot?.projectionState || (
+    mainlineState === "settled" ? "drained" : eventStreamAllowed ? "live" : "unavailable"
+  )
+  const transportState = input.selectedMainlineSnapshot?.transportState || (
+    eventStreamAllowed
+      ? input.selectedMainlineSnapshot?.status === "reconnecting" ? "reconnecting" : "streaming"
+      : "disconnected"
+  )
+  const proof = {
+    ...(input.selectedMainlineSnapshot?.sessionRunId ? { activeSessionRunId: input.selectedMainlineSnapshot.sessionRunId } : {}),
+    ...(input.proof?.sessionRunId ? { proofSessionRunId: input.proof.sessionRunId } : {}),
+    ...(input.proof?.branchBindingId ? { proofBranchBindingId: input.proof.branchBindingId } : {}),
+    ...(input.selectedMainlineSnapshot?.status ? { activeStatus: input.selectedMainlineSnapshot.status } : {}),
+    mainlineState,
+    activationState,
+    bindingStatus,
+    working,
+    continuable,
+    recoverable,
+    eventStreamAllowed,
+    projectionState,
+    transportState,
+    currentRunSessionMatches,
+    ...(input.startInFlight ? { startInFlight: true } : {}),
+  }
+  if (input.disabled) return { kind: "disabled", reason: "composer_disabled", proof }
+  if (!input.hasText) return { kind: "disabled", reason: "empty_text", proof }
+  if (input.startInFlight) return { kind: "blocked", reason: "session_run_start_pending", proof }
+  if (!input.selectedMainlineSnapshot?.sessionRunId) return { kind: "start", reason: "no_active_session_run", proof }
+  if (!currentRunSessionMatches) return { kind: "blocked", reason: "active_run_not_visible", proof }
+
+  if (selectedActivationStateIsExecuting(activationState)) {
+    return {
+      kind: "queue_next_turn",
+      reason: "selected_branch_not_accepting_continuation",
+      proof,
+    }
+  }
+  if (mainlineState === "settled" && continuable && bindingStatus === "active") {
+    return { kind: "continue", reason: "selected_branch_settled", proof }
+  }
+  if (mainlineState === "waiting_user") {
+    return { kind: "blocked", reason: "waiting_user_action", proof }
+  }
+  if (mainlineState === "blocked") {
+    return { kind: "blocked", reason: recoverable ? "repair_required" : "nonrecoverable", proof }
+  }
+  if (mainlineState === "unrecoverable") {
+    return { kind: "blocked", reason: "nonrecoverable", proof }
+  }
+  if (
+    mainlineState === "closed" ||
+    mainlineState === "cancelled" ||
+    mainlineState === "failed" ||
+    bindingStatus === "closed" ||
+    bindingStatus === "deleted"
+  ) {
+    return { kind: "blocked", reason: "start_new_task_required", proof }
+  }
+  if (projectionState === "nonrecoverable") {
+    return { kind: "blocked", reason: "nonrecoverable", proof }
+  }
+  return { kind: "blocked", reason: "selected_mainline_state_missing", proof }
+}
+
+function selectedMainlineSnapshotStatusFromPayload(value: Record<string, unknown>): SelectedMainlineSnapshotStatus {
+  const status = stringValue(value.status)
+  const mainlineState = stringValue(value.mainlineState) || stringValue(value.mainline_state)
+  if (mainlineState === "starting") return "starting"
+  if (mainlineState === "executing") return "running"
+  if (mainlineState === "waiting_user") return "waiting_user"
+  if (mainlineState === "settled") return "settled"
+  if (mainlineState === "blocked") return "blocked"
+  if (mainlineState === "cancelled") return "cancelled"
+  if (mainlineState === "closed") return "closed"
+  if (mainlineState === "failed") return "failed"
+  if (mainlineState === "unrecoverable") return "unrecoverable"
+  if (status === "starting") return "starting"
+  if (status === "reconnecting") return "reconnecting"
+  if (
+    status === "running" ||
+    status === "queued" ||
+    status === "waiting" ||
+    status === "stopping"
+  ) {
+    return "running"
+  }
+  if (status === "settled" || status === "done" || status === "completed" || status === "complete" || status === "success" || status === "idle") {
+    return "settled"
+  }
+  if (status === "waiting_user") return "waiting_user"
+  if (status === "blocked") return "blocked"
+  if (status === "cancelled" || status === "canceled") return "cancelled"
+  if (status === "closed") return "closed"
+  if (status === "failed" || status === "failure" || status === "error" || status === "interrupted") return "failed"
+  if (status === "unrecoverable") return "unrecoverable"
+  return "running"
+}
+
+function selectedMainlineStateFromPayload(
+  value: Record<string, unknown>,
+  status: SelectedMainlineSnapshotStatus,
+): SelectedMainlineState {
+  const parsed = stringValue(value.mainlineState) || stringValue(value.mainline_state)
+  if (isSelectedMainlineState(parsed)) return parsed
+  if (status === "starting") return "starting"
+  if (status === "running") return "executing"
+  if (
+    status === "reconnecting" &&
+    booleanValue(value.working) === true &&
+    booleanValue(value.eventStreamAllowed ?? value.event_stream_allowed) === true
+  ) {
+    return "executing"
+  }
+  if (status === "settled") return "settled"
+  if (status === "waiting_user") return "waiting_user"
+  if (status === "blocked") return "blocked"
+  if (status === "cancelled") return "cancelled"
+  if (status === "closed") return "closed"
+  if (status === "failed") return "failed"
+  if (status === "unrecoverable") return "unrecoverable"
+  return "none"
+}
+
+function selectedActivationStateFromPayload(
+  value: Record<string, unknown>,
+  status: SelectedMainlineSnapshotStatus,
+): SelectedActivationState {
+  const parsed = stringValue(value.activationState) || stringValue(value.activation_state)
+  if (isSelectedActivationState(parsed)) return parsed
+  if (status === "starting") return "queued"
+  if (status === "running") return "running"
+  if (
+    status === "reconnecting" &&
+    booleanValue(value.working) === true &&
+    booleanValue(value.eventStreamAllowed ?? value.event_stream_allowed) === true
+  ) {
+    return "running"
+  }
+  if (status === "settled") return "completed"
+  if (status === "waiting_user") return "waiting_user"
+  if (status === "blocked") return "blocked"
+  if (status === "cancelled") return "cancelled"
+  if (status === "failed" || status === "unrecoverable") return "failed"
+  return "none"
+}
+
+function selectedBindingStatusFromPayload(
+  value: Record<string, unknown>,
+  mainlineState: SelectedMainlineState,
+): SelectedBindingStatus {
+  const parsed = stringValue(value.bindingStatus) || stringValue(value.binding_status)
+  if (isSelectedBindingStatus(parsed)) return parsed
+  return selectedBindingStatus(undefined, mainlineState)
+}
+
+function selectedProjectionStateFromPayload(
+  value: Record<string, unknown>,
+  mainlineState: SelectedMainlineState,
+  eventStreamAllowed: boolean,
+): SelectedProjectionState {
+  const parsed = stringValue(value.projectionState) || stringValue(value.projection_state)
+  if (isSelectedProjectionState(parsed)) return parsed
+  if (mainlineState === "unrecoverable") return "nonrecoverable"
+  if (mainlineState === "settled") return "drained"
+  return eventStreamAllowed ? "live" : "unavailable"
+}
+
+function selectedTransportStateFromPayload(
+  value: Record<string, unknown>,
+  eventStreamAllowed: boolean,
+): SelectedTransportState {
+  const parsed = stringValue(value.transportState) || stringValue(value.transport_state)
+  if (isSelectedTransportState(parsed)) return parsed
+  const status = stringValue(value.status)
+  if (!eventStreamAllowed) return "disconnected"
+  return status === "reconnecting" ? "reconnecting" : "streaming"
+}
+
+function selectedMainlineState(run: SelectedMainlineSnapshot | undefined): SelectedMainlineState {
+  if (!run) return "none"
+  if (run.mainlineState) return run.mainlineState
+  if (run.status === "starting") return "starting"
+  if (run.status === "running") return "executing"
+  if (run.status === "reconnecting" && run.working === true && run.eventStreamAllowed === true) return "executing"
+  if (run.status === "settled") return "settled"
+  if (run.status === "waiting_user") return "waiting_user"
+  if (run.status === "blocked") return "blocked"
+  if (run.status === "cancelled") return "cancelled"
+  if (run.status === "closed") return "closed"
+  if (run.status === "failed") return "failed"
+  if (run.status === "unrecoverable") return "unrecoverable"
+  return "none"
+}
+
+function selectedActivationState(run: SelectedMainlineSnapshot | undefined): SelectedActivationState {
+  if (!run) return "none"
+  if (run.activationState) return run.activationState
+  if (run.status === "starting") return "queued"
+  if (run.status === "running") return "running"
+  if (run.status === "reconnecting" && run.working === true && run.eventStreamAllowed === true) return "running"
+  if (run.status === "settled") return "completed"
+  if (run.status === "waiting_user") return "waiting_user"
+  if (run.status === "blocked") return "blocked"
+  if (run.status === "cancelled") return "cancelled"
+  if (run.status === "failed" || run.status === "unrecoverable") return "failed"
+  return "none"
+}
+
+function selectedBindingStatus(
+  run: SelectedMainlineSnapshot | undefined,
+  mainlineState: SelectedMainlineState,
+): SelectedBindingStatus {
+  if (run?.bindingStatus) return run.bindingStatus
+  if (mainlineState === "none") return "none"
+  if (
+    mainlineState === "closed" ||
+    mainlineState === "cancelled" ||
+    mainlineState === "failed" ||
+    mainlineState === "unrecoverable"
+  ) {
+    return "closed"
+  }
+  return "active"
+}
+
+function selectedActivationStateIsExecuting(status: SelectedActivationState): boolean {
+  return status === "queued" || status === "dispatched" || status === "running" || status === "waiting_server"
+}
+
+function isSelectedMainlineState(value: string | undefined): value is SelectedMainlineState {
+  return Boolean(value && [
+    "none",
+    "starting",
+    "executing",
+    "waiting_user",
+    "settled",
+    "closed",
+    "cancelled",
+    "failed",
+    "blocked",
+    "unrecoverable",
+  ].includes(value))
+}
+
+function isSelectedActivationState(value: string | undefined): value is SelectedActivationState {
+  return Boolean(value && [
+    "none",
+    "queued",
+    "dispatched",
+    "running",
+    "waiting_server",
+    "waiting_user",
+    "completed",
+    "failed",
+    "cancelled",
+    "blocked",
+  ].includes(value))
+}
+
+function isSelectedBindingStatus(value: string | undefined): value is SelectedBindingStatus {
+  return Boolean(value && ["none", "pending", "active", "closed", "deleted"].includes(value))
+}
+
+function isSelectedProjectionState(value: string | undefined): value is SelectedProjectionState {
+  return Boolean(value && ["live", "recovered", "drained", "unavailable", "nonrecoverable"].includes(value))
+}
+
+function isSelectedTransportState(value: string | undefined): value is SelectedTransportState {
+  return Boolean(value && ["disconnected", "connecting", "streaming", "reconnecting", "closed", "error"].includes(value))
+}
+
+function booleanValue(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined
+}
+
+function hostSessionSubmitBlockedMessage(reason: string): string {
+  if (reason === "session_run_start_pending") return "会话运行正在启动，请稍候后再发送。"
+  if (reason === "waiting_user_action") return "当前任务正在等待审批或专用输入，请先处理等待项。"
+  if (reason === "repair_required") return "当前任务需要通过修复或反馈入口继续，普通输入不会直接发送。"
+  if (reason === "nonrecoverable") return "当前任务状态不可恢复，请先开启新任务。"
+  if (reason === "start_new_task_required") return "当前任务已结束或取消，请先明确开启新任务。"
+  if (reason === "active_run_not_visible") return "当前可继续主线不属于正在查看的会话。"
+  return "当前会话运行状态不接受普通输入。"
 }
 
 function pendingNextTurnFromPayload(value: Record<string, unknown>): PendingNextTurn | undefined {
@@ -982,17 +1558,17 @@ function pendingNextTurnKey(sessionRunId: string, branchBindingId: string): stri
   return `${sessionRunId}:${branchBindingId}`
 }
 
-function selectedPendingNextTurn(run: Pick<ActiveSessionRun, "sessionRunId" | "branchBindingId" | "pendingNextTurnsByBranch">): PendingNextTurn | undefined {
+function selectedPendingNextTurn(run: Pick<SelectedMainlineSnapshot, "sessionRunId" | "branchBindingId" | "pendingNextTurnsByBranch">): PendingNextTurn | undefined {
   const branchBindingId = run.branchBindingId
   if (!branchBindingId) return undefined
   return run.pendingNextTurnsByBranch?.[pendingNextTurnKey(run.sessionRunId, branchBindingId)]?.[0]
 }
 
-function activeRunStateKey(run: ActiveSessionRun | undefined): string {
-  return run ? JSON.stringify(activeSessionRunPayload(run)) : ""
+function selectedMainlineStateKey(run: SelectedMainlineSnapshot | undefined): string {
+  return run ? JSON.stringify(selectedMainlineSnapshotPayload(run)) : ""
 }
 
-function activeRunIdentityKey(run: ActiveSessionRun | undefined): string {
+function selectedMainlineIdentityKey(run: SelectedMainlineSnapshot | undefined): string {
   if (!run) return ""
   return JSON.stringify({
     sessionRunId: run.sessionRunId || "",
@@ -1014,7 +1590,7 @@ function pendingNextTurnMatchesRemoval(
   return Boolean(!removal.clientRequestId && !removal.queuedAt && removal.text && item.text === removal.text)
 }
 
-function normalizeActiveSessionRun(run: ActiveSessionRun): ActiveSessionRun | undefined {
+function normalizeSelectedMainlineSnapshot(run: SelectedMainlineSnapshot): SelectedMainlineSnapshot | undefined {
   const branchBindingId = run.branchBindingId
   if (!branchBindingId) return undefined
   const pendingNextTurnsByBranch = { ...(run.pendingNextTurnsByBranch || {}) }
@@ -1028,15 +1604,64 @@ function normalizeActiveSessionRun(run: ActiveSessionRun): ActiveSessionRun | un
           branchBindingId,
         }]
   }
-  const normalized: ActiveSessionRun = {
+  const normalized: SelectedMainlineSnapshot = {
     ...run,
     branchBindingId,
     pendingNextTurnsByBranch,
   }
+  const mainlineState = selectedMainlineState(normalized)
+  const activationState = selectedActivationState(normalized)
+  const bindingStatus = selectedBindingStatus(normalized, mainlineState)
+  const working = normalized.working ?? selectedActivationStateIsExecuting(activationState)
+  const continuable = normalized.continuable ?? (
+    mainlineState === "settled" && bindingStatus === "active"
+  )
+  const recoverable = normalized.recoverable ?? (
+    bindingStatus === "active" &&
+    mainlineState !== "cancelled" &&
+    mainlineState !== "closed" &&
+    mainlineState !== "failed" &&
+    mainlineState !== "unrecoverable"
+  )
+  const eventStreamAllowed = normalized.eventStreamAllowed ?? (working && bindingStatus === "active")
   return {
     ...normalized,
+    status: statusFromSelectedMainlineFacts(normalized.status, mainlineState, activationState),
+    mainlineState,
+    activationState,
+    bindingStatus,
+    working,
+    continuable,
+    recoverable,
+    eventStreamAllowed,
+    projectionState: normalized.projectionState || (
+      mainlineState === "settled" ? "drained" : eventStreamAllowed ? "live" : "unavailable"
+    ),
+    transportState: normalized.transportState || (
+      eventStreamAllowed
+        ? normalized.status === "reconnecting" ? "reconnecting" : "streaming"
+        : "disconnected"
+    ),
     pendingNextTurn: selectedPendingNextTurn(normalized),
   }
+}
+
+function statusFromSelectedMainlineFacts(
+  fallback: SelectedMainlineSnapshotStatus,
+  mainlineState: SelectedMainlineState,
+  activationState: SelectedActivationState,
+): SelectedMainlineSnapshotStatus {
+  if (fallback === "reconnecting" && selectedActivationStateIsExecuting(activationState)) return "reconnecting"
+  if (mainlineState === "starting") return "starting"
+  if (selectedActivationStateIsExecuting(activationState) || mainlineState === "executing") return "running"
+  if (mainlineState === "settled") return "settled"
+  if (mainlineState === "waiting_user") return "waiting_user"
+  if (mainlineState === "blocked") return "blocked"
+  if (mainlineState === "closed") return "closed"
+  if (mainlineState === "cancelled") return "cancelled"
+  if (mainlineState === "failed") return "failed"
+  if (mainlineState === "unrecoverable") return "unrecoverable"
+  return fallback
 }
 
 function explicitSessionRunBranchProof(

@@ -9,7 +9,7 @@ import type {
   SessionRuntimeOperation,
 } from "../sessionRuntime/SessionRuntimeModel"
 
-export type SessionRunControlOperationKind = "continue" | "recover" | "steer" | "cancel"
+export type SessionRunControlOperationKind = "continue" | "recover" | "steer" | "stop" | "cancel"
 export type SessionRunOperationKind =
   | "start"
   | SessionRunControlOperationKind
@@ -24,7 +24,7 @@ export interface SessionRunBranchIdentity {
   sourceIdentityRevision: number
 }
 
-export interface ActiveSessionRunIdentity {
+export interface SelectedMainlineSnapshotIdentity {
   sessionRunId?: string
   branchBindingId?: string
   agentRunId?: string

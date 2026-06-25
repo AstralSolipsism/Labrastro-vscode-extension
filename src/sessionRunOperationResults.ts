@@ -27,7 +27,7 @@ export interface NormalizedBranchSelectResult {
   agentRunId?: string
   activationId?: string
   running: boolean
-  status: "running" | "idle"
+  status: "running" | "done"
   branches: Record<string, unknown>[]
   runtimeState: Record<string, unknown>
 }
@@ -78,7 +78,7 @@ export function normalizeBranchSelectResult(
   if (!branchBindingId) return undefined
   const runtimeState = objectField(value, "runtime_state", "runtimeState")
   const running = value.running === true || stringValue(value.status) === "running"
-  const status = running ? "running" : "idle"
+  const status = running ? "running" : "done"
   const agentRunId =
     stringField(value, "agent_run_id", "agentRunId") ||
     stringField(runtimeState, "agent_run_id", "agentRunId")

@@ -76,7 +76,7 @@ describe("LabrastroController session run event batching", () => {
     expect(retryFunction).toContain("this.sessionRunEventReconnects.set(streamKey")
     expect(retryFunction).toContain("!this.sessionRunEventStreamMatches(sessionRunId, branchBindingId)")
     expect(retryFunction).not.toContain("!this.activeSessionRunMatches({ sessionRunId, branchBindingId })")
-    expect(retryFunction).not.toContain("!canRetrySessionRunEvents(activeRun)")
+    expect(retryFunction).not.toContain("!canRetrySessionRunEvents(selectedMainlineSnapshot)")
     expect(connectedFunction).toContain("this.activeSessionRunMatches({ sessionRunId, branchBindingId })")
   })
 
@@ -89,9 +89,9 @@ describe("LabrastroController session run event batching", () => {
     expect(batchFunction).toContain("const selectedBranch = this.activeSessionRunMatches({ sessionRunId, branchBindingId: streamBranchBindingId })")
     expect(batchFunction).toContain("const visibleBranch = selectedBranch && options.applyVisibleSideEffects !== false")
     expect(batchFunction).toContain("const emitScopedEvents = visibleBranch || options.emitScopedEvents === true")
-    expect(batchFunction).toContain("if (visibleBranch) {\n      this.sessionRunCoordinator.patchActiveRun({")
+    expect(batchFunction).toContain("if (visibleBranch) {\n      this.sessionRunCoordinator.patchSelectedMainlineSnapshot({")
     expect(batchFunction).toContain("this.sessionRuntimeStore.hasScope({ sessionRunId, branchBindingId: streamBranchBindingId })")
-    expect(batchFunction).not.toContain("this.sessionRunCoordinator.patchActiveRun({\n      ...(visibleBranch ?")
+    expect(batchFunction).not.toContain("this.sessionRunCoordinator.patchSelectedMainlineSnapshot({\n      ...(visibleBranch ?")
   })
 
   it("reports scoped event stream remote session mismatch as a projection error", () => {
@@ -128,7 +128,7 @@ describe("LabrastroController session run event batching", () => {
       "private sessionRunEventStreamMatches",
     )
 
-    expect(streamFunction).not.toContain("branchBindingId = this.sessionRunCoordinator.activeRun?.branchBindingId")
+    expect(streamFunction).not.toContain("branchBindingId = this.sessionRunCoordinator.selectedMainlineSnapshot?.branchBindingId")
     expect(streamFunction).toContain("branchBindingId: string")
     expect(streamFunction).toContain("this.ensureSessionRunStreamScope(sessionRunId, branchBindingId)")
   })
@@ -142,7 +142,7 @@ describe("LabrastroController session run event batching", () => {
     expect(ensureScopeFunction).toContain("return this.sessionRuntimeStore.streamScopeIsOpen({ sessionRunId, branchBindingId })")
     expect(ensureScopeFunction).not.toContain("resolveSessionRunSourceIdentity")
     expect(ensureScopeFunction).not.toContain("ensureBranchRuntimeScope")
-    expect(ensureScopeFunction).not.toContain("this.sessionRunCoordinator.activeRun")
+    expect(ensureScopeFunction).not.toContain("this.sessionRunCoordinator.selectedMainlineSnapshot")
   })
 
   it("reads session run event stream cursor from branch runtime scope", () => {
@@ -153,7 +153,7 @@ describe("LabrastroController session run event batching", () => {
 
     expect(streamFunction).toContain("let cursor = this.sessionRuntimeStore.streamCursorForScope({ sessionRunId, branchBindingId })")
     expect(streamFunction).not.toContain("selectedBranchBindingId")
-    expect(streamFunction).not.toContain("this.sessionRunCoordinator.activeRun?.cursor")
+    expect(streamFunction).not.toContain("this.sessionRunCoordinator.selectedMainlineSnapshot?.cursor")
   })
 
   it("keeps pending next turns owned until continue succeeds", () => {
@@ -218,7 +218,7 @@ describe("LabrastroController session run event batching", () => {
     expect(saveFunction).toContain("const proof = explicitSessionRunBranchProof(request)")
     expect(saveFunction).toContain("if (!proof)")
     expect(saveFunction).not.toContain("request.sessionRunId || this.sessionRunCoordinator.activeSessionRunId")
-    expect(saveFunction).not.toContain("request.branchBindingId || this.sessionRunCoordinator.activeRun?.branchBindingId")
+    expect(saveFunction).not.toContain("request.branchBindingId || this.sessionRunCoordinator.selectedMainlineSnapshot?.branchBindingId")
     expect(saveFunction).toContain("branch_binding_id: branchBindingId")
     expect(saveFunction).toContain("branchBindingId,")
     expect(saveFunction).toContain("branch_binding_id: branchBindingId,")
@@ -264,6 +264,28 @@ describe("LabrastroController session run event batching", () => {
     expect(streamFunction).toContain("this.sessionRuntimeStore.reduce({")
   })
 
+  it("preserves selected mainline identity when stream or cancel state changes", () => {
+    const streamFunction = sourceSection(
+      "private ensureSessionRunEventStream(",
+      "private ensureSessionRunEventStreamSoon",
+    )
+    const batchFunction = sourceSection(
+      "private async applySessionRunEventsBatch",
+      "private async recoverSessionRun",
+    )
+    const cancelFunction = sourceSection(
+      "private async cancelSessionRun",
+      "private async runAdminAction",
+    )
+
+    expect(streamFunction).not.toContain("clearSelectedMainlineSnapshot()")
+    expect(streamFunction).toContain('...selectedMainlinePatchFromRuntimeStatus("error")')
+    expect(batchFunction).not.toContain("clearSelectedMainlineSnapshot()")
+    expect(batchFunction).toContain('...selectedMainlinePatchFromRuntimeStatus("error")')
+    expect(cancelFunction).not.toContain("setSelectedMainlineSnapshot(undefined)")
+    expect(cancelFunction).toContain('selectedMainlinePatchFromRuntimeStatus("cancelled")')
+  })
+
   it("does not fabricate main branch proof for operation preflight failures", () => {
     const preflightFailureFunction = sourceSection(
       "private reportSessionRunOperationPreflightFailure",
@@ -281,13 +303,13 @@ describe("LabrastroController session run event batching", () => {
     )
 
     expect(cancelFunction).not.toContain("sessionRunId || this.sessionRunCoordinator.activeSessionRunId")
-    expect(cancelFunction).not.toContain("branchBindingId || this.sessionRunCoordinator.activeRun?.branchBindingId")
+    expect(cancelFunction).not.toContain("branchBindingId || this.sessionRunCoordinator.selectedMainlineSnapshot?.branchBindingId")
     expect(cancelFunction).toContain("const targetSessionRunId = sessionRunId")
     expect(cancelFunction).toContain("const targetBranchBindingId = branchBindingId")
   })
 
   it("refreshes active run status before sessionRun.resume and forwards pending approvals", () => {
-    expect(source).toContain("activeRunPayloadWithServerStatus")
+    expect(source).toContain("selectedMainlineSnapshotPayloadWithServerStatus")
     expect(source).toContain("const status = await this.client.sessionRunStatus(sessionRunId")
     expect(source).toContain("const runtimeState = objectValue(status.runtime_state || status.runtimeState)")
     expect(source).toContain("runtime_state: runtimeState")
@@ -297,47 +319,64 @@ describe("LabrastroController session run event batching", () => {
   it("keeps active run state across extension dispose so Reload Window can recover approvals", () => {
     const disposeFunction = sourceFrom("dispose(): void {")
 
-    expect(disposeFunction).not.toContain("clearActiveRun()")
+    expect(disposeFunction).not.toContain("clearSelectedMainlineSnapshot()")
     expect(disposeFunction).toContain('stopPeer("controller.dispose")')
   })
 
   it("caches status approvals and reconnects the event stream during session run resume", () => {
     const resumeStatusFunction = sourceSection(
-      "private async activeRunPayloadWithServerStatus",
+      "private async selectedMainlineSnapshotPayloadWithServerStatus",
       "private async refreshInitialStateInBackground",
     )
     const initialStateFunction = sourceSection(
       "async postInitialState(",
-      "private async activeRunPayloadWithServerStatus",
+      "private async selectedMainlineSnapshotPayloadWithServerStatus",
     )
 
     expect(resumeStatusFunction).toContain("await this.storeStatusApprovals(status.approvals)")
-    expect(resumeStatusFunction).toContain("this.sessionRunCoordinator.clearActiveRun()")
+    expect(resumeStatusFunction).toContain("this.clearSelectedMainlineSnapshotIfStillCurrent")
     expect(initialStateFunction).toContain("this.ensureSessionRunEventStream")
-    expect(initialStateFunction).toContain("if (sessionRunId && branchBindingId)")
-    expect(initialStateFunction).not.toContain('stringValue(activeRunPayload.branch_binding_id) ||\n          "main"')
+    expect(initialStateFunction).toContain("sessionRunStatusAllowsEventStream(selectedMainlineSnapshotPayload)")
+    expect(initialStateFunction).not.toContain('stringValue(selectedMainlineSnapshotPayload.branch_binding_id) ||\n          "main"')
+  })
+
+  it("does not treat terminal or nonrecoverable status facts as missing selected mainline identity", () => {
+    const preserveFunction = sourceSection(
+      "function sessionRunStatusPreservesSelectedMainline",
+      "function selectedMainlineSnapshotStatusFromFacts",
+    )
+
+    expect(preserveFunction).not.toContain("facts.terminal")
+    expect(preserveFunction).not.toContain("!facts.recoverable")
+    expect(preserveFunction).not.toContain('facts.bindingStatus !== "active"')
+    expect(preserveFunction).toContain('facts.mainlineState === "settled"')
+    expect(preserveFunction).toContain('facts.mainlineState === "cancelled"')
+    expect(preserveFunction).toContain('facts.mainlineState === "closed"')
+    expect(preserveFunction).toContain('facts.mainlineState === "failed"')
+    expect(preserveFunction).toContain('facts.mainlineState === "unrecoverable"')
   })
 
   it("does not advance the active run cursor from chat status", () => {
     const resumeStatusFunction = sourceSection(
-      "private async activeRunPayloadWithServerStatus",
+      "private async selectedMainlineSnapshotPayloadWithServerStatus",
       "private async refreshInitialStateInBackground",
     )
 
     expect(resumeStatusFunction).not.toContain("status.next_cursor")
-    expect(resumeStatusFunction).not.toContain("patchActiveRun({\n          cursor")
+    expect(resumeStatusFunction).not.toContain("patchSelectedMainlineSnapshot({\n          cursor")
     expect(resumeStatusFunction).toContain("const payloadCursor = Number(payload.cursor")
     expect(resumeStatusFunction).toContain("const cursor = Number.isFinite(payloadCursor) ? payloadCursor : 0")
   })
 
   it("clears restored active runs when the server no longer knows the session run", () => {
     const resumeStatusFunction = sourceSection(
-      "private async activeRunPayloadWithServerStatus",
+      "private async selectedMainlineSnapshotPayloadWithServerStatus",
       "private async refreshInitialStateInBackground",
     )
 
-    expect(resumeStatusFunction).toContain('isRemoteError(error, "session_run_not_found", 404)')
-    expect(resumeStatusFunction).toContain("this.sessionRunCoordinator.clearActiveRun()")
+    expect(source).toContain('isRemoteError(error, "session_run_not_found", 404)')
+    expect(resumeStatusFunction).toContain("sessionRunRestoreFailureClearsActiveRun(error)")
+    expect(resumeStatusFunction).toContain("this.clearSelectedMainlineSnapshotIfStillCurrent")
     expect(resumeStatusFunction).toContain("return undefined")
   })
 

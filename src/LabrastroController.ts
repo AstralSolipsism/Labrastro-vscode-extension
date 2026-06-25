@@ -13,7 +13,16 @@ import { classifyRemoteError, isRemoteError } from "./remote-errors"
 import { WebviewBus, type PostMessage, type WebviewTarget } from "./WebviewBus"
 import type { WebviewToHostMessage } from "./protocol/messages"
 import { AdminCoordinator } from "./coordinators/AdminCoordinator"
-import { SessionRunCoordinator } from "./coordinators/SessionRunCoordinator"
+import {
+  SessionRunCoordinator,
+  type SelectedMainlineSnapshot,
+  type SelectedActivationState,
+  type SelectedBindingStatus,
+  type SelectedMainlineState,
+  type SelectedMainlineSnapshotStatus,
+  type SelectedProjectionState,
+  type SelectedTransportState,
+} from "./coordinators/SessionRunCoordinator"
 import {
   beginSessionRunOperation,
   currentSessionRunOperation,
@@ -230,6 +239,7 @@ export class LabrastroController implements vscode.Disposable {
       steerAgentRun: this.steerAgentRun.bind(this),
       branchSessionRun: this.branchSessionRun.bind(this),
       selectSessionRunBranch: this.selectSessionRunBranch.bind(this),
+      stopSessionRun: this.stopSessionRun.bind(this),
       cancelSessionRun: this.cancelSessionRun.bind(this),
       recoverSessionRun: this.recoverSessionRun.bind(this),
       postConnectionStateIfAuthRequired: this.postConnectionStateIfAuthRequired.bind(this),
@@ -358,22 +368,26 @@ export class LabrastroController implements vscode.Disposable {
     if (includeSession) {
       await this.sessionCoordinator.postSessionSyncStatus(post)
     }
-    let activeRunPayload = this.sessionRunCoordinator.activeRunPayload()
-    if (activeRunPayload && includeSessionRunResume) {
-      activeRunPayload = await this.activeRunPayloadWithServerStatus(activeRunPayload)
-      if (activeRunPayload) {
-        post({ type: "sessionRun.resume", bootstrapRestore: true, payload: activeRunPayload })
-        const sessionRunId = stringValue(activeRunPayload.sessionRunId) || stringValue(activeRunPayload.session_run_id)
+    let selectedMainlineSnapshotPayload = this.sessionRunCoordinator.selectedMainlineSnapshotPayload()
+    if (selectedMainlineSnapshotPayload && includeSessionRunResume) {
+      selectedMainlineSnapshotPayload = await this.selectedMainlineSnapshotPayloadWithServerStatus(selectedMainlineSnapshotPayload)
+      if (selectedMainlineSnapshotPayload) {
+        post({ type: "sessionRun.resume", bootstrapRestore: true, payload: selectedMainlineSnapshotPayload })
+        const sessionRunId = stringValue(selectedMainlineSnapshotPayload.sessionRunId) || stringValue(selectedMainlineSnapshotPayload.session_run_id)
         const sessionId =
-          stringValue(activeRunPayload.sessionId) ||
-          stringValue(activeRunPayload.session_id) ||
-          stringValue(activeRunPayload.draftSessionId) ||
-          stringValue(activeRunPayload.draft_session_id) ||
+          stringValue(selectedMainlineSnapshotPayload.sessionId) ||
+          stringValue(selectedMainlineSnapshotPayload.session_id) ||
+          stringValue(selectedMainlineSnapshotPayload.draftSessionId) ||
+          stringValue(selectedMainlineSnapshotPayload.draft_session_id) ||
           ""
         const branchBindingId =
-          stringValue(activeRunPayload.branchBindingId) ||
-          stringValue(activeRunPayload.branch_binding_id)
-        if (sessionRunId && branchBindingId) {
+          stringValue(selectedMainlineSnapshotPayload.branchBindingId) ||
+          stringValue(selectedMainlineSnapshotPayload.branch_binding_id)
+        if (
+          sessionRunId &&
+          branchBindingId &&
+          sessionRunStatusAllowsEventStream(selectedMainlineSnapshotPayload)
+        ) {
           this.ensureSessionRunEventStream(sessionRunId, sessionId, post, branchBindingId)
         }
       }
@@ -389,12 +403,12 @@ export class LabrastroController implements vscode.Disposable {
     })
   }
 
-  private async activeRunPayloadWithServerStatus(
+  private async selectedMainlineSnapshotPayloadWithServerStatus(
     payload: Record<string, unknown>
   ): Promise<Record<string, unknown> | undefined> {
     const sessionRunId = stringValue(payload.sessionRunId) || stringValue(payload.session_run_id)
     if (!sessionRunId) {
-      this.sessionRunCoordinator.clearActiveRun()
+      this.sessionRunCoordinator.clearSelectedMainlineSnapshot()
       return undefined
     }
     try {
@@ -404,34 +418,50 @@ export class LabrastroController implements vscode.Disposable {
         stringValue(payload.branchBindingId) ||
         stringValue(payload.branch_binding_id)
       if (!branchBindingId) {
-        this.sessionRunCoordinator.clearActiveRun()
+        this.sessionRunCoordinator.clearSelectedMainlineSnapshot()
         return undefined
       }
       const status = await this.client.sessionRunStatus(sessionRunId, cursor, branchBindingId)
       const payloadAgentRunId = stringValue(payload.agentRunId) || stringValue(payload.agent_run_id)
       const branches = arrayOfRecords(status.branches)
       const statusScope = sessionRunStatusScopeProof(status, branches)
-      if (!statusScope) return undefined
+      const payloadIdentity = {
+        sessionRunId,
+        branchBindingId,
+        ...(payloadAgentRunId ? { agentRunId: payloadAgentRunId } : {}),
+      }
+      if (!statusScope) {
+        this.clearSelectedMainlineSnapshotIfStillCurrent(payloadIdentity)
+        return undefined
+      }
       const responseSessionRunId = statusScope.sessionRunId
       const responseBranchBindingId = statusScope.branchBindingId
       const responseAgentRunId = statusScope.agentRunId
-      const statusValue = stringValue(status.status) || stringValue(payload.status) || "running"
+      const recoveryFacts = sessionRunStatusRecoveryFacts(status)
       if (responseSessionRunId !== sessionRunId || responseBranchBindingId !== branchBindingId) {
+        this.clearSelectedMainlineSnapshotIfStillCurrent(payloadIdentity)
         return undefined
       }
       if (
         payloadAgentRunId &&
         (!responseAgentRunId || responseAgentRunId !== payloadAgentRunId)
       ) {
+        this.clearSelectedMainlineSnapshotIfStillCurrent(payloadIdentity)
         return undefined
       }
-      if (!this.activeRunPayloadScopeMatchesOrRestoresBootstrap({
+      if (!sessionRunStatusPreservesSelectedMainline(recoveryFacts)) {
+        this.clearSelectedMainlineSnapshotIfStillCurrent(payloadIdentity)
+        return undefined
+      }
+      const snapshotStatus = selectedMainlineSnapshotStatusFromFacts(recoveryFacts)
+      if (!this.selectedMainlineSnapshotScopeMatchesOrRestoresBootstrap({
         sessionRunId,
         branchBindingId,
         ...(responseAgentRunId ? { agentRunId: responseAgentRunId } : {}),
-        status: activeSessionRunRuntimeStatus(statusValue === "idle" ? "idle" : "running"),
+        status: activeSessionRunRuntimeStatus(snapshotStatus),
         streamCursor: cursor,
       })) {
+        this.clearSelectedMainlineSnapshotIfStillCurrent(payloadIdentity)
         return undefined
       }
       const approvals = Array.isArray(status.approvals) ? status.approvals : []
@@ -442,14 +472,26 @@ export class LabrastroController implements vscode.Disposable {
         stringValue(payload.sessionId) ||
         stringValue(payload.session_id)
       const runtimeState = objectValue(status.runtime_state || status.runtimeState)
-      this.sessionRunCoordinator.patchActiveRun({
+      this.sessionRunCoordinator.patchSelectedMainlineSnapshot({
         sessionId,
         branchBindingId: responseBranchBindingId,
         ...(responseAgentRunId ? { agentRunId: responseAgentRunId } : {}),
+        status: snapshotStatus,
+        mainlineState: recoveryFacts.mainlineState,
+        agentRunState: recoveryFacts.agentRunState,
+        activationState: recoveryFacts.activationState,
+        bindingStatus: recoveryFacts.bindingStatus,
+        projectionState: recoveryFacts.projectionState,
+        transportState: recoveryFacts.transportState,
+        working: recoveryFacts.working,
+        continuable: recoveryFacts.continuable,
+        recoverable: recoveryFacts.recoverable,
+        eventStreamAllowed: recoveryFacts.eventStreamAllowed,
+        closedReason: recoveryFacts.closedReason,
         ...(branches.length ? { branches } : {}),
         lastStreamAt: new Date().toISOString(),
       })
-      const latestRun = this.sessionRunCoordinator.activeRunPayload() || payload
+      const latestRun = this.sessionRunCoordinator.selectedMainlineSnapshotPayload() || payload
       return {
         ...payload,
         ...latestRun,
@@ -465,35 +507,66 @@ export class LabrastroController implements vscode.Disposable {
               agent_run_id: responseAgentRunId,
             }
           : {}),
-        status: statusValue,
+        status: snapshotStatus,
         ...(branches.length ? { branches } : {}),
         runtimeState,
         runtime_state: runtimeState,
+        terminal: recoveryFacts.terminal,
+        mainlineState: recoveryFacts.mainlineState,
+        mainline_state: recoveryFacts.mainlineState,
+        agentRunState: recoveryFacts.agentRunState,
+        agent_run_state: recoveryFacts.agentRunState,
+        activationState: recoveryFacts.activationState,
+        activation_state: recoveryFacts.activationState,
+        bindingStatus: recoveryFacts.bindingStatus,
+        binding_status: recoveryFacts.bindingStatus,
+        working: recoveryFacts.working,
+        continuable: recoveryFacts.continuable,
+        recoverable: recoveryFacts.recoverable,
+        eventStreamAllowed: recoveryFacts.eventStreamAllowed,
+        event_stream_allowed: recoveryFacts.eventStreamAllowed,
+        projectionState: recoveryFacts.projectionState,
+        projection_state: recoveryFacts.projectionState,
+        transportState: recoveryFacts.transportState,
+        transport_state: recoveryFacts.transportState,
+        closedReason: recoveryFacts.closedReason,
+        closed_reason: recoveryFacts.closedReason,
         approvals,
       }
     } catch (error) {
-      if (isRemoteError(error, "session_run_not_found", 404)) {
-        this.sessionRunCoordinator.clearActiveRun()
-        return undefined
-      }
-      const branchBindingId =
-        stringValue(payload.branchBindingId) ||
-        stringValue(payload.branch_binding_id)
-      const payloadAgentRunId = stringValue(payload.agentRunId) || stringValue(payload.agent_run_id)
-      if (
-        !branchBindingId ||
-        !this.activeRunPayloadScopeMatchesOrRestoresBootstrap({
+      if (sessionRunRestoreFailureClearsActiveRun(error)) {
+        const branchBindingId =
+          stringValue(payload.branchBindingId) ||
+          stringValue(payload.branch_binding_id)
+        const payloadAgentRunId = stringValue(payload.agentRunId) || stringValue(payload.agent_run_id)
+        this.clearSelectedMainlineSnapshotIfStillCurrent({
           sessionRunId,
-          branchBindingId,
+          ...(branchBindingId ? { branchBindingId } : {}),
           ...(payloadAgentRunId ? { agentRunId: payloadAgentRunId } : {}),
-          status: activeSessionRunRuntimeStatus(stringValue(payload.status) === "idle" ? "idle" : "running"),
-          streamCursor: Number(payload.cursor ?? 0),
         })
-      ) {
-        return undefined
       }
-      return payload
+      return undefined
     }
+  }
+
+  private clearSelectedMainlineSnapshotIfStillCurrent(identity: {
+    sessionRunId: string
+    branchBindingId?: string
+    agentRunId?: string
+  }): void {
+    const selectedMainlineSnapshot = this.sessionRunCoordinator.selectedMainlineSnapshot
+    if (!selectedMainlineSnapshot || selectedMainlineSnapshot.sessionRunId !== identity.sessionRunId) return
+    if (
+      identity.branchBindingId &&
+      selectedMainlineSnapshot.branchBindingId &&
+      selectedMainlineSnapshot.branchBindingId !== identity.branchBindingId
+    ) return
+    if (
+      identity.agentRunId &&
+      selectedMainlineSnapshot.agentRunId &&
+      selectedMainlineSnapshot.agentRunId !== identity.agentRunId
+    ) return
+    this.sessionRunCoordinator.clearSelectedMainlineSnapshot()
   }
 
   private activeSessionRunMatches(identity: {
@@ -504,7 +577,7 @@ export class LabrastroController implements vscode.Disposable {
     return this.sessionRuntimeStore.selectedScopeMatches(identity)
   }
 
-  private activeRunPayloadScopeMatchesOrRestoresBootstrap(identity: {
+  private selectedMainlineSnapshotScopeMatchesOrRestoresBootstrap(identity: {
     sessionRunId: string
     branchBindingId: string
     agentRunId?: string
@@ -1720,6 +1793,7 @@ export class LabrastroController implements vscode.Disposable {
       message: string
       sessionRunId?: string
       branchBindingId?: string
+      level?: "info" | "error"
     },
   ): void {
     this.emitChatMessage({
@@ -1732,6 +1806,7 @@ export class LabrastroController implements vscode.Disposable {
         branch_binding_id: operation.branchBindingId,
       } : {}),
       message: operation.message,
+      ...(operation.level ? { level: operation.level } : {}),
     }, post)
   }
 
@@ -1879,13 +1954,13 @@ export class LabrastroController implements vscode.Disposable {
     const targetBranchBindingId = sessionRunStartTargetBranchBindingId(options.branchBindingId)
     let startedSessionRunId = ""
     let startedBranchBindingId = targetBranchBindingId
-    const sourceIdentityRevision = this.sessionRunCoordinator.activeRunIdentityRevision
-    const activeRun = this.sessionRunCoordinator.activeRun
+    const sourceIdentityRevision = this.sessionRunCoordinator.selectedMainlineIdentityRevision
+    const selectedMainlineSnapshot = this.sessionRunCoordinator.selectedMainlineSnapshot
     beginSessionRunOperation(this.sessionRuntimeStore, {
       operationId,
       operationKind,
       sourceIdentityRevision,
-      ...(activeRun?.sessionRunId ? { activeSessionRunId: activeRun.sessionRunId } : {}),
+      ...(selectedMainlineSnapshot?.sessionRunId ? { activeSessionRunId: selectedMainlineSnapshot.sessionRunId } : {}),
     })
     this.emitSessionRunOperationPending(post, { operationId, operationKind, targetBranchBindingId })
     try {
@@ -1897,8 +1972,8 @@ export class LabrastroController implements vscode.Disposable {
           () => this.sessionRuntimeStore.acceptsFailure({
             operationId,
             operationKind,
-            activeRun: this.sessionRunCoordinator.activeRun,
-            sourceIdentityRevision: this.sessionRunCoordinator.activeRunIdentityRevision,
+            selectedMainlineSnapshot: this.sessionRunCoordinator.selectedMainlineSnapshot,
+            sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
           }),
         )) {
           this.emitSessionRunOperationError(post, { operationId, operationKind, branchBindingId: targetBranchBindingId, message: modelError })
@@ -1919,8 +1994,8 @@ export class LabrastroController implements vscode.Disposable {
           () => this.sessionRuntimeStore.acceptsFailure({
             operationId,
             operationKind,
-            activeRun: this.sessionRunCoordinator.activeRun,
-            sourceIdentityRevision: this.sessionRunCoordinator.activeRunIdentityRevision,
+            selectedMainlineSnapshot: this.sessionRunCoordinator.selectedMainlineSnapshot,
+            sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
           }),
         )) {
           this.emitSessionRunOperationError(post, {
@@ -1952,14 +2027,14 @@ export class LabrastroController implements vscode.Disposable {
         { operationId, operationKind, sessionRunId, branchBindingId },
         () => this.sessionRuntimeStore.acceptsStartSuccess({
           operationId,
-          activeRun: this.sessionRunCoordinator.activeRun,
-          sourceIdentityRevision: this.sessionRunCoordinator.activeRunIdentityRevision,
+          selectedMainlineSnapshot: this.sessionRunCoordinator.selectedMainlineSnapshot,
+          sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
           responseSessionRunId: sessionRunId,
           responseBranchBindingId: branchBindingId,
           responseAgentRunId: agentRunId,
         }),
       )) return
-      this.sessionRunCoordinator.setActiveRun({
+      this.sessionRunCoordinator.setSelectedMainlineSnapshot({
         sessionRunId,
         cursor: 0,
         sessionId,
@@ -2003,8 +2078,8 @@ export class LabrastroController implements vscode.Disposable {
         () => this.sessionRuntimeStore.acceptsFailure({
           operationId,
           operationKind,
-          activeRun: this.sessionRunCoordinator.activeRun,
-          sourceIdentityRevision: this.sessionRunCoordinator.activeRunIdentityRevision,
+          selectedMainlineSnapshot: this.sessionRunCoordinator.selectedMainlineSnapshot,
+          sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
         }),
       )) return
       this.emitSessionRunOperationError(post, {
@@ -2037,8 +2112,8 @@ export class LabrastroController implements vscode.Disposable {
       (sourceScope === "branch-local" ? this.createSessionRunOperationId(operationKind) : undefined)
     if (!operationId) return
     const sourceResolution = resolveSessionRunSourceIdentity({
-      activeRun: this.sessionRunCoordinator.activeRun,
-      sourceIdentityRevision: this.sessionRunCoordinator.activeRunIdentityRevision,
+      selectedMainlineSnapshot: this.sessionRunCoordinator.selectedMainlineSnapshot,
+      sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
       sessionRunId: options.sessionRunId,
       branchBindingId: options.branchBindingId,
       scope: sourceScope,
@@ -2128,8 +2203,8 @@ export class LabrastroController implements vscode.Disposable {
         () => this.sessionRuntimeStore.acceptsControlSuccess({
           operationId,
           operationKind,
-          activeRun: this.sessionRunCoordinator.activeRun,
-          sourceIdentityRevision: this.sessionRunCoordinator.activeRunIdentityRevision,
+          selectedMainlineSnapshot: this.sessionRunCoordinator.selectedMainlineSnapshot,
+          sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
           ...(responseSessionRunId ? { responseSessionRunId } : {}),
           ...(responseBranchBindingId ? { responseBranchBindingId } : {}),
           ...(agentRunId ? { responseAgentRunId: agentRunId } : {}),
@@ -2196,15 +2271,15 @@ export class LabrastroController implements vscode.Disposable {
       text: input.text,
     })
     this.sessionRunCoordinator.postPendingNextTurnsSnapshot(input.post, input.sessionRunId, input.branchBindingId)
-    const activeRun = this.sessionRunCoordinator.activeRun
-    const streamSessionId = input.resolvedSource.sessionId || activeRun?.sessionId || ""
+    const selectedMainlineSnapshot = this.sessionRunCoordinator.selectedMainlineSnapshot
+    const streamSessionId = input.resolvedSource.sessionId || selectedMainlineSnapshot?.sessionId || ""
     this.sessionRuntimeStore.ensureBranchRuntimeScope({
       sessionRunId: input.sessionRunId,
       branchBindingId: input.branchBindingId,
       ...(input.agentRunId ? { agentRunId: input.agentRunId } : {}),
       ...(input.activationId ? { activeActivationId: input.activationId } : {}),
       status: "running",
-      ...(targetSelectedNow ? { streamCursor: activeRun?.cursor ?? 0 } : {}),
+      ...(targetSelectedNow ? { streamCursor: selectedMainlineSnapshot?.cursor ?? 0 } : {}),
     })
     this.ensureSessionRunEventStream(
       input.sessionRunId,
@@ -2214,9 +2289,9 @@ export class LabrastroController implements vscode.Disposable {
     )
     if (!targetSelectedNow) return
 
-    this.sessionRunCoordinator.patchActiveRun({
-      status: "running",
-      cursor: activeRun?.cursor ?? 0,
+    this.sessionRunCoordinator.patchSelectedMainlineSnapshot({
+      ...selectedMainlinePatchFromRuntimeStatus("running"),
+      cursor: selectedMainlineSnapshot?.cursor ?? 0,
       branchBindingId: input.branchBindingId,
       ...(input.agentRunId ? { agentRunId: input.agentRunId } : {}),
       ...(input.activationId ? { activationId: input.activationId } : {}),
@@ -2254,8 +2329,8 @@ export class LabrastroController implements vscode.Disposable {
       () => this.sessionRuntimeStore.acceptsFailure({
         operationId: input.operationId,
         operationKind: input.operationKind,
-        activeRun: this.sessionRunCoordinator.activeRun,
-        sourceIdentityRevision: this.sessionRunCoordinator.activeRunIdentityRevision,
+        selectedMainlineSnapshot: this.sessionRunCoordinator.selectedMainlineSnapshot,
+        sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
       }),
     )
     if (!accepted) return
@@ -2284,7 +2359,7 @@ export class LabrastroController implements vscode.Disposable {
     const operationKind: SessionRunLifecycleOperationKind = "steer"
     const operationId = options.operationId?.trim()
     if (!operationId) return
-    const activeRun = this.sessionRunCoordinator.activeRun
+    const selectedMainlineSnapshot = this.sessionRunCoordinator.selectedMainlineSnapshot
     const requestedSessionRunId = options.sessionRunId?.trim() || ""
     const branchBindingId = options.branchBindingId?.trim() || ""
     if (!requestedSessionRunId || !branchBindingId) {
@@ -2296,8 +2371,8 @@ export class LabrastroController implements vscode.Disposable {
       return
     }
     const sourceResolution = resolveSessionRunSourceIdentity({
-      activeRun,
-      sourceIdentityRevision: this.sessionRunCoordinator.activeRunIdentityRevision,
+      selectedMainlineSnapshot,
+      sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
       sessionRunId: requestedSessionRunId,
       branchBindingId,
       scope: "selected-visible",
@@ -2340,15 +2415,15 @@ export class LabrastroController implements vscode.Disposable {
       branchBindingId: resolvedBranchBindingId,
       targetBranchBindingId: resolvedBranchBindingId,
     })
-    if (!activeRun?.activationId) {
+    if (!selectedMainlineSnapshot?.activationId) {
       if (!this.acceptVisibleSessionRunOperationOrReport(
         post,
         { operationId, operationKind, sessionRunId, branchBindingId: resolvedBranchBindingId },
         () => this.sessionRuntimeStore.acceptsControlSuccess({
           operationId,
           operationKind,
-          activeRun: this.sessionRunCoordinator.activeRun,
-          sourceIdentityRevision: this.sessionRunCoordinator.activeRunIdentityRevision,
+          selectedMainlineSnapshot: this.sessionRunCoordinator.selectedMainlineSnapshot,
+          sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
           responseSessionRunId: sessionRunId,
           responseBranchBindingId: resolvedBranchBindingId,
           responseAgentRunId: agentRunId,
@@ -2386,7 +2461,7 @@ export class LabrastroController implements vscode.Disposable {
         agentRunId,
         sessionRunId,
         text,
-        activationId: activeRun.activationId,
+        activationId: selectedMainlineSnapshot.activationId,
         branchBindingId: resolvedBranchBindingId,
         clientSteerId: options.clientSteerId,
       })
@@ -2397,8 +2472,8 @@ export class LabrastroController implements vscode.Disposable {
         () => this.sessionRuntimeStore.acceptsControlSuccess({
           operationId,
           operationKind,
-          activeRun: this.sessionRunCoordinator.activeRun,
-          sourceIdentityRevision: this.sessionRunCoordinator.activeRunIdentityRevision,
+          selectedMainlineSnapshot: this.sessionRunCoordinator.selectedMainlineSnapshot,
+          sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
           responseSessionRunId: sessionRunId,
           responseBranchBindingId: resolvedBranchBindingId,
           responseAgentRunId,
@@ -2424,8 +2499,8 @@ export class LabrastroController implements vscode.Disposable {
           () => this.sessionRuntimeStore.acceptsControlSuccess({
             operationId,
             operationKind,
-            activeRun: this.sessionRunCoordinator.activeRun,
-            sourceIdentityRevision: this.sessionRunCoordinator.activeRunIdentityRevision,
+            selectedMainlineSnapshot: this.sessionRunCoordinator.selectedMainlineSnapshot,
+            sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
             responseSessionRunId: sessionRunId,
             responseBranchBindingId: resolvedBranchBindingId,
             responseAgentRunId: agentRunId,
@@ -2464,8 +2539,8 @@ export class LabrastroController implements vscode.Disposable {
         () => this.sessionRuntimeStore.acceptsFailure({
           operationId,
           operationKind,
-          activeRun: this.sessionRunCoordinator.activeRun,
-          sourceIdentityRevision: this.sessionRunCoordinator.activeRunIdentityRevision,
+          selectedMainlineSnapshot: this.sessionRunCoordinator.selectedMainlineSnapshot,
+          sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
         }),
       )) return
       this.emitSessionRunOperationError(post, {
@@ -2494,7 +2569,7 @@ export class LabrastroController implements vscode.Disposable {
     },
     post: PostMessage
   ): Promise<void> {
-    const activeRun = this.sessionRunCoordinator.activeRun
+    const selectedMainlineSnapshot = this.sessionRunCoordinator.selectedMainlineSnapshot
     const baseSessionItemId = request.baseSessionItemId.trim()
     const prompt = request.prompt.trim()
     const runtimeRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || ""
@@ -2513,8 +2588,8 @@ export class LabrastroController implements vscode.Disposable {
       return
     }
     const sourceResolution = resolveSessionRunSourceIdentity({
-      activeRun,
-      sourceIdentityRevision: this.sessionRunCoordinator.activeRunIdentityRevision,
+      selectedMainlineSnapshot,
+      sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
       sessionRunId: requestedSessionRunId,
       branchBindingId: sourceBranchBindingId,
       scope: "selected-visible",
@@ -2535,7 +2610,7 @@ export class LabrastroController implements vscode.Disposable {
     const resolvedSource = sourceResolution.value
     const { source } = resolvedSource
     const sessionRunId = source.sessionRunId
-    const sessionId = resolvedSource.sessionId || activeRun?.sessionId || ""
+    const sessionId = resolvedSource.sessionId || selectedMainlineSnapshot?.sessionId || ""
     const resolvedSourceAgentRunId = source.agentRunId
     const resolvedSourceBranchBindingId = source.branchBindingId
     if (!baseSessionItemId) {
@@ -2614,13 +2689,13 @@ export class LabrastroController implements vscode.Disposable {
         { operationId, operationKind, sessionRunId, branchBindingId },
         () => this.sessionRuntimeStore.acceptsBranchCreateSuccess({
           operationId,
-          activeRun: this.sessionRunCoordinator.activeRun,
-          sourceIdentityRevision: this.sessionRunCoordinator.activeRunIdentityRevision,
+          selectedMainlineSnapshot: this.sessionRunCoordinator.selectedMainlineSnapshot,
+          sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
           responseBranchBindingId,
         }),
       )) return
-      this.sessionRunCoordinator.patchActiveRun({
-        status: "running",
+      this.sessionRunCoordinator.patchSelectedMainlineSnapshot({
+        ...selectedMainlinePatchFromRuntimeStatus("running"),
         agentRunId,
         activationId: activationId || undefined,
         branchBindingId: responseBranchBindingId,
@@ -2662,8 +2737,8 @@ export class LabrastroController implements vscode.Disposable {
         () => this.sessionRuntimeStore.acceptsFailure({
           operationId,
           operationKind,
-          activeRun: this.sessionRunCoordinator.activeRun,
-          sourceIdentityRevision: this.sessionRunCoordinator.activeRunIdentityRevision,
+          selectedMainlineSnapshot: this.sessionRunCoordinator.selectedMainlineSnapshot,
+          sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
         }),
       )) return
       this.emitSessionRunOperationError(post, {
@@ -2681,7 +2756,7 @@ export class LabrastroController implements vscode.Disposable {
     request: { sessionRunId?: string; sourceBranchBindingId?: string; branchBindingId: string; operationId?: string },
     post: PostMessage
   ): Promise<void> {
-    const activeRun = this.sessionRunCoordinator.activeRun
+    const selectedMainlineSnapshot = this.sessionRunCoordinator.selectedMainlineSnapshot
     const requestedSessionRunId = request.sessionRunId?.trim() || ""
     const sourceBranchBindingId = request.sourceBranchBindingId?.trim() || ""
     const branchBindingId = request.branchBindingId.trim()
@@ -2689,8 +2764,8 @@ export class LabrastroController implements vscode.Disposable {
     const operationId = request.operationId?.trim()
     if (!operationId) return
     const sourceResolution = resolveSessionRunSourceIdentity({
-      activeRun,
-      sourceIdentityRevision: this.sessionRunCoordinator.activeRunIdentityRevision,
+      selectedMainlineSnapshot,
+      sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
       sessionRunId: requestedSessionRunId,
       branchBindingId: sourceBranchBindingId,
       scope: "selected-visible",
@@ -2743,14 +2818,14 @@ export class LabrastroController implements vscode.Disposable {
         branchBindingId,
         cursor: 0,
       })
-      const branchResult = normalizeBranchSelectResult(status, resolvedSource.sessionId || activeRun?.sessionId || "")
+      const branchResult = normalizeBranchSelectResult(status, resolvedSource.sessionId || selectedMainlineSnapshot?.sessionId || "")
       if (!branchResult) throw new Error("SessionRun branch select failed: missing canonical branch result")
       const responseBranchBindingId = branchResult.branchBindingId
       const branchSelectSuccessStillCurrent = () => {
         const accepted = this.sessionRuntimeStore.branchSelectSuccessStillCurrent({
           operationId,
-          activeRun: this.sessionRunCoordinator.activeRun,
-          sourceIdentityRevision: this.sessionRunCoordinator.activeRunIdentityRevision,
+          selectedMainlineSnapshot: this.sessionRunCoordinator.selectedMainlineSnapshot,
+          sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
           responseBranchBindingId,
         })
         if (!accepted) {
@@ -2820,9 +2895,9 @@ export class LabrastroController implements vscode.Disposable {
         streamCursor: 0,
         select: true,
       })
-      this.sessionRunCoordinator.patchActiveRun({
+      this.sessionRunCoordinator.patchSelectedMainlineSnapshot({
         sessionId,
-        status: branchResult.status,
+        ...selectedMainlinePatchFromRuntimeStatus(branchResult.status),
         cursor: 0,
         branchBindingId: responseBranchBindingId,
         agentRunId,
@@ -2860,8 +2935,8 @@ export class LabrastroController implements vscode.Disposable {
         () => this.sessionRuntimeStore.acceptsFailure({
           operationId,
           operationKind,
-          activeRun: this.sessionRunCoordinator.activeRun,
-          sourceIdentityRevision: this.sessionRunCoordinator.activeRunIdentityRevision,
+          selectedMainlineSnapshot: this.sessionRunCoordinator.selectedMainlineSnapshot,
+          sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
         }),
       )) return
       this.emitSessionRunOperationError(post, {
@@ -2884,12 +2959,12 @@ export class LabrastroController implements vscode.Disposable {
     const targetBranchBindingId = sessionRunStartTargetBranchBindingId()
     let startedSessionRunId = ""
     let startedBranchBindingId = targetBranchBindingId
-    const activeRun = this.sessionRunCoordinator.activeRun
+    const selectedMainlineSnapshot = this.sessionRunCoordinator.selectedMainlineSnapshot
     beginSessionRunOperation(this.sessionRuntimeStore, {
       operationId,
       operationKind,
-      sourceIdentityRevision: this.sessionRunCoordinator.activeRunIdentityRevision,
-      ...(activeRun?.sessionRunId ? { activeSessionRunId: activeRun.sessionRunId } : {}),
+      sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
+      ...(selectedMainlineSnapshot?.sessionRunId ? { activeSessionRunId: selectedMainlineSnapshot.sessionRunId } : {}),
     })
     this.emitSessionRunOperationPending(post, { operationId, operationKind, targetBranchBindingId })
     try {
@@ -2910,8 +2985,8 @@ export class LabrastroController implements vscode.Disposable {
           () => this.sessionRuntimeStore.acceptsFailure({
             operationId,
             operationKind,
-            activeRun: this.sessionRunCoordinator.activeRun,
-            sourceIdentityRevision: this.sessionRunCoordinator.activeRunIdentityRevision,
+            selectedMainlineSnapshot: this.sessionRunCoordinator.selectedMainlineSnapshot,
+            sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
           }),
         )) {
           this.emitSessionRunOperationError(post, {
@@ -2947,14 +3022,14 @@ export class LabrastroController implements vscode.Disposable {
         { operationId, operationKind, sessionRunId, branchBindingId: startResult.branchBindingId },
         () => this.sessionRuntimeStore.acceptsStartSuccess({
           operationId,
-          activeRun: this.sessionRunCoordinator.activeRun,
-          sourceIdentityRevision: this.sessionRunCoordinator.activeRunIdentityRevision,
+          selectedMainlineSnapshot: this.sessionRunCoordinator.selectedMainlineSnapshot,
+          sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
           responseSessionRunId: sessionRunId,
           responseBranchBindingId: startResult.branchBindingId,
           responseAgentRunId: startResult.agentRunId,
         }),
       )) return
-      this.sessionRunCoordinator.setActiveRun({
+      this.sessionRunCoordinator.setSelectedMainlineSnapshot({
         sessionRunId,
         cursor: 0,
         sessionId: resolvedSessionId,
@@ -3006,8 +3081,8 @@ export class LabrastroController implements vscode.Disposable {
         () => this.sessionRuntimeStore.acceptsFailure({
           operationId,
           operationKind,
-          activeRun: this.sessionRunCoordinator.activeRun,
-          sourceIdentityRevision: this.sessionRunCoordinator.activeRunIdentityRevision,
+          selectedMainlineSnapshot: this.sessionRunCoordinator.selectedMainlineSnapshot,
+          sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
         }),
       )) {
         this.emitSessionRunOperationError(post, {
@@ -3048,7 +3123,10 @@ export class LabrastroController implements vscode.Disposable {
       })
       await this.postConnectionStateIfAuthRequired(error, post)
       if (this.activeSessionRunMatches({ sessionRunId, branchBindingId })) {
-        this.sessionRunCoordinator.clearActiveRun()
+        this.sessionRunCoordinator.patchSelectedMainlineSnapshot({
+          ...selectedMainlinePatchFromRuntimeStatus("error"),
+          lastError: chatErrorMessage(error),
+        })
       }
     })
   }
@@ -3150,12 +3228,12 @@ export class LabrastroController implements vscode.Disposable {
 
   private markSessionRunEventsConnected(sessionRunId: string, branchBindingId: string, post: PostMessage): void {
     this.sessionRunEventReconnects.delete(sessionRunEventStreamKey(sessionRunId, branchBindingId))
-    const activeRun = this.sessionRunCoordinator.activeRun
+    const selectedMainlineSnapshot = this.sessionRunCoordinator.selectedMainlineSnapshot
     const selectedBranch = this.activeSessionRunMatches({ sessionRunId, branchBindingId })
-    const reconnecting = selectedBranch && activeRun?.status === "reconnecting"
+    const reconnecting = selectedBranch && selectedMainlineSnapshot?.status === "reconnecting"
     if (selectedBranch) {
-      this.sessionRunCoordinator.patchActiveRun({
-        status: "running",
+      this.sessionRunCoordinator.patchSelectedMainlineSnapshot({
+        ...selectedMainlinePatchFromRuntimeStatus("running"),
         reconnectAttempts: 0,
         reconnectStartedAt: undefined,
         lastError: undefined,
@@ -3163,14 +3241,14 @@ export class LabrastroController implements vscode.Disposable {
         lastStreamAt: new Date().toISOString(),
       })
     }
-    if (reconnecting && this.sessionRunCoordinator.activeRun) {
+    if (reconnecting && this.sessionRunCoordinator.selectedMainlineSnapshot) {
       this.emitChatMessage(
         {
           type: "sessionRun.reconnected",
           sessionRunId,
           branchBindingId,
           branch_binding_id: branchBindingId,
-          payload: this.sessionRunCoordinator.activeRunPayload(),
+          payload: this.sessionRunCoordinator.selectedMainlineSnapshotPayload(),
         },
         post
       )
@@ -3207,8 +3285,10 @@ export class LabrastroController implements vscode.Disposable {
     }
     this.sessionRunEventReconnects.set(streamKey, nextReconnectState)
     if (this.activeSessionRunMatches({ sessionRunId, branchBindingId })) {
-      const next = this.sessionRunCoordinator.patchActiveRun({
+      const next = this.sessionRunCoordinator.patchSelectedMainlineSnapshot({
+        ...selectedMainlinePatchFromRuntimeStatus("running"),
         status: "reconnecting",
+        transportState: "reconnecting",
         reconnectAttempts: nextReconnectState.attempts,
         reconnectStartedAt: nextReconnectState.startedAt,
         lastError: nextReconnectState.lastError,
@@ -3221,7 +3301,7 @@ export class LabrastroController implements vscode.Disposable {
           branchBindingId,
           branch_binding_id: branchBindingId,
           message: errorMessage(error),
-          payload: next ? this.sessionRunCoordinator.activeRunPayload() : undefined,
+          payload: next ? this.sessionRunCoordinator.selectedMainlineSnapshotPayload() : undefined,
         },
         post
       )
@@ -3241,7 +3321,7 @@ export class LabrastroController implements vscode.Disposable {
   ): Promise<{ sessionId: string; cursor: number; done: boolean; active: boolean }> {
     const events = Array.isArray(stream.events) ? stream.events : []
     const nextCursor = Number(stream.next_cursor ?? cursor)
-    const activeRun = this.sessionRunCoordinator.activeRun
+    const selectedMainlineSnapshot = this.sessionRunCoordinator.selectedMainlineSnapshot
     const selectedBranch = this.activeSessionRunMatches({ sessionRunId, branchBindingId: streamBranchBindingId })
     const visibleBranch = selectedBranch && options.applyVisibleSideEffects !== false
     const emitScopedEvents = visibleBranch || options.emitScopedEvents === true
@@ -3266,7 +3346,10 @@ export class LabrastroController implements vscode.Disposable {
               stopWorking: true,
             }, post)
             if (visibleBranch) {
-              this.sessionRunCoordinator.clearActiveRun()
+              this.sessionRunCoordinator.patchSelectedMainlineSnapshot({
+                ...selectedMainlinePatchFromRuntimeStatus("error"),
+                lastError: `会话绑定异常：当前会话 ${sessionId}，远端返回 ${remoteSessionId}。`,
+              })
             }
             return { sessionId, cursor, done: false, active: false }
           }
@@ -3277,7 +3360,7 @@ export class LabrastroController implements vscode.Disposable {
               this.sessionRunCoordinator.activeDraftSessionId,
               post
             )) || sessionId
-            this.sessionRunCoordinator.patchActiveRun({
+            this.sessionRunCoordinator.patchSelectedMainlineSnapshot({
               sessionId,
               draftSessionId: undefined,
             })
@@ -3304,7 +3387,8 @@ export class LabrastroController implements vscode.Disposable {
           })
         }
         if (visibleBranch && payloadTargetsStreamBranch && (agentRunId || activationId)) {
-          this.sessionRunCoordinator.patchActiveRun({
+          this.sessionRunCoordinator.patchSelectedMainlineSnapshot({
+            ...selectedMainlinePatchFromRuntimeStatus("running"),
             ...(agentRunId ? { agentRunId } : {}),
             ...(activationId ? { activationId } : {}),
           })
@@ -3349,37 +3433,46 @@ export class LabrastroController implements vscode.Disposable {
     const streamTerminalStatus = stream.done
       ? sessionRunTerminalStatusFromBranchSummaries(branches, streamBranchBindingId)
       : undefined
-    this.upsertBranchRuntimeScopesFromSummaries(sessionRunId, branches)
+    const statusCompletion = stream.done && !streamTerminalStatus
+      ? await this.resolveSessionRunStreamCompletionFromStatus(sessionRunId, streamBranchBindingId, nextCursor)
+      : undefined
+    const resolvedTerminalStatus = streamTerminalStatus || statusCompletion?.terminalStatus
+    const resolvedTerminalMessage =
+      sessionRunTerminalMessageFromBranchSummaries(branches, streamBranchBindingId) ||
+      statusCompletion?.message
+    const resolvedBranches = statusCompletion?.branches.length ? statusCompletion.branches : branches
+    this.upsertBranchRuntimeScopesFromSummaries(sessionRunId, resolvedBranches)
     this.sessionRuntimeStore.recordStreamCursor({
       sessionRunId,
       branchBindingId: streamBranchBindingId,
       cursor,
-      ...(streamTerminalStatus ? { status: streamTerminalStatus } : {}),
+      ...(resolvedTerminalStatus ? { status: resolvedTerminalStatus } : {}),
     })
     if (visibleBranch) {
-      this.sessionRunCoordinator.patchActiveRun({
+      this.sessionRunCoordinator.patchSelectedMainlineSnapshot({
         cursor,
         lastStreamAt: new Date().toISOString(),
-        ...(branches.length ? { branches } : {}),
+        ...(statusCompletion?.facts ? selectedMainlinePatchFromRecoveryFacts(statusCompletion.facts) : {}),
+        ...(resolvedBranches.length ? { branches: resolvedBranches } : {}),
       })
     }
-    if (branches.length) {
+    if (resolvedBranches.length) {
       this.emitChatMessage({
         type: "sessionRun.branches",
         sessionRunId,
         branchBindingId: streamBranchBindingId,
         branch_binding_id: streamBranchBindingId,
-        branches,
+        branches: resolvedBranches,
       }, post)
     }
     if (stream.done) {
       await this.sessionCoordinator.refreshSessionListAfterSessionRunDone(post)
-      if (streamTerminalStatus) {
+      if (resolvedTerminalStatus) {
         this.emitSessionRunStreamTerminal(post, {
-          status: streamTerminalStatus,
+          status: resolvedTerminalStatus,
           sessionRunId,
           branchBindingId: streamBranchBindingId,
-          message: sessionRunTerminalMessageFromBranchSummaries(branches, streamBranchBindingId),
+          message: resolvedTerminalMessage,
         })
       } else {
         this.emitChatMessage({
@@ -3396,9 +3489,7 @@ export class LabrastroController implements vscode.Disposable {
       )
       if (pendingNextTurn) {
         if (visibleBranch) {
-          this.sessionRunCoordinator.patchActiveRun({
-            status: "idle",
-          })
+          this.sessionRunCoordinator.patchSelectedMainlineSnapshot(settledSelectedMainlinePatch())
         }
         setTimeout(() => {
           void this.continueSessionRun(pendingNextTurn.text, post, {
@@ -3416,9 +3507,7 @@ export class LabrastroController implements vscode.Disposable {
         return { sessionId, cursor, done: true, active: true }
       }
       if (visibleBranch) {
-        this.sessionRunCoordinator.patchActiveRun({
-          status: "idle",
-        })
+        this.sessionRunCoordinator.patchSelectedMainlineSnapshot(settledSelectedMainlinePatch())
         this.sessionRunCoordinator.clearActiveDraftSessionId()
       }
       return { sessionId, cursor, done: true, active: true }
@@ -3428,6 +3517,34 @@ export class LabrastroController implements vscode.Disposable {
       cursor,
       done: false,
       active: this.sessionRunEventStreamMatches(sessionRunId, streamBranchBindingId),
+    }
+  }
+
+  private async resolveSessionRunStreamCompletionFromStatus(
+    sessionRunId: string,
+    branchBindingId: string,
+    cursor: number,
+  ): Promise<SessionRunStreamCompletionResolution | undefined> {
+    try {
+      const status = await this.client.sessionRunStatus(sessionRunId, cursor, branchBindingId)
+      const branches = arrayOfRecords(status.branches)
+      const scope = sessionRunStatusScopeProof(status, branches)
+      if (!scope || scope.sessionRunId !== sessionRunId || scope.branchBindingId !== branchBindingId) {
+        return undefined
+      }
+      const facts = sessionRunStatusRecoveryFacts(status)
+      return {
+        facts,
+        branches,
+        terminalStatus: sessionRunTerminalStatusFromRecoveryFacts(facts),
+        message:
+          sessionRunTerminalMessageFromBranchSummaries(branches, branchBindingId) ||
+          stringValue(status.message) ||
+          stringValue(status.error) ||
+          facts.closedReason,
+      }
+    } catch {
+      return undefined
     }
   }
 
@@ -3444,8 +3561,8 @@ export class LabrastroController implements vscode.Disposable {
     const operationId = options.operationId?.trim()
     if (!operationId) return
     const sourceResolution = resolveSessionRunSourceIdentity({
-      activeRun: this.sessionRunCoordinator.activeRun,
-      sourceIdentityRevision: this.sessionRunCoordinator.activeRunIdentityRevision,
+      selectedMainlineSnapshot: this.sessionRunCoordinator.selectedMainlineSnapshot,
+      sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
       sessionRunId,
       branchBindingId,
       scope: "selected-visible",
@@ -3494,8 +3611,8 @@ export class LabrastroController implements vscode.Disposable {
         () => this.sessionRuntimeStore.acceptsControlSuccess({
           operationId,
           operationKind,
-          activeRun: this.sessionRunCoordinator.activeRun,
-          sourceIdentityRevision: this.sessionRunCoordinator.activeRunIdentityRevision,
+          selectedMainlineSnapshot: this.sessionRunCoordinator.selectedMainlineSnapshot,
+          sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
           responseSessionRunId: statusScope.sessionRunId,
           responseBranchBindingId,
           ...(responseAgentRunId ? { responseAgentRunId } : {}),
@@ -3504,7 +3621,7 @@ export class LabrastroController implements vscode.Disposable {
       const runtimeState = objectValue(status.runtime_state || status.runtimeState)
       const responseActivationId = stringValue(status.activation_id) || stringValue(status.activationId)
       const responseCursor = Number(status.next_cursor ?? status.cursor ?? 0)
-      this.sessionRunCoordinator.setActiveRun({
+      this.sessionRunCoordinator.setSelectedMainlineSnapshot({
         sessionRunId,
         cursor: responseCursor,
         sessionId,
@@ -3560,8 +3677,8 @@ export class LabrastroController implements vscode.Disposable {
         () => this.sessionRuntimeStore.acceptsFailure({
           operationId,
           operationKind,
-          activeRun: this.sessionRunCoordinator.activeRun,
-          sourceIdentityRevision: this.sessionRunCoordinator.activeRunIdentityRevision,
+          selectedMainlineSnapshot: this.sessionRunCoordinator.selectedMainlineSnapshot,
+          sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
         }),
       )) return
       this.emitSessionRunOperationError(post, {
@@ -3583,7 +3700,7 @@ export class LabrastroController implements vscode.Disposable {
     return defaultChatModelFromChatConfig(await this.client.chatConfigRead())
   }
 
-  private async cancelSessionRun(
+  private async stopSessionRun(
     sessionRunId: string,
     branchBindingId: string,
     post: PostMessage,
@@ -3591,7 +3708,7 @@ export class LabrastroController implements vscode.Disposable {
       operationId?: string
     } = {}
   ): Promise<void> {
-    const operationKind: SessionRunLifecycleOperationKind = "cancel"
+    const operationKind: SessionRunLifecycleOperationKind = "stop"
     const operationId = options.operationId?.trim()
     if (!operationId) return
     const targetSessionRunId = sessionRunId
@@ -3606,8 +3723,8 @@ export class LabrastroController implements vscode.Disposable {
       return
     }
     const sourceResolution = resolveSessionRunSourceIdentity({
-      activeRun: this.sessionRunCoordinator.activeRun,
-      sourceIdentityRevision: this.sessionRunCoordinator.activeRunIdentityRevision,
+      selectedMainlineSnapshot: this.sessionRunCoordinator.selectedMainlineSnapshot,
+      sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
       sessionRunId: targetSessionRunId,
       branchBindingId: targetBranchBindingId,
       scope: "selected-visible",
@@ -3640,7 +3757,152 @@ export class LabrastroController implements vscode.Disposable {
       targetBranchBindingId,
     })
     try {
-      await this.client.cancelSessionRun(targetSessionRunId, "user_cancelled", targetBranchBindingId)
+      const result = await this.client.stopSessionRun(targetSessionRunId, "user_stop", targetBranchBindingId)
+      if (result.ok !== true) {
+        const selectedMainlineSnapshot = this.sessionRunCoordinator.selectedMainlineSnapshot
+        const statusCursor = this.activeSessionRunMatches({
+          sessionRunId: targetSessionRunId,
+          branchBindingId: targetBranchBindingId,
+        })
+          ? selectedMainlineSnapshot?.cursor
+          : undefined
+        const status = await this.client.sessionRunStatus(targetSessionRunId, statusCursor, targetBranchBindingId)
+        const branches = arrayOfRecords(status.branches)
+        const statusScope = sessionRunStatusScopeProof(status, branches)
+        if (!statusScope || statusScope.sessionRunId !== targetSessionRunId || statusScope.branchBindingId !== targetBranchBindingId) {
+          throw new Error("session run status missing scoped proof")
+        }
+        if (statusScope.agentRunId && statusScope.agentRunId !== source.agentRunId) {
+          throw new Error("session run status source mismatch")
+        }
+        const facts = sessionRunStatusRecoveryFacts(status)
+        const responseAgentRunId = statusScope.agentRunId || source.agentRunId
+        const responseActivationId = stringValue(status.activation_id) || stringValue(status.activationId)
+        const responseCursor =
+          numberValue(status.next_cursor) ??
+          numberValue(status.nextCursor) ??
+          numberValue(status.cursor) ??
+          statusCursor ??
+          0
+        const runtimeState = objectValue(status.runtime_state || status.runtimeState)
+        const sessionId =
+          stringValue(status.session_id) ||
+          stringValue(status.sessionId) ||
+          sourceResolution.value.sessionId ||
+          selectedMainlineSnapshot?.sessionId ||
+          ""
+        if (!this.acceptVisibleSessionRunOperationOrReport(
+          post,
+          {
+            operationId,
+            operationKind,
+            sessionRunId: targetSessionRunId,
+            branchBindingId: targetBranchBindingId,
+          },
+          () => this.sessionRuntimeStore.acceptsFailure({
+            operationId,
+            operationKind,
+            selectedMainlineSnapshot: this.sessionRunCoordinator.selectedMainlineSnapshot,
+            sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
+          }),
+        )) return
+        const runtimeStatus = activeSessionRunRuntimeStatus(selectedMainlineSnapshotStatusFromFacts(facts))
+        this.sessionRuntimeStore.ensureBranchRuntimeScope({
+          sessionRunId: targetSessionRunId,
+          branchBindingId: targetBranchBindingId,
+          agentRunId: responseAgentRunId,
+          ...(responseActivationId ? { activeActivationId: responseActivationId } : {}),
+          status: runtimeStatus,
+          streamCursor: responseCursor,
+          select: true,
+        })
+        if (
+          this.activeSessionRunMatches({
+            sessionRunId: targetSessionRunId,
+            branchBindingId: targetBranchBindingId,
+          })
+        ) {
+          this.sessionRunCoordinator.patchSelectedMainlineSnapshot({
+            sessionId,
+            branchBindingId: targetBranchBindingId,
+            agentRunId: responseAgentRunId,
+            ...(responseActivationId ? { activationId: responseActivationId } : {}),
+            cursor: responseCursor,
+            ...selectedMainlinePatchFromRecoveryFacts(facts),
+            ...(branches.length ? { branches } : {}),
+            lastStreamAt: new Date().toISOString(),
+          })
+        }
+        this.emitSessionRunOperationError(post, {
+          operationId,
+          operationKind,
+          sessionRunId: targetSessionRunId,
+          branchBindingId: targetBranchBindingId,
+          message: "当前任务状态已变化，停止未执行，已刷新状态。",
+          level: "info",
+        })
+        const terminalStatus = sessionRunTerminalStatusFromRecoveryFacts(facts)
+        if (terminalStatus) {
+          this.emitSessionRunStreamTerminal(post, {
+            status: terminalStatus,
+            sessionRunId: targetSessionRunId,
+            branchBindingId: targetBranchBindingId,
+            message:
+              sessionRunTerminalMessageFromBranchSummaries(branches, targetBranchBindingId) ||
+              stringValue(status.message) ||
+              stringValue(status.error) ||
+              facts.closedReason,
+          })
+        } else {
+          this.emitChatMessage({
+            type: "sessionRun.resume",
+            sessionRunId: targetSessionRunId,
+            branchBindingId: targetBranchBindingId,
+            branch_binding_id: targetBranchBindingId,
+            payload: {
+              sessionRunId: targetSessionRunId,
+              session_run_id: targetSessionRunId,
+              sessionId,
+              session_id: sessionId,
+              branchBindingId: targetBranchBindingId,
+              branch_binding_id: targetBranchBindingId,
+              agentRunId: responseAgentRunId,
+              agent_run_id: responseAgentRunId,
+              ...(responseActivationId ? { activationId: responseActivationId, activation_id: responseActivationId } : {}),
+              cursor: responseCursor,
+              status: facts.transportState === "reconnecting" ? "reconnecting" : runtimeStatus,
+              runtimeState,
+              runtime_state: runtimeState,
+              terminal: facts.terminal,
+              mainlineState: facts.mainlineState,
+              mainline_state: facts.mainlineState,
+              agentRunState: facts.agentRunState,
+              agent_run_state: facts.agentRunState,
+              activationState: facts.activationState,
+              activation_state: facts.activationState,
+              bindingStatus: facts.bindingStatus,
+              binding_status: facts.bindingStatus,
+              projectionState: facts.projectionState,
+              projection_state: facts.projectionState,
+              transportState: facts.transportState,
+              transport_state: facts.transportState,
+              working: facts.working,
+              continuable: facts.continuable,
+              recoverable: facts.recoverable,
+              eventStreamAllowed: facts.eventStreamAllowed,
+              event_stream_allowed: facts.eventStreamAllowed,
+              ...(facts.closedReason ? { closedReason: facts.closedReason, closed_reason: facts.closedReason } : {}),
+              ...(branches.length ? { branches } : {}),
+              approvals: Array.isArray(status.approvals) ? status.approvals : [],
+              user_inputs: Array.isArray(status.user_inputs) ? status.user_inputs : [],
+            },
+          }, post)
+          if (sessionRunStatusAllowsEventStream(facts)) {
+            this.ensureSessionRunEventStream(targetSessionRunId, sessionId, post, targetBranchBindingId)
+          }
+        }
+        return
+      }
       if (!this.acceptVisibleSessionRunOperationOrReport(
         post,
         {
@@ -3652,8 +3914,8 @@ export class LabrastroController implements vscode.Disposable {
         () => this.sessionRuntimeStore.acceptsControlSuccess({
           operationId,
           operationKind,
-          activeRun: this.sessionRunCoordinator.activeRun,
-          sourceIdentityRevision: this.sessionRunCoordinator.activeRunIdentityRevision,
+          selectedMainlineSnapshot: this.sessionRunCoordinator.selectedMainlineSnapshot,
+          sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
           responseSessionRunId: targetSessionRunId,
           responseBranchBindingId: targetBranchBindingId,
           responseAgentRunId: source.agentRunId,
@@ -3665,17 +3927,18 @@ export class LabrastroController implements vscode.Disposable {
           branchBindingId: targetBranchBindingId,
         })
       ) {
-        this.sessionRunCoordinator.setActiveRun(undefined)
+        this.sessionRunCoordinator.patchSelectedMainlineSnapshot(
+          stoppedSelectedMainlinePatch()
+        )
       }
-      this.sessionRunCoordinator.clearActiveDraftSessionId()
       this.emitChatMessage({
-        type: "sessionRun.cancelled",
+        type: "sessionRun.stopped",
         operationId,
         operationKind,
         sessionRunId: targetSessionRunId,
         branchBindingId: targetBranchBindingId,
         branch_binding_id: targetBranchBindingId,
-        reason: "user_cancelled",
+        reason: "user_stop",
       }, post)
     } catch (error) {
       if (!this.acceptVisibleSessionRunOperationOrReport(
@@ -3689,8 +3952,132 @@ export class LabrastroController implements vscode.Disposable {
         () => this.sessionRuntimeStore.acceptsFailure({
           operationId,
           operationKind,
-          activeRun: this.sessionRunCoordinator.activeRun,
-          sourceIdentityRevision: this.sessionRunCoordinator.activeRunIdentityRevision,
+          selectedMainlineSnapshot: this.sessionRunCoordinator.selectedMainlineSnapshot,
+          sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
+        }),
+      )) return
+      this.emitSessionRunOperationError(post, {
+        operationId,
+        operationKind,
+        sessionRunId: targetSessionRunId,
+        branchBindingId: targetBranchBindingId,
+        message: `停止失败：${errorMessage(error)}`,
+      })
+    }
+  }
+
+  private async cancelSessionRun(
+    sessionRunId: string,
+    branchBindingId: string,
+    post: PostMessage,
+    options: {
+      operationId?: string
+      reason?: string
+    } = {}
+  ): Promise<void> {
+    const operationKind: SessionRunLifecycleOperationKind = "cancel"
+    const operationId = options.operationId?.trim()
+    if (!operationId) return
+    const reason = options.reason?.trim() || "user_cancelled"
+    const targetSessionRunId = sessionRunId
+    const targetBranchBindingId = branchBindingId
+    if (!targetSessionRunId || !targetBranchBindingId) {
+      this.reportSessionRunOperationPreflightFailure(post, {
+        operationId,
+        operationKind,
+        targetBranchBindingId,
+        message: "当前没有正在运行的会话。",
+      })
+      return
+    }
+    const sourceResolution = resolveSessionRunSourceIdentity({
+      selectedMainlineSnapshot: this.sessionRunCoordinator.selectedMainlineSnapshot,
+      sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
+      sessionRunId: targetSessionRunId,
+      branchBindingId: targetBranchBindingId,
+      scope: "selected-visible",
+    })
+    if (!sourceResolution.ok) {
+      this.reportSessionRunOperationPreflightFailure(post, {
+        operationId,
+        operationKind,
+        sessionRunId: targetSessionRunId,
+        ...(sourceResolution.sourceBranchBindingId ? {
+          sourceBranchBindingId: sourceResolution.sourceBranchBindingId,
+        } : {}),
+        targetBranchBindingId,
+        message: "当前会话没有可停止的 AgentRun mainline。",
+      })
+      return
+    }
+    const { source } = sourceResolution.value
+    beginSessionRunOperation(this.sessionRuntimeStore, {
+      operationId,
+      operationKind,
+      source,
+      targetBranchBindingId,
+    })
+    this.emitSessionRunOperationPending(post, {
+      operationId,
+      operationKind,
+      sessionRunId: targetSessionRunId,
+      branchBindingId: targetBranchBindingId,
+      targetBranchBindingId,
+    })
+    try {
+      await this.client.cancelSessionRun(targetSessionRunId, reason, targetBranchBindingId)
+      if (!this.acceptVisibleSessionRunOperationOrReport(
+        post,
+        {
+          operationId,
+          operationKind,
+          sessionRunId: targetSessionRunId,
+          branchBindingId: targetBranchBindingId,
+        },
+        () => this.sessionRuntimeStore.acceptsControlSuccess({
+          operationId,
+          operationKind,
+          selectedMainlineSnapshot: this.sessionRunCoordinator.selectedMainlineSnapshot,
+          sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
+          responseSessionRunId: targetSessionRunId,
+          responseBranchBindingId: targetBranchBindingId,
+          responseAgentRunId: source.agentRunId,
+        }),
+      )) return
+      if (
+        this.activeSessionRunMatches({
+          sessionRunId: targetSessionRunId,
+          branchBindingId: targetBranchBindingId,
+        })
+      ) {
+        this.sessionRunCoordinator.patchSelectedMainlineSnapshot(
+          selectedMainlinePatchFromRuntimeStatus("cancelled")
+        )
+      }
+      this.sessionRunCoordinator.clearActiveDraftSessionId()
+      this.emitChatMessage({
+        type: "sessionRun.cancelled",
+        operationId,
+        operationKind,
+        sessionRunId: targetSessionRunId,
+        branchBindingId: targetBranchBindingId,
+        branch_binding_id: targetBranchBindingId,
+        reason,
+      }, post)
+    } catch (error) {
+      if (!this.acceptVisibleSessionRunOperationOrReport(
+        post,
+        {
+          operationId,
+          operationKind,
+          sessionRunId: targetSessionRunId,
+          branchBindingId: targetBranchBindingId,
+        },
+        () => this.sessionRuntimeStore.acceptsFailure({
+          operationId,
+          operationKind,
+          selectedMainlineSnapshot: this.sessionRunCoordinator.selectedMainlineSnapshot,
+          sourceIdentityRevision: this.sessionRunCoordinator.selectedMainlineIdentityRevision,
         }),
       )) return
       this.emitSessionRunOperationError(post, {
@@ -4029,14 +4416,406 @@ function sessionRunStatusScopeProof(
   }
 }
 
+interface SessionRunStatusRecoveryFacts {
+  terminal: boolean
+  mainlineState: SelectedMainlineState
+  agentRunState: string
+  activationState: SelectedActivationState
+  bindingStatus: SelectedBindingStatus
+  working: boolean
+  continuable: boolean
+  recoverable: boolean
+  eventStreamAllowed: boolean
+  projectionState: SelectedProjectionState
+  transportState: SelectedTransportState
+  closedReason?: string
+}
+
+interface SessionRunStreamCompletionResolution {
+  facts: SessionRunStatusRecoveryFacts
+  branches: Record<string, unknown>[]
+  terminalStatus?: SessionRunStreamTerminalStatus
+  message?: string
+}
+
+function sessionRunStatusRecoveryFacts(status: Record<string, unknown>): SessionRunStatusRecoveryFacts {
+  const rawMainlineState = normalizeSelectedMainlineState(
+    stringField(status, "mainlineState", "mainline_state") || mainlineStateFromLegacyStatus(status)
+  )
+  const rawActivationState = normalizeSelectedActivationState(
+    stringField(status, "activationState", "activation_state") || activationStateFromLegacyStatus(status)
+  )
+  const rawBindingStatus = normalizeSelectedBindingStatus(
+    stringField(status, "bindingStatus", "binding_status") || bindingStatusFromMainlineState(rawMainlineState)
+  )
+  const rawProjectionState = normalizeSelectedProjectionState(
+    stringField(status, "projectionState", "projection_state") ||
+      (rawMainlineState === "settled" ? "drained" : "unavailable")
+  )
+  const explicitRecoverable = booleanField(status, "recoverable")
+  const mainlineState = effectiveRecoveryMainlineState({
+    mainlineState: rawMainlineState,
+    bindingStatus: rawBindingStatus,
+    projectionState: rawProjectionState,
+    recoverable: explicitRecoverable,
+  })
+  const bindingStatus = effectiveRecoveryBindingStatus(rawBindingStatus, mainlineState)
+  const activationState = effectiveRecoveryActivationState(rawActivationState, mainlineState)
+  const canRun = recoveryMainlineCanRun(mainlineState, bindingStatus)
+  const working = canRun
+    ? booleanField(status, "working") ?? activationStateIsExecuting(activationState)
+    : false
+  const continuable = booleanField(status, "continuable") ?? (
+    mainlineState === "settled" && bindingStatus === "active"
+  )
+  const recoverable = (
+    bindingStatus === "active" &&
+    (
+      canRun ||
+      mainlineState === "settled" ||
+      mainlineState === "waiting_user" ||
+      mainlineState === "blocked"
+    )
+  )
+  const eventStreamAllowed = canRun
+    ? booleanField(status, "eventStreamAllowed", "event_stream_allowed") ?? (
+        working && recoverable && bindingStatus === "active"
+      )
+    : false
+  const projectionState = effectiveRecoveryProjectionState(rawProjectionState, mainlineState, eventStreamAllowed)
+  return {
+    terminal: booleanField(status, "terminal") === true,
+    mainlineState,
+    agentRunState: stringField(status, "agentRunState", "agent_run_state") ||
+      agentRunStateFromMainlineState(mainlineState),
+    activationState,
+    bindingStatus,
+    working,
+    continuable,
+    recoverable,
+    eventStreamAllowed,
+    projectionState,
+    transportState: normalizeSelectedTransportState(
+      stringField(status, "transportState", "transport_state") ||
+        (eventStreamAllowed ? "streaming" : "disconnected")
+    ),
+    closedReason: stringField(status, "closedReason", "closed_reason"),
+  }
+}
+
+function sessionRunStatusAllowsEventStream(
+  factsOrPayload: SessionRunStatusRecoveryFacts | Record<string, unknown>,
+): boolean {
+  const facts = isSessionRunStatusRecoveryFacts(factsOrPayload)
+    ? factsOrPayload
+    : sessionRunStatusRecoveryFacts(factsOrPayload)
+  return (
+    facts.working &&
+    facts.recoverable &&
+    facts.eventStreamAllowed &&
+    !facts.terminal &&
+    facts.bindingStatus === "active" &&
+    (facts.projectionState === "live" || facts.projectionState === "recovered")
+  )
+}
+
+function isSessionRunStatusRecoveryFacts(value: unknown): value is SessionRunStatusRecoveryFacts {
+  const record = objectValue(value)
+  return (
+    typeof record.terminal === "boolean" &&
+    typeof record.mainlineState === "string" &&
+    typeof record.activationState === "string" &&
+    typeof record.bindingStatus === "string" &&
+    typeof record.working === "boolean" &&
+    typeof record.continuable === "boolean" &&
+    typeof record.recoverable === "boolean" &&
+    typeof record.eventStreamAllowed === "boolean" &&
+    typeof record.projectionState === "string" &&
+    typeof record.transportState === "string"
+  )
+}
+
+function sessionRunStatusPreservesSelectedMainline(facts: SessionRunStatusRecoveryFacts): boolean {
+  return (
+    facts.mainlineState === "starting" ||
+    facts.mainlineState === "executing" ||
+    facts.mainlineState === "waiting_user" ||
+    facts.mainlineState === "blocked" ||
+    facts.mainlineState === "settled" ||
+    facts.mainlineState === "cancelled" ||
+    facts.mainlineState === "closed" ||
+    facts.mainlineState === "failed" ||
+    facts.mainlineState === "unrecoverable"
+  )
+}
+
+function effectiveRecoveryMainlineState(input: {
+  mainlineState: SelectedMainlineState
+  bindingStatus: SelectedBindingStatus
+  projectionState: SelectedProjectionState
+  recoverable?: boolean
+}): SelectedMainlineState {
+  if (input.mainlineState === "cancelled" || input.mainlineState === "closed" || input.mainlineState === "failed" || input.mainlineState === "unrecoverable") {
+    return input.mainlineState
+  }
+  if (input.projectionState === "nonrecoverable") return "unrecoverable"
+  if (input.recoverable === false && input.mainlineState !== "settled") return "unrecoverable"
+  if (input.bindingStatus === "deleted" || input.bindingStatus === "closed") return "closed"
+  return input.mainlineState
+}
+
+function effectiveRecoveryBindingStatus(
+  bindingStatus: SelectedBindingStatus,
+  mainlineState: SelectedMainlineState,
+): SelectedBindingStatus {
+  if (bindingStatus === "deleted") return "deleted"
+  if (
+    mainlineState === "cancelled" ||
+    mainlineState === "closed" ||
+    mainlineState === "failed" ||
+    mainlineState === "unrecoverable"
+  ) {
+    return "closed"
+  }
+  return bindingStatus
+}
+
+function effectiveRecoveryActivationState(
+  activationState: SelectedActivationState,
+  mainlineState: SelectedMainlineState,
+): SelectedActivationState {
+  if (mainlineState === "cancelled") return "cancelled"
+  if (mainlineState === "failed" || mainlineState === "unrecoverable") return "failed"
+  if (mainlineState === "closed") return activationStateIsExecuting(activationState) ? "completed" : activationState
+  if (mainlineState === "settled") return "completed"
+  return activationState
+}
+
+function recoveryMainlineCanRun(
+  mainlineState: SelectedMainlineState,
+  bindingStatus: SelectedBindingStatus,
+): boolean {
+  return (
+    bindingStatus === "active" &&
+    (
+      mainlineState === "starting" ||
+      mainlineState === "executing"
+    )
+  )
+}
+
+function effectiveRecoveryProjectionState(
+  projectionState: SelectedProjectionState,
+  mainlineState: SelectedMainlineState,
+  eventStreamAllowed: boolean,
+): SelectedProjectionState {
+  if (mainlineState === "unrecoverable") {
+    return "nonrecoverable"
+  }
+  if (mainlineState === "failed" || mainlineState === "cancelled" || mainlineState === "closed") return "drained"
+  if (mainlineState === "settled") return "drained"
+  if (projectionState === "nonrecoverable") return "nonrecoverable"
+  if (projectionState === "recovered" || projectionState === "drained") return projectionState
+  return eventStreamAllowed ? "live" : "unavailable"
+}
+
+function selectedMainlineSnapshotStatusFromFacts(
+  facts: SessionRunStatusRecoveryFacts,
+): SelectedMainlineSnapshotStatus {
+  if (facts.transportState === "reconnecting" && facts.working && facts.eventStreamAllowed) return "reconnecting"
+  if (facts.mainlineState === "starting") return "starting"
+  if (facts.working || facts.mainlineState === "executing") return "running"
+  if (facts.mainlineState === "waiting_user") return "waiting_user"
+  if (facts.mainlineState === "blocked") return "blocked"
+  if (facts.mainlineState === "settled") return "settled"
+  if (facts.mainlineState === "cancelled") return "cancelled"
+  if (facts.mainlineState === "closed") return "closed"
+  if (facts.mainlineState === "failed") return "failed"
+  if (facts.mainlineState === "unrecoverable") return "unrecoverable"
+  return "running"
+}
+
+function selectedMainlinePatchFromRecoveryFacts(
+  facts: SessionRunStatusRecoveryFacts,
+): Partial<SelectedMainlineSnapshot> {
+  return {
+    status: selectedMainlineSnapshotStatusFromFacts(facts),
+    mainlineState: facts.mainlineState,
+    agentRunState: facts.agentRunState,
+    activationState: facts.activationState,
+    bindingStatus: facts.bindingStatus,
+    projectionState: facts.projectionState,
+    transportState: facts.transportState,
+    working: facts.working,
+    continuable: facts.continuable,
+    recoverable: facts.recoverable,
+    eventStreamAllowed: facts.eventStreamAllowed,
+    closedReason: facts.closedReason,
+  }
+}
+
+function sessionRunTerminalStatusFromRecoveryFacts(
+  facts: SessionRunStatusRecoveryFacts,
+): SessionRunStreamTerminalStatus | undefined {
+  if (facts.mainlineState === "settled") return "done"
+  if (facts.mainlineState === "cancelled") return "cancelled"
+  if (
+    facts.mainlineState === "closed" ||
+    facts.mainlineState === "failed" ||
+    facts.mainlineState === "unrecoverable"
+  ) {
+    return "error"
+  }
+  return undefined
+}
+
+function mainlineStateFromLegacyStatus(status: Record<string, unknown>): SelectedMainlineState {
+  const value = stringField(status, "status", "runtimeStatus", "runtime_status")
+  if (
+    value === "queued" ||
+    value === "running" ||
+    value === "waiting" ||
+    value === "stopping"
+  ) {
+    return "executing"
+  }
+  if (value === "reconnecting") return "none"
+  if (value === "completed" || value === "complete" || value === "done" || value === "success" || value === "settled") {
+    return "settled"
+  }
+  if (value === "waiting_user") return "waiting_user"
+  if (value === "blocked") return "blocked"
+  if (value === "cancelled" || value === "canceled") return "cancelled"
+  if (value === "closed") return "closed"
+  if (value === "failed" || value === "failure" || value === "error" || value === "interrupted") return "failed"
+  if (value === "unrecoverable") return "unrecoverable"
+  return "executing"
+}
+
+function activationStateFromLegacyStatus(status: Record<string, unknown>): SelectedActivationState {
+  const value = stringField(status, "status", "runtimeStatus", "runtime_status")
+  if (value === "queued") return "queued"
+  if (value === "dispatched") return "dispatched"
+  if (value === "waiting" || value === "waiting_server") return "waiting_server"
+  if (value === "running" || value === "stopping") return "running"
+  if (value === "reconnecting") return "none"
+  if (value === "completed" || value === "complete" || value === "done" || value === "success" || value === "settled") {
+    return "completed"
+  }
+  if (value === "waiting_user") return "waiting_user"
+  if (value === "blocked") return "blocked"
+  if (value === "cancelled" || value === "canceled") return "cancelled"
+  if (value === "failed" || value === "failure" || value === "error" || value === "interrupted" || value === "unrecoverable") {
+    return "failed"
+  }
+  return "running"
+}
+
+function agentRunStateFromMainlineState(mainlineState: SelectedMainlineState): string {
+  if (mainlineState === "settled") return "continuable"
+  if (mainlineState === "waiting_user") return "waiting_feedback"
+  if (mainlineState === "executing" || mainlineState === "starting") return "executing"
+  return mainlineState
+}
+
+function bindingStatusFromMainlineState(mainlineState: SelectedMainlineState): SelectedBindingStatus {
+  if (mainlineState === "closed" || mainlineState === "cancelled" || mainlineState === "failed" || mainlineState === "unrecoverable") {
+    return "closed"
+  }
+  if (mainlineState === "none") return "none"
+  return "active"
+}
+
+function activationStateIsExecuting(status: SelectedActivationState): boolean {
+  return status === "queued" || status === "dispatched" || status === "running" || status === "waiting_server"
+}
+
+function normalizeSelectedMainlineState(value: string): SelectedMainlineState {
+  if (
+    value === "none" ||
+    value === "starting" ||
+    value === "executing" ||
+    value === "waiting_user" ||
+    value === "settled" ||
+    value === "closed" ||
+    value === "cancelled" ||
+    value === "failed" ||
+    value === "blocked" ||
+    value === "unrecoverable"
+  ) return value
+  return "none"
+}
+
+function normalizeSelectedActivationState(value: string): SelectedActivationState {
+  if (
+    value === "none" ||
+    value === "queued" ||
+    value === "dispatched" ||
+    value === "running" ||
+    value === "waiting_server" ||
+    value === "waiting_user" ||
+    value === "completed" ||
+    value === "failed" ||
+    value === "cancelled" ||
+    value === "blocked"
+  ) return value
+  return "none"
+}
+
+function normalizeSelectedBindingStatus(value: string): SelectedBindingStatus {
+  if (value === "none" || value === "pending" || value === "active" || value === "closed" || value === "deleted") return value
+  return "none"
+}
+
+function normalizeSelectedProjectionState(value: string): SelectedProjectionState {
+  if (value === "live" || value === "recovered" || value === "drained" || value === "unavailable" || value === "nonrecoverable") return value
+  return "unavailable"
+}
+
+function normalizeSelectedTransportState(value: string): SelectedTransportState {
+  if (value === "disconnected" || value === "connecting" || value === "streaming" || value === "reconnecting" || value === "closed" || value === "error") return value
+  return "disconnected"
+}
+
+function sessionRunRestoreFailureClearsActiveRun(error: unknown): boolean {
+  return (
+    isRemoteError(error, "session_run_not_found", 404) ||
+    isRemoteError(error, "session_run_branch_binding_not_found", 404) ||
+    isRemoteError(error, "session_run_binding_not_found", 409) ||
+    isRemoteError(error, "session_run_binding_peer_mismatch", 403) ||
+    isRemoteError(error, "session_run_scope_proof_invalid", 409) ||
+    isRemoteError(error, "session_run_projection_nonrecoverable", 409) ||
+    isRemoteError(error, "agent_run_not_found", 404)
+  )
+}
+
+function booleanField(record: Record<string, unknown>, ...keys: string[]): boolean | undefined {
+  for (const key of keys) {
+    const parsed = booleanValue(record[key])
+    if (parsed !== undefined) return parsed
+  }
+  return undefined
+}
+
+function stringField(record: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const parsed = stringValue(record[key])?.trim()
+    if (parsed) return parsed
+  }
+  return undefined
+}
+
 function branchRuntimeStatusFromRecord(record: Record<string, unknown>): SessionRuntimeStatus | undefined {
   const status =
-    stringValue(record.runtime_status)?.trim() ||
-    stringValue(record.runtimeStatus)?.trim() ||
-    stringValue(record.status)?.trim()
+    stringValue(record.runtime_status)?.trim().toLowerCase() ||
+    stringValue(record.runtimeStatus)?.trim().toLowerCase() ||
+    stringValue(record.status)?.trim().toLowerCase()
   if (status === "failed" || status === "blocked") return "error"
-  if (status === "completed" || status === "complete") return "done"
+  if (status === "completed" || status === "complete" || status === "settled") return "done"
   if (isSessionRuntimeStatus(status)) return status
+  const mainlineState = stringField(record, "mainlineState", "mainline_state")?.toLowerCase()
+  const activationState = stringField(record, "activationState", "activation_state")?.toLowerCase()
+  if (mainlineState === "settled" && (!activationState || activationState === "completed")) return "done"
   if (record.running === false) return "idle"
   if (record.running === true) return "running"
   return undefined
@@ -4075,8 +4854,82 @@ function sessionRunTerminalMessageFromBranchSummaries(
   )
 }
 
-function activeSessionRunRuntimeStatus(status: "idle" | "running" | "reconnecting" | undefined): SessionRuntimeStatus {
-  return status === "idle" ? "idle" : "running"
+function settledSelectedMainlinePatch(): Partial<SelectedMainlineSnapshot> {
+  return {
+    status: "settled",
+    mainlineState: "settled",
+    agentRunState: "continuable",
+    activationState: "completed",
+    bindingStatus: "active",
+    projectionState: "drained",
+    transportState: "disconnected",
+    working: false,
+    continuable: true,
+    recoverable: true,
+    eventStreamAllowed: false,
+  }
+}
+
+function stoppedSelectedMainlinePatch(): Partial<SelectedMainlineSnapshot> {
+  return {
+    ...settledSelectedMainlinePatch(),
+    activationState: "cancelled",
+  }
+}
+
+function selectedMainlinePatchFromRuntimeStatus(status: SessionRuntimeStatus): Partial<SelectedMainlineSnapshot> {
+  if (status === "done") return settledSelectedMainlinePatch()
+  if (status === "cancelled") {
+    return {
+      status: "cancelled",
+      mainlineState: "cancelled",
+      agentRunState: "cancelled",
+      activationState: "cancelled",
+      bindingStatus: "closed",
+      projectionState: "drained",
+      transportState: "disconnected",
+      working: false,
+      continuable: false,
+      recoverable: false,
+      eventStreamAllowed: false,
+    }
+  }
+
+  if (status === "error" || status === "interrupted") {
+    return {
+      status: "failed",
+      mainlineState: "failed",
+      agentRunState: "failed",
+      activationState: "failed",
+      bindingStatus: "closed",
+      projectionState: "drained",
+      transportState: "disconnected",
+      working: false,
+      continuable: false,
+      recoverable: false,
+      eventStreamAllowed: false,
+    }
+  }
+  return {
+    status: "running",
+    mainlineState: "executing",
+    agentRunState: "executing",
+    activationState: "running",
+    bindingStatus: "active",
+    projectionState: "live",
+    transportState: "streaming",
+    working: true,
+    continuable: false,
+    recoverable: true,
+    eventStreamAllowed: true,
+  }
+}
+
+function activeSessionRunRuntimeStatus(status: SelectedMainlineSnapshotStatus | undefined): SessionRuntimeStatus {
+  if (status === "settled") return "done"
+  if (status === "cancelled") return "cancelled"
+  if (status === "failed" || status === "unrecoverable" || status === "closed" || status === "blocked") return "error"
+  return "running"
 }
 
 function isSessionRuntimeStatus(value: string | undefined): value is SessionRuntimeStatus {

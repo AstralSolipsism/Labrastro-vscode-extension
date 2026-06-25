@@ -266,7 +266,7 @@ describe("SessionRuntimeStore", () => {
 
     const accepted = store.acceptsStartSuccess({
       operationId: "op-start",
-      activeRun: undefined,
+      selectedMainlineSnapshot: undefined,
       sourceIdentityRevision: 1,
       responseSessionRunId: "run-1",
       responseBranchBindingId: "main",
@@ -334,7 +334,7 @@ describe("SessionRuntimeStore", () => {
     expect(store.acceptsControlSuccess({
       operationId: "op-continue",
       operationKind: "continue",
-      activeRun: { sessionRunId: "run-1", branchBindingId: "main", agentRunId: "agent-main" },
+      selectedMainlineSnapshot: { sessionRunId: "run-1", branchBindingId: "main", agentRunId: "agent-main" },
       sourceIdentityRevision: 1,
       responseSessionRunId: "run-1",
       responseBranchBindingId: "branch-a",
@@ -364,7 +364,7 @@ describe("SessionRuntimeStore", () => {
     expect(store.acceptsControlSuccess({
       operationId: "op-continue",
       operationKind: "continue",
-      activeRun: { sessionRunId: "run-1", branchBindingId: "main", agentRunId: "agent-main" },
+      selectedMainlineSnapshot: { sessionRunId: "run-1", branchBindingId: "main", agentRunId: "agent-main" },
       sourceIdentityRevision: 1,
       responseSessionRunId: "run-1",
       responseBranchBindingId: "main",
@@ -416,7 +416,7 @@ describe("SessionRuntimeStore", () => {
 
     expect(store.acceptsBranchCreateSuccess({
       operationId: "op-create",
-      activeRun: { sessionRunId: "run-1", branchBindingId: "main", agentRunId: "agent-main" },
+      selectedMainlineSnapshot: { sessionRunId: "run-1", branchBindingId: "main", agentRunId: "agent-main" },
       sourceIdentityRevision: 1,
       responseBranchBindingId: "branch-b",
     })).toBe(false)
@@ -473,7 +473,7 @@ describe("SessionRuntimeStore", () => {
     expect(store.acceptsFailure({
       operationId: "op-continue",
       operationKind: "continue",
-      activeRun: { sessionRunId: "run-1", branchBindingId: "branch-a", agentRunId: "agent-branch-a" },
+      selectedMainlineSnapshot: { sessionRunId: "run-1", branchBindingId: "branch-a", agentRunId: "agent-branch-a" },
       sourceIdentityRevision: 2,
     })).toBe(false)
     expect(store.snapshot().scopes[main.scopeId].operationsById["op-continue"]).toBeDefined()
@@ -500,7 +500,7 @@ describe("SessionRuntimeStore", () => {
     expect(store.acceptsFailure({
       operationId: "op-continue",
       operationKind: "continue",
-      activeRun: { sessionRunId: "run-1", branchBindingId: "main", agentRunId: "agent-main" },
+      selectedMainlineSnapshot: { sessionRunId: "run-1", branchBindingId: "main", agentRunId: "agent-main" },
       sourceIdentityRevision: 3,
     })).toBe(false)
     expect(store.snapshot().scopes[main.scopeId].operationsById["op-continue"]).toBeDefined()

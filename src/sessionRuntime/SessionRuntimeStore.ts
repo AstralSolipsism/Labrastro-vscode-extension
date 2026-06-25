@@ -15,7 +15,7 @@ import type {
 } from "./SessionRuntimeModel"
 
 export type SessionRuntimeOperationSourceScope = "selected-visible" | "branch-local"
-export type SessionRuntimeControlOperationKind = "continue" | "recover" | "steer" | "cancel"
+export type SessionRuntimeControlOperationKind = "continue" | "recover" | "steer" | "stop" | "cancel"
 export const SELECTED_VISIBLE_OPERATION_SCOPE: SessionRuntimeOperationSourceScope = "selected-visible"
 export const BRANCH_LOCAL_OPERATION_SCOPE: SessionRuntimeOperationSourceScope = "branch-local"
 
@@ -26,7 +26,7 @@ export interface SessionRunBranchIdentity {
   sourceIdentityRevision: number
 }
 
-export interface SessionRuntimeActiveRunIdentity {
+export interface SessionRuntimeSelectedMainlineIdentity {
   sessionRunId?: string
   sessionId?: string
   branchBindingId?: string
@@ -213,7 +213,7 @@ export class SessionRuntimeStore {
 
   acceptsStartSuccess(input: {
     operationId: string
-    activeRun: SessionRuntimeActiveRunIdentity | undefined
+    selectedMainlineSnapshot: SessionRuntimeSelectedMainlineIdentity | undefined
     sourceIdentityRevision: number
     responseSessionRunId?: string
     responseBranchBindingId?: string
@@ -225,7 +225,7 @@ export class SessionRuntimeStore {
       visible: true,
     })
     if (!operation) return false
-    const accepted = startSourceStillCurrent(input.activeRun, input.sourceIdentityRevision, operation)
+    const accepted = startSourceStillCurrent(input.selectedMainlineSnapshot, input.sourceIdentityRevision, operation)
     if (accepted && input.responseSessionRunId && input.responseBranchBindingId) {
       this.confirmStartOperation(operation, {
         responseSessionRunId: input.responseSessionRunId,
@@ -240,7 +240,7 @@ export class SessionRuntimeStore {
 
   acceptsBranchCreateSuccess(input: {
     operationId: string
-    activeRun: SessionRuntimeActiveRunIdentity | undefined
+    selectedMainlineSnapshot: SessionRuntimeSelectedMainlineIdentity | undefined
     sourceIdentityRevision: number
     responseBranchBindingId: string
   }): boolean {
@@ -251,7 +251,7 @@ export class SessionRuntimeStore {
     })
     if (!operation) return false
     const accepted =
-      sourceStillCurrent(input.activeRun, input.sourceIdentityRevision, operation) &&
+      sourceStillCurrent(input.selectedMainlineSnapshot, input.sourceIdentityRevision, operation) &&
       operation.targetBranchBindingId === input.responseBranchBindingId
     this.settleOperation(operation, accepted ? "success" : "error")
     return accepted
@@ -259,7 +259,7 @@ export class SessionRuntimeStore {
 
   branchSelectSuccessStillCurrent(input: {
     operationId: string
-    activeRun: SessionRuntimeActiveRunIdentity | undefined
+    selectedMainlineSnapshot: SessionRuntimeSelectedMainlineIdentity | undefined
     sourceIdentityRevision: number
     responseBranchBindingId: string
   }): boolean {
@@ -270,7 +270,7 @@ export class SessionRuntimeStore {
     })
     if (!operation) return false
     return (
-      sourceStillCurrent(input.activeRun, input.sourceIdentityRevision, operation) &&
+      sourceStillCurrent(input.selectedMainlineSnapshot, input.sourceIdentityRevision, operation) &&
       operation.targetBranchBindingId === input.responseBranchBindingId
     )
   }
@@ -303,7 +303,7 @@ export class SessionRuntimeStore {
   acceptsControlSuccess(input: {
     operationId: string
     operationKind: SessionRuntimeControlOperationKind
-    activeRun: SessionRuntimeActiveRunIdentity | undefined
+    selectedMainlineSnapshot: SessionRuntimeSelectedMainlineIdentity | undefined
     sourceIdentityRevision: number
     responseSessionRunId?: string
     responseBranchBindingId?: string
@@ -316,7 +316,7 @@ export class SessionRuntimeStore {
     })
     if (!operation) return false
     const accepted =
-      sourceStillCurrent(input.activeRun, input.sourceIdentityRevision, operation) &&
+      sourceStillCurrent(input.selectedMainlineSnapshot, input.sourceIdentityRevision, operation) &&
       responseMatchesOperation(input, operation)
     this.settleOperation(operation, accepted ? "success" : "error")
     return accepted
@@ -357,7 +357,7 @@ export class SessionRuntimeStore {
   acceptsFailure(input: {
     operationId: string
     operationKind: SessionRuntimeOperationKind
-    activeRun: SessionRuntimeActiveRunIdentity | undefined
+    selectedMainlineSnapshot: SessionRuntimeSelectedMainlineIdentity | undefined
     sourceIdentityRevision: number
   }): boolean {
     const operation = this.findOperation({
@@ -366,7 +366,7 @@ export class SessionRuntimeStore {
       visible: true,
     })
     if (!operation) return false
-    const accepted = operationStillCurrentForFailure(input.activeRun, input.sourceIdentityRevision, operation)
+    const accepted = operationStillCurrentForFailure(input.selectedMainlineSnapshot, input.sourceIdentityRevision, operation)
     if (accepted) this.settleOperation(operation, "error")
     return accepted
   }
@@ -460,14 +460,14 @@ export class SessionRuntimeStore {
 }
 
 export function resolveSessionRuntimeSourceIdentity(input: {
-  activeRun: SessionRuntimeActiveRunIdentity | undefined
+  selectedMainlineSnapshot: SessionRuntimeSelectedMainlineIdentity | undefined
   sourceIdentityRevision: number
   sessionRunId?: string
   branchBindingId?: string
   scope: SessionRuntimeOperationSourceScope
 }): SessionRuntimeSourceIdentityResolution {
-  const activeRun = input.activeRun
-  const activeBranchBindingId = activeRun?.branchBindingId || ""
+  const selectedMainlineSnapshot = input.selectedMainlineSnapshot
+  const activeBranchBindingId = selectedMainlineSnapshot?.branchBindingId || ""
   const targetBranchBindingId = input.branchBindingId || ""
   if (!targetBranchBindingId) {
     return {
@@ -496,7 +496,7 @@ export function resolveSessionRuntimeSourceIdentity(input: {
     }
   }
   const requestedSessionRunId = input.sessionRunId
-  if (!activeRun?.sessionRunId || !requestedSessionRunId) {
+  if (!selectedMainlineSnapshot?.sessionRunId || !requestedSessionRunId) {
     return {
       ok: false,
       sessionRunId: requestedSessionRunId || undefined,
@@ -504,7 +504,7 @@ export function resolveSessionRuntimeSourceIdentity(input: {
       message: "没有可操作的会话运行。",
     }
   }
-  if (activeRun.sessionRunId !== requestedSessionRunId) {
+  if (selectedMainlineSnapshot.sessionRunId !== requestedSessionRunId) {
     return {
       ok: false,
       sessionRunId: requestedSessionRunId,
@@ -524,8 +524,8 @@ export function resolveSessionRuntimeSourceIdentity(input: {
     }
   }
   const agentRunId = selectedBranch
-    ? activeRun.agentRunId || ""
-    : branchAgentRunId(activeRun.branches, targetBranchBindingId)
+    ? selectedMainlineSnapshot.agentRunId || ""
+    : branchAgentRunId(selectedMainlineSnapshot.branches, targetBranchBindingId)
   if (!agentRunId) {
     return {
       ok: false,
@@ -549,7 +549,7 @@ export function resolveSessionRuntimeSourceIdentity(input: {
       scope: input.scope,
       emitWebviewOperation: input.scope === "selected-visible",
       canPatchSelectedRun: selectedBranch,
-      ...(activeRun.sessionId ? { sessionId: activeRun.sessionId } : {}),
+      ...(selectedMainlineSnapshot.sessionId ? { sessionId: selectedMainlineSnapshot.sessionId } : {}),
     },
   }
 }
@@ -587,28 +587,28 @@ function stringValue(value: unknown): string | undefined {
 }
 
 function sourceStillCurrent(
-  activeRun: SessionRuntimeActiveRunIdentity | undefined,
+  selectedMainlineSnapshot: SessionRuntimeSelectedMainlineIdentity | undefined,
   sourceIdentityRevision: number,
   operation: SessionRuntimeOperation,
 ): boolean {
-  if (!activeRun) return false
+  if (!selectedMainlineSnapshot) return false
   return (
     sourceIdentityRevision === operation.sourceIdentityRevision &&
-    activeRun.sessionRunId === operation.sourceSessionRunId &&
-    activeRun.branchBindingId === operation.sourceBranchBindingId &&
-    activeRun.agentRunId === operation.sourceAgentRunId
+    selectedMainlineSnapshot.sessionRunId === operation.sourceSessionRunId &&
+    selectedMainlineSnapshot.branchBindingId === operation.sourceBranchBindingId &&
+    selectedMainlineSnapshot.agentRunId === operation.sourceAgentRunId
   )
 }
 
 function operationStillCurrentForFailure(
-  activeRun: SessionRuntimeActiveRunIdentity | undefined,
+  selectedMainlineSnapshot: SessionRuntimeSelectedMainlineIdentity | undefined,
   sourceIdentityRevision: number,
   operation: SessionRuntimeOperation,
 ): boolean {
   if (operation.kind === "start") {
-    return startSourceStillCurrent(activeRun, sourceIdentityRevision, operation)
+    return startSourceStillCurrent(selectedMainlineSnapshot, sourceIdentityRevision, operation)
   }
-  return sourceStillCurrent(activeRun, sourceIdentityRevision, operation)
+  return sourceStillCurrent(selectedMainlineSnapshot, sourceIdentityRevision, operation)
 }
 
 function responseMatchesOperation(
@@ -627,15 +627,15 @@ function responseMatchesOperation(
 }
 
 function startSourceStillCurrent(
-  activeRun: SessionRuntimeActiveRunIdentity | undefined,
+  selectedMainlineSnapshot: SessionRuntimeSelectedMainlineIdentity | undefined,
   sourceIdentityRevision: number,
   operation: SessionRuntimeOperation,
 ): boolean {
   if (sourceIdentityRevision !== operation.sourceIdentityRevision) return false
   if (operation.activeSessionRunId) {
-    return activeRun?.sessionRunId === operation.activeSessionRunId
+    return selectedMainlineSnapshot?.sessionRunId === operation.activeSessionRunId
   }
-  return !activeRun?.sessionRunId
+  return !selectedMainlineSnapshot?.sessionRunId
 }
 
 function streamStatusIsOpen(status: SessionRuntimeStatus): boolean {

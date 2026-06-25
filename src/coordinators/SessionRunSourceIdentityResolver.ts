@@ -1,4 +1,4 @@
-import type { ActiveSessionRun } from "./SessionRunCoordinator"
+import type { SelectedMainlineSnapshot } from "./SessionRunCoordinator"
 import {
   resolveSessionRuntimeSourceIdentity,
   type ResolvedSessionRuntimeSourceIdentity,
@@ -13,7 +13,7 @@ export type ResolvedSessionRunSourceIdentity = ResolvedSessionRuntimeSourceIdent
 export type SessionRunSourceIdentityResolution = SessionRuntimeSourceIdentityResolution
 
 export function resolveSessionRunSourceIdentity(input: {
-  activeRun: ActiveSessionRun | undefined
+  selectedMainlineSnapshot: SelectedMainlineSnapshot | undefined
   sourceIdentityRevision: number
   sessionRunId?: string
   branchBindingId?: string

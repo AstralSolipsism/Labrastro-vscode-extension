@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest"
 
-import type { ActiveSessionRun } from "./SessionRunCoordinator"
+import type { SelectedMainlineSnapshot } from "./SessionRunCoordinator"
 import { resolveSessionRunSourceIdentity } from "./SessionRunSourceIdentityResolver"
 
-const activeRun = (overrides: Partial<ActiveSessionRun> = {}): ActiveSessionRun => ({
+const selectedMainlineSnapshot = (overrides: Partial<SelectedMainlineSnapshot> = {}): SelectedMainlineSnapshot => ({
   sessionRunId: "run-current",
   sessionId: "session-current",
   cursor: 12,
@@ -22,7 +22,7 @@ const activeRun = (overrides: Partial<ActiveSessionRun> = {}): ActiveSessionRun 
 describe("resolveSessionRunSourceIdentity", () => {
   it("resolves selected visible source from explicit session run proof", () => {
     const result = resolveSessionRunSourceIdentity({
-      activeRun: activeRun(),
+      selectedMainlineSnapshot: selectedMainlineSnapshot(),
       sourceIdentityRevision: 7,
       sessionRunId: "run-current",
       branchBindingId: "main",
@@ -49,7 +49,7 @@ describe("resolveSessionRunSourceIdentity", () => {
 
   it("rejects selected-visible source without an explicit session run id", () => {
     const result = resolveSessionRunSourceIdentity({
-      activeRun: activeRun(),
+      selectedMainlineSnapshot: selectedMainlineSnapshot(),
       sourceIdentityRevision: 7,
       branchBindingId: "main",
       scope: "selected-visible",
@@ -63,7 +63,7 @@ describe("resolveSessionRunSourceIdentity", () => {
 
   it("resolves branch-local source from branch summaries without borrowing selected identity revision", () => {
     const result = resolveSessionRunSourceIdentity({
-      activeRun: activeRun({ branchBindingId: "branch-b", agentRunId: "agent-branch-b" }),
+      selectedMainlineSnapshot: selectedMainlineSnapshot({ branchBindingId: "branch-b", agentRunId: "agent-branch-b" }),
       sourceIdentityRevision: 9,
       sessionRunId: "run-current",
       branchBindingId: "branch-a",
@@ -90,7 +90,7 @@ describe("resolveSessionRunSourceIdentity", () => {
 
   it("rejects selected-visible source when the target is a sibling branch", () => {
     const result = resolveSessionRunSourceIdentity({
-      activeRun: activeRun(),
+      selectedMainlineSnapshot: selectedMainlineSnapshot(),
       sourceIdentityRevision: 1,
       branchBindingId: "branch-a",
       scope: "selected-visible",
@@ -105,7 +105,7 @@ describe("resolveSessionRunSourceIdentity", () => {
 
   it("rejects selected-visible source without explicit branch proof", () => {
     const result = resolveSessionRunSourceIdentity({
-      activeRun: activeRun(),
+      selectedMainlineSnapshot: selectedMainlineSnapshot(),
       sourceIdentityRevision: 1,
       scope: "selected-visible",
     })
@@ -119,7 +119,7 @@ describe("resolveSessionRunSourceIdentity", () => {
 
   it("rejects branch-local source when the branch agent id is unavailable", () => {
     const result = resolveSessionRunSourceIdentity({
-      activeRun: activeRun({ branches: [{ branch_binding_id: "branch-a" }] }),
+      selectedMainlineSnapshot: selectedMainlineSnapshot({ branches: [{ branch_binding_id: "branch-a" }] }),
       sourceIdentityRevision: 1,
       branchBindingId: "branch-a",
       scope: "branch-local",
@@ -133,7 +133,7 @@ describe("resolveSessionRunSourceIdentity", () => {
 
   it("rejects branch-local source for another session run", () => {
     const result = resolveSessionRunSourceIdentity({
-      activeRun: activeRun(),
+      selectedMainlineSnapshot: selectedMainlineSnapshot(),
       sourceIdentityRevision: 1,
       sessionRunId: "run-other",
       branchBindingId: "branch-a",
@@ -149,7 +149,7 @@ describe("resolveSessionRunSourceIdentity", () => {
 
   it("rejects branch-local source without an explicit session run id", () => {
     const result = resolveSessionRunSourceIdentity({
-      activeRun: activeRun(),
+      selectedMainlineSnapshot: selectedMainlineSnapshot(),
       sourceIdentityRevision: 1,
       branchBindingId: "branch-a",
       scope: "branch-local",
@@ -163,7 +163,7 @@ describe("resolveSessionRunSourceIdentity", () => {
 
   it("rejects branch-local source without an explicit branch binding id", () => {
     const result = resolveSessionRunSourceIdentity({
-      activeRun: activeRun(),
+      selectedMainlineSnapshot: selectedMainlineSnapshot(),
       sourceIdentityRevision: 1,
       sessionRunId: "run-current",
       scope: "branch-local",

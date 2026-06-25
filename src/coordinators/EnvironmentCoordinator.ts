@@ -35,7 +35,7 @@ export class EnvironmentCoordinator {
     approvals: [],
     logs: [],
   }
-  private activeRun: Record<string, unknown> | undefined
+  private selectedMainlineSnapshot: Record<string, unknown> | undefined
 
   constructor(private readonly options: EnvironmentCoordinatorOptions) {}
 
@@ -64,15 +64,15 @@ export class EnvironmentCoordinator {
   }
 
   get activeEnvironmentRun(): Record<string, unknown> | undefined {
-    return this.activeRun
+    return this.selectedMainlineSnapshot
   }
 
   set activeEnvironmentRun(value: Record<string, unknown> | undefined) {
-    this.activeRun = value
+    this.selectedMainlineSnapshot = value
   }
 
   isEnvironmentRunActive(): boolean {
-    return Boolean(this.activeRun)
+    return Boolean(this.selectedMainlineSnapshot)
   }
 
   async handleMessage(message: WebviewToHostMessage, post: PostMessage): Promise<boolean> {
