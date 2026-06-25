@@ -62,4 +62,3 @@ export function selectLabrastroHostWriteSource(
   if (configured?.source === "workspace") return "workspace"
   return "global"
 }
-

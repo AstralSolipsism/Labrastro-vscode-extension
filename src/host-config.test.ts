@@ -56,4 +56,3 @@ describe("host config resolution", () => {
     expect(selectLabrastroHostWriteSource(undefined)).toBe("global")
   })
 })
-
