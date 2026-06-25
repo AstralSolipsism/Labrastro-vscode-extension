@@ -1551,7 +1551,8 @@ describe("LabrastroRemoteClient session run start", () => {
       branchBindingId: "branch-2",
       cursor: 0,
     })
-    await client.cancelSessionRun("run-1", "user_stop", "main")
+    await client.stopSessionRun("run-1", "user_stop", "main")
+    await client.cancelSessionRun("run-1", "user_cancelled", "main")
     await client.continueSessionRun({
       sessionRunId: "run-1",
       branchBindingId: "main",
@@ -1615,12 +1616,21 @@ describe("LabrastroRemoteClient session run start", () => {
         },
       },
       {
-        pathname: "/remote/session-runs/cancel",
+        pathname: "/remote/session-runs/stop",
         body: {
           peer_token: "peer-token-1",
           session_run_id: "run-1",
           branch_binding_id: "main",
           reason: "user_stop",
+        },
+      },
+      {
+        pathname: "/remote/session-runs/cancel",
+        body: {
+          peer_token: "peer-token-1",
+          session_run_id: "run-1",
+          branch_binding_id: "main",
+          reason: "user_cancelled",
         },
       },
       {
@@ -1715,6 +1725,12 @@ describe("LabrastroRemoteClient session run start", () => {
     ).rejects.toThrow("branch_binding_id_required")
     await expect(
       client.cancelSessionRun("", "user_cancelled", "main")
+    ).rejects.toThrow("session_run_id_required")
+    await expect(
+      client.stopSessionRun("run-1", "user_stop", "")
+    ).rejects.toThrow("branch_binding_id_required")
+    await expect(
+      client.stopSessionRun("", "user_stop", "main")
     ).rejects.toThrow("session_run_id_required")
     await expect(
       client.continueSessionRun({ sessionRunId: "run-1", branchBindingId: "", prompt: "next" })

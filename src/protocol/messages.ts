@@ -111,6 +111,7 @@ export type HostToWebviewMessageType =
   | "sessionRun.resume"
   | "sessionRun.session"
   | "sessionRun.steer"
+  | "sessionRun.stopped"
   | "sessionRun.stream"
   | "sessionRun.userInput.reply.error"
   | "sessionRun.userInput.reply.ok"
@@ -214,6 +215,7 @@ export type WebviewToHostMessageType =
   | "session.new"
   | "session.openInChat"
   | "sessionRun.cancel"
+  | "sessionRun.stop"
   | "sessionRun.branch"
   | "sessionRun.branch.select"
   | "sessionRun.pendingNextTurn.clear"
@@ -320,6 +322,7 @@ const HOST_TO_WEBVIEW_TYPES = new Set<HostToWebviewMessageType>([
   "session.state",
   "session.syncStatus",
   "sessionRun.cancelled",
+  "sessionRun.stopped",
   "sessionRun.branches",
   "sessionRun.branch.selected",
   "sessionRun.branch.started",
@@ -436,6 +439,7 @@ const WEBVIEW_TO_HOST_TYPES = new Set<WebviewToHostMessageType>([
   "session.new",
   "session.openInChat",
   "sessionRun.cancel",
+  "sessionRun.stop",
   "sessionRun.branch",
   "sessionRun.branch.select",
   "sessionRun.pendingNextTurn.clear",

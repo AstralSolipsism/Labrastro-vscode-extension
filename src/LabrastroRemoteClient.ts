@@ -1148,6 +1148,21 @@ export class LabrastroRemoteClient {
     }))
   }
 
+  async stopSessionRun(
+    sessionRunId: string,
+    reason = "user_stop",
+    branchBindingId: string,
+  ): Promise<JsonObject> {
+    const stopSessionRunId = requiredSessionRunId(sessionRunId)
+    const stopBranchBindingId = requiredBranchBindingId(branchBindingId)
+    return this.postPeerJson("/remote/session-runs/stop", (peer) => ({
+      peer_token: peer.peer_token,
+      session_run_id: stopSessionRunId,
+      branch_binding_id: stopBranchBindingId,
+      reason,
+    }))
+  }
+
   async steerAgentRun(payload: {
     agentRunId: string
     sessionRunId: string
