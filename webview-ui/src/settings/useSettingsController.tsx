@@ -2548,7 +2548,7 @@ export function createSettingsController(props: SettingsViewProps) {
   const setAgentNameInput = (element: HTMLInputElement) => {
     agentNameInput = element
   }
-  const [agentRunPrompt, setAgentRunPrompt] = createSignal("请用一句话回复 Labrastro AgentRun smoke")
+  const [agentRunPrompt, setAgentRunPrompt] = createSignal("请简短回复 Labrastro 运行 smoke")
 
   const [profileId, setProfileId] = createSignal("")
   const [profileProvider, setProfileProvider] = createSignal("deepseek")
